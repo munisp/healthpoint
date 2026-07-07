@@ -795,8 +795,6 @@ async def lifespan(app: FastAPI):
     await db_manager.disconnect()
 
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Patient Management Service",
     description="FHIR-compliant patient management with comprehensive healthcare data support",
     version="1.0.0",

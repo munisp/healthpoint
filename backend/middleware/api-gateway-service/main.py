@@ -22,11 +22,13 @@ from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 setup_telemetry(service_name="api-gateway-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
     title="NSA/IDR Healthcare Platform API Gateway",
     version="1.0.0",
     description="Unified API Gateway for all platform services"
 )
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
+
 
 # CORS middleware
 app.add_middleware(
@@ -296,7 +298,7 @@ async def apply_geographic_adjustment(adjustment_data: Dict[str, Any],
 # ============================================================================
 
 @app.get("/api/v1/admin/fees")
-async def get_admin_fees(,
+async def get_admin_fees(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get admin fee configuration"""
@@ -397,7 +399,7 @@ async def service_proxy(request: APIRequest,
 # ============================================================================
 
 @app.get("/api/v1/metrics/platform")
-async def get_platform_metrics(,
+async def get_platform_metrics(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get comprehensive platform metrics"""

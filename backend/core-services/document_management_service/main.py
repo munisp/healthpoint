@@ -838,15 +838,13 @@ async def lifespan(app: FastAPI):
 
 setup_telemetry(service_name="document-management-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Document Management Service",
     description="FHIR-compliant document management with OCR and secure storage",
     version="1.0.0",
     lifespan=lifespan
 )
-
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),

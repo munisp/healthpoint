@@ -1739,8 +1739,6 @@ async def lifespan(app: FastAPI):
     await db_manager.disconnect()
 
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Enhanced AI Fraud Detection Service",
     description="Real ML/DL/GNN implementation with hybrid rule-based approaches",
     version="2.0.0",

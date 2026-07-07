@@ -231,15 +231,12 @@ async def lifespan(app: FastAPI):
 # FastAPI app
 setup_telemetry(service_name="user-management-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - User Management Service",
     description="Comprehensive user management with RBAC and multi-tenant support",
     version="1.0.0",
     lifespan=lifespan
 )
-
+instrument_fastapi(app)
 # Utility functions
 def hash_password(password: str) -> str:
     """Hash password using SHA-256"""

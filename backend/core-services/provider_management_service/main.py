@@ -239,15 +239,12 @@ async def lifespan(app: FastAPI):
 # FastAPI app
 setup_telemetry(service_name="provider-management-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Provider Management Service",
     description="Comprehensive provider onboarding, credentialing, and contract management",
     version="1.0.0",
     lifespan=lifespan
 )
-
+instrument_fastapi(app)
 async def initialize_database():
     """Initialize database tables"""
     async with db_manager.pool.acquire() as conn:

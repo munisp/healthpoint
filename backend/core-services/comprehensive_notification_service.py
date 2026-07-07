@@ -26,7 +26,7 @@ import json
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import redis.asyncio as redis.asyncio as redis
+import redis.asyncio as redis
 import requests
 from twilio.rest import Client
 import websockets
@@ -637,7 +637,7 @@ async def set_notification_preferences(preferences: NotificationPreference,
     return {"status": "preferences_updated"}
 
 @app.get("/notifications/templates")
-async def get_notification_templates(,
+async def get_notification_templates(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get available notification templates"""

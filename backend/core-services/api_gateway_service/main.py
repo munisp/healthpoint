@@ -304,14 +304,14 @@ async def lifespan(app: FastAPI):
 # FastAPI app
 setup_telemetry(service_name="api-gateway-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - API Gateway",
     description="Intelligent routing, rate limiting, authentication, and load balancing",
     version="1.0.0",
     lifespan=lifespan
 )
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
+
 
 # Add middleware
 app.add_middleware(
@@ -740,7 +740,7 @@ async def gateway_handler(request: Request, path: str):
 
 # Admin endpoints
 @app.get("/gateway/stats", response_model=APIGatewayStats)
-async def get_gateway_stats(,
+async def get_gateway_stats(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get API gateway statistics"""
@@ -771,7 +771,7 @@ async def get_gateway_stats(,
         )
 
 @app.get("/gateway/services")
-async def list_services(,
+async def list_services(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """List registered services"""

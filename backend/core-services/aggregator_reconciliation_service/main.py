@@ -28,7 +28,7 @@ import logging
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, Decimal, JSON, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-import redis.asyncio as redis.asyncio as redis
+import redis.asyncio as redis
 from collections import defaultdict
 import hashlib
 from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
@@ -653,7 +653,7 @@ async def validate_single_claim(claim_data: Dict[str, Any], aggregator_id: str,
     return validation
 
 @app.post("/api/v1/reconciliation/refresh-cache")
-async def refresh_provider_cache(,
+async def refresh_provider_cache(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Refresh provider-aggregator mapping cache"""

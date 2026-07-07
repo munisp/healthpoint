@@ -643,13 +643,13 @@ entity_selector = GeorgetownIDREntitySelector()
 
 setup_telemetry(service_name="idr-entity-selection-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Georgetown-Enhanced IDR Entity Selection Service",
     description="Advanced IDR entity selection with bias detection based on Georgetown University research",
     version="2.0.0"
 )
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
+
 
 @app.post("/select-entity", response_model=SelectionResult)
 async def select_entity(request: EntitySelectionRequest,
@@ -659,14 +659,14 @@ async def select_entity(request: EntitySelectionRequest,
     return entity_selector.select_optimal_entity(request)
 
 @app.get("/entity-performance")
-async def get_entity_performance(,
+async def get_entity_performance(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get comprehensive entity performance data"""
     return entity_selector.get_entity_performance_data()
 
 @app.get("/bias-analysis")
-async def get_bias_analysis(,
+async def get_bias_analysis(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get bias analysis for all entities"""
@@ -674,14 +674,14 @@ async def get_bias_analysis(,
     return entity_selector._perform_bias_analysis(entities)
 
 @app.get("/bias-monitoring")
-async def get_bias_monitoring(,
+async def get_bias_monitoring(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get bias monitoring status and alerts"""
     return entity_selector.monitor_bias_patterns()
 
 @app.get("/georgetown-insights")
-async def get_georgetown_insights(,
+async def get_georgetown_insights(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get Georgetown University research insights"""

@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Any
 import json
 import asyncio
 from datetime import datetime, timedelta
-import redis.asyncio as redis.asyncio as redis
+import redis.asyncio as redis
 import logging
 from decimal import Decimal
 import uuid

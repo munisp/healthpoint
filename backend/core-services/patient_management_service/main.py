@@ -797,15 +797,12 @@ async def lifespan(app: FastAPI):
 
 setup_telemetry(service_name="patient-management-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Patient Management Service",
     description="FHIR-compliant patient management with comprehensive healthcare data support",
     version="1.0.0",
     lifespan=lifespan
 )
-
+instrument_fastapi(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),

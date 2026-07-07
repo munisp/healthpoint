@@ -121,7 +121,7 @@ async def health():
     return {"status": "healthy", "service": "third-party-integration", "version": "2.0.0"}
 
 @app.get("/api/v1/integrations/intermediaries")
-async def list_intermediaries(,
+async def list_intermediaries(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """List all supported IDR intermediaries."""

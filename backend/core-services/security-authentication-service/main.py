@@ -58,11 +58,11 @@ KEYCLOAK_CLIENT_SECRET: str = os.environ.get("KEYCLOAK_CLIENT_SECRET", "")
 # ── App ───────────────────────────────────────────────────────────────────────
 setup_telemetry(service_name="security-authentication-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
     title="Security & Authentication Service",
     version="2.0.0",
     description="Keycloak-backed authentication with PostgreSQL audit logging",
 )
+instrument_fastapi(app)
 apply_security_middleware(app, service_name="security-authentication")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -265,7 +265,6 @@ async def log_hipaa_event(
 async def login_for_access_token(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
-,
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """

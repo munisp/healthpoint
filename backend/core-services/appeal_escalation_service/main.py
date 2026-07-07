@@ -36,13 +36,13 @@ logger = logging.getLogger(__name__)
 
 setup_telemetry(service_name="appeal-escalation-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Appeal & Escalation Management Service",
     description="Comprehensive appeal and escalation management for NSA/IDR dispute resolutions",
     version="1.0.0"
 )
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
+
 
 # Enums
 class AppealStatus(str, Enum):
@@ -163,7 +163,6 @@ class AppealAnalytics(BaseModel):
     success_probability: float
 
 # In-memory storage (replace with database in production)
-appeals = {}
 appeal_documents = {}
 appeal_timelines = {}
 appeal_decisions = {}
@@ -631,7 +630,7 @@ async def get_appeal_analytics(appeal_id: str,
     return analytics
 
 @app.get("/analytics/appeals")
-async def get_appeal_statistics(,
+async def get_appeal_statistics(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get comprehensive appeal statistics"""

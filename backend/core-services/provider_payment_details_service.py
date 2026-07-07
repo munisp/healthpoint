@@ -28,7 +28,7 @@ from decimal import Decimal
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, Decimal as SQLDecimal, Date, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-import redis.asyncio as redis.asyncio as redis
+import redis.asyncio as redis
 from cryptography.fernet import Fernet
 import pandas as pd
 import io

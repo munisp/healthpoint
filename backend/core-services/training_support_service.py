@@ -34,8 +34,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Training & Support Service",
     description="Comprehensive learning management and support system for healthcare providers",
     version="1.0.0"
@@ -274,7 +272,7 @@ class TrainingAndSupportManager:
             enrollment.completed_at = datetime.utcnow()
             await self._issue_certificate(enrollment)
         
-        logger.info("Updated progress for enrollment $1", enrollment_id)
+        logger.info(f"Updated progress for enrollment {enrollment_id}")
         return enrollment
     
     async def submit_quiz(self, quiz_id: str, user_id: str, answers: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -373,7 +371,7 @@ class TrainingAndSupportManager:
             ticket.resolution = resolution
             ticket.resolved_at = datetime.utcnow()
         
-        logger.info("Updated ticket $1 status to {status}", ticket_id)
+        logger.info(f"Updated ticket {ticket_id} status to {status}")
         return ticket
     
     async def create_knowledge_article(self, article: KnowledgeBaseArticle) -> KnowledgeBaseArticle:
@@ -611,7 +609,7 @@ async def schedule_webinar(webinar: Webinar,
     return await training_manager.schedule_webinar(webinar)
 
 @app.get("/webinars", response_model=List[Webinar])
-async def get_webinars(,
+async def get_webinars(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get all scheduled webinars"""
@@ -625,7 +623,7 @@ async def get_user_progress(user_id: str,
     return await training_manager.get_user_progress(user_id)
 
 @app.get("/analytics/training")
-async def get_training_analytics(,
+async def get_training_analytics(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get training analytics"""

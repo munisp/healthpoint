@@ -43,14 +43,12 @@ logger = logging.getLogger(__name__)
 # FastAPI app
 setup_telemetry(service_name="data-validation-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Data Validation Service",
     description="Schema validation and business rule enforcement for healthcare data",
     version="1.0.0"
 )
-
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),

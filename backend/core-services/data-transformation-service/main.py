@@ -463,7 +463,7 @@ async def health_check():
     }
 
 @app.get("/api/v1/formats/supported")
-async def get_supported_formats(,
+async def get_supported_formats(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get list of supported data formats"""

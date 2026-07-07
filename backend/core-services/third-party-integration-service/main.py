@@ -805,9 +805,6 @@ integration_service = GeorgetownThirdPartyIntegration()
 
 setup_telemetry(service_name="third-party-integration-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Georgetown-Enhanced Third-Party Integration Service",
     description="Comprehensive third-party integration framework with Georgetown University research insights",
     version="2.0.0"
@@ -899,7 +896,7 @@ async def get_integration_recommendations(
     return await integration_service.get_georgetown_recommendations(partner_type, geographic_coverage)
 
 @app.get("/georgetown-insights")
-async def get_georgetown_insights(,
+async def get_georgetown_insights(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get Georgetown University research insights for third-party integration"""

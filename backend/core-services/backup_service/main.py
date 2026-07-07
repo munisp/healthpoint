@@ -776,15 +776,12 @@ async def lifespan(app: FastAPI):
 
 setup_telemetry(service_name="backup-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Backup Service",
     description="Automated backup and disaster recovery with encryption",
     version="1.0.0",
     lifespan=lifespan
 )
-
+instrument_fastapi(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),

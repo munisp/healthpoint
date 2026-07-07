@@ -41,8 +41,6 @@ logger = logging.getLogger(__name__)
 
 # FastAPI app
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Data Validation Service",
     description="Schema validation and business rule enforcement for healthcare data",
     version="1.0.0"

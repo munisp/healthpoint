@@ -329,7 +329,7 @@ async def mark_read(user_id: str, notification_ids: List[str],
     return {"marked_read": len(notification_ids)}
 
 @app.get("/api/v1/notifications/templates")
-async def list_templates(,
+async def list_templates(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     return {"templates": [{"name": t.value, "subject": TEMPLATES[t]["subject"]}

@@ -283,7 +283,7 @@ async def delete_file(file_id: str,
                        datetime.utcnow(), file_id)
 
 @app.get("/api/v1/files/stats/summary")
-async def stats(,
+async def stats(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     pool = await get_db_pool()

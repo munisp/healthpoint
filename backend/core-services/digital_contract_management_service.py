@@ -35,8 +35,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Digital Contract Management Service",
     description="Comprehensive contract lifecycle management for healthcare provider-aggregator relationships",
     version="1.0.0"
@@ -332,7 +330,7 @@ async def create_template(template: ContractTemplate,
     return await contract_manager.create_template(template)
 
 @app.get("/templates", response_model=List[ContractTemplate])
-async def get_templates(,
+async def get_templates(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get all contract templates"""
@@ -429,7 +427,7 @@ async def renew_contract(contract_id: str, renewal_terms: Dict[str, Any],
     return await contract_manager.renew_contract(contract_id, renewal_terms)
 
 @app.get("/analytics/contracts")
-async def get_contract_analytics(,
+async def get_contract_analytics(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get contract analytics and insights"""

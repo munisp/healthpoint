@@ -36,13 +36,13 @@ logger = logging.getLogger(__name__)
 
 setup_telemetry(service_name="training-support-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Training & Support Service",
     description="Comprehensive learning management and support system for healthcare providers",
     version="1.0.0"
 )
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
+
 
 # Enums
 class CourseStatus(str, Enum):
@@ -614,7 +614,7 @@ async def schedule_webinar(webinar: Webinar,
     return await training_manager.schedule_webinar(webinar)
 
 @app.get("/webinars", response_model=List[Webinar])
-async def get_webinars(,
+async def get_webinars(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get all scheduled webinars"""
@@ -628,7 +628,7 @@ async def get_user_progress(user_id: str,
     return await training_manager.get_user_progress(user_id)
 
 @app.get("/analytics/training")
-async def get_training_analytics(,
+async def get_training_analytics(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get training analytics"""

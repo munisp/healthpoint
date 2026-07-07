@@ -879,13 +879,13 @@ eligibility_validator = GeorgetownEligibilityValidator()
 
 setup_telemetry(service_name="enhanced-eligibility-validation-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Georgetown-Enhanced Eligibility Validation Service",
     description="Advanced eligibility validation with Georgetown University research insights for challenge reduction",
     version="2.0.0"
 )
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
+
 
 # Add CORS middleware
 app.add_middleware(
@@ -904,7 +904,7 @@ async def validate_eligibility(request: ValidationRequest,
     return await eligibility_validator.validate_eligibility(request)
 
 @app.get("/validation-rules")
-async def get_validation_rules(,
+async def get_validation_rules(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get available validation rules and their descriptions"""
@@ -979,7 +979,7 @@ async def get_state_requirements(state: str,
         }
 
 @app.get("/georgetown-insights")
-async def get_georgetown_insights(,
+async def get_georgetown_insights(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get Georgetown University research insights for eligibility validation"""
@@ -1001,7 +1001,7 @@ async def get_georgetown_insights(,
     }
 
 @app.get("/challenge-risk-factors")
-async def get_challenge_risk_factors(,
+async def get_challenge_risk_factors(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get challenge risk factors and their weights"""

@@ -648,8 +648,6 @@ async def lifespan(app: FastAPI):
     await db_manager.disconnect()
 
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Workflow Engine Service",
     description="Advanced workflow orchestration with Temporal-like capabilities",
     version="1.0.0",

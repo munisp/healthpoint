@@ -229,8 +229,6 @@ async def lifespan(app: FastAPI):
 
 # FastAPI app
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - User Management Service",
     description="Comprehensive user management with RBAC and multi-tenant support",
     version="1.0.0",

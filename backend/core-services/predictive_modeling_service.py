@@ -97,8 +97,6 @@ logger = logging.getLogger(__name__)
 
 # FastAPI app
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Predictive Modeling Service",
     description="AI/ML service for cost forecasting and predictive analytics in healthcare",
     version="1.0.0"

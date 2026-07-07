@@ -425,16 +425,16 @@ volume_service = VolumeManagementService()
 
 setup_telemetry(service_name="volume-management-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Georgetown-Enhanced Volume Management Service",
     description="Advanced volume management with Georgetown University IDR research insights",
     version="2.0.0"
 )
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
+
 
 @app.get("/metrics", response_model=VolumeMetrics)
-async def get_volume_metrics(,
+async def get_volume_metrics(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get comprehensive volume metrics"""
@@ -455,14 +455,14 @@ async def handle_volume_surge(surge_data: Dict[str, Any],
     return await volume_service.handle_volume_surge(surge_data)
 
 @app.get("/deadline-alerts", response_model=List[DeadlineAlert])
-async def get_deadline_alerts(,
+async def get_deadline_alerts(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get cases approaching submission deadlines"""
     return await volume_service.get_deadline_alerts()
 
 @app.post("/scale-up")
-async def scale_up(,
+async def scale_up(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Manually scale up resources"""
@@ -474,7 +474,7 @@ async def scale_up(,
     }
 
 @app.post("/scale-down")
-async def scale_down(,
+async def scale_down(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Manually scale down resources"""
@@ -498,7 +498,7 @@ async def health_check():
     }
 
 @app.get("/scaling-config", response_model=ScalingConfig)
-async def get_scaling_config(,
+async def get_scaling_config(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get current scaling configuration"""

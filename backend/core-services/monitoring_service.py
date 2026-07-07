@@ -642,8 +642,6 @@ async def lifespan(app: FastAPI):
     await db_manager.disconnect()
 
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Monitoring Service",
     description="Comprehensive monitoring with SIEM integration and alerting",
     version="1.0.0",
@@ -816,7 +814,7 @@ async def get_service_health():
     return {"services": [health.dict() for health in health_results]}
 
 @app.get("/system-metrics")
-async def get_system_metrics(,
+async def get_system_metrics(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get current system metrics"""

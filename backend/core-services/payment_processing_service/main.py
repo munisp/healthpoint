@@ -68,11 +68,11 @@ logger = logging.getLogger(__name__)
 # FastAPI app
 setup_telemetry(service_name="payment-processing-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
     title="Payment Processing Service",
     description="Multi-method payment processing with TigerBeetle double-entry ledger",
     version="2.0.0"
 )
+instrument_fastapi(app)
 app.middleware("http")(security_headers_middleware)
 app.add_middleware(
     CORSMiddleware,

@@ -653,13 +653,13 @@ analytics_engine = GeorgetownPredictiveAnalytics()
 
 setup_telemetry(service_name="predictive-analytics-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Georgetown-Enhanced Predictive Analytics Service",
     description="Advanced predictive analytics with Georgetown University IDR research insights",
     version="2.0.0"
 )
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
+
 
 @app.post("/predict", response_model=PredictionResult)
 async def predict_case_outcome(case_data: CaseData,
@@ -674,7 +674,7 @@ async def predict_case_outcome(case_data: CaseData,
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
 @app.get("/model-performance", response_model=ModelPerformance)
-async def get_model_performance(,
+async def get_model_performance(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get current model performance metrics"""
@@ -684,7 +684,7 @@ async def get_model_performance(,
         raise HTTPException(status_code=404, detail="Model performance data not available")
 
 @app.get("/georgetown-insights")
-async def get_georgetown_insights(,
+async def get_georgetown_insights(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get Georgetown University research insights"""

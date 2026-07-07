@@ -40,8 +40,8 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import (
 from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
+from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
 )
 
@@ -54,13 +54,13 @@ S3_REGION = os.getenv("AWS_REGION", "us-east-1")
 
 setup_telemetry(service_name="document-generation-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="HealthPoint Document Generation Service",
     description="Generates PDF and DOCX documents from templates for IDR/NSA workflows.",
     version="2.0.0",
 )
+instrument_fastapi(app)
+app.middleware("http")(security_headers_middleware)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -655,7 +655,7 @@ async def list_documents(document_type: Optional[str] = None, claim_id: Optional
 
 
 @app.get("/api/v1/documents/types/supported")
-async def list_supported_types(,
+async def list_supported_types(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     return {"document_types": [t.value for t in DocumentType],

@@ -286,7 +286,6 @@ async def list_disputes(
     tenant_id: str = Query("default"),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
-,
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """List all disputes with optional status filter."""

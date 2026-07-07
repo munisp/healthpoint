@@ -31,7 +31,7 @@ import hmac
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, Decimal, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-import redis.asyncio as redis.asyncio as redis
+import redis.asyncio as redis
 from cryptography.fernet import Fernet
 
 # Configure logging

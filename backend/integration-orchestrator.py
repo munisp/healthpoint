@@ -652,7 +652,7 @@ async def process_case(case_request: CaseRequest,
     return await orchestrator.process_case(case_request)
 
 @app.get("/service-health")
-async def get_service_health(,
+async def get_service_health(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get health status of all services"""
@@ -667,14 +667,14 @@ async def get_service_health(,
     }
 
 @app.get("/georgetown-metrics")
-async def get_georgetown_metrics(,
+async def get_georgetown_metrics(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get Georgetown performance metrics"""
     return await orchestrator.get_georgetown_metrics()
 
 @app.get("/platform-status")
-async def get_platform_status(,
+async def get_platform_status(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get comprehensive platform status"""

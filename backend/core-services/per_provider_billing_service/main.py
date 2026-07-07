@@ -29,7 +29,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, Decimal as SQLDecimal, Date, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-import redis.asyncio as redis.asyncio as redis
+import redis.asyncio as redis
 from collections import defaultdict
 import stripe
 import uuid

@@ -237,8 +237,6 @@ async def lifespan(app: FastAPI):
 
 # FastAPI app
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Provider Management Service",
     description="Comprehensive provider onboarding, credentialing, and contract management",
     version="1.0.0",

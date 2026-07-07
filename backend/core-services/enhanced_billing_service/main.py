@@ -33,9 +33,6 @@ logger = logging.getLogger(__name__)
 
 setup_telemetry(service_name="enhanced-billing-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Enhanced Billing Service",
     description="Comprehensive billing system with transaction fee management and transparent communication",
     version="2.0.0"
@@ -485,7 +482,7 @@ billing_manager = EnhancedBillingManager()
 
 # API Endpoints
 @app.get("/fee-structure")
-async def get_fee_structure(,
+async def get_fee_structure(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get complete fee structure for transparency"""
@@ -601,7 +598,7 @@ async def get_invoice(invoice_id: str,
     return invoices[invoice_id]
 
 @app.get("/billing-plans")
-async def get_billing_plans(,
+async def get_billing_plans(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get all available billing plans"""
@@ -618,7 +615,7 @@ async def get_billing_plan(plan_name: BillingPlan,
     return plan_details.dict()
 
 @app.get("/analytics/billing")
-async def get_billing_analytics(,
+async def get_billing_analytics(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get billing analytics and insights"""

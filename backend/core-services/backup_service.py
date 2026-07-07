@@ -576,7 +576,7 @@ class BackupManager:
                 if file_path and os.path.exists(file_path):
                     try:
                         os.remove(file_path)
-                        logger.info("Deleted old backup file: $1", file_path)
+                        logger.info(f"Deleted old backup file: {file_path}")
                     except Exception as e:
                         logger.error(f"Failed to delete backup file {file_path}: {e}")
                 
@@ -774,8 +774,6 @@ async def lifespan(app: FastAPI):
     await db_manager.disconnect()
 
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Backup Service",
     description="Automated backup and disaster recovery with encryption",
     version="1.0.0",

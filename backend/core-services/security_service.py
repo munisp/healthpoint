@@ -1007,8 +1007,6 @@ async def lifespan(app: FastAPI):
     await db_manager.disconnect()
 
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Security Service",
     description="Comprehensive security with RBAC, MFA, encryption, and threat detection",
     version="1.0.0",

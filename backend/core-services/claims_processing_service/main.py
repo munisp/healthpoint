@@ -762,9 +762,6 @@ async def lifespan(app: FastAPI):
 # FastAPI app
 setup_telemetry(service_name="claims-processing-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Claims Processing Service",
     description="Advanced workflow management, AI-powered processing, and real-time status tracking",
     version="1.0.0",
@@ -1001,7 +998,7 @@ async def list_claims(
         }
 
 @app.get("/claims/stats")
-async def get_claims_stats(,
+async def get_claims_stats(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get claims processing statistics"""

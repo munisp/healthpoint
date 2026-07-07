@@ -380,7 +380,7 @@ class ConfigurationManager:
         # Clear cache
         await self._clear_cache(key, scope, tenant_id, service_name, environment)
         
-        logger.info("Updated configuration: $1", key)
+        logger.info(f"Updated configuration: {key}")
         return True
 
     async def delete_configuration(self, key: str, scope: ConfigScope,
@@ -584,8 +584,6 @@ async def lifespan(app: FastAPI):
     await db_manager.disconnect()
 
 app = FastAPI(
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Configuration Service",
     description="Centralized configuration management with versioning and encryption",
     version="1.0.0",

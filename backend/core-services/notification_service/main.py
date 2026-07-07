@@ -699,9 +699,6 @@ async def lifespan(app: FastAPI):
 # FastAPI app
 setup_telemetry(service_name="notification-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Notification Service",
     description="Multi-channel communication, real-time alerts, and notification management",
     version="1.0.0",
@@ -1002,7 +999,7 @@ async def get_preferences(user_id: str,
         return dict(prefs)
 
 @app.get("/templates")
-async def list_templates(,
+async def list_templates(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """List notification templates"""
@@ -1014,7 +1011,7 @@ async def list_templates(,
         return {"templates": [dict(template) for template in templates]}
 
 @app.get("/stats")
-async def get_notification_stats(,
+async def get_notification_stats(
     current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get notification statistics"""

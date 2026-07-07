@@ -761,15 +761,12 @@ async def lifespan(app: FastAPI):
 
 setup_telemetry(service_name="audit-compliance-service", service_version="1.0.0")
 app = FastAPI(
-instrument_fastapi(app)
-
-app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Audit & Compliance Service",
     description="HIPAA, SOX, and healthcare compliance with comprehensive audit trails",
     version="1.0.0",
     lifespan=lifespan
 )
-
+instrument_fastapi(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),
