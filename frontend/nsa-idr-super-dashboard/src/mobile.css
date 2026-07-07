@@ -1,0 +1,274 @@
+/* Mobile-First Responsive Design for NSA/IDR Dashboard */
+
+/* PWA Styles */
+@media (display-mode: standalone) {
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Mobile Breakpoints */
+@media (max-width: 768px) {
+  /* Header adjustments */
+  .dashboard-header {
+    padding: 0.5rem 1rem;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  
+  .dashboard-title {
+    font-size: 1.25rem;
+  }
+  
+  /* Navigation tabs */
+  .nav-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  
+  .nav-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .nav-tab {
+    min-width: 120px;
+    font-size: 0.875rem;
+    padding: 0.5rem 1rem;
+  }
+  
+  /* Cards grid */
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+  
+  .metric-card {
+    padding: 1rem;
+  }
+  
+  .metric-value {
+    font-size: 1.5rem;
+  }
+  
+  .metric-label {
+    font-size: 0.75rem;
+  }
+  
+  /* Charts */
+  .chart-container {
+    height: 250px;
+  }
+  
+  /* Tables */
+  .data-table {
+    font-size: 0.875rem;
+  }
+  
+  .table-cell {
+    padding: 0.5rem;
+  }
+  
+  /* Hide non-essential columns on mobile */
+  .hide-mobile {
+    display: none;
+  }
+  
+  /* Action buttons */
+  .action-buttons {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  
+  .action-button {
+    width: 100%;
+    justify-content: center;
+  }
+  
+  /* Modal dialogs */
+  .modal-content {
+    margin: 1rem;
+    max-height: calc(100vh - 2rem);
+    max-width: calc(100vw - 2rem);
+  }
+  
+  .modal-header {
+    padding: 1rem;
+  }
+  
+  .modal-body {
+    padding: 1rem;
+  }
+  
+  /* Form inputs */
+  .form-input {
+    font-size: 16px; /* Prevents zoom on iOS */
+  }
+  
+  /* Bulk upload */
+  .upload-area {
+    padding: 2rem 1rem;
+  }
+  
+  .upload-text {
+    font-size: 0.875rem;
+  }
+  
+  /* Status indicators */
+  .status-badge {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+  }
+  
+  /* Touch targets */
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Tablet adjustments */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .metrics-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  
+  .chart-container {
+    height: 300px;
+  }
+  
+  .nav-tab {
+    font-size: 0.9rem;
+  }
+}
+
+/* Large mobile (iPhone Plus, etc.) */
+@media (max-width: 414px) {
+  .metrics-grid {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+  
+  .metric-card {
+    padding: 0.75rem;
+  }
+  
+  .chart-container {
+    height: 200px;
+  }
+  
+  .modal-content {
+    margin: 0.5rem;
+    max-height: calc(100vh - 1rem);
+    max-width: calc(100vw - 1rem);
+  }
+}
+
+/* PWA specific styles */
+.pwa-install-prompt {
+  position: fixed;
+  bottom: 1rem;
+  left: 1rem;
+  right: 1rem;
+  background: #3b82f6;
+  color: white;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+}
+
+.pwa-install-button {
+  background: white;
+  color: #3b82f6;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 0.25rem;
+  font-weight: 600;
+  margin-left: 1rem;
+}
+
+/* Offline indicator */
+.offline-indicator {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: #ef4444;
+  color: white;
+  text-align: center;
+  padding: 0.5rem;
+  font-size: 0.875rem;
+  z-index: 1001;
+}
+
+/* Loading states */
+.loading-skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: loading 1.5s infinite;
+}
+
+@keyframes loading {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .loading-skeleton {
+    background: linear-gradient(90deg, #374151 25%, #4b5563 50%, #374151 75%);
+    background-size: 200% 100%;
+  }
+  
+  .pwa-install-prompt {
+    background: #1f2937;
+    border: 1px solid #374151;
+  }
+}
+
+/* Accessibility improvements */
+@media (prefers-reduced-motion: reduce) {
+  .loading-skeleton {
+    animation: none;
+  }
+  
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  .metric-card {
+    border: 2px solid;
+  }
+  
+  .status-badge {
+    border: 1px solid;
+  }
+}
+
+/* Print styles */
+@media print {
+  .nav-tabs,
+  .action-buttons,
+  .modal-content {
+    display: none;
+  }
+  
+  .chart-container {
+    height: auto;
+  }
+  
+  .data-table {
+    font-size: 0.75rem;
+  }
+}

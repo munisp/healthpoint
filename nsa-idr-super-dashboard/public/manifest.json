@@ -1,0 +1,155 @@
+{
+  "name": "NSA/IDR Super Aggregator Dashboard",
+  "short_name": "NSA/IDR Dashboard",
+  "description": "Comprehensive NSA/IDR dispute management and aggregator dashboard for healthcare claims processing",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "lang": "en-US",
+  "categories": ["healthcare", "business", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/icon-72x72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-96x96.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-128x128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-144x144.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-152x152.png",
+      "sizes": "152x152",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-384x384.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "description": "View main dashboard with key metrics",
+      "url": "/?tab=dashboard",
+      "icons": [{ "src": "/icons/dashboard-96x96.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Bulk Upload",
+      "short_name": "Upload",
+      "description": "Upload bulk NSA/IDR dispute claims",
+      "url": "/?tab=disputes&action=upload",
+      "icons": [{ "src": "/icons/upload-96x96.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Providers",
+      "short_name": "Providers",
+      "description": "Manage healthcare providers",
+      "url": "/?tab=providers",
+      "icons": [{ "src": "/icons/providers-96x96.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Payments",
+      "short_name": "Payments",
+      "description": "View payment status and billing",
+      "url": "/?tab=payments",
+      "icons": [{ "src": "/icons/payments-96x96.png", "sizes": "96x96" }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/desktop-dashboard.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "NSA/IDR Dashboard - Desktop View"
+    },
+    {
+      "src": "/screenshots/mobile-dashboard.png",
+      "sizes": "375x667",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "NSA/IDR Dashboard - Mobile View"
+    }
+  ],
+  "related_applications": [
+    {
+      "platform": "webapp",
+      "url": "https://nsa-idr-dashboard.healthcare.gov/manifest.json"
+    }
+  ],
+  "prefer_related_applications": false,
+  "edge_side_panel": {
+    "preferred_width": 400
+  },
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
+  "handle_links": "preferred",
+  "protocol_handlers": [
+    {
+      "protocol": "web+nsaidr",
+      "url": "/dispute?id=%s"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "/upload",
+      "accept": {
+        "text/csv": [".csv"],
+        "application/vnd.ms-excel": [".xls"],
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"]
+      }
+    }
+  ],
+  "share_target": {
+    "action": "/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "file",
+          "accept": ["text/csv", ".csv", ".xlsx", ".xls"]
+        }
+      ]
+    }
+  }
+}

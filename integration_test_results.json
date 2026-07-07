@@ -1,0 +1,339 @@
+{
+  "summary": {
+    "timestamp": "2025-10-06T18:22:43.402686",
+    "total_tests": 23,
+    "passed": 11,
+    "failed": 12,
+    "skipped": 0,
+    "success_rate": 47.83,
+    "total_duration": 0.037,
+    "categories": {
+      "Service Health": {
+        "total": 17,
+        "passed": 11,
+        "failed": 6,
+        "skipped": 0
+      },
+      "Service Integration": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0
+      },
+      "Workflow Integration": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0
+      },
+      "End-to-End Workflow": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0
+      },
+      "NSA Compliance Workflow": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0
+      },
+      "Compliance Integration": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0
+      },
+      "Data Flow Integration": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0
+      }
+    }
+  },
+  "results": [
+    {
+      "test_name": "Health Check - user_management",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.00539398193359375,
+      "message": "user_management service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.369450",
+        "service": "user-management-service",
+        "version": "1.0.0",
+        "users_count": 2
+      }
+    },
+    {
+      "test_name": "Health Check - provider_management",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.0027098655700683594,
+      "message": "provider_management service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.372363",
+        "service": "provider-management-service",
+        "version": "1.0.0",
+        "providers_count": 2
+      }
+    },
+    {
+      "test_name": "Health Check - authentication",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.001994609832763672,
+      "message": "authentication service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.374560",
+        "service": "authentication-service",
+        "version": "1.0.0"
+      }
+    },
+    {
+      "test_name": "Health Check - api_gateway",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.0019273757934570312,
+      "message": "api_gateway service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.376427",
+        "service": "api-gateway-service",
+        "version": "1.0.0",
+        "registered_services": 10
+      }
+    },
+    {
+      "test_name": "Health Check - claims_processing",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.0018105506896972656,
+      "message": "claims_processing service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.378287",
+        "service": "claims-processing-service",
+        "version": "1.0.0",
+        "claims_count": 2
+      }
+    },
+    {
+      "test_name": "Health Check - notification",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.001787424087524414,
+      "message": "notification service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.380066",
+        "service": "notification-service",
+        "version": "1.0.0",
+        "notifications_count": 0
+      }
+    },
+    {
+      "test_name": "Health Check - search_analytics",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.0017619132995605469,
+      "message": "search_analytics service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.381836",
+        "service": "search-analytics-service",
+        "version": "1.0.0",
+        "indexed_documents": 3
+      }
+    },
+    {
+      "test_name": "Health Check - enhanced_user_mgmt",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.0018906593322753906,
+      "message": "enhanced_user_mgmt service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.383752",
+        "service": "enhanced-user-management-service",
+        "version": "1.0.0",
+        "users_count": 0,
+        "audit_logs_count": 0
+      }
+    },
+    {
+      "test_name": "Health Check - ai_fraud_detection",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.0021300315856933594,
+      "message": "ai_fraud_detection service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.385648",
+        "service": "ai-fraud-detection-service",
+        "version": "1.0.0",
+        "analyses_count": 0,
+        "alerts_count": 0
+      }
+    },
+    {
+      "test_name": "Health Check - document_verification",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.0037789344787597656,
+      "message": "document_verification service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.389644",
+        "service": "document-verification-service",
+        "version": "1.0.0",
+        "verifications_count": 0,
+        "supported_document_types": [
+          "medical_license",
+          "insurance_certificate",
+          "tax_document",
+          "identity_document",
+          "business_registration"
+        ]
+      }
+    },
+    {
+      "test_name": "Health Check - kyb_verification",
+      "category": "Service Health",
+      "status": "PASS",
+      "duration": 0.0018551349639892578,
+      "message": "kyb_verification service is healthy",
+      "details": {
+        "status": "healthy",
+        "timestamp": "2025-10-06T22:22:43.391535",
+        "service": "kyb-verification-service",
+        "version": "1.0.0",
+        "verifications_count": 0
+      }
+    },
+    {
+      "test_name": "Health Check - cms_api_integration",
+      "category": "Service Health",
+      "status": "FAIL",
+      "duration": 0.0010333061218261719,
+      "message": "cms_api_integration health check failed: Cannot connect to host localhost:8012 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8012, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8012)]",
+      "details": {
+        "status": 0,
+        "error": "Cannot connect to host localhost:8012 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8012, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8012)]",
+        "data": null
+      }
+    },
+    {
+      "test_name": "Health Check - qpa_calculation",
+      "category": "Service Health",
+      "status": "FAIL",
+      "duration": 0.0010042190551757812,
+      "message": "qpa_calculation health check failed: Cannot connect to host localhost:8013 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8013, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8013)]",
+      "details": {
+        "status": 0,
+        "error": "Cannot connect to host localhost:8013 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8013, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8013)]",
+        "data": null
+      }
+    },
+    {
+      "test_name": "Health Check - gfe_service",
+      "category": "Service Health",
+      "status": "FAIL",
+      "duration": 0.0010488033294677734,
+      "message": "gfe_service health check failed: Cannot connect to host localhost:8014 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8014, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8014)]",
+      "details": {
+        "status": 0,
+        "error": "Cannot connect to host localhost:8014 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8014, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8014)]",
+        "data": null
+      }
+    },
+    {
+      "test_name": "Health Check - federal_reporting",
+      "category": "Service Health",
+      "status": "FAIL",
+      "duration": 0.00086212158203125,
+      "message": "federal_reporting health check failed: Cannot connect to host localhost:8015 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8015, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8015)]",
+      "details": {
+        "status": 0,
+        "error": "Cannot connect to host localhost:8015 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8015, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8015)]",
+        "data": null
+      }
+    },
+    {
+      "test_name": "Health Check - admin_fee_payment",
+      "category": "Service Health",
+      "status": "FAIL",
+      "duration": 0.0009138584136962891,
+      "message": "admin_fee_payment health check failed: Cannot connect to host localhost:8016 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8016, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8016)]",
+      "details": {
+        "status": 0,
+        "error": "Cannot connect to host localhost:8016 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8016, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8016)]",
+        "data": null
+      }
+    },
+    {
+      "test_name": "Health Check - nsa_compliance",
+      "category": "Service Health",
+      "status": "FAIL",
+      "duration": 0.001071929931640625,
+      "message": "nsa_compliance health check failed: Cannot connect to host localhost:8017 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8017, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8017)]",
+      "details": {
+        "status": 0,
+        "error": "Cannot connect to host localhost:8017 ssl:default [Multiple exceptions: [Errno 111] Connect call failed ('::1', 8017, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 8017)]",
+        "data": null
+      }
+    },
+    {
+      "test_name": "Authentication Integration with NSA Services",
+      "category": "Service Integration",
+      "status": "FAIL",
+      "duration": 0.0010156631469726562,
+      "message": "User authentication failed",
+      "details": null
+    },
+    {
+      "test_name": "Claims Processing with QPA Integration",
+      "category": "Workflow Integration",
+      "status": "FAIL",
+      "duration": 0.0009822845458984375,
+      "message": "Claims submission failed",
+      "details": null
+    },
+    {
+      "test_name": "IDR Dispute Creation with Payment Processing",
+      "category": "End-to-End Workflow",
+      "status": "FAIL",
+      "duration": 0.0005300045013427734,
+      "message": "IDR dispute creation failed",
+      "details": null
+    },
+    {
+      "test_name": "GFE Generation and Delivery",
+      "category": "NSA Compliance Workflow",
+      "status": "FAIL",
+      "duration": 0.0004961490631103516,
+      "message": "GFE generation failed",
+      "details": null
+    },
+    {
+      "test_name": "Federal Reporting Generation and Validation",
+      "category": "Compliance Integration",
+      "status": "FAIL",
+      "duration": 0.0004839897155761719,
+      "message": "Federal report generation failed",
+      "details": null
+    },
+    {
+      "test_name": "Provider Onboarding with NSA Compliance Check",
+      "category": "Data Flow Integration",
+      "status": "FAIL",
+      "duration": 0.0009102821350097656,
+      "message": "Provider onboarding failed",
+      "details": null
+    }
+  ]
+}

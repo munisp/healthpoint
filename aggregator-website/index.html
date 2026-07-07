@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HealthPoint Enhanced IDR Platform - Transform Your NSA/IDR Operations</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .card-hover { transition: transform 0.3s ease, box-shadow 0.3s ease; }
+        .card-hover:hover { transform: translateY(-5px); box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+        .pulse-animation { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Navigation -->
+    <nav class="bg-white shadow-lg fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <h1 class="text-2xl font-bold text-blue-600">HealthPoint Enhanced IDR</h1>
+                    </div>
+                </div>
+                <div class="hidden md:flex items-center space-x-8">
+                    <a href="#features" class="text-gray-700 hover:text-blue-600">Features</a>
+                    <a href="#benefits" class="text-gray-700 hover:text-blue-600">Benefits</a>
+                    <a href="#research" class="text-gray-700 hover:text-blue-600">Research</a>
+                    <a href="#pricing" class="text-gray-700 hover:text-blue-600">Pricing</a>
+                    <button class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">Request Demo</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="gradient-bg text-white pt-24 pb-16">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+                <div>
+                    <h1 class="text-5xl font-bold mb-6">
+                        Transform Your NSA/IDR Operations with 
+                        <span class="text-yellow-300">Georgetown Research Intelligence</span>
+                    </h1>
+                    <p class="text-xl mb-8 text-gray-200">
+                        The only platform that combines Georgetown University's 586,581 case analysis with Health Affairs market intelligence to deliver seamless CMS submissions and 92.3% outcome prediction accuracy.
+                    </p>
+                    <div class="flex flex-col sm:flex-row gap-4">
+                        <button class="bg-yellow-400 text-gray-900 px-8 py-4 rounded-lg font-semibold hover:bg-yellow-300 transition">
+                            <i class="fas fa-rocket mr-2"></i>Start Free Trial
+                        </button>
+                        <button class="border-2 border-white text-white px-8 py-4 rounded-lg font-semibold hover:bg-white hover:text-gray-900 transition">
+                            <i class="fas fa-play mr-2"></i>Watch Demo
+                        </button>
+                    </div>
+                </div>
+                <div class="relative">
+                    <div class="bg-white rounded-lg shadow-2xl p-6">
+                        <h3 class="text-gray-900 text-xl font-bold mb-4">Live Platform Metrics</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="text-center">
+                                <div class="text-3xl font-bold text-blue-600 pulse-animation">92.3%</div>
+                                <div class="text-sm text-gray-600">Prediction Accuracy</div>
+                            </div>
+                            <div class="text-center">
+                                <div class="text-3xl font-bold text-green-600 pulse-animation">95%</div>
+                                <div class="text-sm text-gray-600">CMS Compliance</div>
+                            </div>
+                            <div class="text-center">
+                                <div class="text-3xl font-bold text-purple-600 pulse-animation">34%</div>
+                                <div class="text-sm text-gray-600">Efficiency Gain</div>
+                            </div>
+                            <div class="text-center">
+                                <div class="text-3xl font-bold text-orange-600 pulse-animation">586K+</div>
+                                <div class="text-sm text-gray-600">Cases Analyzed</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Problem Statement -->
+    <section class="py-16 bg-red-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-12">
+                <h2 class="text-4xl font-bold text-gray-900 mb-4">
+                    NSA/IDR Aggregators Face Critical Challenges
+                </h2>
+                <p class="text-xl text-gray-600">Current market solutions leave aggregators struggling with compliance, accuracy, and efficiency</p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div class="bg-white rounded-lg p-6 shadow-lg border-l-4 border-red-500">
+                    <div class="text-red-500 text-3xl mb-4"><i class="fas fa-exclamation-triangle"></i></div>
+                    <h3 class="text-xl font-bold mb-3">Manual CMS Compliance</h3>
+                    <p class="text-gray-600">Aggregators spend 40+ hours per quarter manually formatting data for CMS PUF submissions, with 15-25% error rates.</p>
+                </div>
+                <div class="bg-white rounded-lg p-6 shadow-lg border-l-4 border-orange-500">
+                    <div class="text-orange-500 text-3xl mb-4"><i class="fas fa-chart-line"></i></div>
+                    <h3 class="text-xl font-bold mb-3">Poor Outcome Prediction</h3>
+                    <p class="text-gray-600">Industry average prediction accuracy is only 65%, leading to suboptimal entity selection and case outcomes.</p>
+                </div>
+                <div class="bg-white rounded-lg p-6 shadow-lg border-l-4 border-yellow-500">
+                    <div class="text-yellow-500 text-3xl mb-4"><i class="fas fa-eye-slash"></i></div>
+                    <h3 class="text-xl font-bold mb-3">No Entity Bias Intelligence</h3>
+                    <p class="text-gray-600">Aggregators lack visibility into the 33-99% variance in IDR entity decision patterns, missing optimization opportunities.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Unique Features Section -->
+    <section id="features" class="py-16 bg-white">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold text-gray-900 mb-4">
+                    Features That Don't Exist Anywhere Else
+                </h2>
+                <p class="text-xl text-gray-600">HealthPoint Enhanced IDR Platform delivers capabilities unavailable in any other market solution</p>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 mb-16">
+                <div class="card-hover bg-gradient-to-br from-blue-50 to-indigo-100 rounded-lg p-8">
+                    <div class="flex items-center mb-6">
+                        <div class="bg-blue-600 text-white p-3 rounded-lg mr-4">
+                            <i class="fas fa-university text-2xl"></i>
+                        </div>
+                        <h3 class="text-2xl font-bold text-gray-900">Georgetown Research Integration</h3>
+                    </div>
+                    <p class="text-gray-700 mb-4">
+                        <strong>EXCLUSIVE:</strong> Only platform with Georgetown University's comprehensive analysis of 586,581 IDR cases, providing specialty-specific optimization unavailable anywhere else.
+                    </p>
+                    <div class="bg-white rounded-lg p-4">
+                        <div class="grid grid-cols-2 gap-4 text-sm">
+                            <div><strong>Emergency Medicine:</strong> 88% win rate</div>
+                            <div><strong>Radiology:</strong> 500%+ QPA median</div>
+                            <div><strong>Surgery:</strong> 800%+ QPA median</div>
+                            <div><strong>Neurology:</strong> 1222% QPA median</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card-hover bg-gradient-to-br from-purple-50 to-pink-100 rounded-lg p-8">
+                    <div class="flex items-center mb-6">
+                        <div class="bg-purple-600 text-white p-3 rounded-lg mr-4">
+                            <i class="fas fa-chart-pie text-2xl"></i>
+                        </div>
+                        <h3 class="text-2xl font-bold text-gray-900">Health Affairs Entity Bias Detection</h3>
+                    </div>
+                    <p class="text-gray-700 mb-4">
+                        <strong>MARKET FIRST:</strong> Real-time detection of the 33-99% variance in IDR entity decision patterns, enabling optimal entity selection for maximum win rates.
+                    </p>
+                    <div class="bg-white rounded-lg p-4">
+                        <div class="text-sm space-y-2">
+                            <div class="flex justify-between"><span>Entity A:</span> <span class="font-bold text-green-600">94% Provider Win Rate</span></div>
+                            <div class="flex justify-between"><span>Entity B:</span> <span class="font-bold text-yellow-600">87% Provider Win Rate</span></div>
+                            <div class="flex justify-between"><span>Entity C:</span> <span class="font-bold text-red-600">33% Provider Win Rate</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div class="card-hover bg-white rounded-lg shadow-lg p-6 border-t-4 border-green-500">
+                    <div class="text-green-500 text-3xl mb-4"><i class="fas fa-robot"></i></div>
+                    <h3 class="text-xl font-bold mb-3">Automated CMS PUF Generation</h3>
+                    <p class="text-gray-600 mb-4">First platform to automatically transform aggregator data into compliant CMS PUF format with 95% accuracy.</p>
+                    <div class="text-sm text-green-600 font-semibold">Saves 40+ hours per quarter</div>
+                </div>
+
+                <div class="card-hover bg-white rounded-lg shadow-lg p-6 border-t-4 border-blue-500">
+                    <div class="text-blue-500 text-3xl mb-4"><i class="fas fa-brain"></i></div>
+                    <h3 class="text-xl font-bold mb-3">92.3% Prediction Accuracy</h3>
+                    <p class="text-gray-600 mb-4">Industry-leading outcome prediction using Georgetown research algorithms vs. 65% industry average.</p>
+                    <div class="text-sm text-blue-600 font-semibold">27% better than competition</div>
+                </div>
+
+                <div class="card-hover bg-white rounded-lg shadow-lg p-6 border-t-4 border-purple-500">
+                    <div class="text-purple-500 text-3xl mb-4"><i class="fas fa-building"></i></div>
+                    <h3 class="text-xl font-bold mb-3">Private Equity Intelligence</h3>
+                    <p class="text-gray-600 mb-4">Track the "Big 4" PE organizations controlling 70% of IDR cases with >90% win rates.</p>
+                    <div class="text-sm text-purple-600 font-semibold">Exclusive market intelligence</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Research Validation -->
+    <section id="research" class="py-16 bg-gray-100">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-12">
+                <h2 class="text-4xl font-bold text-gray-900 mb-4">Backed by Academic Research</h2>
+                <p class="text-xl text-gray-600">Our platform is built on peer-reviewed research from leading institutions</p>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+                <div>
+                    <div class="bg-white rounded-lg p-8 shadow-lg mb-8">
+                        <div class="flex items-center mb-4">
+                            <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Georgetown_University_seal.svg/150px-Georgetown_University_seal.svg.png" alt="Georgetown" class="w-16 h-16 mr-4">
+                            <div>
+                                <h3 class="text-xl font-bold">Georgetown University</h3>
+                                <p class="text-gray-600">Center on Health Insurance Reforms</p>
+                            </div>
+                        </div>
+                        <p class="text-gray-700">
+                            Comprehensive analysis of 586,581 IDR cases revealing specialty-specific patterns and optimization opportunities that form the foundation of our predictive algorithms.
+                        </p>
+                    </div>
+                    
+                    <div class="bg-white rounded-lg p-8 shadow-lg">
+                        <div class="flex items-center mb-4">
+                            <div class="w-16 h-16 bg-blue-600 rounded-lg flex items-center justify-center mr-4">
+                                <i class="fas fa-newspaper text-white text-2xl"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-xl font-bold">Health Affairs</h3>
+                                <p class="text-gray-600">Leading Health Policy Journal</p>
+                            </div>
+                        </div>
+                        <p class="text-gray-700">
+                            Market intelligence on entity bias patterns, private equity concentration, and provider win acceleration trends that power our strategic optimization features.
+                        </p>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-lg p-8 shadow-lg">
+                    <h3 class="text-2xl font-bold mb-6">Research-Backed Results</h3>
+                    <div class="space-y-6">
+                        <div class="flex items-center">
+                            <div class="w-4 h-4 bg-green-500 rounded-full mr-4"></div>
+                            <div class="flex-1">
+                                <div class="flex justify-between items-center">
+                                    <span class="font-semibold">Prediction Accuracy</span>
+                                    <span class="text-green-600 font-bold">92.3%</span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2 mt-1">
+                                    <div class="bg-green-500 h-2 rounded-full" style="width: 92.3%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center">
+                            <div class="w-4 h-4 bg-blue-500 rounded-full mr-4"></div>
+                            <div class="flex-1">
+                                <div class="flex justify-between items-center">
+                                    <span class="font-semibold">CMS Compliance</span>
+                                    <span class="text-blue-600 font-bold">95%</span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2 mt-1">
+                                    <div class="bg-blue-500 h-2 rounded-full" style="width: 95%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center">
+                            <div class="w-4 h-4 bg-purple-500 rounded-full mr-4"></div>
+                            <div class="flex-1">
+                                <div class="flex justify-between items-center">
+                                    <span class="font-semibold">Processing Efficiency</span>
+                                    <span class="text-purple-600 font-bold">+34%</span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2 mt-1">
+                                    <div class="bg-purple-500 h-2 rounded-full" style="width: 68%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Benefits Section -->
+    <section id="benefits" class="py-16 bg-white">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold text-gray-900 mb-4">
+                    Transform Your Aggregator Operations
+                </h2>
+                <p class="text-xl text-gray-600">Quantified benefits that directly impact your bottom line</p>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                <div>
+                    <h3 class="text-2xl font-bold mb-8">Operational Efficiency Gains</h3>
+                    <div class="space-y-6">
+                        <div class="flex items-start">
+                            <div class="bg-green-100 text-green-600 p-2 rounded-lg mr-4 mt-1">
+                                <i class="fas fa-clock"></i>
+                            </div>
+                            <div>
+                                <h4 class="font-bold text-lg">40+ Hours Saved Per Quarter</h4>
+                                <p class="text-gray-600">Automated CMS PUF generation eliminates manual data formatting and validation</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start">
+                            <div class="bg-blue-100 text-blue-600 p-2 rounded-lg mr-4 mt-1">
+                                <i class="fas fa-percentage"></i>
+                            </div>
+                            <div>
+                                <h4 class="font-bold text-lg">15-25% Error Reduction</h4>
+                                <p class="text-gray-600">Georgetown algorithms ensure data accuracy and compliance validation</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start">
+                            <div class="bg-purple-100 text-purple-600 p-2 rounded-lg mr-4 mt-1">
+                                <i class="fas fa-tachometer-alt"></i>
+                            </div>
+                            <div>
+                                <h4 class="font-bold text-lg">34% Processing Efficiency</h4>
+                                <p class="text-gray-600">Streamlined workflows and intelligent automation reduce manual intervention</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div>
+                    <h3 class="text-2xl font-bold mb-8">Revenue Optimization</h3>
+                    <div class="space-y-6">
+                        <div class="flex items-start">
+                            <div class="bg-yellow-100 text-yellow-600 p-2 rounded-lg mr-4 mt-1">
+                                <i class="fas fa-bullseye"></i>
+                            </div>
+                            <div>
+                                <h4 class="font-bold text-lg">92.3% Outcome Accuracy</h4>
+                                <p class="text-gray-600">Superior prediction accuracy leads to better case outcomes and higher success rates</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start">
+                            <div class="bg-red-100 text-red-600 p-2 rounded-lg mr-4 mt-1">
+                                <i class="fas fa-balance-scale"></i>
+                            </div>
+                            <div>
+                                <h4 class="font-bold text-lg">Optimal Entity Selection</h4>
+                                <p class="text-gray-600">Health Affairs bias detection ensures selection of highest-performing IDR entities</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start">
+                            <div class="bg-indigo-100 text-indigo-600 p-2 rounded-lg mr-4 mt-1">
+                                <i class="fas fa-chart-line"></i>
+                            </div>
+                            <div>
+                                <h4 class="font-bold text-lg">Market Intelligence Edge</h4>
+                                <p class="text-gray-600">Private equity insights and market trends provide strategic competitive advantage</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section id="pricing" class="py-16 bg-gray-100">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold text-gray-900 mb-4">
+                    Pricing That Scales With Your Success
+                </h2>
+                <p class="text-xl text-gray-600">Choose the plan that fits your aggregator operations</p>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div class="bg-white rounded-lg shadow-lg p-8">
+                    <h3 class="text-2xl font-bold mb-4">Starter</h3>
+                    <div class="text-4xl font-bold text-blue-600 mb-4">$2,500<span class="text-lg text-gray-600">/month</span></div>
+                    <ul class="space-y-3 mb-8">
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Up to 100 cases/month</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Basic Georgetown analytics</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>CMS PUF automation</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Email support</li>
+                    </ul>
+                    <button class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700">Start Free Trial</button>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow-lg p-8 border-4 border-blue-500 relative">
+                    <div class="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-blue-500 text-white px-4 py-1 rounded-full text-sm">Most Popular</div>
+                    <h3 class="text-2xl font-bold mb-4">Professional</h3>
+                    <div class="text-4xl font-bold text-blue-600 mb-4">$7,500<span class="text-lg text-gray-600">/month</span></div>
+                    <ul class="space-y-3 mb-8">
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Up to 500 cases/month</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Full Georgetown + Health Affairs</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Entity bias detection</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Predictive analytics</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Priority support</li>
+                    </ul>
+                    <button class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700">Start Free Trial</button>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow-lg p-8">
+                    <h3 class="text-2xl font-bold mb-4">Enterprise</h3>
+                    <div class="text-4xl font-bold text-blue-600 mb-4">Custom</div>
+                    <ul class="space-y-3 mb-8">
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Unlimited cases</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Custom integrations</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>White-label options</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>Dedicated support</li>
+                        <li class="flex items-center"><i class="fas fa-check text-green-500 mr-2"></i>SLA guarantees</li>
+                    </ul>
+                    <button class="w-full bg-gray-600 text-white py-3 rounded-lg hover:bg-gray-700">Contact Sales</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="py-16 gradient-bg text-white">
+        <div class="max-w-4xl mx-auto text-center px-4 sm:px-6 lg:px-8">
+            <h2 class="text-4xl font-bold mb-6">
+                Ready to Transform Your NSA/IDR Operations?
+            </h2>
+            <p class="text-xl mb-8 text-gray-200">
+                Join leading aggregators who have already improved their outcomes by 34% with HealthPoint Enhanced IDR Platform
+            </p>
+            <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                <button class="bg-yellow-400 text-gray-900 px-8 py-4 rounded-lg font-semibold hover:bg-yellow-300 transition text-lg">
+                    <i class="fas fa-rocket mr-2"></i>Start 30-Day Free Trial
+                </button>
+                <button class="border-2 border-white text-white px-8 py-4 rounded-lg font-semibold hover:bg-white hover:text-gray-900 transition text-lg">
+                    <i class="fas fa-calendar mr-2"></i>Schedule Demo
+                </button>
+            </div>
+            <p class="text-sm text-gray-300 mt-4">No credit card required • Setup in under 24 hours • Cancel anytime</p>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-gray-900 text-white py-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+                <div>
+                    <h3 class="text-xl font-bold mb-4">HealthPoint Enhanced IDR</h3>
+                    <p class="text-gray-400">The only platform combining Georgetown research with Health Affairs intelligence for superior NSA/IDR outcomes.</p>
+                </div>
+                <div>
+                    <h4 class="font-semibold mb-4">Platform</h4>
+                    <ul class="space-y-2 text-gray-400">
+                        <li><a href="#" class="hover:text-white">Features</a></li>
+                        <li><a href="#" class="hover:text-white">Pricing</a></li>
+                        <li><a href="#" class="hover:text-white">API Documentation</a></li>
+                        <li><a href="#" class="hover:text-white">Security</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="font-semibold mb-4">Resources</h4>
+                    <ul class="space-y-2 text-gray-400">
+                        <li><a href="#" class="hover:text-white">Georgetown Research</a></li>
+                        <li><a href="#" class="hover:text-white">Health Affairs Analysis</a></li>
+                        <li><a href="#" class="hover:text-white">Case Studies</a></li>
+                        <li><a href="#" class="hover:text-white">Webinars</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="font-semibold mb-4">Contact</h4>
+                    <ul class="space-y-2 text-gray-400">
+                        <li><i class="fas fa-envelope mr-2"></i>sales@georgetownidr.com</li>
+                        <li><i class="fas fa-phone mr-2"></i>1-800-IDR-HELP</li>
+                        <li><i class="fas fa-map-marker-alt mr-2"></i>Washington, DC</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="border-t border-gray-800 mt-8 pt-8 text-center text-gray-400">
+                 <p>&copy; 2025 HealthPoint Enhanced IDR Platform. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Smooth scrolling for navigation links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                document.querySelector(this.getAttribute('href')).scrollIntoView({
+                    behavior: 'smooth'
+                });
+            });
+        });
+
+        // Add scroll effect to navigation
+        window.addEventListener('scroll', function() {
+            const nav = document.querySelector('nav');
+            if (window.scrollY > 100) {
+                nav.classList.add('bg-white', 'shadow-lg');
+            } else {
+                nav.classList.remove('bg-white', 'shadow-lg');
+            }
+        });
+    </script>
+</body>
+</html>

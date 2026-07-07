@@ -1,0 +1,514 @@
+version: '3.8'
+
+services:
+  # Database Services
+  postgres:
+    image: postgres:15-alpine
+    container_name: healthcare-postgres
+    environment:
+      POSTGRES_DB: healthcare_platform
+      POSTGRES_USER: healthuser
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-healthpass123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U healthuser -d healthcare_platform"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - healthcare-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: healthcare-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - healthcare-network
+
+  # MLflow Tracking Server
+  mlflow:
+    image: python:3.11-slim
+    container_name: healthcare-mlflow
+    working_dir: /mlflow
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    command: >
+      bash -c "
+        pip install mlflow psycopg2-binary &&
+        mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform --default-artifact-root /mlflow/artifacts
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./api-gateway-service
+    container_name: healthcare-api-gateway
+    ports:
+      - "8025:8025"
+    depends_on:
+      - gfe_management
+      - x12_edi_processing
+      - cms_portal_automation
+      - idr_entity_integration
+      - data_transformation
+      - security_authentication
+    networks:
+      - healthcare-network
+
+  # AI Fraud Detection Service
+  ai-fraud-detection:
+    build:
+      context: .
+      dockerfile: Dockerfile.ai-fraud
+    container_name: healthcare-ai-fraud
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    volumes:
+      - ai_models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mlflow:
+        condition: service_started
+    networks:
+      - healthcare-network
+
+  # Claims Processing Service
+  claims-processing:
+    build:
+      context: .
+      dockerfile: Dockerfile.claims
+    container_name: healthcare-claims
+    ports:
+      - "8002:8002"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Provider Management Service
+  provider-management:
+    build:
+      context: .
+      dockerfile: Dockerfile.provider
+    container_name: healthcare-provider
+    ports:
+      - "8003:8003"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Patient Management Service
+  patient-management:
+    build:
+      context: .
+      dockerfile: Dockerfile.patient
+    container_name: healthcare-patient
+    ports:
+      - "8004:8004"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Audit & Compliance Service
+  audit-compliance:
+    build:
+      context: .
+      dockerfile: Dockerfile.audit
+    container_name: healthcare-audit
+    ports:
+      - "8005:8005"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Notification Service
+  notification:
+    build:
+      context: .
+      dockerfile: Dockerfile.notification
+    container_name: healthcare-notification
+    ports:
+      - "8006:8006"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Analytics & Reporting Service
+  analytics-reporting:
+    build:
+      context: .
+      dockerfile: Dockerfile.analytics
+    container_name: healthcare-analytics
+    ports:
+      - "8007:8007"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mlflow:
+        condition: service_started
+    networks:
+      - healthcare-network
+
+  # User Management Service
+  user-management:
+    build:
+      context: .
+      dockerfile: Dockerfile.user
+    container_name: healthcare-user
+    ports:
+      - "8008:8008"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Document Management Service
+  document-management:
+    build:
+      context: .
+      dockerfile: Dockerfile.document
+    container_name: healthcare-document
+    ports:
+      - "8009:8009"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+      - STORAGE_PATH=/app/storage
+    volumes:
+      - document_storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Integration Service
+  integration:
+    build:
+      context: .
+      dockerfile: Dockerfile.integration
+    container_name: healthcare-integration
+    ports:
+      - "8010:8010"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Workflow Engine
+  workflow-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.workflow
+    container_name: healthcare-workflow
+    ports:
+      - "8011:8011"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Configuration Service
+  configuration:
+    build:
+      context: .
+      dockerfile: Dockerfile.configuration
+    container_name: healthcare-configuration
+    ports:
+      - "8012:8012"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Monitoring Service
+  monitoring:
+    build:
+      context: .
+      dockerfile: Dockerfile.monitoring
+    container_name: healthcare-monitoring
+    ports:
+      - "8013:8013"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Backup Service
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    container_name: healthcare-backup
+    ports:
+      - "8014:8014"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+      - BACKUP_PATH=/app/backups
+    volumes:
+      - backup_storage:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Security Service
+  security:
+    build:
+      context: .
+      dockerfile: Dockerfile.security
+    container_name: healthcare-security
+    ports:
+      - "8015:8015"
+    environment:
+      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Frontend Application
+  frontend:
+    build:
+      context: ./healthcare-platform-ui
+      dockerfile: Dockerfile
+    container_name: healthcare-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_BASE_URL=http://localhost:8000
+      - REACT_APP_ENVIRONMENT=production
+    depends_on:
+      - api-gateway
+    networks:
+      - healthcare-network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: healthcare-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - frontend
+      - api-gateway
+    networks:
+      - healthcare-network
+
+  # Admin Fee Management Service
+  admin-fee-management:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin-fee
+    container_name: healthcare-admin-fee
+    ports:
+      - "8026:8026"
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/nsa_idr_db
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+
+  # Admin Fee Management Dashboard
+  admin-fee-dashboard:
+    build:
+      context: ./admin-fee-dashboard-enhanced
+      dockerfile: Dockerfile
+    container_name: healthcare-admin-fee-dashboard
+    ports:
+      - "3001:3001"
+    environment:
+      - REACT_APP_API_BASE_URL=http://localhost:8026
+      - REACT_APP_ENVIRONMENT=production
+    depends_on:
+      - admin-fee-management
+    networks:
+      - healthcare-network
+
+  gfe_management:
+    build: ./gfe-management-service
+    ports:
+      - "8027:8027"
+    networks:
+      - healthcare-network
+
+  x12_edi_processing:
+    build: ./x12-edi-processing-service
+    ports:
+      - "8028:8028"
+    networks:
+      - healthcare-network
+
+  cms_portal_automation:
+    build: ./cms-portal-automation-service
+    ports:
+      - "8029:8029"
+    networks:
+      - healthcare-network
+
+  idr_entity_integration:
+    build: ./idr-entity-integration-service
+    ports:
+      - "8030:8030"
+    networks:
+      - healthcare-network
+
+  data_transformation:
+    build: ./data-transformation-service
+    ports:
+      - "8031:8031"
+    networks:
+      - healthcare-network
+
+  security_authentication:
+    build: ./security-authentication-service
+    ports:
+      - "8032:8032"
+    networks:
+      - healthcare-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  mlflow_artifacts:
+    driver: local
+  ai_models:
+    driver: local
+  document_storage:
+    driver: local
+  backup_storage:
+    driver: local
+
+networks:
+  healthcare-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+

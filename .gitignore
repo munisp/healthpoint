@@ -1,0 +1,85 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+.env
+*.env.local
+
+# Node / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dist/
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Logs
+*.log
+logs/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
+# Secrets / credentials
+*.pem
+*.key
+*.crt
+secrets/
+.secrets
+
+# Database
+*.sqlite
+*.db
+*.sql.bak
+
+# ML models (large binary files)
+*.pkl
+*.pickle
+*.h5
+*.pt
+*.pth
+*.onnx
+*.bin
+models/weights/
+checkpoints/
+
+# Compiled assets
+*.min.js
+*.min.css
+
+# Large ML model binary files (use Git LFS or model registry instead)
+ai-ml-dl-implementation/models/*.pt
+ai-ml-dl-implementation/models/*.h5
+ai-ml-dl-implementation/models/*.pkl
+ai-ml-dl-implementation/models/*.bin
+ai-ml-dl-implementation/models/*.joblib

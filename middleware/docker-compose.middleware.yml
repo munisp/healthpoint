@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:22.0.1
+    container_name: keycloak
+    command: start-dev
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+    ports:
+      - "8080:8080"
+    networks:
+      - middleware_net
+
+  permify:
+    image: ghcr.io/permify/permify:latest
+    container_name: permify
+    command: serve
+    ports:
+      - "3476:3476"
+      - "3478:3478"
+    environment:
+      - PERMIFY_DATABASE_ENGINE=memory
+    networks:
+      - middleware_net
+
+networks:
+  middleware_net:
+    driver: bridge
+

@@ -1,0 +1,18 @@
+routes:
+  - uri: /api/v1/gfe/*
+    upstream:
+      nodes:
+        "gfe-management-service:8027": 1
+      type: roundrobin
+    plugins:
+      key-auth: {}
+      opa: 
+        policy: |
+          package http
+          
+          default allow = false
+          
+          allow {
+            input.identity.roles[_] == "admin"
+          }
+

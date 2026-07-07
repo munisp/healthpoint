@@ -1,0 +1,271 @@
+version: '3.8'
+
+services:
+  # MinIO for S3-compatible object storage (Data Lake Storage)
+  minio:
+    image: minio/minio:latest
+    container_name: healthpoint-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: healthpoint_admin
+      MINIO_ROOT_PASSWORD: healthpoint_secure_2024
+      MINIO_DOMAIN: minio
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - lakehouse_network
+    restart: unless-stopped
+
+  # Apache Spark for distributed data processing
+  spark-master:
+    image: bitnami/spark:3.5
+    container_name: healthpoint-spark-master
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    volumes:
+      - spark_master_data:/opt/bitnami/spark/data
+      - ./lakehouse_jobs:/opt/bitnami/spark/jobs
+    networks:
+      - lakehouse_network
+    restart: unless-stopped
+
+  spark-worker-1:
+    image: bitnami/spark:3.5
+    container_name: healthpoint-spark-worker-1
+    ports:
+      - "8081:8081"
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    volumes:
+      - spark_worker1_data:/opt/bitnami/spark/data
+    networks:
+      - lakehouse_network
+    depends_on:
+      - spark-master
+    restart: unless-stopped
+
+  spark-worker-2:
+    image: bitnami/spark:3.5
+    container_name: healthpoint-spark-worker-2
+    ports:
+      - "8082:8082"
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    volumes:
+      - spark_worker2_data:/opt/bitnami/spark/data
+    networks:
+      - lakehouse_network
+    depends_on:
+      - spark-master
+    restart: unless-stopped
+
+  # Apache Iceberg for table format with ACID transactions
+  iceberg-rest:
+    image: tabulario/iceberg-rest:0.6.0
+    container_name: healthpoint-iceberg-rest
+    ports:
+      - "8181:8181"
+    environment:
+      - CATALOG_WAREHOUSE=s3://lakehouse/warehouse
+      - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
+      - CATALOG_S3_ENDPOINT=http://minio:9000
+      - CATALOG_S3_ACCESS_KEY_ID=healthpoint_admin
+      - CATALOG_S3_SECRET_ACCESS_KEY=healthpoint_secure_2024
+      - CATALOG_S3_PATH_STYLE_ACCESS=true
+    networks:
+      - lakehouse_network
+    depends_on:
+      - minio
+    restart: unless-stopped
+
+  # Apache Superset for data visualization and exploration
+  superset:
+    image: apache/superset:latest
+    container_name: healthpoint-superset
+    ports:
+      - "8088:8088"
+    environment:
+      - SUPERSET_SECRET_KEY=healthpoint_superset_secret_key_2024
+      - SUPERSET_CONFIG_PATH=/app/superset_config.py
+    volumes:
+      - superset_data:/app/superset_home
+      - ./superset_config.py:/app/superset_config.py
+    networks:
+      - lakehouse_network
+    restart: unless-stopped
+
+  # Trino for distributed SQL query engine
+  trino:
+    image: trinodb/trino:latest
+    container_name: healthpoint-trino
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./trino_config:/etc/trino
+      - trino_data:/data/trino
+    networks:
+      - lakehouse_network
+    depends_on:
+      - minio
+      - iceberg-rest
+    restart: unless-stopped
+
+  # Apache Airflow for workflow orchestration
+  airflow-webserver:
+    image: apache/airflow:2.7.0
+    container_name: healthpoint-airflow-webserver
+    ports:
+      - "8084:8080"
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW__CORE__FERNET_KEY=healthpoint_fernet_key_2024_secure
+      - AIRFLOW__WEBSERVER__SECRET_KEY=healthpoint_webserver_secret_2024
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+    volumes:
+      - airflow_dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - airflow_plugins:/opt/airflow/plugins
+      - ./airflow_dags:/opt/airflow/dags
+    networks:
+      - lakehouse_network
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  airflow-scheduler:
+    image: apache/airflow:2.7.0
+    container_name: healthpoint-airflow-scheduler
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW__CORE__FERNET_KEY=healthpoint_fernet_key_2024_secure
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+    volumes:
+      - airflow_dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - airflow_plugins:/opt/airflow/plugins
+      - ./airflow_dags:/opt/airflow/dags
+    networks:
+      - lakehouse_network
+    depends_on:
+      - postgres
+    command: scheduler
+    restart: unless-stopped
+
+  # PostgreSQL for Airflow metadata
+  postgres:
+    image: postgres:13
+    container_name: healthpoint-postgres-airflow
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - lakehouse_network
+    restart: unless-stopped
+
+  # Redis for caching and message queuing
+  redis:
+    image: redis:7-alpine
+    container_name: healthpoint-redis-lakehouse
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - lakehouse_network
+    restart: unless-stopped
+
+  # Jupyter Lab for data science and exploration
+  jupyter:
+    image: jupyter/pyspark-notebook:latest
+    container_name: healthpoint-jupyter
+    ports:
+      - "8888:8888"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=healthpoint_jupyter_token_2024
+    volumes:
+      - jupyter_data:/home/jovyan/work
+      - ./notebooks:/home/jovyan/work/notebooks
+    networks:
+      - lakehouse_network
+    restart: unless-stopped
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: healthpoint-prometheus-lakehouse
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - lakehouse_network
+    restart: unless-stopped
+
+  # Grafana for monitoring dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: healthpoint-grafana-lakehouse
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=healthpoint_grafana_2024
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana_dashboards:/etc/grafana/provisioning/dashboards
+    networks:
+      - lakehouse_network
+    restart: unless-stopped
+
+volumes:
+  minio_data:
+  spark_master_data:
+  spark_worker1_data:
+  spark_worker2_data:
+  superset_data:
+  trino_data:
+  airflow_dags:
+  airflow_logs:
+  airflow_plugins:
+  postgres_data:
+  redis_data:
+  jupyter_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  lakehouse_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
