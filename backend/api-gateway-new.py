@@ -93,7 +93,7 @@ def check_service_health():
                 'status': 'healthy' if response.status_code == 200 else 'unhealthy',
                 'response_time': response.elapsed.total_seconds()
             }
-        except:
+        except Exception as e:
             health_status[service_name] = {
                 'status': 'unreachable',
                 'response_time': None

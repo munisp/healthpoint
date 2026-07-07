@@ -154,7 +154,9 @@ async def health():
     return {"status": "healthy", "service": "gfe-management", "version": "2.0.0"}
 
 @app.post("/api/v1/gfe/generate", response_model=GFEResponse, status_code=201)
-async def generate_gfe(req: GFECreateRequest, background_tasks: BackgroundTasks):
+async def generate_gfe(req: GFECreateRequest, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Generate a Good Faith Estimate for a patient."""
     gfe_id = f"GFE-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
     total_cost = sum(item.estimatedCost * item.quantity for item in req.serviceItems)
@@ -188,7 +190,9 @@ async def generate_gfe(req: GFECreateRequest, background_tasks: BackgroundTasks)
                        createdAt=datetime.utcnow(), documentUrl=doc_url)
 
 @app.get("/api/v1/gfe/{gfe_id}", response_model=GFEResponse)
-async def get_gfe(gfe_id: str):
+async def get_gfe(gfe_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Retrieve a GFE by ID."""
     pool = await get_db()
     if not pool:
@@ -206,7 +210,9 @@ async def get_gfe(gfe_id: str):
 
 @app.get("/api/v1/gfe")
 async def list_gfes(tenant_id: str, status: Optional[str] = None,
-                     limit: int = Query(50, le=200), offset: int = 0):
+                     limit: int = Query(50, le=200), offset: int = 0,
+                         current_user: TokenPayload = Depends(get_current_user),
+                     ):
     """List GFEs for a tenant."""
     pool = await get_db()
     if not pool:
@@ -223,7 +229,9 @@ async def list_gfes(tenant_id: str, status: Optional[str] = None,
     return {"gfes": [dict(r) for r in rows], "total": len(rows)}
 
 @app.post("/api/v1/gfe/{gfe_id}/send")
-async def send_gfe(gfe_id: str, background_tasks: BackgroundTasks):
+async def send_gfe(gfe_id: str, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Send a GFE to the patient."""
     pool = await get_db()
     if not pool:
@@ -241,7 +249,9 @@ async def send_gfe(gfe_id: str, background_tasks: BackgroundTasks):
     return {"gfe_id": gfe_id, "status": "sent"}
 
 @app.post("/api/v1/gfe/{gfe_id}/confirm")
-async def confirm_gfe(gfe_id: str, confirmed_by: Optional[str] = None):
+async def confirm_gfe(gfe_id: str, confirmed_by: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Mark a GFE as confirmed by the patient."""
     pool = await get_db()
     if not pool:
@@ -254,7 +264,9 @@ async def confirm_gfe(gfe_id: str, confirmed_by: Optional[str] = None):
     return {"gfe_id": gfe_id, "status": "confirmed", "confirmed_at": datetime.utcnow().isoformat()}
 
 @app.post("/api/v1/gfe/{gfe_id}/dispute")
-async def dispute_gfe(gfe_id: str, reason: str, tenant_id: str):
+async def dispute_gfe(gfe_id: str, reason: str, tenant_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Initiate a GFE dispute."""
     pool = await get_db()
     if not pool:

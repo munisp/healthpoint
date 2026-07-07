@@ -883,13 +883,17 @@ app.add_middleware(
 
 # API Endpoints
 @app.post("/endpoints", status_code=status.HTTP_201_CREATED)
-async def create_endpoint(endpoint: IntegrationEndpoint):
+async def create_endpoint(endpoint: IntegrationEndpoint,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create integration endpoint"""
     endpoint_id = await integration_manager.create_endpoint(endpoint)
     return {"endpoint_id": endpoint_id}
 
 @app.get("/endpoints")
-async def get_endpoints(tenant_id: str = Query(...)):
+async def get_endpoints(tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get integration endpoints"""
     async with db_manager.pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -898,7 +902,9 @@ async def get_endpoints(tenant_id: str = Query(...)):
         return {"endpoints": [dict(row) for row in rows]}
 
 @app.post("/messages/send", status_code=status.HTTP_201_CREATED)
-async def send_message(message: IntegrationMessage):
+async def send_message(message: IntegrationMessage,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Send integration message"""
     message_id = await integration_manager.send_message(message)
     return {"message_id": message_id}
@@ -907,7 +913,9 @@ async def send_message(message: IntegrationMessage):
 async def get_messages(tenant_id: str = Query(...), 
                       endpoint_id: Optional[str] = None,
                       status: Optional[MessageStatus] = None,
-                      limit: int = Query(100, le=1000)):
+                      limit: int = Query(100, le=1000),
+                          current_user: TokenPayload = Depends(get_current_user),
+                      ):
     """Get integration messages"""
     query = "SELECT * FROM integration_messages WHERE tenant_id = $1"
     params = [tenant_id]
@@ -928,14 +936,18 @@ async def get_messages(tenant_id: str = Query(...),
         return {"messages": [dict(row) for row in rows]}
 
 @app.post("/fhir/resources", status_code=status.HTTP_201_CREATED)
-async def create_fhir_resource(resource: FHIRResource):
+async def create_fhir_resource(resource: FHIRResource,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create FHIR resource"""
     resource_id = await integration_manager.create_fhir_resource(resource)
     return {"resource_id": resource_id}
 
 @app.get("/fhir/resources")
 async def get_fhir_resources(tenant_id: str = Query(...), 
-                            resource_type: Optional[str] = None):
+                            resource_type: Optional[str] = None,
+                                current_user: TokenPayload = Depends(get_current_user),
+                            ):
     """Get FHIR resources"""
     query = "SELECT * FROM fhir_resources WHERE tenant_id = $1"
     params = [tenant_id]
@@ -951,25 +963,33 @@ async def get_fhir_resources(tenant_id: str = Query(...),
         return {"resources": [dict(row) for row in rows]}
 
 @app.post("/hl7/process")
-async def process_hl7_message(hl7_message: HL7Message):
+async def process_hl7_message(hl7_message: HL7Message,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Process HL7 message"""
     result = await integration_manager.process_hl7_message(hl7_message)
     return result
 
 @app.post("/edi/process")
-async def process_edi_transaction(edi_transaction: EDITransaction):
+async def process_edi_transaction(edi_transaction: EDITransaction,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Process EDI transaction"""
     result = await integration_manager.process_edi_transaction(edi_transaction)
     return result
 
 @app.post("/webhooks/subscribe", status_code=status.HTTP_201_CREATED)
-async def create_webhook_subscription(subscription: WebhookSubscription):
+async def create_webhook_subscription(subscription: WebhookSubscription,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create webhook subscription"""
     subscription_id = await integration_manager.create_webhook_subscription(subscription)
     return {"subscription_id": subscription_id}
 
 @app.get("/webhooks/subscriptions")
-async def get_webhook_subscriptions(tenant_id: str = Query(...)):
+async def get_webhook_subscriptions(tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get webhook subscriptions"""
     async with db_manager.pool.acquire() as conn:
         rows = await conn.fetch("""

@@ -13,6 +13,7 @@ import redis.asyncio as aioredis
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
+from backend.shared.auth import get_current_user, require_admin, require_role, TokenPayload
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -249,7 +250,9 @@ async def health():
     return {"status": "healthy", "service": "integration-notification", "version": "2.0.0"}
 
 @app.post("/api/v1/notifications/send", response_model=NotificationResponse, status_code=201)
-async def send_notification(req: NotificationRequest, background_tasks: BackgroundTasks):
+async def send_notification(req: NotificationRequest, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Send a notification via the specified channel."""
     sent_at = datetime.utcnow()
     notif_status = await deliver_notification(req)
@@ -259,7 +262,9 @@ async def send_notification(req: NotificationRequest, background_tasks: Backgrou
                                  message=f"Notification {notif_status.value}")
 
 @app.post("/api/v1/notifications/bulk", status_code=202)
-async def send_bulk(req: BulkNotificationRequest, background_tasks: BackgroundTasks):
+async def send_bulk(req: BulkNotificationRequest, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     if len(req.notifications) > 500:
         raise HTTPException(400, "Maximum 500 notifications per bulk request")
     batch_id = str(uuid.uuid4())
@@ -277,7 +282,9 @@ async def send_bulk(req: BulkNotificationRequest, background_tasks: BackgroundTa
     return {"batch_id": batch_id, "count": len(req.notifications), "status": "processing"}
 
 @app.get("/api/v1/notifications/user/{user_id}")
-async def get_user_notifications(user_id: str, unread_only: bool = False, limit: int = 50):
+async def get_user_notifications(user_id: str, unread_only: bool = False, limit: int = 50,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get in-app notifications for a user from Redis."""
     redis = await get_redis()
     if not redis:
@@ -295,7 +302,9 @@ async def get_user_notifications(user_id: str, unread_only: bool = False, limit:
     return {"notifications": notifications, "total": len(notifications)}
 
 @app.post("/api/v1/notifications/user/{user_id}/mark-read")
-async def mark_read(user_id: str, notification_ids: List[str]):
+async def mark_read(user_id: str, notification_ids: List[str],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Mark notifications as read."""
     redis = await get_redis()
     if not redis:
@@ -317,12 +326,16 @@ async def mark_read(user_id: str, notification_ids: List[str]):
     return {"marked_read": len(notification_ids)}
 
 @app.get("/api/v1/notifications/templates")
-async def list_templates():
+async def list_templates(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     return {"templates": [{"name": t.value, "subject": TEMPLATES[t]["subject"]}
                            for t in NotificationTemplate if t in TEMPLATES]}
 
 @app.get("/api/v1/notifications/stats")
-async def notification_stats(tenant_id: Optional[str] = None):
+async def notification_stats(tenant_id: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     pool = await get_db()
     if not pool:
         raise HTTPException(503, "Database unavailable")

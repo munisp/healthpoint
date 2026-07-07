@@ -13,6 +13,7 @@ import redis.asyncio as aioredis
 from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from backend.shared.auth import get_current_user, require_admin, require_role, TokenPayload
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -188,12 +189,16 @@ async def health():
     return {"status": "healthy", "service": "cms-portal-automation", "version": "2.0.0"}
 
 @app.post("/api/v1/cms/disputes/initiate", response_model=CMSSubmissionResponse, status_code=201)
-async def initiate_dispute(req: DisputeInitiationRequest):
+async def initiate_dispute(req: DisputeInitiationRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Initiate an IDR dispute with the CMS portal."""
     return await process_submission(req)
 
 @app.get("/api/v1/cms/disputes/{submission_id}/status")
-async def get_submission_status(submission_id: str):
+async def get_submission_status(submission_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get the current status of a CMS submission."""
     pool = await get_db()
     if not pool:
@@ -215,14 +220,18 @@ async def get_submission_status(submission_id: str):
     return record
 
 @app.post("/api/v1/cms/qpa/lookup", response_model=QPALookupResponse)
-async def lookup_qpa(req: QPALookupRequest):
+async def lookup_qpa(req: QPALookupRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Look up the Qualifying Payment Amount (QPA) from CMS."""
     result = await lookup_qpa_from_cms(req)
     return QPALookupResponse(**{**result, "calculated_at": datetime.utcnow()})
 
 @app.get("/api/v1/cms/submissions")
 async def list_submissions(tenant_id: Optional[str] = None, status: Optional[str] = None,
-                            limit: int = 50, offset: int = 0):
+                            limit: int = 50, offset: int = 0,
+                                current_user: TokenPayload = Depends(get_current_user),
+                            ):
     pool = await get_db()
     if not pool:
         raise HTTPException(503, "Database unavailable")
@@ -239,7 +248,9 @@ async def list_submissions(tenant_id: Optional[str] = None, status: Optional[str
     return {"submissions": [dict(r) for r in rows], "total": len(rows)}
 
 @app.post("/api/v1/cms/submissions/{submission_id}/retry")
-async def retry_submission(submission_id: str, background_tasks: BackgroundTasks):
+async def retry_submission(submission_id: str, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Retry a failed CMS submission."""
     pool = await get_db()
     if not pool:
@@ -267,7 +278,9 @@ async def retry_submission(submission_id: str, background_tasks: BackgroundTasks
     return {"submission_id": submission_id, "status": "retry_initiated"}
 
 @app.get("/api/v1/cms/stats")
-async def cms_stats(tenant_id: Optional[str] = None):
+async def cms_stats(tenant_id: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     pool = await get_db()
     if not pool:
         raise HTTPException(503, "Database unavailable")

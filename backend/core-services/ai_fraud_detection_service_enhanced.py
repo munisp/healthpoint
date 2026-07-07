@@ -1716,19 +1716,25 @@ app.add_middleware(
 
 # API Endpoints
 @app.post("/analyze", response_model=FraudDetectionResult)
-async def analyze_claim(claim_data: ClaimData):
+async def analyze_claim(claim_data: ClaimData,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Analyze claim for fraud using hybrid ML/DL/GNN approach"""
     result = await fraud_engine.analyze_claim(claim_data)
     return result
 
 @app.post("/train-model", status_code=status.HTTP_201_CREATED)
-async def train_model(request: ModelTrainingRequest):
+async def train_model(request: ModelTrainingRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Train new ML model for fraud detection"""
     job_id = await fraud_engine.train_model(request)
     return {"job_id": job_id, "status": "training_started"}
 
 @app.get("/training-jobs/{job_id}")
-async def get_training_job(job_id: str):
+async def get_training_job(job_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get training job status"""
     async with db_manager.pool.acquire() as conn:
         job = await conn.fetchrow("""
@@ -1741,7 +1747,9 @@ async def get_training_job(job_id: str):
         return dict(job)
 
 @app.get("/models")
-async def get_models(tenant_id: str = Query(...)):
+async def get_models(tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get available ML models for tenant"""
     async with db_manager.pool.acquire() as conn:
         models = await conn.fetch("""
@@ -1754,7 +1762,9 @@ async def get_models(tenant_id: str = Query(...)):
         return {"models": [dict(model) for model in models]}
 
 @app.post("/rules", status_code=status.HTTP_201_CREATED)
-async def create_fraud_rule(rule: FraudRule):
+async def create_fraud_rule(rule: FraudRule,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create new fraud detection rule"""
     rule.id = str(uuid.uuid4())
     
@@ -1770,7 +1780,9 @@ async def create_fraud_rule(rule: FraudRule):
     return {"rule_id": rule.id}
 
 @app.get("/rules")
-async def get_fraud_rules(tenant_id: str = Query(...)):
+async def get_fraud_rules(tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get fraud detection rules for tenant"""
     async with db_manager.pool.acquire() as conn:
         rules = await conn.fetch("""
@@ -1784,6 +1796,8 @@ async def get_fraud_results(
     tenant_id: str = Query(...),
     risk_level: Optional[FraudRiskLevel] = None,
     limit: int = Query(100, le=1000)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get fraud detection results"""
     query = "SELECT * FROM fraud_detection_results WHERE tenant_id = $1"
@@ -1801,7 +1815,9 @@ async def get_fraud_results(
         return {"results": [dict(result) for result in results]}
 
 @app.get("/patterns")
-async def get_fraud_patterns(tenant_id: str = Query(...)):
+async def get_fraud_patterns(tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get detected fraud patterns"""
     async with db_manager.pool.acquire() as conn:
         patterns = await conn.fetch("""

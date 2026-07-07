@@ -202,7 +202,9 @@ parser = EDIParser()
 
 
 @app.post("/api/v1/x12/837/process")
-async def process_837(claim: Claim837):
+async def process_837(claim: Claim837,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Process an X12 837 claim transaction."""
     transaction_id = f"TXN-{uuid.uuid4().hex[:8].upper()}"
     processed_at = datetime.utcnow()
@@ -230,7 +232,9 @@ async def process_837(claim: Claim837):
 
 
 @app.post("/api/v1/x12/270/eligibility")
-async def check_eligibility(inquiry: EligibilityInquiry):
+async def check_eligibility(inquiry: EligibilityInquiry,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Process X12 270 eligibility inquiry and return 271 response."""
     # Determine eligibility (in production, query payer system)
     eligible = True  # Default to eligible; real implementation queries payer
@@ -257,7 +261,9 @@ async def check_eligibility(inquiry: EligibilityInquiry):
 
 
 @app.post("/api/v1/x12/276/claim-status")
-async def get_claim_status(request: ClaimStatusRequest):
+async def get_claim_status(request: ClaimStatusRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Process X12 276 claim status request and return 277 response."""
     # In production, query claims adjudication system
     claim_status = "accepted"
@@ -279,7 +285,9 @@ async def get_claim_status(request: ClaimStatusRequest):
 
 
 @app.post("/api/v1/x12/835/remittance")
-async def process_835(raw_edi: str):
+async def process_835(raw_edi: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Process X12 835 Electronic Remittance Advice."""
     parsed = parser.parse(raw_edi)
     claim_payments = []
@@ -322,7 +330,9 @@ async def process_835(raw_edi: str):
 
 
 @app.post("/api/v1/x12/parse")
-async def parse_edi(raw_edi: str):
+async def parse_edi(raw_edi: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Parse any X12 EDI transaction and return structured data."""
     try:
         parsed = parser.parse(raw_edi)
@@ -332,7 +342,9 @@ async def parse_edi(raw_edi: str):
 
 
 @app.post("/api/v1/x12/upload")
-async def upload_edi_file(file: UploadFile = File(...)):
+async def upload_edi_file(file: UploadFile = File(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Upload and process an EDI file."""
     content = await file.read()
     raw_edi = content.decode("utf-8", errors="replace")

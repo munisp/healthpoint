@@ -28,7 +28,7 @@ import logging
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, Decimal, JSON, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-import redis
+import redis.asyncio as redis.asyncio as redis
 from collections import defaultdict
 import hashlib
 
@@ -47,7 +47,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Redis setup for caching
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
+# Redis client initialized via shared cache module
+# Use: from backend.shared.cache import get_client as get_redis_client
 
 class ReconciliationStatus(str, Enum):
     PENDING = "pending"
@@ -572,6 +573,8 @@ async def reconcile_bulk_submission(
     request: ReconciliationRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Reconcile bulk submission and validate claim mappings"""
     try:
@@ -595,7 +598,9 @@ async def reconcile_bulk_submission(
         raise HTTPException(status_code=500, detail=f"Reconciliation failed: {str(e)}")
 
 @app.get("/api/v1/reconciliation/status/{batch_id}")
-async def get_reconciliation_status(batch_id: str, db: Session = Depends(get_db)):
+async def get_reconciliation_status(batch_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get reconciliation status for a batch"""
     # Try cache first
     cached_result = redis_client.get(f"reconciliation:{batch_id}")
@@ -623,29 +628,39 @@ async def assign_provider(
     aggregator_id: str,
     provider_info: ProviderMapping,
     db: Session = Depends(get_db)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Assign a provider to an aggregator"""
     return await provider_manager.assign_provider_to_aggregator(aggregator_id, provider_info)
 
 @app.get("/api/v1/aggregators/{aggregator_id}/providers")
-async def get_aggregator_providers(aggregator_id: str, db: Session = Depends(get_db)):
+async def get_aggregator_providers(aggregator_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all providers assigned to an aggregator"""
     return await provider_manager.get_aggregator_providers(aggregator_id)
 
 @app.post("/api/v1/reconciliation/validate-claim")
-async def validate_single_claim(claim_data: Dict[str, Any], aggregator_id: str):
+async def validate_single_claim(claim_data: Dict[str, Any], aggregator_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Validate a single claim mapping"""
     validation = await reconciliation_engine.validate_claim_mapping(claim_data, aggregator_id)
     return validation
 
 @app.post("/api/v1/reconciliation/refresh-cache")
-async def refresh_provider_cache():
+async def refresh_provider_cache(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Refresh provider-aggregator mapping cache"""
     reconciliation_engine.refresh_cache()
     return {"status": "cache refreshed", "timestamp": datetime.utcnow().isoformat()}
 
 @app.get("/api/v1/reconciliation/aggregator-summary/{aggregator_id}")
-async def get_aggregator_summary(aggregator_id: str, db: Session = Depends(get_db)):
+async def get_aggregator_summary(aggregator_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get summary of submissions and billing for an aggregator"""
     submissions = db.query(BulkSubmission).filter(
         BulkSubmission.aggregator_id == aggregator_id

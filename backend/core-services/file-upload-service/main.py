@@ -180,7 +180,9 @@ async def health():
 
 @app.post("/upload-file/")
 async def upload_legacy(file: UploadFile = File(...),
-                        background_tasks: BackgroundTasks = BackgroundTasks()):
+                        background_tasks: BackgroundTasks = BackgroundTasks(),
+                            current_user: TokenPayload = Depends(get_current_user),
+                        ):
     content = await file.read()
     return await process_upload(content, file.filename,
                                  file.content_type or "application/octet-stream",
@@ -192,7 +194,9 @@ async def upload_file(file: UploadFile = File(...),
                       claim_id: Optional[str] = Form(default=None),
                       dispute_id: Optional[str] = Form(default=None),
                       uploaded_by: Optional[str] = Form(default=None),
-                      background_tasks: BackgroundTasks = BackgroundTasks()):
+                      background_tasks: BackgroundTasks = BackgroundTasks(),
+                          current_user: TokenPayload = Depends(get_current_user),
+                      ):
     content = await file.read()
     return await process_upload(content, file.filename,
                                  file.content_type or "application/octet-stream",
@@ -204,7 +208,9 @@ async def upload_bulk(files: List[UploadFile] = File(...),
                       claim_id: Optional[str] = Form(default=None),
                       dispute_id: Optional[str] = Form(default=None),
                       uploaded_by: Optional[str] = Form(default=None),
-                      background_tasks: BackgroundTasks = BackgroundTasks()):
+                      background_tasks: BackgroundTasks = BackgroundTasks(),
+                          current_user: TokenPayload = Depends(get_current_user),
+                      ):
     if len(files) > 20:
         raise HTTPException(400, "Maximum 20 files per bulk upload")
     batch_id = str(uuid.uuid4())
@@ -223,7 +229,9 @@ async def upload_bulk(files: List[UploadFile] = File(...),
     return {"batch_id": batch_id, "total": len(files), "successful": ok, "failed": fail, "results": results}
 
 @app.get("/api/v1/files/{file_id}")
-async def get_file(file_id: str):
+async def get_file(file_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     pool = await get_db_pool()
     if not pool:
         raise HTTPException(503, "Database unavailable")
@@ -236,7 +244,9 @@ async def get_file(file_id: str):
 
 @app.get("/api/v1/files")
 async def list_files(category: Optional[str]=None, claim_id: Optional[str]=None,
-                     dispute_id: Optional[str]=None, limit: int=Query(50, le=200), offset: int=0):
+                     dispute_id: Optional[str]=None, limit: int=Query(50, le=200), offset: int=0,
+                         current_user: TokenPayload = Depends(get_current_user),
+                     ):
     pool = await get_db_pool()
     if not pool:
         raise HTTPException(503, "Database unavailable")
@@ -251,7 +261,9 @@ async def list_files(category: Optional[str]=None, claim_id: Optional[str]=None,
     return {"files": [dict(r) for r in rows], "total": len(rows)}
 
 @app.delete("/api/v1/files/{file_id}", status_code=204)
-async def delete_file(file_id: str):
+async def delete_file(file_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     pool = await get_db_pool()
     if not pool:
         raise HTTPException(503, "Database unavailable")
@@ -268,7 +280,9 @@ async def delete_file(file_id: str):
                        datetime.utcnow(), file_id)
 
 @app.get("/api/v1/files/stats/summary")
-async def stats():
+async def stats(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     pool = await get_db_pool()
     if not pool:
         raise HTTPException(503, "Database unavailable")

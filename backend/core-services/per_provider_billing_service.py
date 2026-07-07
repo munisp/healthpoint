@@ -28,7 +28,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, Decimal as SQLDecimal, Date, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-import redis
+import redis.asyncio as redis.asyncio as redis
 from collections import defaultdict
 import stripe
 import uuid
@@ -49,7 +49,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Redis setup for caching
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
+# Redis client initialized via shared cache module
+# Use: from backend.shared.cache import get_client as get_redis_client
 
 # Stripe setup (for payment processing)
 stripe.api_key = "sk_test_stripe_api_key_placeholder"  # In production, use secure key management
@@ -571,7 +572,9 @@ billing_engine = PerProviderBillingEngine()
 payment_engine = PaymentProcessingEngine()
 
 @app.post("/api/v1/billing/record-usage")
-async def record_usage(usage_data: UsageData, db: Session = Depends(get_db)):
+async def record_usage(usage_data: UsageData, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Record usage data for billing calculation"""
     usage_record = await billing_engine.record_usage(usage_data)
     return {
@@ -582,7 +585,9 @@ async def record_usage(usage_data: UsageData, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/v1/billing/generate-invoice/{aggregator_id}")
-async def generate_invoice(aggregator_id: str, usage_record_id: int, db: Session = Depends(get_db)):
+async def generate_invoice(aggregator_id: str, usage_record_id: int, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Generate invoice for an aggregator based on usage"""
     usage_record = db.query(UsageRecord).filter(UsageRecord.id == usage_record_id).first()
     if not usage_record:
@@ -598,7 +603,9 @@ async def generate_invoice(aggregator_id: str, usage_record_id: int, db: Session
     }
 
 @app.get("/api/v1/billing/calculate/{aggregator_id}")
-async def calculate_billing(aggregator_id: str, usage_data: UsageData, db: Session = Depends(get_db)):
+async def calculate_billing(aggregator_id: str, usage_data: UsageData, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Calculate billing amount without recording usage"""
     aggregator_billing = db.query(AggregatorBilling).filter(
         AggregatorBilling.aggregator_id == aggregator_id
@@ -617,7 +624,9 @@ async def calculate_billing(aggregator_id: str, usage_data: UsageData, db: Sessi
     return calculation
 
 @app.post("/api/v1/billing/process-payment")
-async def process_payment(payment_request: PaymentRequest, db: Session = Depends(get_db)):
+async def process_payment(payment_request: PaymentRequest, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Process payment for an invoice"""
     payment = await payment_engine.process_payment(payment_request)
     return {
@@ -629,7 +638,9 @@ async def process_payment(payment_request: PaymentRequest, db: Session = Depends
     }
 
 @app.get("/api/v1/billing/invoices/{aggregator_id}")
-async def get_aggregator_invoices(aggregator_id: str, db: Session = Depends(get_db)):
+async def get_aggregator_invoices(aggregator_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all invoices for an aggregator"""
     invoices = db.query(Invoice).filter(
         Invoice.aggregator_id == aggregator_id
@@ -649,7 +660,9 @@ async def get_aggregator_invoices(aggregator_id: str, db: Session = Depends(get_
     ]
 
 @app.get("/api/v1/billing/usage/{aggregator_id}")
-async def get_aggregator_usage(aggregator_id: str, db: Session = Depends(get_db)):
+async def get_aggregator_usage(aggregator_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get usage records for an aggregator"""
     usage_records = db.query(UsageRecord).filter(
         UsageRecord.aggregator_id == aggregator_id
@@ -669,7 +682,9 @@ async def get_aggregator_usage(aggregator_id: str, db: Session = Depends(get_db)
     ]
 
 @app.post("/api/v1/billing/plans")
-async def create_billing_plan(plan_data: BillingPlanCreate, db: Session = Depends(get_db)):
+async def create_billing_plan(plan_data: BillingPlanCreate, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new billing plan"""
     plan_id = f"PLAN-{uuid.uuid4().hex[:8].upper()}"
     
@@ -696,7 +711,9 @@ async def create_billing_plan(plan_data: BillingPlanCreate, db: Session = Depend
     }
 
 @app.get("/api/v1/billing/summary/{aggregator_id}")
-async def get_billing_summary(aggregator_id: str, db: Session = Depends(get_db)):
+async def get_billing_summary(aggregator_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get billing summary for an aggregator"""
     # Get current billing info
     aggregator_billing = db.query(AggregatorBilling).filter(

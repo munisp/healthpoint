@@ -721,7 +721,7 @@ class PredictiveModelingService:
                 if col in processed_df.columns:
                     try:
                         processed_df[col] = encoder.fit_transform(processed_df[col].astype(str))
-                    except:
+                    except Exception as e:
                         # Handle unseen categories
                         processed_df[col] = 0
             
@@ -973,6 +973,8 @@ async def startup_event():
 async def make_prediction(
     prediction_request: PredictionRequest,
     credentials: HTTPAuthorizationCredentials = Depends(security)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Make predictions using trained models"""
     return await predictive_service.predict(prediction_request)
@@ -982,6 +984,8 @@ async def train_model(
     training_request: TrainingRequest,
     background_tasks: BackgroundTasks,
     credentials: HTTPAuthorizationCredentials = Depends(security)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Train a new predictive model"""
     return await predictive_service.train_model(training_request)
@@ -989,6 +993,8 @@ async def train_model(
 @app.get("/models")
 async def list_models(
     credentials: HTTPAuthorizationCredentials = Depends(security)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """List available models"""
     models_info = []
@@ -1009,6 +1015,8 @@ async def list_models(
 async def get_best_model(
     model_type: ModelType,
     credentials: HTTPAuthorizationCredentials = Depends(security)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get the best performing model for a type"""
     best_model = await predictive_service.get_best_model_for_type(model_type)
@@ -1026,6 +1034,8 @@ async def get_best_model(
 async def get_prediction_result(
     prediction_id: str,
     credentials: HTTPAuthorizationCredentials = Depends(security)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get cached prediction result"""
     try:

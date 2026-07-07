@@ -13,6 +13,7 @@ import redis.asyncio as aioredis
 from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from backend.shared.auth import get_current_user, require_admin, require_role, TokenPayload
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -117,7 +118,9 @@ async def health():
     return {"status": "healthy", "service": "third-party-integration", "version": "2.0.0"}
 
 @app.get("/api/v1/integrations/intermediaries")
-async def list_intermediaries():
+async def list_intermediaries(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """List all supported IDR intermediaries."""
     return {"intermediaries": [
         {"name": name, "api_base": info["api_base"], "auth_type": info["auth_type"]}
@@ -125,7 +128,9 @@ async def list_intermediaries():
     ]}
 
 @app.post("/integrate")
-async def integrate_intermediary_legacy(req: IntegrationRequest):
+async def integrate_intermediary_legacy(req: IntegrationRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Legacy endpoint: integrate with an intermediary."""
     if req.intermediary_name not in SUPPORTED_INTERMEDIARIES:
         raise HTTPException(400, f"Intermediary '{req.intermediary_name}' not supported. "
@@ -152,12 +157,16 @@ async def integrate_intermediary_legacy(req: IntegrationRequest):
                 else f"Integration configured but connectivity check failed")
 
 @app.post("/api/v1/integrations/register", response_model=IntegrationResponse, status_code=201)
-async def register_integration(req: IntegrationRequest):
+async def register_integration(req: IntegrationRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Register a new third-party integration."""
     return await integrate_intermediary_legacy(req)
 
 @app.post("/api/v1/integrations/cases/submit", status_code=201)
-async def submit_case(req: CaseSubmissionRequest):
+async def submit_case(req: CaseSubmissionRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Submit a dispute case to an external intermediary."""
     pool = await get_db()
     integration = None
@@ -180,7 +189,9 @@ async def submit_case(req: CaseSubmissionRequest):
             "submitted_at": datetime.utcnow().isoformat()}
 
 @app.get("/api/v1/integrations/{integration_id}/status")
-async def get_integration_status(integration_id: str, tenant_id: str):
+async def get_integration_status(integration_id: str, tenant_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get the status of a registered integration."""
     pool = await get_db()
     if not pool:
@@ -194,7 +205,9 @@ async def get_integration_status(integration_id: str, tenant_id: str):
             "api_base": value.get("api_base"), "created_at": row["created_at"]}
 
 @app.get("/api/v1/integrations")
-async def list_integrations(tenant_id: str):
+async def list_integrations(tenant_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """List all integrations for a tenant."""
     pool = await get_db()
     if not pool:
@@ -204,7 +217,9 @@ async def list_integrations(tenant_id: str):
     return {"integrations": [dict(r) for r in rows]}
 
 @app.delete("/api/v1/integrations/{integration_id}", status_code=204)
-async def delete_integration(integration_id: str, tenant_id: str):
+async def delete_integration(integration_id: str, tenant_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Remove an integration."""
     pool = await get_db()
     if not pool:

@@ -1,0 +1,875 @@
+---
+# HealthPoint NSA/IDR Platform — Core Services Kubernetes Deployments
+# All deployments use:
+#   - Vault agent sidecar for secret injection
+#   - Liveness + readiness probes on /health
+#   - Resource requests/limits sized for production
+#   - Anti-affinity rules to spread pods across nodes
+#   - Security context: non-root, read-only filesystem
+
+# ── API Gateway (port 8000) ──────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: healthpoint
+  labels:
+    app: api-gateway
+    version: v1
+    app.kubernetes.io/part-of: healthpoint-platform
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api-gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        vault.hashicorp.com/agent-inject-secret-app: "secret/data/healthpoint/keycloak"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values: [api-gateway]
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: api-gateway
+          image: healthpoint/api-gateway:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ── NSA IDR Dispute Service (port 8016) ─────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nsa-idr-dispute
+  namespace: healthpoint
+  labels:
+    app: nsa-idr-dispute
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nsa-idr-dispute
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: nsa-idr-dispute
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8016"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: nsa-idr-dispute
+          image: healthpoint/nsa-idr-dispute:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8016
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8016
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8016
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ── Payment Processing Service (port 8016 — uses different image) ────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-processing
+  namespace: healthpoint
+  labels:
+    app: payment-processing
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: payment-processing
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: payment-processing
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8016"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: payment-processing
+          image: healthpoint/payment-processing:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8016
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          env:
+            - name: TIGERBEETLE_ADDRESSES
+              valueFrom:
+                configMapKeyRef:
+                  name: healthpoint-platform-config
+                  key: TIGERBEETLE_ADDRESSES
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8016
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8016
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ── Claims Processing Service (port 8004) ───────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claims-processing
+  namespace: healthpoint
+  labels:
+    app: claims-processing
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: claims-processing
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: claims-processing
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8004"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: claims-processing
+          image: healthpoint/claims-processing:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8004
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ── Provider Management Service (port 8002) ─────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provider-management
+  namespace: healthpoint
+  labels:
+    app: provider-management
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: provider-management
+  template:
+    metadata:
+      labels:
+        app: provider-management
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: provider-management
+          image: healthpoint/provider-management:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8002
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ── Security Authentication Service (port 8031) ──────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-auth
+  namespace: healthpoint
+  labels:
+    app: security-auth
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: security-auth
+  template:
+    metadata:
+      labels:
+        app: security-auth
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8031"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: security-auth
+          image: healthpoint/security-auth:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8031
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8031
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8031
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ── Audit Compliance Service (port 8005) ─────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-compliance
+  namespace: healthpoint
+  labels:
+    app: audit-compliance
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: audit-compliance
+  template:
+    metadata:
+      labels:
+        app: audit-compliance
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8005"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: audit-compliance
+          image: healthpoint/audit-compliance:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8005
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ── AI Fraud Detection Service (port 8001) ───────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-fraud-detection
+  namespace: healthpoint
+  labels:
+    app: ai-fraud-detection
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ai-fraud-detection
+  template:
+    metadata:
+      labels:
+        app: ai-fraud-detection
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: ai-fraud-detection
+          image: healthpoint/ai-fraud-detection:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "1Gi"
+            limits:
+              cpu: "4000m"
+              memory: "4Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: model-cache
+              mountPath: /app/models
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: model-cache
+          emptyDir:
+            sizeLimit: 2Gi
+---
+# ── Notification Service (port 8023) ─────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification
+  namespace: healthpoint
+  labels:
+    app: notification
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: notification
+  template:
+    metadata:
+      labels:
+        app: notification
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8023"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: notification
+          image: healthpoint/notification:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8023
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8023
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8023
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ── GFE Management Service (port 8036) ───────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gfe-management
+  namespace: healthpoint
+  labels:
+    app: gfe-management
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gfe-management
+  template:
+    metadata:
+      labels:
+        app: gfe-management
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8036"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: gfe-management
+          image: healthpoint/gfe-management:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8036
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8036
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8036
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ── Predictive Analytics Service (port 8081) ─────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: predictive-analytics
+  namespace: healthpoint
+  labels:
+    app: predictive-analytics
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: predictive-analytics
+  template:
+    metadata:
+      labels:
+        app: predictive-analytics
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "healthpoint-app"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+    spec:
+      serviceAccountName: healthpoint-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: predictive-analytics
+          image: healthpoint/predictive-analytics:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthpoint-platform-config
+            - secretRef:
+                name: healthpoint-app-secrets
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "2Gi"
+            limits:
+              cpu: "4000m"
+              memory: "8Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: model-cache
+              mountPath: /app/models
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: model-cache
+          emptyDir:
+            sizeLimit: 4Gi

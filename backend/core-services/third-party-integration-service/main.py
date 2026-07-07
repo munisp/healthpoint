@@ -823,13 +823,17 @@ app.add_middleware(
 security = HTTPBearer()
 
 @app.post("/partners", response_model=Dict[str, str])
-async def register_partner(partner: ThirdPartyPartner):
+async def register_partner(partner: ThirdPartyPartner,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Register a new third-party partner"""
     partner_id = await integration_service.register_partner(partner)
     return {"partner_id": partner_id, "status": "registered"}
 
 @app.get("/partners/{partner_id}")
-async def get_partner(partner_id: str):
+async def get_partner(partner_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get partner details"""
     if partner_id not in integration_service.partner_registry:
         raise HTTPException(status_code=404, detail="Partner not found")
@@ -837,7 +841,9 @@ async def get_partner(partner_id: str):
     return integration_service.partner_registry[partner_id]
 
 @app.get("/partners")
-async def list_partners(partner_type: Optional[IntegrationPartnerType] = None):
+async def list_partners(partner_type: Optional[IntegrationPartnerType] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """List all partners with optional filtering"""
     partners = list(integration_service.partner_registry.values())
     
@@ -847,13 +853,17 @@ async def list_partners(partner_type: Optional[IntegrationPartnerType] = None):
     return {"partners": partners, "total": len(partners)}
 
 @app.post("/endpoints", response_model=Dict[str, str])
-async def create_endpoint(endpoint: IntegrationEndpoint):
+async def create_endpoint(endpoint: IntegrationEndpoint,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new integration endpoint"""
     endpoint_id = await integration_service.create_endpoint(endpoint)
     return {"endpoint_id": endpoint_id, "status": "created"}
 
 @app.get("/endpoints/{endpoint_id}")
-async def get_endpoint(endpoint_id: str):
+async def get_endpoint(endpoint_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get endpoint details"""
     if endpoint_id not in integration_service.endpoint_registry:
         raise HTTPException(status_code=404, detail="Endpoint not found")
@@ -861,13 +871,17 @@ async def get_endpoint(endpoint_id: str):
     return integration_service.endpoint_registry[endpoint_id]
 
 @app.post("/messages", response_model=Dict[str, str])
-async def send_message(message: IntegrationMessage):
+async def send_message(message: IntegrationMessage,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Send integration message"""
     message_id = await integration_service.send_message(message)
     return {"message_id": message_id, "status": "queued"}
 
 @app.get("/partners/{partner_id}/metrics", response_model=IntegrationMetrics)
-async def get_partner_metrics(partner_id: str):
+async def get_partner_metrics(partner_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get partner integration metrics"""
     return await integration_service.get_partner_metrics(partner_id)
 
@@ -875,12 +889,16 @@ async def get_partner_metrics(partner_id: str):
 async def get_integration_recommendations(
     partner_type: IntegrationPartnerType,
     geographic_coverage: List[str] = Query(...)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get Georgetown-based integration recommendations"""
     return await integration_service.get_georgetown_recommendations(partner_type, geographic_coverage)
 
 @app.get("/georgetown-insights")
-async def get_georgetown_insights():
+async def get_georgetown_insights(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get Georgetown University research insights for third-party integration"""
     return {
         "research_source": "Georgetown University Center on Health Insurance Reforms",
@@ -894,7 +912,9 @@ async def get_georgetown_insights():
     }
 
 @app.get("/compliance-requirements/{state}")
-async def get_state_compliance_requirements(state: str):
+async def get_state_compliance_requirements(state: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get compliance requirements for a specific state"""
     state_upper = state.upper()
     

@@ -262,6 +262,8 @@ async def log_hipaa_event(
 async def login_for_access_token(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """
     Authenticate user via Keycloak (primary) or local PostgreSQL (fallback).
@@ -361,7 +363,9 @@ async def login_for_access_token(
 
 
 @app.post("/api/v1/auth/register", response_model=UserResponse, status_code=201)
-async def register_user(user_data: UserCreate, request: Request):
+async def register_user(user_data: UserCreate, request: Request,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Register a new user in PostgreSQL (and optionally Keycloak)."""
     existing = await get_user_by_username(user_data.username)
     if existing:

@@ -199,7 +199,9 @@ async def health():
     return {"status": "healthy", "service": "real-time-analytics", "version": "2.0.0"}
 
 @app.post("/api/v1/analytics/events", status_code=201)
-async def ingest_event(event: AnalyticsEvent):
+async def ingest_event(event: AnalyticsEvent,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Ingest a single analytics event."""
     await publish_event(event)
     pool = await get_db()
@@ -217,7 +219,9 @@ async def ingest_event(event: AnalyticsEvent):
     return {"event_id": event.event_id, "status": "ingested"}
 
 @app.post("/api/v1/analytics/events/bulk", status_code=201)
-async def ingest_events_bulk(events: List[AnalyticsEvent]):
+async def ingest_events_bulk(events: List[AnalyticsEvent],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     if len(events) > 500:
         raise HTTPException(400, "Maximum 500 events per bulk request")
     for event in events:
@@ -226,7 +230,9 @@ async def ingest_events_bulk(events: List[AnalyticsEvent]):
 
 @app.get("/api/v1/analytics/dashboard")
 async def get_dashboard(tenant_id: Optional[str] = None,
-                         period_hours: int = Query(default=24, ge=1, le=720)):
+                         period_hours: int = Query(default=24, ge=1, le=720),
+                             current_user: TokenPayload = Depends(get_current_user),
+                         ):
     """Get comprehensive dashboard metrics."""
     end = datetime.utcnow()
     start = end - timedelta(hours=period_hours)
@@ -243,39 +249,51 @@ async def get_dashboard(tenant_id: Optional[str] = None,
     }
 
 @app.get("/api/v1/analytics/metrics/disputes")
-async def dispute_metrics(tenant_id: Optional[str] = None, period_hours: int = 24):
+async def dispute_metrics(tenant_id: Optional[str] = None, period_hours: int = 24,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     end = datetime.utcnow(); start = end - timedelta(hours=period_hours)
     pool = await get_db()
     return await compute_dispute_metrics(pool, tenant_id, start, end)
 
 @app.get("/api/v1/analytics/metrics/claims")
-async def claim_metrics(tenant_id: Optional[str] = None, period_hours: int = 24):
+async def claim_metrics(tenant_id: Optional[str] = None, period_hours: int = 24,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     end = datetime.utcnow(); start = end - timedelta(hours=period_hours)
     pool = await get_db()
     return await compute_claim_metrics(pool, tenant_id, start, end)
 
 @app.get("/api/v1/analytics/metrics/fraud")
-async def fraud_metrics(tenant_id: Optional[str] = None, period_hours: int = 24):
+async def fraud_metrics(tenant_id: Optional[str] = None, period_hours: int = 24,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     end = datetime.utcnow(); start = end - timedelta(hours=period_hours)
     pool = await get_db()
     return await compute_fraud_metrics(pool, tenant_id, start, end)
 
 @app.get("/api/v1/analytics/metrics/payments")
-async def payment_metrics(tenant_id: Optional[str] = None, period_hours: int = 24):
+async def payment_metrics(tenant_id: Optional[str] = None, period_hours: int = 24,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     end = datetime.utcnow(); start = end - timedelta(hours=period_hours)
     pool = await get_db()
     return await compute_payment_metrics(pool, tenant_id, start, end)
 
 @app.get("/api/v1/analytics/timeseries/{metric}")
 async def time_series(metric: str, tenant_id: Optional[str] = None,
-                       period_hours: int = 168, granularity: str = "hour"):
+                       period_hours: int = 168, granularity: str = "hour",
+                           current_user: TokenPayload = Depends(get_current_user),
+                       ):
     end = datetime.utcnow(); start = end - timedelta(hours=period_hours)
     pool = await get_db()
     data = await get_time_series(pool, metric, start, end, tenant_id, granularity)
     return {"metric": metric, "granularity": granularity, "data": data}
 
 @app.get("/api/v1/analytics/events/stream")
-async def event_stream(tenant_id: Optional[str] = None):
+async def event_stream(tenant_id: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Server-Sent Events stream for real-time analytics."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     _event_subscribers.append(queue)
@@ -298,14 +316,18 @@ async def event_stream(tenant_id: Optional[str] = None):
                               headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.get("/api/v1/analytics/events/recent")
-async def recent_events(limit: int = Query(50, le=200), tenant_id: Optional[str] = None):
+async def recent_events(limit: int = Query(50, le=200), tenant_id: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     events = list(_recent_events)
     if tenant_id:
         events = [e for e in events if e.get("tenant_id") == tenant_id]
     return {"events": events[-limit:], "total": len(events)}
 
 @app.get("/api/v1/analytics/kpis")
-async def get_kpis(tenant_id: Optional[str] = None):
+async def get_kpis(tenant_id: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get key performance indicators."""
     end = datetime.utcnow()
     start_24h = end - timedelta(hours=24)

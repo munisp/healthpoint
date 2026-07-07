@@ -158,7 +158,9 @@ class CMSSubmission(BaseModel):
 # ============================================================================
 
 @app.post("/api/v1/transform/gfe-to-json")
-async def transform_gfe_to_json(gfe: GoodFaithEstimate):
+async def transform_gfe_to_json(gfe: GoodFaithEstimate,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Transform GFE object to standardized JSON format"""
     try:
         json_output = gfe.dict()
@@ -172,7 +174,9 @@ async def transform_gfe_to_json(gfe: GoodFaithEstimate):
         raise HTTPException(status_code=400, detail=f"Transformation failed: {str(e)}")
 
 @app.post("/api/v1/transform/json-to-gfe")
-async def transform_json_to_gfe(json_data: Dict[str, Any]):
+async def transform_json_to_gfe(json_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Transform JSON data to GFE object"""
     try:
         gfe = GoodFaithEstimate(**json_data)
@@ -181,7 +185,9 @@ async def transform_json_to_gfe(json_data: Dict[str, Any]):
         raise HTTPException(status_code=400, detail=f"Transformation failed: {str(e)}")
 
 @app.post("/api/v1/transform/gfe-to-x12")
-async def transform_gfe_to_x12(gfe: GoodFaithEstimate):
+async def transform_gfe_to_x12(gfe: GoodFaithEstimate,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Transform GFE to X12 EDI format (837-like structure)"""
     try:
         # Create X12 segments from GFE data
@@ -240,7 +246,9 @@ async def transform_gfe_to_x12(gfe: GoodFaithEstimate):
         raise HTTPException(status_code=400, detail=f"X12 transformation failed: {str(e)}")
 
 @app.post("/api/v1/transform/x12-to-gfe")
-async def transform_x12_to_gfe(x12_data: X12Interchange):
+async def transform_x12_to_gfe(x12_data: X12Interchange,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Transform X12 EDI data to GFE format"""
     try:
         # Extract relevant information from X12 segments
@@ -268,7 +276,9 @@ async def transform_x12_to_gfe(x12_data: X12Interchange):
         raise HTTPException(status_code=400, detail=f"X12 to GFE transformation failed: {str(e)}")
 
 @app.post("/api/v1/transform/gfe-to-cms")
-async def transform_gfe_to_cms(gfe: GoodFaithEstimate, submission_type: str):
+async def transform_gfe_to_cms(gfe: GoodFaithEstimate, submission_type: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Transform GFE to CMS submission format"""
     try:
         cms_data = {
@@ -299,7 +309,9 @@ async def transform_gfe_to_cms(gfe: GoodFaithEstimate, submission_type: str):
 # ============================================================================
 
 @app.post("/api/v1/validate/gfe")
-async def validate_gfe(gfe: GoodFaithEstimate):
+async def validate_gfe(gfe: GoodFaithEstimate,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Comprehensive GFE validation"""
     validation_results = {
         "is_valid": True,
@@ -341,7 +353,9 @@ async def validate_gfe(gfe: GoodFaithEstimate):
         raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
 
 @app.post("/api/v1/validate/x12")
-async def validate_x12(x12_data: X12Interchange):
+async def validate_x12(x12_data: X12Interchange,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Validate X12 EDI structure"""
     validation_results = {
         "is_valid": True,
@@ -369,7 +383,9 @@ async def validate_x12(x12_data: X12Interchange):
 # ============================================================================
 
 @app.post("/api/v1/process/upload-gfe")
-async def process_gfe_upload(file: UploadFile = File(...)):
+async def process_gfe_upload(file: UploadFile = File(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Process uploaded GFE file (JSON, XML, or CSV)"""
     try:
         content = await file.read()
@@ -395,7 +411,9 @@ async def process_gfe_upload(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"File processing failed: {str(e)}")
 
 @app.post("/api/v1/process/batch-transform")
-async def batch_transform_gfes(gfes: List[GoodFaithEstimate], target_format: str):
+async def batch_transform_gfes(gfes: List[GoodFaithEstimate], target_format: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Batch transform multiple GFEs to target format"""
     try:
         results = []
@@ -442,7 +460,9 @@ async def health_check():
     }
 
 @app.get("/api/v1/formats/supported")
-async def get_supported_formats():
+async def get_supported_formats(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get list of supported data formats"""
     return {
         "input_formats": ["GFE_JSON", "X12_EDI", "CSV", "XML"],

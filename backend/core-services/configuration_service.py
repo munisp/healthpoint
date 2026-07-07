@@ -602,7 +602,9 @@ app.add_middleware(
 
 # API Endpoints
 @app.post("/configurations", status_code=status.HTTP_201_CREATED)
-async def create_configuration(config: ConfigurationItem, user: dict = Depends(verify_token)):
+async def create_configuration(config: ConfigurationItem, user: dict = Depends(verify_token),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new configuration item"""
     config.created_by = user["user_id"]
     config_id = await config_manager.create_configuration(config)
@@ -613,7 +615,9 @@ async def get_configuration(key: str, scope: ConfigScope,
                            tenant_id: Optional[str] = None,
                            service_name: Optional[str] = None,
                            environment: str = "production",
-                           user: dict = Depends(verify_token)):
+                           user: dict = Depends(verify_token),
+                               current_user: TokenPayload = Depends(get_current_user),
+                           ):
     """Get configuration value"""
     config = await config_manager.get_configuration(key, scope, tenant_id, service_name, environment)
     if not config:
@@ -625,7 +629,9 @@ async def update_configuration(key: str, scope: ConfigScope, update: Configurati
                               tenant_id: Optional[str] = None,
                               service_name: Optional[str] = None,
                               environment: str = "production",
-                              user: dict = Depends(verify_token)):
+                              user: dict = Depends(verify_token),
+                                  current_user: TokenPayload = Depends(get_current_user),
+                              ):
     """Update configuration value"""
     update.updated_by = user["user_id"]
     success = await config_manager.update_configuration(key, scope, update, tenant_id, service_name, environment)
@@ -638,7 +644,9 @@ async def delete_configuration(key: str, scope: ConfigScope,
                               tenant_id: Optional[str] = None,
                               service_name: Optional[str] = None,
                               environment: str = "production",
-                              user: dict = Depends(verify_token)):
+                              user: dict = Depends(verify_token),
+                                  current_user: TokenPayload = Depends(get_current_user),
+                              ):
     """Delete configuration"""
     success = await config_manager.delete_configuration(key, scope, tenant_id, service_name, environment)
     if not success:
@@ -651,14 +659,18 @@ async def list_configurations(scope: Optional[ConfigScope] = None,
                              service_name: Optional[str] = None,
                              environment: Optional[str] = None,
                              tags: Optional[str] = None,
-                             user: dict = Depends(verify_token)):
+                             user: dict = Depends(verify_token),
+                                 current_user: TokenPayload = Depends(get_current_user),
+                             ):
     """List configurations with filters"""
     tag_list = tags.split(',') if tags else None
     configurations = await config_manager.list_configurations(scope, tenant_id, service_name, environment, tag_list)
     return {"configurations": configurations}
 
 @app.post("/configurations/batch")
-async def create_configurations_batch(batch: ConfigurationBatch, user: dict = Depends(verify_token)):
+async def create_configurations_batch(batch: ConfigurationBatch, user: dict = Depends(verify_token),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create multiple configurations in batch"""
     results = []
     for config in batch.configurations:
@@ -672,7 +684,9 @@ async def create_configurations_batch(batch: ConfigurationBatch, user: dict = De
     return {"results": results}
 
 @app.post("/configurations/export")
-async def export_configurations(export_request: ConfigurationExport, user: dict = Depends(verify_token)):
+async def export_configurations(export_request: ConfigurationExport, user: dict = Depends(verify_token),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Export configurations in specified format"""
     export_data = await config_manager.export_configurations(export_request)
     return {"data": export_data, "format": export_request.format}

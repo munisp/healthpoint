@@ -325,29 +325,39 @@ contract_manager = DigitalContractManager()
 
 # API Endpoints
 @app.post("/templates", response_model=ContractTemplate)
-async def create_template(template: ContractTemplate):
+async def create_template(template: ContractTemplate,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new contract template"""
     return await contract_manager.create_template(template)
 
 @app.get("/templates", response_model=List[ContractTemplate])
-async def get_templates():
+async def get_templates(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all contract templates"""
     return list(contract_templates.values())
 
 @app.get("/templates/{template_id}", response_model=ContractTemplate)
-async def get_template(template_id: str):
+async def get_template(template_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get a specific contract template"""
     if template_id not in contract_templates:
         raise HTTPException(status_code=404, detail="Template not found")
     return contract_templates[template_id]
 
 @app.post("/contracts", response_model=Contract)
-async def create_contract(template_id: str, provider_id: str, aggregator_id: str, variables: Dict[str, Any]):
+async def create_contract(template_id: str, provider_id: str, aggregator_id: str, variables: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a contract from template"""
     return await contract_manager.create_contract_from_template(template_id, provider_id, aggregator_id, variables)
 
 @app.get("/contracts", response_model=List[Contract])
-async def get_contracts(provider_id: Optional[str] = None, aggregator_id: Optional[str] = None, status: Optional[ContractStatus] = None):
+async def get_contracts(provider_id: Optional[str] = None, aggregator_id: Optional[str] = None, status: Optional[ContractStatus] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get contracts with optional filtering"""
     filtered_contracts = list(contracts.values())
     
@@ -361,49 +371,67 @@ async def get_contracts(provider_id: Optional[str] = None, aggregator_id: Option
     return filtered_contracts
 
 @app.get("/contracts/{contract_id}", response_model=Contract)
-async def get_contract(contract_id: str):
+async def get_contract(contract_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get a specific contract"""
     if contract_id not in contracts:
         raise HTTPException(status_code=404, detail="Contract not found")
     return contracts[contract_id]
 
 @app.post("/contracts/{contract_id}/signatures", response_model=List[ContractSignature])
-async def initiate_signatures(contract_id: str, signers: List[Dict[str, str]]):
+async def initiate_signatures(contract_id: str, signers: List[Dict[str, str]],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Initiate digital signature process"""
     return await contract_manager.initiate_signature_process(contract_id, signers)
 
 @app.put("/signatures/{signature_id}", response_model=ContractSignature)
-async def process_signature(signature_id: str, signature_data: Dict[str, Any]):
+async def process_signature(signature_id: str, signature_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Process a digital signature"""
     return await contract_manager.process_signature(signature_id, signature_data)
 
 @app.get("/contracts/{contract_id}/signatures", response_model=List[ContractSignature])
-async def get_contract_signatures(contract_id: str):
+async def get_contract_signatures(contract_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all signatures for a contract"""
     return [s for s in contract_signatures.values() if s.contract_id == contract_id]
 
 @app.post("/contracts/{contract_id}/performance", response_model=List[ContractPerformanceMetric])
-async def track_performance(contract_id: str, metrics: List[Dict[str, Any]]):
+async def track_performance(contract_id: str, metrics: List[Dict[str, Any]],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Track contract performance metrics"""
     return await contract_manager.track_performance(contract_id, metrics)
 
 @app.get("/contracts/{contract_id}/performance", response_model=List[ContractPerformanceMetric])
-async def get_performance_metrics(contract_id: str):
+async def get_performance_metrics(contract_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get performance metrics for a contract"""
     return [m for m in performance_metrics.values() if m.contract_id == contract_id]
 
 @app.get("/contracts/{contract_id}/renewal-eligibility")
-async def check_renewal_eligibility(contract_id: str):
+async def check_renewal_eligibility(contract_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Check contract renewal eligibility"""
     return await contract_manager.check_renewal_eligibility(contract_id)
 
 @app.post("/contracts/{contract_id}/renew", response_model=Contract)
-async def renew_contract(contract_id: str, renewal_terms: Dict[str, Any]):
+async def renew_contract(contract_id: str, renewal_terms: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Renew a contract"""
     return await contract_manager.renew_contract(contract_id, renewal_terms)
 
 @app.get("/analytics/contracts")
-async def get_contract_analytics():
+async def get_contract_analytics(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get contract analytics and insights"""
     total_contracts = len(contracts)
     active_contracts = len([c for c in contracts.values() if c.status == ContractStatus.ACTIVE])

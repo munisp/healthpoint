@@ -17,6 +17,7 @@ import json
 from datetime import datetime, timedelta
 from enum import Enum
 import uuid
+from backend.shared.auth import get_current_user, require_admin, require_role, TokenPayload
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -644,12 +645,16 @@ app.add_middleware(
 )
 
 @app.post("/process-case", response_model=UnifiedCaseResult)
-async def process_case(case_request: CaseRequest):
+async def process_case(case_request: CaseRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Process a case through all Georgetown-enhanced services"""
     return await orchestrator.process_case(case_request)
 
 @app.get("/service-health")
-async def get_service_health():
+async def get_service_health(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get health status of all services"""
     health_status = await orchestrator.get_service_health()
     return {
@@ -662,12 +667,16 @@ async def get_service_health():
     }
 
 @app.get("/georgetown-metrics")
-async def get_georgetown_metrics():
+async def get_georgetown_metrics(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get Georgetown performance metrics"""
     return await orchestrator.get_georgetown_metrics()
 
 @app.get("/platform-status")
-async def get_platform_status():
+async def get_platform_status(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get comprehensive platform status"""
     health_status = await orchestrator.get_service_health()
     georgetown_metrics = await orchestrator.get_georgetown_metrics()

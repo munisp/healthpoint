@@ -956,19 +956,25 @@ app.add_middleware(
 
 # API Endpoints
 @app.post("/analytics/query")
-async def execute_analytics_query(query: AnalyticsQuery):
+async def execute_analytics_query(query: AnalyticsQuery,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Execute analytics query"""
     result = await analytics_manager.execute_analytics_query(query)
     return result
 
 @app.post("/dashboards", status_code=status.HTTP_201_CREATED)
-async def create_dashboard(dashboard: Dashboard):
+async def create_dashboard(dashboard: Dashboard,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new dashboard"""
     dashboard_id = await analytics_manager.create_dashboard(dashboard)
     return {"dashboard_id": dashboard_id}
 
 @app.get("/dashboards")
-async def get_dashboards(tenant_id: str = Query(...)):
+async def get_dashboards(tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get dashboards for tenant"""
     async with db_manager.pool.acquire() as conn:
         dashboards = await conn.fetch("""
@@ -992,13 +998,17 @@ async def get_dashboards(tenant_id: str = Query(...)):
         return {"dashboards": [dict(row) for row in dashboards]}
 
 @app.post("/charts/generate")
-async def generate_chart(config: ChartConfiguration, data: List[Dict[str, Any]]):
+async def generate_chart(config: ChartConfiguration, data: List[Dict[str, Any]],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Generate chart from data"""
     chart = await analytics_manager.generate_chart(config, data)
     return chart
 
 @app.post("/reports", status_code=status.HTTP_201_CREATED)
-async def generate_report(report_request: ReportRequest):
+async def generate_report(report_request: ReportRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Generate a report"""
     report_id = await analytics_manager.generate_report(report_request)
     return {"report_id": report_id}
@@ -1006,7 +1016,9 @@ async def generate_report(report_request: ReportRequest):
 @app.get("/reports")
 async def get_reports(tenant_id: str = Query(...), 
                      report_type: Optional[ReportType] = None,
-                     status: Optional[ReportStatus] = None):
+                     status: Optional[ReportStatus] = None,
+                         current_user: TokenPayload = Depends(get_current_user),
+                     ):
     """Get reports for tenant"""
     query = "SELECT * FROM reports WHERE tenant_id = $1"
     params = [tenant_id]
@@ -1026,7 +1038,9 @@ async def get_reports(tenant_id: str = Query(...),
         return {"reports": [dict(row) for row in rows]}
 
 @app.get("/reports/{report_id}")
-async def get_report(report_id: str, tenant_id: str = Query(...)):
+async def get_report(report_id: str, tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get specific report"""
     async with db_manager.pool.acquire() as conn:
         row = await conn.fetchrow("""
@@ -1052,7 +1066,9 @@ async def get_report(report_id: str, tenant_id: str = Query(...)):
         return report_data
 
 @app.post("/models/{model_id}/predict")
-async def run_prediction(model_id: str, input_data: Dict[str, Any]):
+async def run_prediction(model_id: str, input_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Run prediction using trained model"""
     result = await analytics_manager.run_predictive_model(model_id, input_data)
     return result

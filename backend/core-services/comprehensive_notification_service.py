@@ -26,7 +26,7 @@ import json
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import redis
+import redis.asyncio as redis.asyncio as redis
 import requests
 from twilio.rest import Client
 import websockets
@@ -41,7 +41,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Redis connection for real-time notifications
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
+# Redis client initialized via shared cache module
+# Use: from backend.shared.cache import get_client as get_redis_client
 
 class NotificationChannel(str, Enum):
     EMAIL = "email"
@@ -489,7 +490,9 @@ notification_service = ComprehensiveNotificationService()
 
 # API Endpoints
 @app.post("/notifications/send")
-async def send_notification(notification: NotificationRequest, background_tasks: BackgroundTasks):
+async def send_notification(notification: NotificationRequest, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Send a notification"""
     try:
         result = await notification_service.send_notification(notification)
@@ -503,6 +506,8 @@ async def notify_bulk_upload_started(
     aggregator_id: str,
     total_records: int,
     background_tasks: BackgroundTasks
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Notify when bulk upload starts"""
     notification = NotificationRequest(
@@ -530,6 +535,8 @@ async def notify_bulk_upload_complete(
     invalid_records: int,
     cms_submission_id: str,
     background_tasks: BackgroundTasks
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Notify when bulk upload completes"""
     success_rate = round((valid_records / total_records) * 100, 1) if total_records > 0 else 0
@@ -559,6 +566,8 @@ async def notify_refund_complete(
     refund_amount: float,
     refund_method: str,
     background_tasks: BackgroundTasks
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Notify when refund is complete"""
     notification = NotificationRequest(
@@ -586,6 +595,8 @@ async def notify_security_alert(
     affected_resource: str,
     recommended_actions: List[str],
     background_tasks: BackgroundTasks
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Send security alert notification"""
     notification = NotificationRequest(
@@ -607,7 +618,9 @@ async def notify_security_alert(
     return {"status": "security_alert_sent"}
 
 @app.get("/notifications/history/{user_id}")
-async def get_notification_history(user_id: str, limit: int = 50):
+async def get_notification_history(user_id: str, limit: int = 50,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get notification history for a user"""
     user_history = [
         entry for entry in notification_service.notification_history
@@ -616,13 +629,17 @@ async def get_notification_history(user_id: str, limit: int = 50):
     return {"history": user_history[-limit:]}
 
 @app.post("/notifications/preferences")
-async def set_notification_preferences(preferences: NotificationPreference):
+async def set_notification_preferences(preferences: NotificationPreference,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Set user notification preferences"""
     notification_service.user_preferences[preferences.user_id] = preferences
     return {"status": "preferences_updated"}
 
 @app.get("/notifications/templates")
-async def get_notification_templates():
+async def get_notification_templates(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get available notification templates"""
     template_info = {}
     for event_type, channels in notification_service.templates.items():
@@ -634,6 +651,13 @@ async def get_notification_templates():
             for channel, template in channels.items()
         }
     return {"templates": template_info}
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    from datetime import datetime
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 if __name__ == "__main__":
     import uvicorn

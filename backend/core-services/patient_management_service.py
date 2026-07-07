@@ -813,13 +813,17 @@ app.add_middleware(
 
 # API Endpoints
 @app.post("/patients", status_code=status.HTTP_201_CREATED)
-async def create_patient(patient: Patient):
+async def create_patient(patient: Patient,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new patient record"""
     patient_id = await patient_manager.create_patient(patient)
     return {"patient_id": patient_id}
 
 @app.get("/patients/{patient_id}")
-async def get_patient(patient_id: str, tenant_id: str = Query(...)):
+async def get_patient(patient_id: str, tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get patient by ID"""
     patient = await patient_manager.get_patient(patient_id, tenant_id)
     if not patient:
@@ -827,7 +831,9 @@ async def get_patient(patient_id: str, tenant_id: str = Query(...)):
     return patient
 
 @app.put("/patients/{patient_id}")
-async def update_patient(patient_id: str, update: PatientUpdate, tenant_id: str = Query(...)):
+async def update_patient(patient_id: str, update: PatientUpdate, tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Update patient information"""
     # Get existing patient
     existing_patient = await patient_manager.get_patient(patient_id, tenant_id)
@@ -887,13 +893,17 @@ async def update_patient(patient_id: str, update: PatientUpdate, tenant_id: str 
     return {"message": "Patient updated successfully"}
 
 @app.post("/patients/search")
-async def search_patients(search: PatientSearch, limit: int = Query(50, le=100)):
+async def search_patients(search: PatientSearch, limit: int = Query(50, le=100),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Search for patients"""
     patients = await patient_manager.search_patients(search, limit)
     return {"patients": patients, "count": len(patients)}
 
 @app.post("/patients/{patient_id}/vital-signs", status_code=status.HTTP_201_CREATED)
-async def record_vital_signs(patient_id: str, vital_signs: VitalSigns):
+async def record_vital_signs(patient_id: str, vital_signs: VitalSigns,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Record patient vital signs"""
     vital_signs.patient_id = patient_id
     vital_id = await patient_manager.record_vital_signs(vital_signs)
@@ -903,7 +913,9 @@ async def record_vital_signs(patient_id: str, vital_signs: VitalSigns):
 async def get_vital_signs(patient_id: str, 
                          start_date: Optional[datetime] = None,
                          end_date: Optional[datetime] = None,
-                         limit: int = Query(50, le=100)):
+                         limit: int = Query(50, le=100),
+                             current_user: TokenPayload = Depends(get_current_user),
+                         ):
     """Get patient vital signs history"""
     query = "SELECT * FROM patient_vital_signs WHERE patient_id = $1"
     params = [patient_id]

@@ -28,7 +28,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, Decimal as SQLDecimal, Date, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-import redis
+import redis.asyncio as redis.asyncio as redis
 from cryptography.fernet import Fernet
 import stripe
 import uuid
@@ -52,7 +52,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Redis setup for caching and job queues
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
+# Redis client initialized via shared cache module
+# Use: from backend.shared.cache import get_client as get_redis_client
 
 # Encryption setup
 ENCRYPTION_KEY = Fernet.generate_key()  # In production, use secure key management
@@ -701,13 +702,17 @@ async def process_refund_batch(
     refund_request: RefundRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Process a batch of refunds"""
     result = await refund_processor.process_refund_batch(refund_request)
     return result
 
 @app.get("/api/v1/refunds/batch-status/{batch_id}")
-async def get_batch_status(batch_id: str, db: Session = Depends(get_db)):
+async def get_batch_status(batch_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get refund batch status"""
     batch = db.query(RefundBatch).filter(RefundBatch.batch_id == batch_id).first()
     if not batch:
@@ -760,7 +765,9 @@ async def get_batch_status(batch_id: str, db: Session = Depends(get_db)):
     }
 
 @app.get("/api/v1/refunds/aggregator-summary/{aggregator_id}")
-async def get_aggregator_refund_summary(aggregator_id: str, db: Session = Depends(get_db)):
+async def get_aggregator_refund_summary(aggregator_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get refund summary for an aggregator"""
     batches = db.query(RefundBatch).filter(
         RefundBatch.aggregator_id == aggregator_id
@@ -797,6 +804,8 @@ async def simulate_idr_decision(
     dispute_claims: List[Dict[str, Any]],
     decision_outcome: str = "provider_wins",  # provider_wins, payer_wins, split_decision
     db: Session = Depends(get_db)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Simulate IDR decision and trigger refund processing"""
     

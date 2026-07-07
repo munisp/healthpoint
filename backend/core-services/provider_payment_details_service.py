@@ -28,7 +28,7 @@ from decimal import Decimal
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, Decimal as SQLDecimal, Date, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-import redis
+import redis.asyncio as redis.asyncio as redis
 from cryptography.fernet import Fernet
 import pandas as pd
 import io
@@ -50,7 +50,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Redis setup for caching
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
+# Redis client initialized via shared cache module
+# Use: from backend.shared.cache import get_client as get_redis_client
 
 # Encryption setup for sensitive payment data
 ENCRYPTION_KEY = Fernet.generate_key()  # In production, use secure key management
@@ -628,6 +629,8 @@ refund_manager = RefundPreferenceManager()
 async def create_provider_payment_details(
     payment_data: ProviderPaymentDetailsCreate,
     db: Session = Depends(get_db)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Create provider payment details"""
     payment_details = await payment_manager.create_provider_payment_details(payment_data)
@@ -642,6 +645,8 @@ async def create_provider_payment_details(
 async def bulk_upload_payment_details(
     aggregator_id: str = Form(...),
     file: UploadFile = File(...)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Bulk upload provider payment details from CSV/Excel"""
     results = await payment_manager.process_bulk_payment_upload(aggregator_id, file)
@@ -652,6 +657,8 @@ async def get_provider_payment_details(
     provider_npi: str,
     aggregator_id: str,
     db: Session = Depends(get_db)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get provider payment details (non-sensitive)"""
     details = await payment_manager.get_provider_payment_details(provider_npi, aggregator_id)
@@ -663,6 +670,8 @@ async def get_provider_payment_details(
 async def create_refund_preferences(
     preference_data: AggregatorRefundPreferenceCreate,
     db: Session = Depends(get_db)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Create aggregator refund preferences"""
     preferences = await refund_manager.create_aggregator_refund_preference(preference_data)
@@ -674,7 +683,9 @@ async def create_refund_preferences(
     }
 
 @app.get("/api/v1/refund-preferences/{aggregator_id}")
-async def get_refund_preferences(aggregator_id: str, db: Session = Depends(get_db)):
+async def get_refund_preferences(aggregator_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get aggregator refund preferences"""
     preferences = db.query(AggregatorRefundPreference).filter(
         AggregatorRefundPreference.aggregator_id == aggregator_id
@@ -696,7 +707,9 @@ async def get_refund_preferences(aggregator_id: str, db: Session = Depends(get_d
     }
 
 @app.get("/api/v1/aggregator-providers/{aggregator_id}/payment-summary")
-async def get_aggregator_payment_summary(aggregator_id: str, db: Session = Depends(get_db)):
+async def get_aggregator_payment_summary(aggregator_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get summary of payment details for all providers under an aggregator"""
     providers = db.query(ProviderPaymentDetails).filter(
         ProviderPaymentDetails.aggregator_id == aggregator_id

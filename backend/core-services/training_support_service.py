@@ -475,12 +475,16 @@ training_manager = TrainingAndSupportManager()
 
 # API Endpoints
 @app.post("/courses", response_model=Course)
-async def create_course(course: Course):
+async def create_course(course: Course,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new training course"""
     return await training_manager.create_course(course)
 
 @app.get("/courses", response_model=List[Course])
-async def get_courses(category: Optional[str] = None, status: Optional[CourseStatus] = None):
+async def get_courses(category: Optional[str] = None, status: Optional[CourseStatus] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all courses with optional filtering"""
     filtered_courses = list(courses.values())
     
@@ -492,60 +496,82 @@ async def get_courses(category: Optional[str] = None, status: Optional[CourseSta
     return filtered_courses
 
 @app.get("/courses/{course_id}", response_model=Course)
-async def get_course(course_id: str):
+async def get_course(course_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get a specific course"""
     if course_id not in courses:
         raise HTTPException(status_code=404, detail="Course not found")
     return courses[course_id]
 
 @app.post("/courses/{course_id}/modules", response_model=CourseModule)
-async def add_course_module(course_id: str, module: CourseModule):
+async def add_course_module(course_id: str, module: CourseModule,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Add a module to a course"""
     module.course_id = course_id
     return await training_manager.add_course_module(module)
 
 @app.get("/courses/{course_id}/modules", response_model=List[CourseModule])
-async def get_course_modules(course_id: str):
+async def get_course_modules(course_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all modules for a course"""
     return sorted([m for m in course_modules.values() if m.course_id == course_id], key=lambda x: x.order_index)
 
 @app.post("/quizzes", response_model=Quiz)
-async def create_quiz(quiz: Quiz):
+async def create_quiz(quiz: Quiz,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a quiz"""
     return await training_manager.create_quiz(quiz)
 
 @app.post("/enrollments", response_model=Enrollment)
-async def enroll_user(user_id: str, course_id: str):
+async def enroll_user(user_id: str, course_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Enroll a user in a course"""
     return await training_manager.enroll_user(user_id, course_id)
 
 @app.get("/users/{user_id}/enrollments", response_model=List[Enrollment])
-async def get_user_enrollments(user_id: str):
+async def get_user_enrollments(user_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all enrollments for a user"""
     return [e for e in enrollments.values() if e.user_id == user_id]
 
 @app.put("/enrollments/{enrollment_id}/progress")
-async def update_progress(enrollment_id: str, module_id: str, completed: bool = False):
+async def update_progress(enrollment_id: str, module_id: str, completed: bool = False,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Update user progress in a course"""
     return await training_manager.update_progress(enrollment_id, module_id, completed)
 
 @app.post("/quizzes/{quiz_id}/submit")
-async def submit_quiz(quiz_id: str, user_id: str, answers: List[Dict[str, Any]]):
+async def submit_quiz(quiz_id: str, user_id: str, answers: List[Dict[str, Any]],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Submit quiz answers"""
     return await training_manager.submit_quiz(quiz_id, user_id, answers)
 
 @app.get("/users/{user_id}/certificates", response_model=List[Certification])
-async def get_user_certificates(user_id: str):
+async def get_user_certificates(user_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all certificates for a user"""
     return [c for c in certifications.values() if c.user_id == user_id]
 
 @app.post("/support/tickets", response_model=SupportTicket)
-async def create_support_ticket(ticket: SupportTicket):
+async def create_support_ticket(ticket: SupportTicket,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a support ticket"""
     return await training_manager.create_support_ticket(ticket)
 
 @app.get("/support/tickets", response_model=List[SupportTicket])
-async def get_support_tickets(user_id: Optional[str] = None, status: Optional[SupportTicketStatus] = None):
+async def get_support_tickets(user_id: Optional[str] = None, status: Optional[SupportTicketStatus] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get support tickets with optional filtering"""
     filtered_tickets = list(support_tickets.values())
     
@@ -557,37 +583,51 @@ async def get_support_tickets(user_id: Optional[str] = None, status: Optional[Su
     return filtered_tickets
 
 @app.put("/support/tickets/{ticket_id}", response_model=SupportTicket)
-async def update_ticket_status(ticket_id: str, status: SupportTicketStatus, resolution: Optional[str] = None):
+async def update_ticket_status(ticket_id: str, status: SupportTicketStatus, resolution: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Update support ticket status"""
     return await training_manager.update_ticket_status(ticket_id, status, resolution)
 
 @app.post("/knowledge-base", response_model=KnowledgeBaseArticle)
-async def create_knowledge_article(article: KnowledgeBaseArticle):
+async def create_knowledge_article(article: KnowledgeBaseArticle,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a knowledge base article"""
     return await training_manager.create_knowledge_article(article)
 
 @app.get("/knowledge-base/search", response_model=List[KnowledgeBaseArticle])
-async def search_knowledge_base(query: str, category: Optional[str] = None):
+async def search_knowledge_base(query: str, category: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Search knowledge base articles"""
     return await training_manager.search_knowledge_base(query, category)
 
 @app.post("/webinars", response_model=Webinar)
-async def schedule_webinar(webinar: Webinar):
+async def schedule_webinar(webinar: Webinar,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Schedule a webinar"""
     return await training_manager.schedule_webinar(webinar)
 
 @app.get("/webinars", response_model=List[Webinar])
-async def get_webinars():
+async def get_webinars(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all scheduled webinars"""
     return list(webinars.values())
 
 @app.get("/users/{user_id}/progress")
-async def get_user_progress(user_id: str):
+async def get_user_progress(user_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get user progress report"""
     return await training_manager.get_user_progress(user_id)
 
 @app.get("/analytics/training")
-async def get_training_analytics():
+async def get_training_analytics(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get training analytics"""
     return await training_manager.get_training_analytics()
 

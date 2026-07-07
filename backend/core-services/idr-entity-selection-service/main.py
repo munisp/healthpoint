@@ -649,28 +649,38 @@ app.middleware("http")(security_headers_middleware)
 )
 
 @app.post("/select-entity", response_model=SelectionResult)
-async def select_entity(request: EntitySelectionRequest):
+async def select_entity(request: EntitySelectionRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Select optimal IDR entity using Georgetown-enhanced algorithms"""
     return entity_selector.select_optimal_entity(request)
 
 @app.get("/entity-performance")
-async def get_entity_performance():
+async def get_entity_performance(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get comprehensive entity performance data"""
     return entity_selector.get_entity_performance_data()
 
 @app.get("/bias-analysis")
-async def get_bias_analysis():
+async def get_bias_analysis(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get bias analysis for all entities"""
     entities = list(entity_selector.georgetown_entity_data.keys())
     return entity_selector._perform_bias_analysis(entities)
 
 @app.get("/bias-monitoring")
-async def get_bias_monitoring():
+async def get_bias_monitoring(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get bias monitoring status and alerts"""
     return entity_selector.monitor_bias_patterns()
 
 @app.get("/georgetown-insights")
-async def get_georgetown_insights():
+async def get_georgetown_insights(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get Georgetown University research insights"""
     return {
         "research_source": "Georgetown University Center on Health Insurance Reforms",
@@ -684,7 +694,9 @@ async def get_georgetown_insights():
     }
 
 @app.get("/specialty-recommendations/{specialty}")
-async def get_specialty_recommendations(specialty: str):
+async def get_specialty_recommendations(specialty: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get entity recommendations for specific specialty"""
     if specialty in entity_selector.specialty_entity_preferences:
         recommended_entities = entity_selector.specialty_entity_preferences[specialty]
@@ -709,7 +721,9 @@ async def get_specialty_recommendations(specialty: str):
         return {"specialty": specialty, "message": "No specific recommendations available"}
 
 @app.get("/geographic-recommendations/{state}")
-async def get_geographic_recommendations(state: str):
+async def get_geographic_recommendations(state: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get entity recommendations for specific state"""
     state_upper = state.upper()
     

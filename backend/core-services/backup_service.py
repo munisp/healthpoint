@@ -792,13 +792,17 @@ app.add_middleware(
 
 # API Endpoints
 @app.post("/backup-configurations", status_code=status.HTTP_201_CREATED)
-async def create_backup_configuration(config: BackupConfiguration):
+async def create_backup_configuration(config: BackupConfiguration,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new backup configuration"""
     config_id = await backup_manager.create_backup_configuration(config)
     return {"configuration_id": config_id}
 
 @app.get("/backup-configurations")
-async def list_backup_configurations(tenant_id: Optional[str] = None):
+async def list_backup_configurations(tenant_id: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """List backup configurations"""
     query = "SELECT * FROM backup_configurations WHERE is_active = TRUE"
     params = []
@@ -812,7 +816,9 @@ async def list_backup_configurations(tenant_id: Optional[str] = None):
         return [dict(row) for row in rows]
 
 @app.post("/backup-jobs", status_code=status.HTTP_201_CREATED)
-async def start_backup_job(configuration_id: str, backup_type: Optional[BackupType] = None):
+async def start_backup_job(configuration_id: str, backup_type: Optional[BackupType] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Start a backup job"""
     job_id = await backup_manager.start_backup_job(configuration_id, backup_type)
     return {"job_id": job_id}
@@ -820,7 +826,9 @@ async def start_backup_job(configuration_id: str, backup_type: Optional[BackupTy
 @app.get("/backup-jobs")
 async def list_backup_jobs(status: Optional[BackupStatus] = None, 
                           configuration_id: Optional[str] = None,
-                          limit: int = 50):
+                          limit: int = 50,
+                              current_user: TokenPayload = Depends(get_current_user),
+                          ):
     """List backup jobs"""
     query = "SELECT * FROM backup_jobs WHERE 1=1"
     params = []
@@ -841,7 +849,9 @@ async def list_backup_jobs(status: Optional[BackupStatus] = None,
         return [dict(row) for row in rows]
 
 @app.get("/backup-jobs/{job_id}")
-async def get_backup_job(job_id: str):
+async def get_backup_job(job_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get backup job details"""
     async with db_manager.pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM backup_jobs WHERE id = $1", job_id)
@@ -850,13 +860,17 @@ async def get_backup_job(job_id: str):
         return dict(row)
 
 @app.post("/restore-jobs", status_code=status.HTTP_201_CREATED)
-async def start_restore_job(request: RestoreRequest):
+async def start_restore_job(request: RestoreRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Start a restore job"""
     job_id = await backup_manager.start_restore_job(request)
     return {"job_id": job_id}
 
 @app.get("/restore-jobs")
-async def list_restore_jobs(status: Optional[RestoreStatus] = None, limit: int = 50):
+async def list_restore_jobs(status: Optional[RestoreStatus] = None, limit: int = 50,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """List restore jobs"""
     query = "SELECT * FROM restore_jobs WHERE 1=1"
     params = []
@@ -873,7 +887,9 @@ async def list_restore_jobs(status: Optional[RestoreStatus] = None, limit: int =
         return [dict(row) for row in rows]
 
 @app.get("/restore-jobs/{job_id}")
-async def get_restore_job(job_id: str):
+async def get_restore_job(job_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get restore job details"""
     async with db_manager.pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM restore_jobs WHERE id = $1", job_id)

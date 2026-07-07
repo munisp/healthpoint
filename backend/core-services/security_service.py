@@ -1025,13 +1025,17 @@ app.add_middleware(
 
 # API Endpoints
 @app.post("/auth/register", status_code=status.HTTP_201_CREATED)
-async def register_user(user_create: UserCreate):
+async def register_user(user_create: UserCreate,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Register new user"""
     user_id = await security_manager.create_user(user_create)
     return {"user_id": user_id}
 
 @app.post("/auth/login")
-async def login(login: UserLogin, request: Request):
+async def login(login: UserLogin, request: Request,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """User login"""
     # Check for threats before processing login
     threat = await security_manager.detect_threats(request)
@@ -1145,7 +1149,9 @@ async def get_audit_logs(
         return {"logs": [dict(row) for row in rows]}
 
 @app.post("/audit/log")
-async def create_audit_log(audit_log: AuditLog):
+async def create_audit_log(audit_log: AuditLog,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create audit log entry"""
     await security_manager.log_audit_event(audit_log)
     return {"message": "Audit log created"}

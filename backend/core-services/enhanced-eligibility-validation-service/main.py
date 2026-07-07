@@ -894,12 +894,16 @@ app.add_middleware(
 )
 
 @app.post("/validate-eligibility", response_model=ValidationResult)
-async def validate_eligibility(request: ValidationRequest):
+async def validate_eligibility(request: ValidationRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Comprehensive eligibility validation using Georgetown-enhanced algorithms"""
     return await eligibility_validator.validate_eligibility(request)
 
 @app.get("/validation-rules")
-async def get_validation_rules():
+async def get_validation_rules(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get available validation rules and their descriptions"""
     return {
         "rules": [
@@ -952,7 +956,9 @@ async def get_validation_rules():
     }
 
 @app.get("/state-requirements/{state}")
-async def get_state_requirements(state: str):
+async def get_state_requirements(state: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get state-specific validation requirements"""
     state_upper = state.upper()
     
@@ -970,7 +976,9 @@ async def get_state_requirements(state: str):
         }
 
 @app.get("/georgetown-insights")
-async def get_georgetown_insights():
+async def get_georgetown_insights(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get Georgetown University research insights for eligibility validation"""
     return {
         "research_source": "Georgetown University Center on Health Insurance Reforms",
@@ -990,7 +998,9 @@ async def get_georgetown_insights():
     }
 
 @app.get("/challenge-risk-factors")
-async def get_challenge_risk_factors():
+async def get_challenge_risk_factors(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get challenge risk factors and their weights"""
     return {
         "risk_factors": eligibility_validator.challenge_risk_factors,

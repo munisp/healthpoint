@@ -882,6 +882,8 @@ async def startup_event():
 async def validate_data(
     validation_request: ValidationRequest,
     credentials: HTTPAuthorizationCredentials = Depends(security)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Validate data according to specified rules"""
     return await validation_service.validate_data(validation_request)
@@ -890,6 +892,8 @@ async def validate_data(
 async def validate_bulk_data(
     bulk_request: BulkValidationRequest,
     credentials: HTTPAuthorizationCredentials = Depends(security)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Validate multiple data items in bulk"""
     results = []
@@ -928,6 +932,8 @@ async def validate_bulk_data(
 async def get_validation_result(
     validation_id: str,
     credentials: HTTPAuthorizationCredentials = Depends(security)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get cached validation result"""
     try:
@@ -943,6 +949,8 @@ async def get_validation_result(
 async def get_schema(
     data_type: DataType,
     credentials: HTTPAuthorizationCredentials = Depends(security)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get validation schema for data type"""
     schema = validation_service.schemas.get(data_type)
@@ -954,6 +962,8 @@ async def get_schema(
 async def get_business_rules(
     data_type: DataType,
     credentials: HTTPAuthorizationCredentials = Depends(security)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Get business rules for data type"""
     rules = validation_service.business_rules.get(data_type, [])

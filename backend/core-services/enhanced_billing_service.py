@@ -482,7 +482,9 @@ billing_manager = EnhancedBillingManager()
 
 # API Endpoints
 @app.get("/fee-structure")
-async def get_fee_structure():
+async def get_fee_structure(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get complete fee structure for transparency"""
     return {
         "transaction_fees": {method.value: fee.dict() for method, fee in TRANSACTION_FEES.items()},
@@ -499,6 +501,8 @@ async def create_transaction_cost(
     payment_method: PaymentMethod,
     amount: float,
     billing_plan: BillingPlan
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Create a transaction cost record"""
     return await billing_manager.create_transaction_cost(
@@ -507,7 +511,9 @@ async def create_transaction_cost(
     )
 
 @app.get("/transaction-costs", response_model=List[TransactionCost])
-async def get_transaction_costs(aggregator_id: Optional[str] = None):
+async def get_transaction_costs(aggregator_id: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get transaction costs with optional filtering"""
     costs = list(transaction_costs.values())
     if aggregator_id:
@@ -520,6 +526,8 @@ async def generate_fee_estimate(
     billing_plan: BillingPlan,
     estimated_disputes: int,
     estimated_transactions: Dict[str, int]
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Generate fee estimate for aggregator"""
     # Convert string keys to PaymentMethod enum
@@ -536,14 +544,18 @@ async def generate_fee_estimate(
     )
 
 @app.get("/fee-estimates/{estimate_id}", response_model=FeeEstimate)
-async def get_fee_estimate(estimate_id: str):
+async def get_fee_estimate(estimate_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get a specific fee estimate"""
     if estimate_id not in fee_estimates:
         raise HTTPException(status_code=404, detail="Fee estimate not found")
     return fee_estimates[estimate_id]
 
 @app.post("/calculate-transaction-fee")
-async def calculate_transaction_fee(payment_method: PaymentMethod, amount: float, is_international: bool = False):
+async def calculate_transaction_fee(payment_method: PaymentMethod, amount: float, is_international: bool = False,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Calculate transaction fee for a specific payment method and amount"""
     fee_breakdown = billing_manager.calculate_transaction_fee(
         payment_method, Decimal(str(amount)), is_international
@@ -560,12 +572,16 @@ async def generate_invoice(
     aggregator_id: str,
     billing_period_start: datetime,
     billing_period_end: datetime
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Generate invoice for aggregator"""
     return await billing_manager.generate_invoice(aggregator_id, billing_period_start, billing_period_end)
 
 @app.get("/invoices", response_model=List[Invoice])
-async def get_invoices(aggregator_id: Optional[str] = None):
+async def get_invoices(aggregator_id: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get invoices with optional filtering"""
     filtered_invoices = list(invoices.values())
     if aggregator_id:
@@ -573,19 +589,25 @@ async def get_invoices(aggregator_id: Optional[str] = None):
     return filtered_invoices
 
 @app.get("/invoices/{invoice_id}", response_model=Invoice)
-async def get_invoice(invoice_id: str):
+async def get_invoice(invoice_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get a specific invoice"""
     if invoice_id not in invoices:
         raise HTTPException(status_code=404, detail="Invoice not found")
     return invoices[invoice_id]
 
 @app.get("/billing-plans")
-async def get_billing_plans():
+async def get_billing_plans(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all available billing plans"""
     return {plan.value: details.dict() for plan, details in BILLING_PLANS.items()}
 
 @app.get("/billing-plans/{plan_name}")
-async def get_billing_plan(plan_name: BillingPlan):
+async def get_billing_plan(plan_name: BillingPlan,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get specific billing plan details"""
     plan_details = BILLING_PLANS.get(plan_name)
     if not plan_details:
@@ -593,7 +615,9 @@ async def get_billing_plan(plan_name: BillingPlan):
     return plan_details.dict()
 
 @app.get("/analytics/billing")
-async def get_billing_analytics():
+async def get_billing_analytics(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get billing analytics and insights"""
     total_transactions = len(transaction_costs)
     total_revenue = sum(tc.total_fee for tc in transaction_costs.values())

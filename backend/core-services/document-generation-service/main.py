@@ -550,7 +550,9 @@ async def health_check():
 
 
 @app.post("/generate-pdf")
-async def generate_pdf_legacy(html_content: str):
+async def generate_pdf_legacy(html_content: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Legacy endpoint: generate PDF from raw HTML using weasyprint."""
     try:
         from weasyprint import HTML
@@ -561,7 +563,9 @@ async def generate_pdf_legacy(html_content: str):
 
 
 @app.post("/api/v1/documents/generate", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
-async def generate_document(req: DocumentRequest):
+async def generate_document(req: DocumentRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Generate a document (PDF or DOCX) from a template."""
     try:
         return await _process(req)
@@ -571,7 +575,9 @@ async def generate_document(req: DocumentRequest):
 
 
 @app.post("/api/v1/documents/generate/stream")
-async def generate_document_stream(req: DocumentRequest):
+async def generate_document_stream(req: DocumentRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Generate and stream a document directly to the client."""
     try:
         req.store_to_s3 = False
@@ -590,7 +596,9 @@ async def generate_document_stream(req: DocumentRequest):
 
 
 @app.post("/api/v1/documents/bulk", status_code=status.HTTP_202_ACCEPTED)
-async def generate_bulk_documents(documents: List[DocumentRequest], background_tasks: BackgroundTasks):
+async def generate_bulk_documents(documents: List[DocumentRequest], background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Generate multiple documents in bulk (async)."""
     if len(documents) > 100:
         raise HTTPException(status_code=400, detail="Maximum 100 documents per bulk request.")
@@ -608,7 +616,9 @@ async def generate_bulk_documents(documents: List[DocumentRequest], background_t
 
 
 @app.get("/api/v1/documents/{document_id}")
-async def get_document_info(document_id: str):
+async def get_document_info(document_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Retrieve metadata for a previously generated document."""
     pool = await get_db_pool()
     if pool is None:
@@ -621,7 +631,9 @@ async def get_document_info(document_id: str):
 
 @app.get("/api/v1/documents")
 async def list_documents(document_type: Optional[str] = None, claim_id: Optional[str] = None,
-                          dispute_id: Optional[str] = None, limit: int = 50, offset: int = 0):
+                          dispute_id: Optional[str] = None, limit: int = 50, offset: int = 0,
+                              current_user: TokenPayload = Depends(get_current_user),
+                          ):
     """List documents with optional filtering."""
     pool = await get_db_pool()
     if pool is None:
@@ -640,7 +652,9 @@ async def list_documents(document_type: Optional[str] = None, claim_id: Optional
 
 
 @app.get("/api/v1/documents/types/supported")
-async def list_supported_types():
+async def list_supported_types(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     return {"document_types": [t.value for t in DocumentType],
             "output_formats": [f.value for f in OutputFormat]}
 

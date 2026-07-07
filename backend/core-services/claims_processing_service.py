@@ -919,17 +919,23 @@ async def initialize_database():
 
 # API Endpoints
 @app.post("/claims", response_model=ClaimResponse)
-async def submit_claim(claim: ClaimSubmission, background_tasks: BackgroundTasks):
+async def submit_claim(claim: ClaimSubmission, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Submit a new claim for processing"""
     return await claims_processor.process_claim(claim, background_tasks)
 
 @app.get("/claims/{claim_id}", response_model=ClaimResponse)
-async def get_claim(claim_id: str):
+async def get_claim(claim_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get claim details by ID"""
     return await claims_processor.get_claim(claim_id)
 
 @app.put("/claims/{claim_id}/status")
-async def update_claim_status(claim_id: str, update: ClaimUpdate, user_id: str = "system"):
+async def update_claim_status(claim_id: str, update: ClaimUpdate, user_id: str = "system",
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Update claim status"""
     if update.status:
         await claims_processor.update_claim_status(claim_id, update.status, user_id, update.notes)
@@ -943,6 +949,8 @@ async def list_claims(
     claim_type: Optional[ClaimType] = None,
     limit: int = 50,
     offset: int = 0
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """List claims with filtering"""
     async with db_manager.pool.acquire() as conn:
@@ -990,7 +998,9 @@ async def list_claims(
         }
 
 @app.get("/claims/stats")
-async def get_claims_stats():
+async def get_claims_stats(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get claims processing statistics"""
     async with db_manager.pool.acquire() as conn:
         stats = await conn.fetchrow("""

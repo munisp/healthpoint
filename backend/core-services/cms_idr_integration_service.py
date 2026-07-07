@@ -31,7 +31,7 @@ import hmac
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, Decimal, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-import redis
+import redis.asyncio as redis.asyncio as redis
 from cryptography.fernet import Fernet
 
 # Configure logging
@@ -49,7 +49,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Redis setup for caching and real-time updates
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
+# Redis client initialized via shared cache module
+# Use: from backend.shared.cache import get_client as get_redis_client
 
 # Encryption setup
 encryption_key = Fernet.generate_key()
@@ -444,6 +445,8 @@ async def submit_to_cms_idr(
     request: SubmissionRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Submit bulk NSA/IDR disputes to CMS IDR Portal"""
     try:
@@ -566,7 +569,9 @@ async def process_cms_submission(submission_id: int, claims_data: List[Dict[str,
         db.close()
 
 @app.get("/api/v1/cms-idr/status/{submission_id}", response_model=List[StatusUpdateResponse])
-async def get_submission_status(submission_id: str, db: Session = Depends(get_db)):
+async def get_submission_status(submission_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get detailed status updates for a submission"""
     status_updates = db.query(StatusUpdate).filter(
         StatusUpdate.submission_id == submission_id
@@ -584,7 +589,9 @@ async def get_submission_status(submission_id: str, db: Session = Depends(get_db
     ]
 
 @app.get("/api/v1/cms-idr/submissions/{aggregator_id}")
-async def get_aggregator_submissions(aggregator_id: str, db: Session = Depends(get_db)):
+async def get_aggregator_submissions(aggregator_id: str, db: Session = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all submissions for a specific aggregator"""
     submissions = db.query(CMSSubmission).filter(
         CMSSubmission.aggregator_id == aggregator_id
@@ -593,7 +600,9 @@ async def get_aggregator_submissions(aggregator_id: str, db: Session = Depends(g
     return submissions
 
 @app.post("/api/v1/cms-idr/webhook/cms-update")
-async def receive_cms_webhook(update_data: Dict[str, Any]):
+async def receive_cms_webhook(update_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Receive status updates from CMS IDR Portal"""
     submission_id = update_data.get('submission_id')
     status = update_data.get('status')
@@ -612,7 +621,9 @@ async def receive_cms_webhook(update_data: Dict[str, Any]):
     return {"status": "received"}
 
 @app.post("/api/v1/cms-idr/webhook/idr-update")
-async def receive_idr_webhook(update_data: Dict[str, Any]):
+async def receive_idr_webhook(update_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Receive status updates from IDR entities"""
     submission_id = update_data.get('submission_id')
     status = update_data.get('status')

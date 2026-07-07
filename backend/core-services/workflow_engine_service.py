@@ -666,20 +666,26 @@ app.add_middleware(
 
 # API Endpoints
 @app.post("/workflow-definitions", status_code=status.HTTP_201_CREATED)
-async def create_workflow_definition(definition: WorkflowDefinition):
+async def create_workflow_definition(definition: WorkflowDefinition,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new workflow definition"""
     definition.id = str(uuid.uuid4())
     workflow_id = await workflow_engine.create_workflow_definition(definition)
     return {"workflow_definition_id": workflow_id}
 
 @app.post("/workflows/start", status_code=status.HTTP_201_CREATED)
-async def start_workflow(request: WorkflowExecutionRequest):
+async def start_workflow(request: WorkflowExecutionRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Start a new workflow instance"""
     instance_id = await workflow_engine.start_workflow(request)
     return {"workflow_instance_id": instance_id}
 
 @app.get("/workflows/{instance_id}")
-async def get_workflow_status(instance_id: str):
+async def get_workflow_status(instance_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get workflow instance status"""
     async with db_manager.pool.acquire() as conn:
         row = await conn.fetchrow("""
@@ -692,7 +698,9 @@ async def get_workflow_status(instance_id: str):
         return dict(row)
 
 @app.get("/workflows/{instance_id}/tasks")
-async def get_workflow_tasks(instance_id: str):
+async def get_workflow_tasks(instance_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all tasks for a workflow instance"""
     async with db_manager.pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -704,7 +712,9 @@ async def get_workflow_tasks(instance_id: str):
         return [dict(row) for row in rows]
 
 @app.post("/workflows/{instance_id}/cancel")
-async def cancel_workflow(instance_id: str):
+async def cancel_workflow(instance_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Cancel a running workflow"""
     async with db_manager.pool.acquire() as conn:
         await conn.execute("""

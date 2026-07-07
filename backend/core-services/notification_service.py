@@ -226,7 +226,7 @@ class ConnectionManager:
             for connection in self.active_connections[user_id]:
                 try:
                     await connection.websocket.send_json(message)
-                except:
+                except Exception as e:
                     disconnected.append(connection)
             
             # Remove disconnected connections
@@ -840,12 +840,16 @@ async def initialize_database():
 
 # API Endpoints
 @app.post("/notifications", response_model=NotificationResponse)
-async def send_notification(request: NotificationRequest, background_tasks: BackgroundTasks):
+async def send_notification(request: NotificationRequest, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Send notification to recipients"""
     return await notification_service.send_notification(request, background_tasks)
 
 @app.get("/notifications/{notification_id}")
-async def get_notification(notification_id: str):
+async def get_notification(notification_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get notification details"""
     async with db_manager.pool.acquire() as conn:
         notification = await conn.fetchrow("""
@@ -864,6 +868,8 @@ async def list_notifications(
     status: Optional[NotificationStatus] = None,
     limit: int = 50,
     offset: int = 0
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """List notifications with filtering"""
     async with db_manager.pool.acquire() as conn:
@@ -942,7 +948,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, tenant_id: Opti
         connection_manager.disconnect(user_id, websocket)
 
 @app.post("/preferences/{user_id}")
-async def update_preferences(user_id: str, preferences: NotificationPreferences):
+async def update_preferences(user_id: str, preferences: NotificationPreferences,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Update user notification preferences"""
     async with db_manager.pool.acquire() as conn:
         await conn.execute("""
@@ -965,7 +973,9 @@ async def update_preferences(user_id: str, preferences: NotificationPreferences)
     return {"message": "Preferences updated successfully"}
 
 @app.get("/preferences/{user_id}")
-async def get_preferences(user_id: str):
+async def get_preferences(user_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get user notification preferences"""
     async with db_manager.pool.acquire() as conn:
         prefs = await conn.fetchrow("""
@@ -989,7 +999,9 @@ async def get_preferences(user_id: str):
         return dict(prefs)
 
 @app.get("/templates")
-async def list_templates():
+async def list_templates(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """List notification templates"""
     async with db_manager.pool.acquire() as conn:
         templates = await conn.fetch("""
@@ -999,7 +1011,9 @@ async def list_templates():
         return {"templates": [dict(template) for template in templates]}
 
 @app.get("/stats")
-async def get_notification_stats():
+async def get_notification_stats(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get notification statistics"""
     async with db_manager.pool.acquire() as conn:
         stats = await conn.fetchrow("""

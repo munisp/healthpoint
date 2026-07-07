@@ -866,6 +866,8 @@ async def upload_document(
     access_level: AccessLevel = Form(AccessLevel.CONFIDENTIAL),
     uploaded_by: str = Form(...),
     tenant_id: str = Form(...)
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """Upload a document"""
     tag_list = tags.split(',') if tags else []
@@ -885,7 +887,9 @@ async def upload_document(
     return {"document_id": document_id}
 
 @app.get("/documents/{document_id}")
-async def get_document(document_id: str, tenant_id: str = Query(...), user_id: str = Query(...)):
+async def get_document(document_id: str, tenant_id: str = Query(...), user_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get document metadata"""
     document = await document_manager.get_document(document_id, tenant_id, user_id)
     if not document:
@@ -893,7 +897,9 @@ async def get_document(document_id: str, tenant_id: str = Query(...), user_id: s
     return document
 
 @app.get("/documents/{document_id}/download")
-async def download_document(document_id: str, tenant_id: str = Query(...), user_id: str = Query(...)):
+async def download_document(document_id: str, tenant_id: str = Query(...), user_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Download document file"""
     file_data, filename, mime_type = await document_manager.download_document(document_id, tenant_id, user_id)
     
@@ -904,27 +910,35 @@ async def download_document(document_id: str, tenant_id: str = Query(...), user_
     )
 
 @app.post("/documents/search")
-async def search_documents(search: DocumentSearch, limit: int = Query(50, le=100)):
+async def search_documents(search: DocumentSearch, limit: int = Query(50, le=100),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Search documents"""
     documents = await document_manager.search_documents(search, limit)
     return {"documents": documents, "count": len(documents)}
 
 @app.post("/documents/{document_id}/share", status_code=status.HTTP_201_CREATED)
-async def create_document_share(document_id: str, share: DocumentShare):
+async def create_document_share(document_id: str, share: DocumentShare,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create document share"""
     share.document_id = document_id
     share_id = await document_manager.create_document_share(share)
     return {"share_id": share_id}
 
 @app.post("/documents/{document_id}/ocr")
-async def perform_ocr(document_id: str, ocr_request: OCRRequest):
+async def perform_ocr(document_id: str, ocr_request: OCRRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Perform OCR on document"""
     # This would trigger OCR processing
     # For now, return success message
     return {"message": "OCR processing started", "document_id": document_id}
 
 @app.get("/documents/{document_id}/versions")
-async def get_document_versions(document_id: str, tenant_id: str = Query(...)):
+async def get_document_versions(document_id: str, tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get document versions"""
     async with db_manager.pool.acquire() as conn:
         versions = await conn.fetch("""

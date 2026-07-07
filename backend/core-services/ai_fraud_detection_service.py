@@ -194,7 +194,9 @@ app.add_middleware(
 fraud_predictor = FraudPredictor()
 
 @app.post("/detect-fraud", response_model=FraudDetectionResult, status_code=status.HTTP_200_OK)
-async def detect_fraud(claim: ClaimData, background_tasks: BackgroundTasks):
+async def detect_fraud(claim: ClaimData, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Detect potential fraud in a healthcare claim"""
     return await fraud_predictor.predict_fraud(claim, background_tasks)
 
@@ -695,7 +697,9 @@ class FeedbackData(BaseModel):
     feedback_notes: Optional[str] = None
 
 @app.post("/feedback", status_code=status.HTTP_202_ACCEPTED)
-async def receive_feedback(feedback: FeedbackData, background_tasks: BackgroundTasks):
+async def receive_feedback(feedback: FeedbackData, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Receive feedback on fraud detection results to enable continuous learning."""
     background_tasks.add_task(fraud_predictor.handle_feedback, feedback)
     return {"message": "Feedback received and queued for processing."}
@@ -736,3 +740,9 @@ async def _ensure_fraud_schema():
         """)
         logger.info("Database schema created or already exists.")
 
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    from datetime import datetime
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}

@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Any
 import json
 import asyncio
 from datetime import datetime, timedelta
-import redis
+import redis.asyncio as redis.asyncio as redis
 import logging
 from decimal import Decimal
 import uuid
@@ -47,7 +47,8 @@ app.add_middleware(
 )
 
 # Redis connection for real-time configuration updates
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+# Redis client initialized via shared cache module
+# Use: from backend.shared.cache import get_client as get_redis_client
 
 # Data Models
 class TransactionFee(BaseModel):
@@ -225,15 +226,10 @@ platform_settings = {
 }
 
 # Admin Authentication (simplified for demo)
-def verify_admin_token(token: str = None):
-    """Verify admin authentication token"""
-    if not token or token != "admin-token-123":
-        raise HTTPException(status_code=401, detail="Invalid admin token")
-    return True
 
 # Transaction Fee Management Endpoints
 @app.get("/admin/fees")
-async def get_transaction_fees(admin_token: str = Depends(verify_admin_token)):
+async def get_transaction_fees(admin_token: str = Depends(require_admin)):
     """Get all transaction fees"""
     return {
         "fees": transaction_fees,
@@ -246,7 +242,7 @@ async def update_transaction_fee(
     method: str, 
     fee_data: TransactionFee,
     background_tasks: BackgroundTasks,
-    admin_token: str = Depends(verify_admin_token)
+    admin_token: str = Depends(require_admin)
 ):
     """Update transaction fee for specific payment method"""
     if method not in transaction_fees:
@@ -273,7 +269,7 @@ async def update_transaction_fee(
 async def create_transaction_fee(
     fee_data: TransactionFee,
     background_tasks: BackgroundTasks,
-    admin_token: str = Depends(verify_admin_token)
+    admin_token: str = Depends(require_admin)
 ):
     """Create new transaction fee method"""
     if fee_data.method in transaction_fees:
@@ -297,7 +293,7 @@ async def create_transaction_fee(
 
 # Billing Plan Management Endpoints
 @app.get("/admin/plans")
-async def get_billing_plans(admin_token: str = Depends(verify_admin_token)):
+async def get_billing_plans(admin_token: str = Depends(require_admin)):
     """Get all billing plans"""
     return {
         "plans": billing_plans,
@@ -310,7 +306,7 @@ async def update_billing_plan(
     plan_id: str,
     plan_data: BillingPlan,
     background_tasks: BackgroundTasks,
-    admin_token: str = Depends(verify_admin_token)
+    admin_token: str = Depends(require_admin)
 ):
     """Update billing plan"""
     if plan_id not in billing_plans:
@@ -338,7 +334,7 @@ async def update_billing_plan(
 async def create_billing_plan(
     plan_data: BillingPlan,
     background_tasks: BackgroundTasks,
-    admin_token: str = Depends(verify_admin_token)
+    admin_token: str = Depends(require_admin)
 ):
     """Create new billing plan"""
     if plan_data.plan_id in billing_plans:
@@ -362,7 +358,7 @@ async def create_billing_plan(
 
 # Volume Discount Management Endpoints
 @app.get("/admin/discounts")
-async def get_volume_discounts(admin_token: str = Depends(verify_admin_token)):
+async def get_volume_discounts(admin_token: str = Depends(require_admin)):
     """Get all volume discounts"""
     return {
         "discounts": volume_discounts,
@@ -375,7 +371,7 @@ async def update_volume_discount(
     tier_id: str,
     discount_data: VolumeDiscount,
     background_tasks: BackgroundTasks,
-    admin_token: str = Depends(verify_admin_token)
+    admin_token: str = Depends(require_admin)
 ):
     """Update volume discount tier"""
     if tier_id not in volume_discounts:
@@ -399,7 +395,7 @@ async def update_volume_discount(
 
 # Platform Settings Management Endpoints
 @app.get("/admin/settings")
-async def get_platform_settings(admin_token: str = Depends(verify_admin_token)):
+async def get_platform_settings(admin_token: str = Depends(require_admin)):
     """Get all platform settings"""
     return {
         "settings": platform_settings,
@@ -412,7 +408,7 @@ async def update_platform_setting(
     setting_key: str,
     setting_data: PlatformSettings,
     background_tasks: BackgroundTasks,
-    admin_token: str = Depends(verify_admin_token)
+    admin_token: str = Depends(require_admin)
 ):
     """Update platform setting"""
     if setting_key not in platform_settings:
@@ -442,7 +438,7 @@ async def update_platform_setting(
 async def bulk_configuration_update(
     updates: List[ConfigurationUpdate],
     background_tasks: BackgroundTasks,
-    admin_token: str = Depends(verify_admin_token)
+    admin_token: str = Depends(require_admin)
 ):
     """Perform bulk configuration updates"""
     results = []
@@ -487,7 +483,7 @@ async def bulk_configuration_update(
 
 # Configuration Export/Import
 @app.get("/admin/export")
-async def export_configuration(admin_token: str = Depends(verify_admin_token)):
+async def export_configuration(admin_token: str = Depends(require_admin)):
     """Export all configuration data"""
     export_data = {
         "transaction_fees": {k: v.dict() for k, v in transaction_fees.items()},
@@ -504,7 +500,7 @@ async def export_configuration(admin_token: str = Depends(verify_admin_token)):
 async def import_configuration(
     config_data: Dict[str, Any],
     background_tasks: BackgroundTasks,
-    admin_token: str = Depends(verify_admin_token)
+    admin_token: str = Depends(require_admin)
 ):
     """Import configuration data"""
     try:

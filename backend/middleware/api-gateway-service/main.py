@@ -13,6 +13,7 @@ import asyncio
 from datetime import datetime
 import logging
 import json
+from backend.shared.auth import get_current_user, require_admin, require_role, TokenPayload
 
 # ============================================================================
 # CONFIGURATION
@@ -159,22 +160,30 @@ async def platform_health():
 # ============================================================================
 
 @app.post("/api/v1/gfe/generate")
-async def generate_gfe(gfe_data: Dict[str, Any]):
+async def generate_gfe(gfe_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Generate a new Good Faith Estimate"""
     return await call_service("gfe_management", "/api/v1/gfe/generate", "POST", gfe_data)
 
 @app.get("/api/v1/gfe/{gfe_id}")
-async def get_gfe(gfe_id: str):
+async def get_gfe(gfe_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Retrieve a specific GFE"""
     return await call_service("gfe_management", f"/api/v1/gfe/{gfe_id}", "GET")
 
 @app.put("/api/v1/gfe/{gfe_id}")
-async def update_gfe(gfe_id: str, gfe_data: Dict[str, Any]):
+async def update_gfe(gfe_id: str, gfe_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Update an existing GFE"""
     return await call_service("gfe_management", f"/api/v1/gfe/{gfe_id}", "PUT", gfe_data)
 
 @app.post("/api/v1/gfe/{gfe_id}/submit")
-async def submit_gfe(gfe_id: str, submission_data: Dict[str, Any]):
+async def submit_gfe(gfe_id: str, submission_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Submit GFE to CMS/IDR entities"""
     return await call_service("gfe_management", f"/api/v1/gfe/{gfe_id}/submit", "POST", submission_data)
 
@@ -183,23 +192,31 @@ async def submit_gfe(gfe_id: str, submission_data: Dict[str, Any]):
 # ============================================================================
 
 @app.post("/api/v1/transform/gfe-to-json")
-async def transform_gfe_to_json(gfe_data: Dict[str, Any]):
+async def transform_gfe_to_json(gfe_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Transform GFE to JSON format"""
     return await call_service("data_transformation", "/api/v1/transform/gfe-to-json", "POST", gfe_data)
 
 @app.post("/api/v1/transform/gfe-to-x12")
-async def transform_gfe_to_x12(gfe_data: Dict[str, Any]):
+async def transform_gfe_to_x12(gfe_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Transform GFE to X12 EDI format"""
     return await call_service("data_transformation", "/api/v1/transform/gfe-to-x12", "POST", gfe_data)
 
 @app.post("/api/v1/transform/gfe-to-cms")
-async def transform_gfe_to_cms(gfe_data: Dict[str, Any], submission_type: str):
+async def transform_gfe_to_cms(gfe_data: Dict[str, Any], submission_type: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Transform GFE to CMS submission format"""
     data = {"gfe_data": gfe_data, "submission_type": submission_type}
     return await call_service("data_transformation", "/api/v1/transform/gfe-to-cms", "POST", data)
 
 @app.post("/api/v1/validate/gfe")
-async def validate_gfe(gfe_data: Dict[str, Any]):
+async def validate_gfe(gfe_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Validate GFE data"""
     return await call_service("data_transformation", "/api/v1/validate/gfe", "POST", gfe_data)
 
@@ -208,17 +225,23 @@ async def validate_gfe(gfe_data: Dict[str, Any]):
 # ============================================================================
 
 @app.post("/api/v1/cms/ppdr/submit")
-async def submit_ppdr(submission_data: Dict[str, Any]):
+async def submit_ppdr(submission_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Submit Patient-Provider Dispute Resolution to CMS"""
     return await call_service("cms_portal_automation", "/api/v1/cms/ppdr/submit", "POST", submission_data)
 
 @app.get("/api/v1/cms/submission-status/{submission_id}")
-async def get_cms_submission_status(submission_id: str):
+async def get_cms_submission_status(submission_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get CMS submission status"""
     return await call_service("cms_portal_automation", f"/api/v1/cms/submission-status/{submission_id}", "GET")
 
 @app.post("/api/v1/cms/compliance/report")
-async def submit_compliance_report(report_data: Dict[str, Any]):
+async def submit_compliance_report(report_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Submit compliance report to CMS"""
     return await call_service("cms_portal_automation", "/api/v1/cms/compliance/report", "POST", report_data)
 
@@ -227,17 +250,23 @@ async def submit_compliance_report(report_data: Dict[str, Any]):
 # ============================================================================
 
 @app.post("/api/v1/idr/dispute/initiate")
-async def initiate_idr_dispute(dispute_data: Dict[str, Any]):
+async def initiate_idr_dispute(dispute_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Initiate IDR dispute"""
     return await call_service("idr_entity_integration", "/api/v1/idr/dispute/initiate", "POST", dispute_data)
 
 @app.put("/api/v1/idr/dispute/{dispute_id}/evidence")
-async def submit_idr_evidence(dispute_id: str, evidence_data: Dict[str, Any]):
+async def submit_idr_evidence(dispute_id: str, evidence_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Submit evidence for IDR dispute"""
     return await call_service("idr_entity_integration", f"/api/v1/idr/dispute/{dispute_id}/evidence", "PUT", evidence_data)
 
 @app.get("/api/v1/idr/dispute/{dispute_id}/status")
-async def get_idr_dispute_status(dispute_id: str):
+async def get_idr_dispute_status(dispute_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get IDR dispute status"""
     return await call_service("idr_entity_integration", f"/api/v1/idr/dispute/{dispute_id}/status", "GET")
 
@@ -246,12 +275,16 @@ async def get_idr_dispute_status(dispute_id: str):
 # ============================================================================
 
 @app.post("/api/v1/nsa/calculate-qpa")
-async def calculate_qpa(calculation_data: Dict[str, Any]):
+async def calculate_qpa(calculation_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Calculate Qualifying Payment Amount (QPA)"""
     return await call_service("nsa_rate_calculation", "/api/v1/nsa/calculate-qpa", "POST", calculation_data)
 
 @app.post("/api/v1/nsa/geographic-adjustment")
-async def apply_geographic_adjustment(adjustment_data: Dict[str, Any]):
+async def apply_geographic_adjustment(adjustment_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Apply geographic adjustment to rates"""
     return await call_service("nsa_rate_calculation", "/api/v1/nsa/geographic-adjustment", "POST", adjustment_data)
 
@@ -260,12 +293,16 @@ async def apply_geographic_adjustment(adjustment_data: Dict[str, Any]):
 # ============================================================================
 
 @app.get("/api/v1/admin/fees")
-async def get_admin_fees():
+async def get_admin_fees(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get admin fee configuration"""
     return await call_service("admin_fee_management", "/api/v1/admin/fees", "GET")
 
 @app.put("/api/v1/admin/fees/{fee_id}")
-async def update_admin_fee(fee_id: str, fee_data: Dict[str, Any]):
+async def update_admin_fee(fee_id: str, fee_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Update admin fee"""
     return await call_service("admin_fee_management", f"/api/v1/admin/fees/{fee_id}", "PUT", fee_data)
 
@@ -274,7 +311,9 @@ async def update_admin_fee(fee_id: str, fee_data: Dict[str, Any]):
 # ============================================================================
 
 @app.post("/api/v1/workflows/complete-gfe-submission")
-async def complete_gfe_submission_workflow(workflow_data: Dict[str, Any]):
+async def complete_gfe_submission_workflow(workflow_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Complete end-to-end GFE submission workflow"""
     try:
         # Step 1: Validate GFE
@@ -307,7 +346,9 @@ async def complete_gfe_submission_workflow(workflow_data: Dict[str, Any]):
         return {"status": "failed", "error": str(e)}
 
 @app.post("/api/v1/workflows/idr-dispute-process")
-async def idr_dispute_process_workflow(workflow_data: Dict[str, Any]):
+async def idr_dispute_process_workflow(workflow_data: Dict[str, Any],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Complete IDR dispute process workflow"""
     try:
         # Step 1: Initiate dispute
@@ -336,7 +377,9 @@ async def idr_dispute_process_workflow(workflow_data: Dict[str, Any]):
 # ============================================================================
 
 @app.post("/api/v1/proxy")
-async def service_proxy(request: APIRequest):
+async def service_proxy(request: APIRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Generic proxy for any service call"""
     return await call_service(
         service_name=request.service,
@@ -351,7 +394,9 @@ async def service_proxy(request: APIRequest):
 # ============================================================================
 
 @app.get("/api/v1/metrics/platform")
-async def get_platform_metrics():
+async def get_platform_metrics(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get comprehensive platform metrics"""
     try:
         # Collect metrics from various services

@@ -11,6 +11,7 @@ import asyncpg
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from backend.shared.auth import get_current_user, require_admin, require_role, TokenPayload
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -113,7 +114,9 @@ async def shutdown():
 
 
 @app.post("/api/v1/idr/dispute/initiate", response_model=DisputeResponse)
-async def initiate_dispute(request: DisputeInitiateRequest, background_tasks: BackgroundTasks):
+async def initiate_dispute(request: DisputeInitiateRequest, background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Initiate a new IDR dispute with a certified IDR entity."""
     dispute_id = f"IDR-{uuid.uuid4().hex[:8].upper()}"
     deadline = datetime.utcnow() + timedelta(days=30)  # NSA 30-day deadline
@@ -157,7 +160,9 @@ async def initiate_dispute(request: DisputeInitiateRequest, background_tasks: Ba
 
 
 @app.post("/api/v1/idr/dispute/{dispute_id}/select-entity")
-async def select_entity(dispute_id: str, request: EntitySelectionRequest):
+async def select_entity(dispute_id: str, request: EntitySelectionRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Assign a certified IDR entity to the dispute."""
     # Fetch available entities excluding conflicts
     excluded = set(request.conflict_of_interest_entities or [])
@@ -193,7 +198,9 @@ async def select_entity(dispute_id: str, request: EntitySelectionRequest):
 
 
 @app.post("/api/v1/idr/dispute/{dispute_id}/determination")
-async def submit_determination(dispute_id: str, request: DeterminationRequest):
+async def submit_determination(dispute_id: str, request: DeterminationRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Submit the IDR entity's final determination."""
     if request.determination not in ("provider", "plan"):
         raise HTTPException(status_code=400, detail="determination must be 'provider' or 'plan'")
@@ -229,7 +236,9 @@ async def submit_determination(dispute_id: str, request: DeterminationRequest):
 
 
 @app.get("/api/v1/idr/dispute/{dispute_id}/status", response_model=DisputeStatusResponse)
-async def get_dispute_status(dispute_id: str):
+async def get_dispute_status(dispute_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get full status and timeline for a dispute."""
     try:
         pool = await get_db()
@@ -274,6 +283,8 @@ async def list_disputes(
     tenant_id: str = Query("default"),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
+,
+    current_user: TokenPayload = Depends(get_current_user),
 ):
     """List all disputes with optional status filter."""
     try:
@@ -300,7 +311,9 @@ async def list_disputes(
 
 
 @app.post("/api/v1/idr/dispute/{dispute_id}/appeal")
-async def file_appeal(dispute_id: str, appeal_reason: str):
+async def file_appeal(dispute_id: str, appeal_reason: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """File an appeal against a determination."""
     try:
         pool = await get_db()
@@ -326,7 +339,9 @@ async def file_appeal(dispute_id: str, appeal_reason: str):
 
 
 @app.get("/api/v1/idr/entities")
-async def list_certified_entities(specialty: Optional[str] = Query(None)):
+async def list_certified_entities(specialty: Optional[str] = Query(None),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """List all certified IDR entities available for selection."""
     try:
         pool = await get_db()

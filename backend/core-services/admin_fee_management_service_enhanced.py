@@ -107,21 +107,19 @@ def create_audit_log(conn, log: AuditLog):
     conn.commit()
 
 # Admin Authentication (simplified)
-def verify_admin_token(token: str = None):
-    if not token or token != "admin-token-123":
-        raise HTTPException(status_code=401, detail="Invalid admin token")
-    return True
 
 # Transaction Fee Management Endpoints
 @app.get("/admin/fees")
-async def get_transaction_fees(db: psycopg2.extensions.connection = Depends(get_db_connection)):
+async def get_transaction_fees(db: psycopg2.extensions.connection = Depends(get_db_connection),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     with db.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM transaction_fees")
         fees = cur.fetchall()
     return {"fees": fees}
 
 @app.put("/admin/fees/{method}")
-async def update_transaction_fee(method: str, fee_data: TransactionFee, background_tasks: BackgroundTasks, db: psycopg2.extensions.connection = Depends(get_db_connection), admin_token: str = Depends(verify_admin_token)):
+async def update_transaction_fee(method: str, fee_data: TransactionFee, background_tasks: BackgroundTasks, db: psycopg2.extensions.connection = Depends(get_db_connection), admin_token: str = Depends(require_admin)):
     with db.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM transaction_fees WHERE method = %s", (method,))
         existing_fee = cur.fetchone()
@@ -242,6 +240,13 @@ def update_platform_setting(key: str, value: str, db: Session = Depends(get_db))
 
 
 
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    from datetime import datetime
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8026)
@@ -250,14 +255,16 @@ if __name__ == "__main__":
 
 # Billing Plan Management Endpoints
 @app.get("/admin/plans")
-async def get_billing_plans(db: psycopg2.extensions.connection = Depends(get_db_connection)):
+async def get_billing_plans(db: psycopg2.extensions.connection = Depends(get_db_connection),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     with db.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM billing_plans")
         plans = cur.fetchall()
     return {"plans": plans}
 
 @app.put("/admin/plans/{plan_id}")
-async def update_billing_plan(plan_id: str, plan_data: BillingPlan, background_tasks: BackgroundTasks, db: psycopg2.extensions.connection = Depends(get_db_connection), admin_token: str = Depends(verify_admin_token)):
+async def update_billing_plan(plan_id: str, plan_data: BillingPlan, background_tasks: BackgroundTasks, db: psycopg2.extensions.connection = Depends(get_db_connection), admin_token: str = Depends(require_admin)):
     with db.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM billing_plans WHERE plan_id = %s", (plan_id,))
         existing_plan = cur.fetchone()
@@ -275,14 +282,16 @@ async def update_billing_plan(plan_id: str, plan_data: BillingPlan, background_t
 
 # Volume Discount Management Endpoints
 @app.get("/admin/discounts")
-async def get_volume_discounts(db: psycopg2.extensions.connection = Depends(get_db_connection)):
+async def get_volume_discounts(db: psycopg2.extensions.connection = Depends(get_db_connection),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     with db.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM volume_discounts")
         discounts = cur.fetchall()
     return {"discounts": discounts}
 
 @app.put("/admin/discounts/{tier_name}")
-async def update_volume_discount(tier_name: str, discount_data: VolumeDiscount, background_tasks: BackgroundTasks, db: psycopg2.extensions.connection = Depends(get_db_connection), admin_token: str = Depends(verify_admin_token)):
+async def update_volume_discount(tier_name: str, discount_data: VolumeDiscount, background_tasks: BackgroundTasks, db: psycopg2.extensions.connection = Depends(get_db_connection), admin_token: str = Depends(require_admin)):
     with db.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM volume_discounts WHERE tier_name = %s", (tier_name,))
         existing_discount = cur.fetchone()
@@ -300,14 +309,16 @@ async def update_volume_discount(tier_name: str, discount_data: VolumeDiscount, 
 
 # Platform Settings Management Endpoints
 @app.get("/admin/settings")
-async def get_platform_settings(db: psycopg2.extensions.connection = Depends(get_db_connection)):
+async def get_platform_settings(db: psycopg2.extensions.connection = Depends(get_db_connection),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     with db.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM platform_settings")
         settings = cur.fetchall()
     return {"settings": settings}
 
 @app.put("/admin/settings/{setting_key}")
-async def update_platform_setting(setting_key: str, setting_data: PlatformSettings, background_tasks: BackgroundTasks, db: psycopg2.extensions.connection = Depends(get_db_connection), admin_token: str = Depends(verify_admin_token)):
+async def update_platform_setting(setting_key: str, setting_data: PlatformSettings, background_tasks: BackgroundTasks, db: psycopg2.extensions.connection = Depends(get_db_connection), admin_token: str = Depends(require_admin)):
     with db.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM platform_settings WHERE setting_key = %s", (setting_key,))
         existing_setting = cur.fetchone()
@@ -364,7 +375,7 @@ async def broadcast_update(update: dict):
 
 
 @app.put("/admin/fees/{method}")
-async def update_transaction_fee(method: str, fee_data: TransactionFee, background_tasks: BackgroundTasks, db: psycopg2.extensions.connection = Depends(get_db_connection), admin_token: str = Depends(verify_admin_token)):
+async def update_transaction_fee(method: str, fee_data: TransactionFee, background_tasks: BackgroundTasks, db: psycopg2.extensions.connection = Depends(get_db_connection), admin_token: str = Depends(require_admin)):
     with db.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM transaction_fees WHERE method = %s", (method,))
         existing_fee = cur.fetchone()
@@ -380,4 +391,3 @@ async def update_transaction_fee(method: str, fee_data: TransactionFee, backgrou
         background_tasks.add_task(broadcast_update, {**log.dict(), "entity_id": method})
 
     return {"message": f"Transaction fee for {method} updated successfully"}
-

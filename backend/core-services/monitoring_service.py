@@ -586,7 +586,7 @@ class MonitoringManager:
             for websocket in self.connected_websockets:
                 try:
                     await websocket.send_text(json.dumps(message))
-                except:
+                except Exception as e:
                     disconnected.add(websocket)
             
             # Remove disconnected clients
@@ -612,7 +612,7 @@ class MonitoringManager:
             for websocket in self.connected_websockets:
                 try:
                     await websocket.send_text(json.dumps(message))
-                except:
+                except Exception as e:
                     disconnected.add(websocket)
             
             # Remove disconnected clients
@@ -660,13 +660,17 @@ app.add_middleware(
 
 # API Endpoints
 @app.post("/metrics", status_code=status.HTTP_201_CREATED)
-async def collect_metric(metric: MetricData):
+async def collect_metric(metric: MetricData,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Collect a metric data point"""
     await monitoring_manager.collect_metric(metric)
     return {"message": "Metric collected successfully"}
 
 @app.post("/metrics/batch", status_code=status.HTTP_201_CREATED)
-async def collect_metrics_batch(metrics: List[MetricData]):
+async def collect_metrics_batch(metrics: List[MetricData],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Collect multiple metrics in batch"""
     for metric in metrics:
         await monitoring_manager.collect_metric(metric)
@@ -678,7 +682,9 @@ async def get_metric_history(metric_name: str,
                             tenant_id: Optional[str] = None,
                             start_time: Optional[datetime] = None,
                             end_time: Optional[datetime] = None,
-                            limit: int = 100):
+                            limit: int = 100,
+                                current_user: TokenPayload = Depends(get_current_user),
+                            ):
     """Get metric history"""
     if not start_time:
         start_time = datetime.utcnow() - timedelta(hours=1)
@@ -707,13 +713,17 @@ async def get_metric_history(metric_name: str,
         return [dict(row) for row in rows]
 
 @app.post("/alert-rules", status_code=status.HTTP_201_CREATED)
-async def create_alert_rule(rule: AlertRule):
+async def create_alert_rule(rule: AlertRule,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new alert rule"""
     rule_id = await monitoring_manager.create_alert_rule(rule)
     return {"rule_id": rule_id}
 
 @app.get("/alert-rules")
-async def list_alert_rules(tenant_id: Optional[str] = None, service_name: Optional[str] = None):
+async def list_alert_rules(tenant_id: Optional[str] = None, service_name: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """List alert rules"""
     query = "SELECT * FROM alert_rules WHERE is_active = TRUE"
     params = []
@@ -735,7 +745,9 @@ async def list_alerts(status: Optional[AlertStatus] = None,
                      severity: Optional[AlertSeverity] = None,
                      service_name: Optional[str] = None,
                      tenant_id: Optional[str] = None,
-                     limit: int = 50):
+                     limit: int = 50,
+                         current_user: TokenPayload = Depends(get_current_user),
+                     ):
     """List alerts"""
     query = "SELECT * FROM alerts WHERE 1=1"
     params = []
@@ -764,7 +776,9 @@ async def list_alerts(status: Optional[AlertStatus] = None,
         return [dict(row) for row in rows]
 
 @app.post("/alerts/{alert_id}/acknowledge")
-async def acknowledge_alert(alert_id: str, acknowledged_by: str):
+async def acknowledge_alert(alert_id: str, acknowledged_by: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Acknowledge an alert"""
     async with db_manager.pool.acquire() as conn:
         result = await conn.execute("""
@@ -779,7 +793,9 @@ async def acknowledge_alert(alert_id: str, acknowledged_by: str):
     return {"message": "Alert acknowledged successfully"}
 
 @app.post("/alerts/{alert_id}/resolve")
-async def resolve_alert(alert_id: str):
+async def resolve_alert(alert_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Resolve an alert"""
     async with db_manager.pool.acquire() as conn:
         result = await conn.execute("""
@@ -800,7 +816,9 @@ async def get_service_health():
     return {"services": [health.dict() for health in health_results]}
 
 @app.get("/system-metrics")
-async def get_system_metrics():
+async def get_system_metrics(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get current system metrics"""
     metrics = await monitoring_manager.get_system_metrics()
     return metrics.dict()

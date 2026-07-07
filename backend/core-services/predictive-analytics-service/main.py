@@ -659,7 +659,9 @@ app.middleware("http")(security_headers_middleware)
 )
 
 @app.post("/predict", response_model=PredictionResult)
-async def predict_case_outcome(case_data: CaseData):
+async def predict_case_outcome(case_data: CaseData,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Predict IDR case outcome using Georgetown-enhanced analytics"""
     try:
         result = analytics_engine.predict_case_outcome(case_data)
@@ -669,7 +671,9 @@ async def predict_case_outcome(case_data: CaseData):
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
 @app.get("/model-performance", response_model=ModelPerformance)
-async def get_model_performance():
+async def get_model_performance(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get current model performance metrics"""
     if analytics_engine.model_performance:
         return analytics_engine.model_performance
@@ -677,18 +681,24 @@ async def get_model_performance():
         raise HTTPException(status_code=404, detail="Model performance data not available")
 
 @app.get("/georgetown-insights")
-async def get_georgetown_insights():
+async def get_georgetown_insights(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get Georgetown University research insights"""
     return analytics_engine.georgetown_data
 
 @app.post("/retrain-models")
-async def retrain_models(background_tasks: BackgroundTasks):
+async def retrain_models(background_tasks: BackgroundTasks,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Retrain models with updated data"""
     background_tasks.add_task(analytics_engine._initialize_models)
     return {"status": "Model retraining initiated"}
 
 @app.get("/specialty-analysis/{specialty}")
-async def get_specialty_analysis(specialty: Specialty):
+async def get_specialty_analysis(specialty: Specialty,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get detailed analysis for a specific specialty"""
     specialty_data = analytics_engine.georgetown_data["provider_win_rates"]["specialty_patterns"][specialty]
     return {
@@ -699,12 +709,16 @@ async def get_specialty_analysis(specialty: Specialty):
     }
 
 @app.get("/geographic-analysis/{state}")
-async def get_geographic_analysis(state: str):
+async def get_geographic_analysis(state: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get detailed analysis for a specific state"""
     return analytics_engine._get_geographic_insights(state.upper())
 
 @app.get("/entity-analysis/{entity_name}")
-async def get_entity_analysis(entity_name: str):
+async def get_entity_analysis(entity_name: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get detailed analysis for a specific IDR entity"""
     return analytics_engine._get_entity_insights(entity_name)
 

@@ -527,12 +527,16 @@ appeal_manager = AppealEscalationManager()
 
 # API Endpoints
 @app.post("/appeals", response_model=Appeal)
-async def create_appeal(appeal: Appeal, idr_decision_date: datetime):
+async def create_appeal(appeal: Appeal, idr_decision_date: datetime,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new appeal"""
     return await appeal_manager.create_appeal(appeal, idr_decision_date)
 
 @app.get("/appeals", response_model=List[Appeal])
-async def get_appeals(status: Optional[AppealStatus] = None, appellant_id: Optional[str] = None):
+async def get_appeals(status: Optional[AppealStatus] = None, appellant_id: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get appeals with optional filtering"""
     filtered_appeals = list(appeals.values())
     
@@ -544,19 +548,25 @@ async def get_appeals(status: Optional[AppealStatus] = None, appellant_id: Optio
     return filtered_appeals
 
 @app.get("/appeals/{appeal_id}", response_model=Appeal)
-async def get_appeal(appeal_id: str):
+async def get_appeal(appeal_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get a specific appeal"""
     if appeal_id not in appeals:
         raise HTTPException(status_code=404, detail="Appeal not found")
     return appeals[appeal_id]
 
 @app.put("/appeals/{appeal_id}/file")
-async def file_appeal(appeal_id: str, filing_documents: List[str]):
+async def file_appeal(appeal_id: str, filing_documents: List[str],
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """File an appeal with required documents"""
     return await appeal_manager.file_appeal(appeal_id, filing_documents)
 
 @app.post("/appeals/{appeal_id}/documents", response_model=AppealDocument)
-async def upload_document(appeal_id: str, document: AppealDocument, file: UploadFile = File(...)):
+async def upload_document(appeal_id: str, document: AppealDocument, file: UploadFile = File(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Upload a document for an appeal"""
     file_content = await file.read()
     document.file_size = len(file_content)
@@ -564,39 +574,53 @@ async def upload_document(appeal_id: str, document: AppealDocument, file: Upload
     return await appeal_manager.upload_document(appeal_id, document, file_content)
 
 @app.get("/appeals/{appeal_id}/documents", response_model=List[AppealDocument])
-async def get_appeal_documents(appeal_id: str):
+async def get_appeal_documents(appeal_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get all documents for an appeal"""
     return [d for d in appeal_documents.values() if d.appeal_id == appeal_id]
 
 @app.put("/appeals/{appeal_id}/status")
-async def update_appeal_status(appeal_id: str, status: AppealStatus, notes: Optional[str] = None):
+async def update_appeal_status(appeal_id: str, status: AppealStatus, notes: Optional[str] = None,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Update appeal status"""
     return await appeal_manager.update_appeal_status(appeal_id, status, notes)
 
 @app.get("/appeals/{appeal_id}/timeline", response_model=List[AppealTimeline])
-async def get_appeal_timeline(appeal_id: str):
+async def get_appeal_timeline(appeal_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get timeline for an appeal"""
     return sorted([t for t in appeal_timelines.values() if t.appeal_id == appeal_id], 
                  key=lambda x: x.event_date)
 
 @app.post("/escalations", response_model=EscalationRequest)
-async def create_escalation_request(escalation: EscalationRequest):
+async def create_escalation_request(escalation: EscalationRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create an escalation request"""
     return await appeal_manager.create_escalation_request(escalation)
 
 @app.put("/escalations/{escalation_id}/approve")
-async def approve_escalation(escalation_id: str, approved_by: str, approved: bool = True):
+async def approve_escalation(escalation_id: str, approved_by: str, approved: bool = True,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Approve or reject an escalation request"""
     return await appeal_manager.approve_escalation(escalation_id, approved_by, approved)
 
 @app.post("/appeals/{appeal_id}/decisions", response_model=AppealDecision)
-async def create_appeal_decision(appeal_id: str, decision: AppealDecision):
+async def create_appeal_decision(appeal_id: str, decision: AppealDecision,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create an appeal decision"""
     decision.appeal_id = appeal_id
     return await appeal_manager.create_appeal_decision(decision)
 
 @app.get("/appeals/{appeal_id}/analytics", response_model=AppealAnalytics)
-async def get_appeal_analytics(appeal_id: str):
+async def get_appeal_analytics(appeal_id: str,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get predictive analytics for an appeal"""
     analytics = next((a for a in appeal_analytics.values() if a.appeal_id == appeal_id), None)
     if not analytics:
@@ -604,7 +628,9 @@ async def get_appeal_analytics(appeal_id: str):
     return analytics
 
 @app.get("/analytics/appeals")
-async def get_appeal_statistics():
+async def get_appeal_statistics(,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get comprehensive appeal statistics"""
     return await appeal_manager.get_appeal_statistics()
 

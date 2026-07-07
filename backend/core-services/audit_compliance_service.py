@@ -777,7 +777,9 @@ app.add_middleware(
 
 # API Endpoints
 @app.post("/audit-events", status_code=status.HTTP_201_CREATED)
-async def log_audit_event(event: AuditEvent):
+async def log_audit_event(event: AuditEvent,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Log an audit event"""
     event_id = await audit_manager.log_audit_event(event)
     return {"event_id": event_id}
@@ -788,7 +790,9 @@ async def get_audit_events(tenant_id: str = Query(...),
                           user_id: Optional[str] = None,
                           start_date: Optional[datetime] = None,
                           end_date: Optional[datetime] = None,
-                          limit: int = Query(100, le=1000)):
+                          limit: int = Query(100, le=1000),
+                              current_user: TokenPayload = Depends(get_current_user),
+                          ):
     """Get audit events with filters"""
     query = "SELECT * FROM audit_events WHERE tenant_id = $1"
     params = [tenant_id]
@@ -817,14 +821,18 @@ async def get_audit_events(tenant_id: str = Query(...),
         return {"events": [dict(row) for row in rows]}
 
 @app.post("/compliance-rules", status_code=status.HTTP_201_CREATED)
-async def create_compliance_rule(rule: ComplianceRule):
+async def create_compliance_rule(rule: ComplianceRule,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Create a new compliance rule"""
     rule_id = await audit_manager.create_compliance_rule(rule)
     return {"rule_id": rule_id}
 
 @app.get("/compliance-rules")
 async def get_compliance_rules(tenant_id: Optional[str] = None,
-                              framework: Optional[ComplianceFramework] = None):
+                              framework: Optional[ComplianceFramework] = None,
+                                  current_user: TokenPayload = Depends(get_current_user),
+                              ):
     """Get compliance rules"""
     query = "SELECT * FROM compliance_rules WHERE is_active = TRUE"
     params = []
@@ -845,7 +853,9 @@ async def get_compliance_rules(tenant_id: Optional[str] = None,
 async def get_compliance_violations(tenant_id: str = Query(...),
                                    status: Optional[ComplianceStatus] = None,
                                    risk_level: Optional[RiskLevel] = None,
-                                   limit: int = Query(100, le=1000)):
+                                   limit: int = Query(100, le=1000),
+                                       current_user: TokenPayload = Depends(get_current_user),
+                                   ):
     """Get compliance violations"""
     query = "SELECT * FROM compliance_violations WHERE tenant_id = $1"
     params = [tenant_id]
@@ -866,7 +876,9 @@ async def get_compliance_violations(tenant_id: str = Query(...),
         return {"violations": [dict(row) for row in rows]}
 
 @app.post("/audit-reports", status_code=status.HTTP_201_CREATED)
-async def generate_audit_report(report: AuditReport):
+async def generate_audit_report(report: AuditReport,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Generate an audit report"""
     report_id = await audit_manager.generate_audit_report(report)
     return {"report_id": report_id}
@@ -874,7 +886,9 @@ async def generate_audit_report(report: AuditReport):
 @app.get("/audit-reports")
 async def get_audit_reports(tenant_id: str = Query(...),
                            report_type: Optional[str] = None,
-                           status: Optional[AuditStatus] = None):
+                           status: Optional[AuditStatus] = None,
+                               current_user: TokenPayload = Depends(get_current_user),
+                           ):
     """Get audit reports"""
     query = "SELECT * FROM audit_reports WHERE tenant_id = $1"
     params = [tenant_id]
@@ -894,7 +908,9 @@ async def get_audit_reports(tenant_id: str = Query(...),
         return {"reports": [dict(row) for row in rows]}
 
 @app.get("/audit-reports/{report_id}")
-async def get_audit_report(report_id: str, tenant_id: str = Query(...)):
+async def get_audit_report(report_id: str, tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Get specific audit report"""
     async with db_manager.pool.acquire() as conn:
         row = await conn.fetchrow("""
@@ -918,7 +934,9 @@ async def get_audit_report(report_id: str, tenant_id: str = Query(...)):
         return report_data
 
 @app.post("/access-control-audit", status_code=status.HTTP_201_CREATED)
-async def log_access_control_audit(audit: AccessControlAudit):
+async def log_access_control_audit(audit: AccessControlAudit,
+    current_user: TokenPayload = Depends(get_current_user),
+):
     """Log access control audit event"""
     async with db_manager.pool.acquire() as conn:
         audit_id = await conn.fetchval("""
