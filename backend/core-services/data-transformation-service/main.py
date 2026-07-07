@@ -23,8 +23,11 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, date
 import re
 import uuid
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
+setup_telemetry(service_name="data-transformation-service", service_version="1.0.0")
 app = FastAPI(title="Data Transformation Service", version="1.0.0")
+instrument_fastapi(app)
 
 app.middleware("http")(security_headers_middleware)
 

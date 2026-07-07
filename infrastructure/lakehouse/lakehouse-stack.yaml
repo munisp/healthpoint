@@ -1,0 +1,362 @@
+---
+# HealthPoint Lakehouse Stack
+# Components:
+#   - MinIO (S3-compatible object storage for Iceberg data files)
+#   - Iceberg REST Catalog (Nessie)
+#   - Spark Operator (for Spark Structured Streaming jobs)
+#   - Trino (SQL query engine over Iceberg)
+
+# ── MinIO — S3-compatible object storage ─────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: healthpoint-infra
+  labels:
+    app: minio
+spec:
+  serviceName: minio
+  replicas: 4
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2024-01-01T00-00-00Z
+          command:
+            - minio
+            - server
+            - /data{0...3}
+            - --console-address=:9001
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: access-key
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: secret-key
+            - name: MINIO_VOLUMES
+              value: "/data{0...3}"
+          ports:
+            - containerPort: 9000
+              name: api
+            - containerPort: 9001
+              name: console
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: gp3
+        resources:
+          requests:
+            storage: 100Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: healthpoint-infra
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: api
+      port: 9000
+    - name: console
+      port: 9001
+---
+# ── Nessie — Iceberg REST Catalog ────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iceberg-rest-catalog
+  namespace: healthpoint-infra
+  labels:
+    app: iceberg-rest-catalog
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: iceberg-rest-catalog
+  template:
+    metadata:
+      labels:
+        app: iceberg-rest-catalog
+    spec:
+      containers:
+        - name: nessie
+          image: projectnessie/nessie:0.73.0
+          env:
+            - name: QUARKUS_DATASOURCE_JDBC_URL
+              value: "jdbc:postgresql://pgbouncer.healthpoint-infra.svc.cluster.local:5432/healthpoint"
+            - name: QUARKUS_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: QUARKUS_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            - name: NESSIE_VERSION_STORE_TYPE
+              value: JDBC
+            - name: NESSIE_SERVER_AUTHENTICATION_ENABLED
+              value: "true"
+          ports:
+            - containerPort: 19120
+              name: api
+          readinessProbe:
+            httpGet:
+              path: /q/health/ready
+              port: 19120
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iceberg-rest-catalog
+  namespace: healthpoint-infra
+spec:
+  selector:
+    app: iceberg-rest-catalog
+  ports:
+    - name: api
+      port: 8181
+      targetPort: 19120
+---
+# ── Trino — SQL query engine ──────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-config
+  namespace: healthpoint-infra
+data:
+  config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://trino:8080
+    query.max-memory=4GB
+    query.max-memory-per-node=1GB
+    query.max-total-memory-per-node=2GB
+  node.properties: |
+    node.environment=production
+    node.id=trino-coordinator
+    node.data-dir=/data/trino
+  jvm.config: |
+    -server
+    -Xmx4G
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=32M
+    -XX:+UseGCOverheadLimit
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:+ExitOnOutOfMemoryError
+    -Djdk.attach.allowAttachSelf=true
+  iceberg.properties: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://iceberg-rest-catalog:8181
+    iceberg.rest-catalog.warehouse=s3://healthpoint-lakehouse/warehouse
+    fs.native-s3.enabled=true
+    s3.endpoint=http://minio:9000
+    s3.path-style-access=true
+    s3.aws-access-key=${S3_ACCESS_KEY}
+    s3.aws-secret-key=${S3_SECRET_KEY}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino
+  namespace: healthpoint-infra
+  labels:
+    app: trino
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trino
+  template:
+    metadata:
+      labels:
+        app: trino
+    spec:
+      containers:
+        - name: trino
+          image: trinodb/trino:435
+          env:
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: access-key
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: secret-key
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "4Gi"
+            limits:
+              cpu: "4000m"
+              memory: "8Gi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/trino
+      volumes:
+        - name: config
+          configMap:
+            name: trino-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino
+  namespace: healthpoint-infra
+spec:
+  selector:
+    app: trino
+  ports:
+    - name: http
+      port: 8080
+---
+# ── SparkApplication CRDs (Spark Operator) ───────────────────────────────────
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: idr-disputes-ingestion
+  namespace: healthpoint-infra
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: healthpoint/spark-jobs:1.0.0
+  imagePullPolicy: Always
+  mainApplicationFile: local:///opt/spark/jobs/idr_disputes_ingestion.py
+  sparkVersion: "3.5.0"
+  restartPolicy:
+    type: Always
+    onFailureRetries: 3
+    onFailureRetryInterval: 30
+    onSubmissionFailureRetries: 5
+    onSubmissionFailureRetryInterval: 20
+  driver:
+    cores: 1
+    memory: "2g"
+    serviceAccount: spark
+  executor:
+    cores: 2
+    instances: 3
+    memory: "4g"
+  deps:
+    packages:
+      - "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2"
+      - "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0"
+      - "org.apache.hadoop:hadoop-aws:3.3.4"
+  sparkConf:
+    "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+    "spark.sql.catalog.iceberg": "org.apache.iceberg.spark.SparkCatalog"
+    "spark.sql.catalog.iceberg.type": "rest"
+    "spark.sql.catalog.iceberg.uri": "http://iceberg-rest-catalog:8181"
+    "spark.sql.catalog.iceberg.warehouse": "s3a://healthpoint-lakehouse/warehouse"
+    "spark.hadoop.fs.s3a.endpoint": "http://minio:9000"
+    "spark.hadoop.fs.s3a.path.style.access": "true"
+    "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem"
+  envFrom:
+    - secretRef:
+        name: spark-secrets
+---
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: payments-ingestion
+  namespace: healthpoint-infra
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: healthpoint/spark-jobs:1.0.0
+  imagePullPolicy: Always
+  mainApplicationFile: local:///opt/spark/jobs/payments_ingestion.py
+  sparkVersion: "3.5.0"
+  restartPolicy:
+    type: Always
+    onFailureRetries: 3
+    onFailureRetryInterval: 30
+  driver:
+    cores: 1
+    memory: "2g"
+    serviceAccount: spark
+  executor:
+    cores: 2
+    instances: 3
+    memory: "4g"
+  deps:
+    packages:
+      - "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2"
+      - "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0"
+      - "org.apache.hadoop:hadoop-aws:3.3.4"
+  sparkConf:
+    "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+    "spark.sql.catalog.iceberg": "org.apache.iceberg.spark.SparkCatalog"
+    "spark.sql.catalog.iceberg.type": "rest"
+    "spark.sql.catalog.iceberg.uri": "http://iceberg-rest-catalog:8181"
+    "spark.sql.catalog.iceberg.warehouse": "s3a://healthpoint-lakehouse/warehouse"
+    "spark.hadoop.fs.s3a.endpoint": "http://minio:9000"
+    "spark.hadoop.fs.s3a.path.style.access": "true"
+    "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem"
+  envFrom:
+    - secretRef:
+        name: spark-secrets

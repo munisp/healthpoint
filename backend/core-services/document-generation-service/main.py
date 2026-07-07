@@ -41,6 +41,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import (
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
 )
 
@@ -51,7 +52,9 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 S3_BUCKET = os.getenv("S3_BUCKET", "healthpoint-documents")
 S3_REGION = os.getenv("AWS_REGION", "us-east-1")
 
+setup_telemetry(service_name="document-generation-service", service_version="1.0.0")
 app = FastAPI(
+instrument_fastapi(app)
 
 app.middleware("http")(security_headers_middleware)
     title="HealthPoint Document Generation Service",

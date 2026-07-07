@@ -145,7 +145,7 @@ async def check_service_health(service_name: str, endpoint: str) -> str:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(f"{endpoint}/health")
             return "healthy" if response.status_code == 200 else "unhealthy"
-    except:
+    except Exception:
         return "unreachable"
 
 # Route handler
@@ -237,7 +237,7 @@ async def dynamic_route(request: Request, path: str):
     # Increment request counter
     try:
         redis_client.incr("total_requests")
-    except:
+    except Exception:
         pass
     
     # Find matching service
@@ -252,7 +252,7 @@ async def dynamic_route(request: Request, path: str):
     if not target_service:
         try:
             redis_client.incr("error_count")
-        except:
+        except Exception:
             pass
         raise HTTPException(status_code=404, detail="Route not found")
     
@@ -262,13 +262,13 @@ async def dynamic_route(request: Request, path: str):
     except HTTPException:
         try:
             redis_client.incr("error_count")
-        except:
+        except Exception:
             pass
         raise
     except Exception as e:
         try:
             redis_client.incr("error_count")
-        except:
+        except Exception:
             pass
         logger.error(f"Routing error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

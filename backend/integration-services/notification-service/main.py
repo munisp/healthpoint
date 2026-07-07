@@ -14,6 +14,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from backend.shared.auth import get_current_user, require_admin, require_role, TokenPayload
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,7 +27,9 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@healthpoint.com")
 
+setup_telemetry(service_name="notification-service", service_version="1.0.0")
 app = FastAPI(title="HealthPoint Integration Notification Service", version="2.0.0")
+instrument_fastapi(app)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","), allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 

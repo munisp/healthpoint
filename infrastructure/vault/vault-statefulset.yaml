@@ -1,0 +1,265 @@
+---
+# Vault HA — 3-node Raft cluster on Kubernetes
+# Requires: cert-manager for TLS, AWS KMS for auto-unseal (or Shamir)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault
+  namespace: healthpoint-infra
+  labels:
+    app: vault
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: vault
+    namespace: healthpoint-infra
+---
+# Headless service for Raft peer discovery
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-internal
+  namespace: healthpoint-infra
+  labels:
+    app: vault
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: vault
+  ports:
+    - name: https
+      port: 8200
+      targetPort: 8200
+    - name: internal
+      port: 8201
+      targetPort: 8201
+---
+# External service for client access
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: healthpoint-infra
+  labels:
+    app: vault
+spec:
+  selector:
+    app: vault
+    vault-active: "true"
+  ports:
+    - name: https
+      port: 8200
+      targetPort: 8200
+---
+# ConfigMap with vault.hcl
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-config
+  namespace: healthpoint-infra
+data:
+  vault.hcl: |
+    ui            = true
+    log_level     = "info"
+    log_format    = "json"
+    cluster_name  = "healthpoint-vault"
+
+    listener "tcp" {
+      address         = "0.0.0.0:8200"
+      tls_cert_file   = "/vault/tls/tls.crt"
+      tls_key_file    = "/vault/tls/tls.key"
+      tls_min_version = "tls12"
+      telemetry {
+        unauthenticated_metrics_access = false
+      }
+    }
+
+    storage "raft" {
+      path    = "/vault/data"
+      node_id = "HOSTNAME"
+      retry_join {
+        leader_api_addr     = "https://vault-0.vault-internal.healthpoint-infra.svc.cluster.local:8200"
+        leader_ca_cert_file = "/vault/tls/ca.crt"
+      }
+      retry_join {
+        leader_api_addr     = "https://vault-1.vault-internal.healthpoint-infra.svc.cluster.local:8200"
+        leader_ca_cert_file = "/vault/tls/ca.crt"
+      }
+      retry_join {
+        leader_api_addr     = "https://vault-2.vault-internal.healthpoint-infra.svc.cluster.local:8200"
+        leader_ca_cert_file = "/vault/tls/ca.crt"
+      }
+    }
+
+    seal "awskms" {
+      region     = "us-east-1"
+      kms_key_id = "alias/healthpoint-vault-unseal"
+    }
+
+    api_addr     = "https://POD_IP:8200"
+    cluster_addr = "https://POD_IP:8201"
+
+    telemetry {
+      prometheus_retention_time = "30s"
+      disable_hostname          = false
+    }
+---
+# StatefulSet — 3 replicas
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vault
+  namespace: healthpoint-infra
+  labels:
+    app: vault
+spec:
+  serviceName: vault-internal
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8200"
+        prometheus.io/path: "/v1/sys/metrics"
+    spec:
+      serviceAccountName: vault
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: vault-init
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              # Replace HOSTNAME placeholder in vault.hcl
+              sed "s/HOSTNAME/${HOSTNAME}/g; s/POD_IP/${POD_IP}/g" \
+                /vault/config-template/vault.hcl > /vault/config/vault.hcl
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          volumeMounts:
+            - name: config-template
+              mountPath: /vault/config-template
+            - name: config
+              mountPath: /vault/config
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.15
+          command:
+            - vault
+            - server
+            - -config=/vault/config/vault.hcl
+          env:
+            - name: VAULT_ADDR
+              value: "https://127.0.0.1:8200"
+            - name: VAULT_API_ADDR
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: VAULT_CLUSTER_ADDR
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: SKIP_CHOWN
+              value: "true"
+            - name: SKIP_SETCAP
+              value: "true"
+            # AWS KMS credentials injected via IAM role (IRSA)
+          ports:
+            - containerPort: 8200
+              name: https
+            - containerPort: 8201
+              name: internal
+          readinessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204
+              port: 8200
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true
+              port: 8200
+              scheme: HTTPS
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["IPC_LOCK"]
+          volumeMounts:
+            - name: config
+              mountPath: /vault/config
+            - name: config-template
+              mountPath: /vault/config-template
+            - name: tls
+              mountPath: /vault/tls
+              readOnly: true
+            - name: data
+              mountPath: /vault/data
+      volumes:
+        - name: config
+          emptyDir: {}
+        - name: config-template
+          configMap:
+            name: vault-config
+        - name: tls
+          secret:
+            secretName: vault-tls
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: gp3
+        resources:
+          requests:
+            storage: 10Gi
+---
+# PodDisruptionBudget — always keep at least 2 nodes up
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vault-pdb
+  namespace: healthpoint-infra
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: vault

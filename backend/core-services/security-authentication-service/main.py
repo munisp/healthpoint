@@ -40,6 +40,7 @@ from backend.shared.auth import (
 )
 from backend.shared.messaging import Topics, publish
 from backend.shared.security_middleware import apply_security_middleware
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,9 @@ KEYCLOAK_CLIENT_ID: str = os.getenv("KEYCLOAK_CLIENT_ID", "healthpoint-api")
 KEYCLOAK_CLIENT_SECRET: str = os.environ.get("KEYCLOAK_CLIENT_SECRET", "")
 
 # ── App ───────────────────────────────────────────────────────────────────────
+setup_telemetry(service_name="security-authentication-service", service_version="1.0.0")
 app = FastAPI(
+instrument_fastapi(app)
     title="Security & Authentication Service",
     version="2.0.0",
     description="Keycloak-backed authentication with PostgreSQL audit logging",

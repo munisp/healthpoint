@@ -25,6 +25,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,7 +44,9 @@ ALLOWED_MIME_TYPES = {
     "text/plain", "text/csv", "application/json", "application/xml", "application/zip",
 }
 
+setup_telemetry(service_name="file-upload-service", service_version="1.0.0")
 app = FastAPI(title="HealthPoint File Upload Service", version="2.0.0")
+instrument_fastapi(app)
 
 app.middleware("http")(security_headers_middleware)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","), allow_credentials=True,

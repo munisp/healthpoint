@@ -25,6 +25,7 @@ from backend.shared.messaging import publish, Topics
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,7 +35,9 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://integration-notification-service:8034")
 DOCUMENT_SERVICE_URL = os.getenv("DOCUMENT_SERVICE_URL", "http://document-generation-service:8030")
 
+setup_telemetry(service_name="gfe-management-service", service_version="1.0.0")
 app = FastAPI(title="HealthPoint GFE Management Service", version="2.0.0")
+instrument_fastapi(app)
 
 app.middleware("http")(security_headers_middleware)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","), allow_credentials=True,

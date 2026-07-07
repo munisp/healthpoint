@@ -28,6 +28,7 @@ from backend.shared.messaging import publish, Topics
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)

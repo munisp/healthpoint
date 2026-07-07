@@ -14,12 +14,15 @@ from datetime import datetime
 import logging
 import json
 from backend.shared.auth import get_current_user, require_admin, require_role, TokenPayload
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
+setup_telemetry(service_name="api-gateway-service", service_version="1.0.0")
 app = FastAPI(
+instrument_fastapi(app)
     title="NSA/IDR Healthcare Platform API Gateway",
     version="1.0.0",
     description="Unified API Gateway for all platform services"

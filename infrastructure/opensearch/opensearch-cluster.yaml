@@ -1,0 +1,287 @@
+---
+# OpenSearch 3-node production cluster
+# Roles: master-eligible + data + ingest on all nodes (small cluster pattern)
+# TLS: cert-manager issues node and admin certs
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opensearch-config
+  namespace: healthpoint-infra
+data:
+  opensearch.yml: |
+    cluster.name: healthpoint-opensearch
+    network.host: 0.0.0.0
+
+    # Discovery
+    discovery.seed_hosts:
+      - opensearch-0.opensearch-headless.healthpoint-infra.svc.cluster.local
+      - opensearch-1.opensearch-headless.healthpoint-infra.svc.cluster.local
+      - opensearch-2.opensearch-headless.healthpoint-infra.svc.cluster.local
+    cluster.initial_cluster_manager_nodes:
+      - opensearch-0
+      - opensearch-1
+      - opensearch-2
+
+    # Node roles — all nodes are master-eligible, data, and ingest
+    node.roles: [cluster_manager, data, ingest]
+
+    # TLS — transport layer
+    plugins.security.ssl.transport.pemcert_filepath: /usr/share/opensearch/config/tls/tls.crt
+    plugins.security.ssl.transport.pemkey_filepath: /usr/share/opensearch/config/tls/tls.key
+    plugins.security.ssl.transport.pemtrustedcas_filepath: /usr/share/opensearch/config/tls/ca.crt
+    plugins.security.ssl.transport.enforce_hostname_verification: false
+
+    # TLS — HTTP layer
+    plugins.security.ssl.http.enabled: true
+    plugins.security.ssl.http.pemcert_filepath: /usr/share/opensearch/config/tls/tls.crt
+    plugins.security.ssl.http.pemkey_filepath: /usr/share/opensearch/config/tls/tls.key
+    plugins.security.ssl.http.pemtrustedcas_filepath: /usr/share/opensearch/config/tls/ca.crt
+
+    # Security plugin
+    plugins.security.allow_unsafe_democertificates: false
+    plugins.security.allow_default_init_securityindex: true
+    plugins.security.authcz.admin_dn:
+      - "CN=admin,O=HealthPoint"
+    plugins.security.nodes_dn:
+      - "CN=opensearch-*.opensearch-headless.healthpoint-infra.svc.cluster.local,O=HealthPoint"
+
+    # Performance tuning
+    indices.memory.index_buffer_size: 20%
+    indices.queries.cache.size: 10%
+    thread_pool.write.queue_size: 1000
+    thread_pool.search.queue_size: 1000
+
+    # Slow log thresholds
+    index.search.slowlog.threshold.query.warn: 10s
+    index.search.slowlog.threshold.query.info: 5s
+    index.indexing.slowlog.threshold.index.warn: 10s
+
+  jvm.options: |
+    -Xms2g
+    -Xmx2g
+    -XX:+UseG1GC
+    -XX:G1ReservePercent=25
+    -XX:InitiatingHeapOccupancyPercent=30
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:HeapDumpPath=/usr/share/opensearch/data
+    -XX:ErrorFile=/usr/share/opensearch/logs/hs_err_pid%p.log
+    -Xlog:gc*,gc+age=trace,safepoint:file=/usr/share/opensearch/logs/gc.log:utctime,pid,tags:filecount=32,filesize=64m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-headless
+  namespace: healthpoint-infra
+  labels:
+    app: opensearch
+spec:
+  clusterIP: None
+  selector:
+    app: opensearch
+  ports:
+    - name: https
+      port: 9200
+    - name: transport
+      port: 9300
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch
+  namespace: healthpoint-infra
+  labels:
+    app: opensearch
+spec:
+  selector:
+    app: opensearch
+  ports:
+    - name: https
+      port: 9200
+      targetPort: 9200
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: opensearch
+  namespace: healthpoint-infra
+  labels:
+    app: opensearch
+spec:
+  serviceName: opensearch-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: opensearch
+  template:
+    metadata:
+      labels:
+        app: opensearch
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9600"
+    spec:
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: sysctl
+          image: busybox:1.36
+          command: ["sysctl", "-w", "vm.max_map_count=262144"]
+          securityContext:
+            privileged: true
+        - name: fix-permissions
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 1000:1000 /usr/share/opensearch/data"]
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/opensearch/data
+      containers:
+        - name: opensearch
+          image: opensearchproject/opensearch:2.11.0
+          env:
+            - name: cluster.name
+              value: healthpoint-opensearch
+            - name: node.name
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPENSEARCH_JAVA_OPTS
+              value: "-Xms2g -Xmx2g"
+            - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-credentials
+                  key: admin-password
+          ports:
+            - containerPort: 9200
+              name: https
+            - containerPort: 9300
+              name: transport
+            - containerPort: 9600
+              name: metrics
+          readinessProbe:
+            httpGet:
+              path: /_cluster/health?wait_for_status=yellow&timeout=5s
+              port: 9200
+              scheme: HTTPS
+              httpHeaders:
+                - name: Authorization
+                  value: Basic YWRtaW46YWRtaW4=  # base64(admin:admin) — overridden by secret
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /_cluster/health
+              port: 9200
+              scheme: HTTPS
+              httpHeaders:
+                - name: Authorization
+                  value: Basic YWRtaW46YWRtaW4=
+            initialDelaySeconds: 90
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "3Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/opensearch/data
+            - name: config
+              mountPath: /usr/share/opensearch/config/opensearch.yml
+              subPath: opensearch.yml
+            - name: config
+              mountPath: /usr/share/opensearch/config/jvm.options
+              subPath: jvm.options
+            - name: tls
+              mountPath: /usr/share/opensearch/config/tls
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: opensearch-config
+        - name: tls
+          secret:
+            secretName: opensearch-tls
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: gp3
+        resources:
+          requests:
+            storage: 50Gi
+---
+# OpenSearch Dashboards
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-dashboards
+  namespace: healthpoint-infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opensearch-dashboards
+  template:
+    metadata:
+      labels:
+        app: opensearch-dashboards
+    spec:
+      containers:
+        - name: dashboards
+          image: opensearchproject/opensearch-dashboards:2.11.0
+          env:
+            - name: OPENSEARCH_HOSTS
+              value: '["https://opensearch:9200"]'
+            - name: OPENSEARCH_USERNAME
+              value: admin
+            - name: OPENSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-credentials
+                  key: admin-password
+            - name: SERVER_SSL_ENABLED
+              value: "true"
+            - name: SERVER_SSL_CERTIFICATE
+              value: /usr/share/opensearch-dashboards/config/tls/tls.crt
+            - name: SERVER_SSL_KEY
+              value: /usr/share/opensearch-dashboards/config/tls/tls.key
+          ports:
+            - containerPort: 5601
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: tls
+              mountPath: /usr/share/opensearch-dashboards/config/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: opensearch-dashboards-tls
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: opensearch-pdb
+  namespace: healthpoint-infra
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: opensearch

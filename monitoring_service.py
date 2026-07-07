@@ -574,7 +574,7 @@ class MonitoringManager:
             for websocket in self.connected_websockets:
                 try:
                     await websocket.send_text(json.dumps(message))
-                except:
+                except Exception:
                     disconnected.add(websocket)
             
             # Remove disconnected clients
@@ -600,7 +600,7 @@ class MonitoringManager:
             for websocket in self.connected_websockets:
                 try:
                     await websocket.send_text(json.dumps(message))
-                except:
+                except Exception:
                     disconnected.add(websocket)
             
             # Remove disconnected clients
@@ -801,7 +801,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # Keep connection alive
             await websocket.receive_text()
-    except:
+    except Exception:
         pass
     finally:
         monitoring_manager.connected_websockets.discard(websocket)

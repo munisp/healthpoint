@@ -14,6 +14,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from backend.shared.auth import get_current_user, require_admin, require_role, TokenPayload
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +25,9 @@ CMS_API_BASE = os.getenv("CMS_IDR_API_BASE", "https://idr.cms.gov/api/v1")
 CMS_API_KEY = os.getenv("CMS_IDR_API_KEY", "")
 CMS_TIMEOUT = int(os.getenv("CMS_TIMEOUT_SECONDS", "30"))
 
+setup_telemetry(service_name="cms-portal-automation-service", service_version="1.0.0")
 app = FastAPI(title="HealthPoint CMS Portal Automation Service", version="2.0.0")
+instrument_fastapi(app)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","), allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 

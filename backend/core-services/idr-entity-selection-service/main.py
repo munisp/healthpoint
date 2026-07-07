@@ -23,6 +23,7 @@ from enum import Enum
 import statistics
 from dataclasses import dataclass
 import warnings
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 warnings.filterwarnings('ignore')
 
 # Configure logging
@@ -640,7 +641,9 @@ class GeorgetownIDREntitySelector:
 # Initialize the entity selector
 entity_selector = GeorgetownIDREntitySelector()
 
+setup_telemetry(service_name="idr-entity-selection-service", service_version="1.0.0")
 app = FastAPI(
+instrument_fastapi(app)
 
 app.middleware("http")(security_headers_middleware)
     title="Georgetown-Enhanced IDR Entity Selection Service",

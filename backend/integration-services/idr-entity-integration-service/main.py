@@ -12,13 +12,16 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from backend.shared.auth import get_current_user, require_admin, require_role, TokenPayload
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://healthpoint:healthpoint@postgres:5432/healthpoint")
 
+setup_telemetry(service_name="idr-entity-integration-service", service_version="1.0.0")
 app = FastAPI(title="IDR Entity Integration Service", version="2.0.0")
+instrument_fastapi(app)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","), allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 

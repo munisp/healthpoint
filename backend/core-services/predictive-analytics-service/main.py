@@ -27,6 +27,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import warnings
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 warnings.filterwarnings('ignore')
 
 # Configure logging
@@ -650,7 +651,9 @@ class GeorgetownPredictiveAnalytics:
 # Initialize the analytics engine
 analytics_engine = GeorgetownPredictiveAnalytics()
 
+setup_telemetry(service_name="predictive-analytics-service", service_version="1.0.0")
 app = FastAPI(
+instrument_fastapi(app)
 
 app.middleware("http")(security_headers_middleware)
     title="Georgetown-Enhanced Predictive Analytics Service",

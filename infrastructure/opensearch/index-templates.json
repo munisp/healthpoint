@@ -1,0 +1,129 @@
+{
+  "idr_disputes": {
+    "index_patterns": ["idr-disputes-*"],
+    "template": {
+      "settings": {
+        "number_of_shards": 3,
+        "number_of_replicas": 1,
+        "refresh_interval": "5s",
+        "index.codec": "best_compression",
+        "analysis": {
+          "analyzer": {
+            "case_number_analyzer": {
+              "type": "custom",
+              "tokenizer": "keyword",
+              "filter": ["lowercase"]
+            }
+          }
+        }
+      },
+      "mappings": {
+        "properties": {
+          "id": {"type": "keyword"},
+          "case_number": {"type": "keyword", "normalizer": "lowercase"},
+          "status": {"type": "keyword"},
+          "provider_id": {"type": "keyword"},
+          "payer_id": {"type": "keyword"},
+          "idr_entity_id": {"type": "keyword"},
+          "billed_amount": {"type": "double"},
+          "qpa_amount": {"type": "double"},
+          "determination_amount": {"type": "double"},
+          "service_code": {"type": "keyword"},
+          "service_description": {"type": "text", "analyzer": "standard"},
+          "service_date": {"type": "date"},
+          "facility_type": {"type": "keyword"},
+          "batched_dispute": {"type": "boolean"},
+          "batch_id": {"type": "keyword"},
+          "created_at": {"type": "date"},
+          "updated_at": {"type": "date"},
+          "open_negotiation_deadline": {"type": "date"},
+          "determination_deadline": {"type": "date"},
+          "payment_deadline": {"type": "date"}
+        }
+      }
+    }
+  },
+  "claims": {
+    "index_patterns": ["claims-*"],
+    "template": {
+      "settings": {
+        "number_of_shards": 3,
+        "number_of_replicas": 1,
+        "refresh_interval": "5s"
+      },
+      "mappings": {
+        "properties": {
+          "id": {"type": "keyword"},
+          "claim_number": {"type": "keyword"},
+          "status": {"type": "keyword"},
+          "provider_id": {"type": "keyword"},
+          "payer_id": {"type": "keyword"},
+          "patient_id": {"type": "keyword"},
+          "billed_amount": {"type": "double"},
+          "allowed_amount": {"type": "double"},
+          "paid_amount": {"type": "double"},
+          "claim_type": {"type": "keyword"},
+          "diagnosis_codes": {"type": "keyword"},
+          "procedure_codes": {"type": "keyword"},
+          "place_of_service": {"type": "keyword"},
+          "service_date_from": {"type": "date"},
+          "service_date_to": {"type": "date"},
+          "received_date": {"type": "date"},
+          "adjudication_date": {"type": "date"},
+          "denial_reason": {"type": "keyword"}
+        }
+      }
+    }
+  },
+  "audit_logs": {
+    "index_patterns": ["audit-logs-*"],
+    "template": {
+      "settings": {
+        "number_of_shards": 2,
+        "number_of_replicas": 1,
+        "refresh_interval": "10s",
+        "index.lifecycle.name": "audit-logs-ilm-policy",
+        "index.lifecycle.rollover_alias": "audit-logs"
+      },
+      "mappings": {
+        "properties": {
+          "id": {"type": "long"},
+          "user_id": {"type": "keyword"},
+          "action": {"type": "keyword"},
+          "resource_type": {"type": "keyword"},
+          "resource_id": {"type": "keyword"},
+          "tenant_id": {"type": "keyword"},
+          "ip_address": {"type": "ip"},
+          "severity": {"type": "keyword"},
+          "details": {"type": "object", "dynamic": true},
+          "created_at": {"type": "date"}
+        }
+      }
+    }
+  },
+  "fraud_alerts": {
+    "index_patterns": ["fraud-alerts-*"],
+    "template": {
+      "settings": {
+        "number_of_shards": 2,
+        "number_of_replicas": 1,
+        "refresh_interval": "5s"
+      },
+      "mappings": {
+        "properties": {
+          "id": {"type": "keyword"},
+          "alert_type": {"type": "keyword"},
+          "severity": {"type": "keyword"},
+          "resource_type": {"type": "keyword"},
+          "resource_id": {"type": "keyword"},
+          "organization_id": {"type": "keyword"},
+          "risk_score": {"type": "float"},
+          "features": {"type": "object", "dynamic": true},
+          "model_version": {"type": "keyword"},
+          "status": {"type": "keyword"},
+          "created_at": {"type": "date"}
+        }
+      }
+    }
+  }
+}

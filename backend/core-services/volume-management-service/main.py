@@ -22,6 +22,7 @@ import asyncpg
 from contextlib import asynccontextmanager
 import os
 from enum import Enum
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -422,7 +423,9 @@ class VolumeManagementService:
 # Initialize service
 volume_service = VolumeManagementService()
 
+setup_telemetry(service_name="volume-management-service", service_version="1.0.0")
 app = FastAPI(
+instrument_fastapi(app)
 
 app.middleware("http")(security_headers_middleware)
     title="Georgetown-Enhanced Volume Management Service",

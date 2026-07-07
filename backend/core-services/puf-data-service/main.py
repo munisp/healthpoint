@@ -27,6 +27,7 @@ from typing import Dict, List, Any, Optional, Tuple
 import sqlite3
 from dataclasses import dataclass
 from enum import Enum
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

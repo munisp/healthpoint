@@ -214,7 +214,7 @@ class ConnectionManager:
             for connection in self.active_connections[user_id]:
                 try:
                     await connection.websocket.send_json(message)
-                except:
+                except Exception:
                     disconnected.append(connection)
             
             # Remove disconnected connections
@@ -228,7 +228,7 @@ class ConnectionManager:
                 if connection.tenant_id == tenant_id:
                     try:
                         await connection.websocket.send_json(message)
-                    except:
+                    except Exception:
                         pass
 
 connection_manager = ConnectionManager()

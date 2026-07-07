@@ -22,11 +22,14 @@ from backend.shared.messaging import publish, Topics
 from fastapi import FastAPI, HTTPException, UploadFile, File, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from shared.telemetry import setup_telemetry, instrument_fastapi, get_tracer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+setup_telemetry(service_name="x12-edi-processing-service", service_version="1.0.0")
 app = FastAPI(title="X12 EDI Processing Service", version="2.0.0")
+instrument_fastapi(app)
 
 app.middleware("http")(security_headers_middleware)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","), allow_credentials=True,

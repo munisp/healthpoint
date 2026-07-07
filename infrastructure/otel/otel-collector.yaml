@@ -1,0 +1,362 @@
+---
+# OpenTelemetry Collector — receives traces/metrics from all services
+# Exports to: Jaeger (traces), Prometheus (metrics), OpenSearch (logs)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: healthpoint-infra
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: "otel-collector"
+              static_configs:
+                - targets: ["localhost:8888"]
+
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 512
+        spike_limit_mib: 128
+
+      resource:
+        attributes:
+          - key: deployment.environment
+            value: "${ENVIRONMENT}"
+            action: upsert
+
+      # Add k8s metadata to all telemetry
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        filter:
+          node_from_env_var: KUBE_NODE_NAME
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.deployment.name
+            - k8s.namespace.name
+            - k8s.node.name
+            - k8s.pod.start_time
+          labels:
+            - tag_name: app.label.component
+              key: app.kubernetes.io/component
+              from: pod
+          annotations:
+            - tag_name: ad.config
+              key: ad.datadoghq.com/tags
+              from: pod
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.ip
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: connection
+
+      # Tail sampling — keep 100% of error traces, 10% of success traces
+      tail_sampling:
+        decision_wait: 10s
+        num_traces: 100000
+        expected_new_traces_per_sec: 1000
+        policies:
+          - name: errors-policy
+            type: status_code
+            status_code: {status_codes: [ERROR]}
+          - name: slow-traces-policy
+            type: latency
+            latency: {threshold_ms: 1000}
+          - name: health-check-filter
+            type: string_attribute
+            string_attribute:
+              key: http.route
+              values: ["/health", "/metrics", "/readiness", "/liveness"]
+              invert_match: true
+          - name: sample-policy
+            type: probabilistic
+            probabilistic: {sampling_percentage: 10}
+
+    exporters:
+      # Jaeger for traces
+      jaeger:
+        endpoint: jaeger-collector.healthpoint-infra.svc.cluster.local:14250
+        tls:
+          insecure: false
+          ca_file: /etc/otel/tls/ca.crt
+
+      # Prometheus for metrics
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        namespace: healthpoint
+        send_timestamps: true
+        metric_expiration: 3m
+        enable_open_metrics: true
+
+      # OpenSearch for logs
+      opensearch:
+        http:
+          endpoint: https://opensearch.healthpoint-infra.svc.cluster.local:9200
+          tls:
+            ca_file: /etc/otel/tls/ca.crt
+          auth:
+            authenticator: basicauth/opensearch
+        logs_index: otel-logs
+        traces_index: otel-traces
+
+      # Debug exporter (development only)
+      debug:
+        verbosity: detailed
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      pprof:
+        endpoint: 0.0.0.0:1777
+      zpages:
+        endpoint: 0.0.0.0:55679
+      basicauth/opensearch:
+        client_auth:
+          username: "${OPENSEARCH_USERNAME}"
+          password: "${OPENSEARCH_PASSWORD}"
+
+    service:
+      extensions: [health_check, pprof, zpages, basicauth/opensearch]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, resource, tail_sampling, batch]
+          exporters: [jaeger]
+        metrics:
+          receivers: [otlp, prometheus]
+          processors: [memory_limiter, k8sattributes, resource, batch]
+          exporters: [prometheus]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, resource, batch]
+          exporters: [opensearch]
+      telemetry:
+        logs:
+          level: info
+        metrics:
+          address: 0.0.0.0:8888
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: healthpoint-infra
+  labels:
+    app: otel-collector
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8889"
+    spec:
+      serviceAccountName: otel-collector
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.91.0
+          args:
+            - "--config=/etc/otel/config/otel-collector-config.yaml"
+          env:
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: ENVIRONMENT
+            - name: OPENSEARCH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-credentials
+                  key: username
+            - name: OPENSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-credentials
+                  key: admin-password
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 4318
+              name: otlp-http
+            - containerPort: 8888
+              name: metrics
+            - containerPort: 8889
+              name: prometheus
+            - containerPort: 13133
+              name: health
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel/config
+            - name: tls
+              mountPath: /etc/otel/tls
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+        - name: tls
+          secret:
+            secretName: otel-collector-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: healthpoint-infra
+  labels:
+    app: otel-collector
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+    - name: prometheus
+      port: 8889
+      targetPort: 8889
+---
+# Jaeger — trace storage and UI
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: healthpoint-infra
+  labels:
+    app: jaeger
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+        - name: jaeger
+          image: jaegertracing/all-in-one:1.52
+          env:
+            - name: SPAN_STORAGE_TYPE
+              value: elasticsearch
+            - name: ES_SERVER_URLS
+              value: https://opensearch.healthpoint-infra.svc.cluster.local:9200
+            - name: ES_TLS_CA
+              value: /etc/jaeger/tls/ca.crt
+            - name: ES_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-credentials
+                  key: username
+            - name: ES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-credentials
+                  key: admin-password
+          ports:
+            - containerPort: 14250
+              name: grpc
+            - containerPort: 16686
+              name: ui
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/jaeger/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: jaeger-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-collector
+  namespace: healthpoint-infra
+spec:
+  selector:
+    app: jaeger
+  ports:
+    - name: grpc
+      port: 14250
+      targetPort: 14250
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-ui
+  namespace: healthpoint-infra
+spec:
+  selector:
+    app: jaeger
+  ports:
+    - name: ui
+      port: 16686
+      targetPort: 16686
