@@ -9,6 +9,18 @@ from typing import Any, Dict, List, Optional
 
 import asyncpg, boto3
 from botocore.exceptions import ClientError
+
+# ── Shared HealthPoint infrastructure ─────────────────────────────────────────
+import sys, os as _os
+_repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+from backend.shared.database import fetch, fetchrow, execute, fetchval, transaction, bootstrap_schema, get_pool
+from backend.shared.cache import get_client as get_redis_client, rate_limit_check, set_json, get_json
+from backend.shared.auth import get_current_user, require_role, require_admin, require_provider, security_headers_middleware, TokenPayload
+from backend.shared.messaging import publish, Topics
+# ─────────────────────────────────────────────────────────────────────────────
+
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -17,7 +29,7 @@ from pydantic import BaseModel, Field
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://healthpoint:healthpoint@postgres:5432/healthpoint")
+DATABASE_URL = os.environ["DATABASE_URL"]
 S3_BUCKET = os.getenv("S3_BUCKET", "healthpoint-uploads")
 S3_REGION = os.getenv("AWS_REGION", "us-east-1")
 MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_MB", "50")) * 1024 * 1024
@@ -32,7 +44,9 @@ ALLOWED_MIME_TYPES = {
 }
 
 app = FastAPI(title="HealthPoint File Upload Service", version="2.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+
+app.middleware("http")(security_headers_middleware)
+app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","), allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
 class FileCategory(str, Enum):

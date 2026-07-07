@@ -24,7 +24,7 @@ CMS_API_KEY = os.getenv("CMS_IDR_API_KEY", "")
 CMS_TIMEOUT = int(os.getenv("CMS_TIMEOUT_SECONDS", "30"))
 
 app = FastAPI(title="HealthPoint CMS Portal Automation Service", version="2.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","), allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
 class CMSSubmissionStatus(str, Enum):

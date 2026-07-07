@@ -21,7 +21,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://healthpoint:healthpoint@p
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 app = FastAPI(title="HealthPoint Third-Party Integration Service", version="2.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","), allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
 SUPPORTED_INTERMEDIARIES = {
@@ -106,9 +106,11 @@ async def submit_case_to_intermediary(integration: dict, case_data: dict) -> dic
             resp.raise_for_status()
             return resp.json()
     except Exception as e:
-        logger.warning(f"Case submission to {intermediary} failed: {e}")
-        return {"external_case_id": f"MOCK-{uuid.uuid4().hex[:8].upper()}",
-                "status": "submitted", "submitted_at": datetime.utcnow().isoformat()}
+        logger.error(f"Case submission to {intermediary} failed: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to submit case to intermediary '{intermediary}': {str(e)}"
+        )
 
 @app.get("/health")
 async def health():
@@ -211,10 +213,6 @@ async def delete_integration(integration_id: str, tenant_id: str):
         "DELETE FROM configurations WHERE id=$1 AND tenant_id=$2", integration_id, tenant_id)
     if result == "DELETE 0":
         raise HTTPException(404, "Integration not found")
-
-@app.get("/health")
-async def health_check():
-    return {"status": "ok"}
 
 if __name__ == "__main__":
     import uvicorn

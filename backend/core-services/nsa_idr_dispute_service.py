@@ -15,6 +15,18 @@ from typing import Dict, List, Optional, Any
 
 import httpx
 import asyncpg
+
+# ── Shared HealthPoint infrastructure ─────────────────────────────────────────
+import sys, os as _os
+_repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+from backend.shared.database import fetch, fetchrow, execute, fetchval, transaction, bootstrap_schema, get_pool
+from backend.shared.cache import get_client as get_redis_client, rate_limit_check, set_json, get_json
+from backend.shared.auth import get_current_user, require_role, require_admin, require_provider, security_headers_middleware, TokenPayload
+from backend.shared.messaging import publish, Topics
+# ─────────────────────────────────────────────────────────────────────────────
+
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -25,6 +37,8 @@ logging.basicConfig(level=logging.INFO)
 logger = structlog.get_logger()
 
 app = FastAPI(
+
+app.middleware("http")(security_headers_middleware)
     title="NSA/IDR Dispute Resolution Service",
     description="No Surprises Act Independent Dispute Resolution processing",
     version="1.0.0"
@@ -32,14 +46,14 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Configuration
-DATABASE_URL = "postgresql://healthuser:healthpass123@localhost:5432/healthcare_platform"
+DATABASE_URL = os.environ["DATABASE_URL"]
 CMS_IDR_PORTAL_URL = "https://nsa-idr.cms.gov/paymentdisputes/api/v1"
 IDR_ADMIN_FEE = Decimal("115.00")
 NEGOTIATION_PERIOD_DAYS = 30

@@ -7,6 +7,18 @@ Author: Manus AI
 Date: October 5, 2025
 """
 
+
+# ── Shared HealthPoint infrastructure ─────────────────────────────────────────
+import sys, os as _os
+_repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+from backend.shared.database import fetch, fetchrow, execute, fetchval, transaction, bootstrap_schema, get_pool
+from backend.shared.cache import get_client as get_redis_client, rate_limit_check, set_json, get_json
+from backend.shared.auth import get_current_user, require_role, require_admin, require_provider, security_headers_middleware, TokenPayload
+from backend.shared.messaging import publish, Topics
+# ─────────────────────────────────────────────────────────────────────────────
+
 from fastapi import FastAPI, HTTPException, Depends, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -18,7 +30,7 @@ import uuid
 import logging
 from enum import Enum
 import asyncio
-import aioredis
+
 import asyncpg
 import httpx
 import os
@@ -34,7 +46,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/healthcare_platform")
+DATABASE_URL = os.environ["DATABASE_URL"]
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 
@@ -125,7 +137,7 @@ class DatabaseManager:
         """Initialize database connections"""
         try:
             self.pool = await asyncpg.create_pool(DATABASE_URL)
-            self.redis = await aioredis.from_url(REDIS_URL)
+            self.redis = get_redis_client()
             logger.info("Database connections established")
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
@@ -290,6 +302,8 @@ async def lifespan(app: FastAPI):
 
 # FastAPI app
 app = FastAPI(
+
+app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - API Gateway",
     description="Intelligent routing, rate limiting, authentication, and load balancing",
     version="1.0.0",
@@ -299,7 +313,7 @@ app = FastAPI(
 # Add middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),  # Configure appropriately for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

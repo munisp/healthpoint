@@ -4,6 +4,18 @@ Comprehensive billing system with transparent fee calculation and communication
 Port: 8026
 """
 
+
+# ── Shared HealthPoint infrastructure ─────────────────────────────────────────
+import sys, os as _os
+_repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+from backend.shared.database import fetch, fetchrow, execute, fetchval, transaction, bootstrap_schema, get_pool
+from backend.shared.cache import get_client as get_redis_client, rate_limit_check, set_json, get_json
+from backend.shared.auth import get_current_user, require_role, require_admin, require_provider, security_headers_middleware, TokenPayload
+from backend.shared.messaging import publish, Topics
+# ─────────────────────────────────────────────────────────────────────────────
+
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -19,6 +31,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
+
+app.middleware("http")(security_headers_middleware)
     title="Enhanced Billing Service",
     description="Comprehensive billing system with transaction fee management and transparent communication",
     version="2.0.0"

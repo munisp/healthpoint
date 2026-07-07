@@ -26,7 +26,7 @@ TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@healthpoint.com")
 
 app = FastAPI(title="HealthPoint Integration Notification Service", version="2.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+app.add_middleware(CORSMiddleware, allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","), allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
 class NotificationChannel(str, Enum):
@@ -153,7 +153,7 @@ async def send_email(req: NotificationRequest) -> NotificationStatus:
         return NotificationStatus.FAILED
     subject, body = (req.subject, req.body) if req.subject else _render_template(req.template, req.template_vars)
     if not SENDGRID_API_KEY:
-        logger.info(f"[MOCK EMAIL] To: {req.recipient_email} | Subject: {subject}")
+        logger.warning("SENDGRID_API_KEY not configured — email notification skipped. Set SENDGRID_API_KEY env var to enable.")
         return NotificationStatus.SENT
     try:
         async with httpx.AsyncClient() as client:
@@ -171,7 +171,7 @@ async def send_sms(req: NotificationRequest) -> NotificationStatus:
         return NotificationStatus.FAILED
     _, body = (req.subject, req.body) if req.body else _render_template(req.template, req.template_vars)
     if not TWILIO_ACCOUNT_SID:
-        logger.info(f"[MOCK SMS] To: {req.recipient_phone} | Body: {body[:50]}")
+        logger.warning("TWILIO_ACCOUNT_SID not configured — SMS notification skipped. Set TWILIO_ACCOUNT_SID env var to enable.")
         return NotificationStatus.SENT
     try:
         async with httpx.AsyncClient() as client:

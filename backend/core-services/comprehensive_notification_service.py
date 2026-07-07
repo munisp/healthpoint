@@ -3,6 +3,18 @@ Comprehensive Notification Service for NSA/IDR Healthcare Platform
 Handles all major platform events with multi-channel notifications
 """
 
+
+# ── Shared HealthPoint infrastructure ─────────────────────────────────────────
+import sys, os as _os
+_repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+from backend.shared.database import fetch, fetchrow, execute, fetchval, transaction, bootstrap_schema, get_pool
+from backend.shared.cache import get_client as get_redis_client, rate_limit_check, set_json, get_json
+from backend.shared.auth import get_current_user, require_role, require_admin, require_provider, security_headers_middleware, TokenPayload
+from backend.shared.messaging import publish, Topics
+# ─────────────────────────────────────────────────────────────────────────────
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional, Dict, Any
@@ -21,6 +33,8 @@ import websockets
 from jinja2 import Template
 
 app = FastAPI(title="Comprehensive Notification Service", version="1.0.0")
+
+app.middleware("http")(security_headers_middleware)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -312,7 +326,7 @@ class ComprehensiveNotificationService:
         smtp_server = "smtp.gmail.com"
         smtp_port = 587
         smtp_user = "nsa-idr-platform@healthcare.com"
-        smtp_password = "secure_password"
+        smtp_password = os.environ["SMTP_PASSWORD"]
         
         try:
             msg = MIMEMultipart('alternative')
@@ -343,8 +357,8 @@ class ComprehensiveNotificationService:
         message = Template(template.body_template).render(**notification.data)
         
         # Twilio configuration (would be from environment variables)
-        account_sid = "your_twilio_account_sid"
-        auth_token = "your_twilio_auth_token"
+        account_sid = os.environ["TWILIO_ACCOUNT_SID"]
+        auth_token = os.environ["TWILIO_AUTH_TOKEN"]
         from_number = "+1234567890"
         
         try:

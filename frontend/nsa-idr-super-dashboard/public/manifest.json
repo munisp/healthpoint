@@ -1,15 +1,15 @@
 {
-  "name": "NSA/IDR Super Aggregator Dashboard",
-  "short_name": "NSA/IDR Dashboard",
-  "description": "Comprehensive NSA/IDR dispute management and aggregator dashboard for healthcare claims processing",
+  "name": "HealthPoint IDR Platform",
+  "short_name": "HealthPoint IDR",
+  "description": "No Surprises Act Independent Dispute Resolution Platform — comprehensive healthcare claims dispute management, provider management, and payment reconciliation.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#3b82f6",
-  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#1e40af",
+  "orientation": "any",
   "scope": "/",
   "lang": "en-US",
-  "categories": ["healthcare", "business", "productivity"],
+  "categories": ["healthcare", "business", "productivity", "finance"],
   "icons": [
     {
       "src": "/icons/icon-72x72.png",
@@ -62,17 +62,17 @@
   ],
   "shortcuts": [
     {
-      "name": "Dashboard",
+      "name": "IDR Dashboard",
       "short_name": "Dashboard",
-      "description": "View main dashboard with key metrics",
+      "description": "View IDR case metrics and status overview",
       "url": "/?tab=dashboard",
       "icons": [{ "src": "/icons/dashboard-96x96.png", "sizes": "96x96" }]
     },
     {
-      "name": "Bulk Upload",
-      "short_name": "Upload",
-      "description": "Upload bulk NSA/IDR dispute claims",
-      "url": "/?tab=disputes&action=upload",
+      "name": "New IDR Case",
+      "short_name": "New Case",
+      "description": "Initiate a new IDR dispute case",
+      "url": "/?tab=disputes&action=new",
       "icons": [{ "src": "/icons/upload-96x96.png", "sizes": "96x96" }]
     },
     {
@@ -85,7 +85,7 @@
     {
       "name": "Payments",
       "short_name": "Payments",
-      "description": "View payment status and billing",
+      "description": "View payment status and reconciliation",
       "url": "/?tab=payments",
       "icons": [{ "src": "/icons/payments-96x96.png", "sizes": "96x96" }]
     }
@@ -96,25 +96,19 @@
       "sizes": "1280x720",
       "type": "image/png",
       "form_factor": "wide",
-      "label": "NSA/IDR Dashboard - Desktop View"
+      "label": "HealthPoint IDR Dashboard — Desktop View"
     },
     {
       "src": "/screenshots/mobile-dashboard.png",
       "sizes": "375x667",
       "type": "image/png",
       "form_factor": "narrow",
-      "label": "NSA/IDR Dashboard - Mobile View"
-    }
-  ],
-  "related_applications": [
-    {
-      "platform": "webapp",
-      "url": "https://nsa-idr-dashboard.healthcare.gov/manifest.json"
+      "label": "HealthPoint IDR Dashboard — Mobile View"
     }
   ],
   "prefer_related_applications": false,
   "edge_side_panel": {
-    "preferred_width": 400
+    "preferred_width": 420
   },
   "launch_handler": {
     "client_mode": "navigate-existing"
@@ -122,8 +116,8 @@
   "handle_links": "preferred",
   "protocol_handlers": [
     {
-      "protocol": "web+nsaidr",
-      "url": "/dispute?id=%s"
+      "protocol": "web+healthpointidr",
+      "url": "/case?id=%s"
     }
   ],
   "file_handlers": [
@@ -132,7 +126,9 @@
       "accept": {
         "text/csv": [".csv"],
         "application/vnd.ms-excel": [".xls"],
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"]
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+        "application/json": [".json"],
+        "application/xml": [".xml"]
       }
     }
   ],
@@ -147,7 +143,7 @@
       "files": [
         {
           "name": "file",
-          "accept": ["text/csv", ".csv", ".xlsx", ".xls"]
+          "accept": ["text/csv", ".csv", ".xlsx", ".xls", ".json", ".xml"]
         }
       ]
     }

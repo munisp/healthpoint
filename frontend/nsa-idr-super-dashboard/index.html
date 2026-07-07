@@ -4,26 +4,72 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>NSA/IDR Super Aggregator Dashboard</title>
-    
+    <title>HealthPoint IDR Platform — NSA/IDR Dispute Resolution</title>
+
+    <!-- Cache-busting: index.html must never be cached -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json" />
-    
-    <!-- Mobile Meta Tags -->
+
+    <!-- Mobile / PWA Meta Tags -->
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="NSA/IDR Dashboard" />
-    <meta name="msapplication-TileColor" content="#3b82f6" />
-    <meta name="theme-color" content="#3b82f6" />
-    
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="HealthPoint IDR" />
+    <meta name="msapplication-TileColor" content="#1e40af" />
+    <meta name="theme-color" content="#1e40af" />
+
+    <!-- Apple touch icons -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16x16.png" />
+
     <!-- SEO Meta Tags -->
-    <meta name="description" content="Comprehensive NSA/IDR dispute management and aggregator dashboard for healthcare claims processing" />
-    <meta name="keywords" content="NSA, IDR, healthcare, claims, dispute resolution, aggregator, dashboard" />
-    <meta name="author" content="Healthcare Claims Platform" />
+    <meta name="description" content="HealthPoint IDR Platform — Comprehensive No Surprises Act Independent Dispute Resolution for healthcare claims processing, provider management, and payment reconciliation." />
+    <meta name="keywords" content="NSA, IDR, No Surprises Act, healthcare, claims, dispute resolution, provider, health plan, payment" />
+    <meta name="author" content="HealthPoint IDR Platform" />
+    <meta name="robots" content="noindex, nofollow" /><!-- Internal tool — not for public indexing -->
+
+    <!-- Open Graph (for sharing) -->
+    <meta property="og:title" content="HealthPoint IDR Platform" />
+    <meta property="og:description" content="No Surprises Act Independent Dispute Resolution Platform" />
+    <meta property="og:type" content="website" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      // Register service worker with update detection
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .then((registration) => {
+              console.log('[App] Service worker registered:', registration.scope);
+
+              // Check for updates every 60 seconds
+              setInterval(() => registration.update(), 60000);
+
+              // Handle new service worker waiting to activate
+              registration.addEventListener('updatefound', () => {
+                const newWorker = registration.installing;
+                if (!newWorker) return;
+                newWorker.addEventListener('statechange', () => {
+                  if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                    // New version available — notify user
+                    console.log('[App] New version available — reloading...');
+                    // Clear all caches and reload
+                    newWorker.postMessage({ type: 'CLEAR_CACHE' });
+                    setTimeout(() => window.location.reload(), 500);
+                  }
+                });
+              });
+            })
+            .catch((err) => console.warn('[App] Service worker registration failed:', err));
+        });
+      }
+    </script>
   </body>
 </html>

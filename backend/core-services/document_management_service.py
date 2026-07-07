@@ -7,6 +7,18 @@ Date: October 8, 2025
 Port: 8009
 """
 
+
+# ── Shared HealthPoint infrastructure ─────────────────────────────────────────
+import sys, os as _os
+_repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+from backend.shared.database import fetch, fetchrow, execute, fetchval, transaction, bootstrap_schema, get_pool
+from backend.shared.cache import get_client as get_redis_client, rate_limit_check, set_json, get_json
+from backend.shared.auth import get_current_user, require_role, require_admin, require_provider, security_headers_middleware, TokenPayload
+from backend.shared.messaging import publish, Topics
+# ─────────────────────────────────────────────────────────────────────────────
+
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, status, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -18,7 +30,7 @@ import uuid
 import logging
 import asyncio
 import asyncpg
-import aioredis
+
 import json
 import os
 import shutil
@@ -40,7 +52,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://docuser:password@localhost/healthcare_platform")
+DATABASE_URL = os.environ["DATABASE_URL"]
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 DOCUMENT_STORAGE_PATH = os.getenv("DOCUMENT_STORAGE_PATH", "/var/documents/healthcare-platform")
 ENCRYPTION_KEY = os.getenv("DOCUMENT_ENCRYPTION_KEY", "your-document-encryption-key")
@@ -299,7 +311,7 @@ class DocumentManager:
 
     async def _get_redis_client(self):
         if not self.redis_client:
-            self.redis_client = aioredis.from_url(REDIS_URL)
+            self.redis_client = get_redis_client()
         return self.redis_client
 
     def _get_s3_client(self):
@@ -824,6 +836,8 @@ async def lifespan(app: FastAPI):
     await db_manager.disconnect()
 
 app = FastAPI(
+
+app.middleware("http")(security_headers_middleware)
     title="Healthcare Claims Platform - Document Management Service",
     description="FHIR-compliant document management with OCR and secure storage",
     version="1.0.0",
@@ -832,7 +846,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
