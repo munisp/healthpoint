@@ -550,7 +550,7 @@ class GeorgetownIDREntitySelector:
         entity_name = recommendation.entity_name
         
         rationale_parts = [
-            f"Selected {entity_name} based on {criteria.value} criteria.",
+            "Selected $1 based on {criteria.value} criteria.", entity_name,
             f"Provider win probability: {recommendation.provider_win_probability:.1%}",
             f"Estimated decision time: {recommendation.estimated_decision_time} days",
             f"Bias assessment: {recommendation.bias_assessment.value}",

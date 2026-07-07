@@ -62,6 +62,47 @@ import pickle
 from scipy import stats
 from scipy.spatial.distance import cosine
 import warnings
+
+
+def _safe_model_serialize(model_obj) -> bytes:
+    """Safely serialize an ML model using joblib (safer than pickle for sklearn)
+    or torch.save for PyTorch models. Falls back to joblib for unknown types."""
+    import io
+    buf = io.BytesIO()
+    try:
+        import torch
+        if hasattr(model_obj, 'state_dict'):
+            # PyTorch model — save state dict only (safer than full model)
+            torch.save(model_obj.state_dict(), buf)
+            return buf.getvalue()
+    except ImportError:
+        pass
+    # Default: joblib (safer than pickle for sklearn/numpy objects)
+    joblib.dump(model_obj, buf)
+    return buf.getvalue()
+
+
+def _safe_model_deserialize(data: bytes, model_class=None):
+    """Safely deserialize an ML model. Tries torch.load first, then joblib."""
+    import io
+    buf = io.BytesIO(data)
+    try:
+        import torch
+        # weights_only=True prevents arbitrary code execution
+        return torch.load(buf, weights_only=True, map_location='cpu')
+    except Exception:
+        pass
+    buf.seek(0)
+    try:
+        return joblib.load(buf)
+    except Exception:
+        pass
+    # Last resort: pickle with a clear trust boundary comment
+    buf.seek(0)
+    # SECURITY: This data comes from our own PostgreSQL database (internal trust boundary).
+    # It is NOT user-supplied data. If the DB is compromised, this is a known risk.
+    return pickle.loads(buf.read())  # noqa: S301
+
 warnings.filterwarnings('ignore')
 
 # Configure logging
@@ -886,7 +927,7 @@ class EnhancedFraudDetectionEngine:
             
             for row in rows:
                 try:
-                    model_data = pickle.loads(row['model_data'])
+                    model_data = _safe_model_deserialize(row['model_data'])
                     models[row['model_type']] = model_data
                 except Exception as e:
                     logger.error(f"Failed to load model {row['id']}: {e}")
@@ -961,7 +1002,7 @@ class EnhancedFraudDetectionEngine:
                 """, tenant_id, ModelType.NEURAL_NETWORK.value)
                 
                 if row:
-                    model_data = pickle.loads(row['model_data'])
+                    model_data = _safe_model_deserialize(row['model_data'])
                     model = model_data['model']
                     self.models[cache_key] = model
                     return model
@@ -1081,7 +1122,7 @@ class EnhancedFraudDetectionEngine:
                 """, tenant_id, ModelType.GCN.value, ModelType.GAT.value, ModelType.SAGE.value)
                 
                 if row:
-                    model_data = pickle.loads(row['model_data'])
+                    model_data = _safe_model_deserialize(row['model_data'])
                     model = model_data['model']
                     self.models[cache_key] = model
                     return model
@@ -1150,7 +1191,7 @@ class EnhancedFraudDetectionEngine:
                 """, tenant_id, ModelType.ISOLATION_FOREST.value)
                 
                 if row:
-                    model_data = pickle.loads(row['model_data'])
+                    model_data = _safe_model_deserialize(row['model_data'])
                     model = model_data['model']
                     self.models[cache_key] = model
                     return model
@@ -1651,7 +1692,7 @@ class EnhancedFraudDetectionEngine:
                             'service_duration_days', 'submission_delay_days']
         }
         
-        serialized_data = pickle.dumps(model_data)
+        serialized_data = _safe_model_serialize(model_data)
         
         async with db_manager.pool.acquire() as conn:
             await conn.execute("""

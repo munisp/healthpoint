@@ -6,6 +6,7 @@ Supports multiple payment methods and batch processing
 
 
 # ── Shared HealthPoint infrastructure ─────────────────────────────────────────
+import os
 import sys, os as _os
 _repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 if _repo_root not in sys.path:
@@ -63,7 +64,7 @@ ENCRYPTION_KEY = Fernet.generate_key()  # In production, use secure key manageme
 cipher_suite = Fernet(ENCRYPTION_KEY)
 
 # Stripe setup
-stripe.api_key = "sk_test_stripe_api_key_placeholder"
+stripe.api_key = os.getenv("STRIPE_API_KEY", "")
 
 class RefundStatus(str, Enum):
     PENDING = "pending"

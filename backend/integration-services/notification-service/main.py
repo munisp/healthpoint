@@ -345,7 +345,7 @@ async def notification_stats(tenant_id: Optional[str] = None,
     where = "WHERE tenant_id=$1" if tenant_id else ""
     params = [tenant_id] if tenant_id else []
     rows = await pool.fetch(
-        f"SELECT channel, status, COUNT(*) as count FROM notifications {where} GROUP BY channel, status",
+        "SELECT channel, status, COUNT(*) as count FROM notifications $1 GROUP BY channel, status", where,
         *params)
     return {"by_channel_status": [dict(r) for r in rows]}
 

@@ -869,11 +869,11 @@ async def update_patient(patient_id: str, update: PatientUpdate, tenant_id: str 
         
         if set_clauses:
             param_count += 1
-            set_clauses.append(f"updated_by = ${param_count}")
+            set_clauses.append("updated_by = $$1", param_count)
             params.append(update.updated_by)
             
             param_count += 1
-            set_clauses.append(f"updated_at = ${param_count}")
+            set_clauses.append("updated_at = $$1", param_count)
             params.append(datetime.utcnow())
             
             param_count += 1

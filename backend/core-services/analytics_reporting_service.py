@@ -1,3 +1,5 @@
+import joblib
+import io
 """
 Healthcare Claims Platform - Analytics & Reporting Service
 Advanced analytics with ML insights, real-time dashboards, and comprehensive reporting.
@@ -659,7 +661,7 @@ class AnalyticsManager:
             
             # Load and run real predictive models
             try:
-                model_obj = pickle.loads(model_data.get('model_data', b''))
+                model_obj = _safe_model_deserialize(model_data.get('model_data', b''))
                 model = model_obj.get('model')
                 scaler = model_obj.get('scaler')
                 

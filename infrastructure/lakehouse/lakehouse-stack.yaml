@@ -282,7 +282,7 @@ spec:
   type: Python
   pythonVersion: "3"
   mode: cluster
-  image: healthpoint/spark-jobs:1.0.0
+  image: ghcr.io/munisp/healthpoint/spark-jobs:${IMAGE_TAG:-latest}
   imagePullPolicy: Always
   mainApplicationFile: local:///opt/spark/jobs/idr_disputes_ingestion.py
   sparkVersion: "3.5.0"
@@ -327,7 +327,7 @@ spec:
   type: Python
   pythonVersion: "3"
   mode: cluster
-  image: healthpoint/spark-jobs:1.0.0
+  image: ghcr.io/munisp/healthpoint/spark-jobs:${IMAGE_TAG:-latest}
   imagePullPolicy: Always
   mainApplicationFile: local:///opt/spark/jobs/payments_ingestion.py
   sparkVersion: "3.5.0"

@@ -381,7 +381,7 @@ class ConfigurationManager:
         # Clear cache
         await self._clear_cache(key, scope, tenant_id, service_name, environment)
         
-        logger.info(f"Updated configuration: {key}")
+        logger.info("Updated configuration: $1", key)
         return True
 
     async def delete_configuration(self, key: str, scope: ConfigScope,

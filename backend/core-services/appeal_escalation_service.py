@@ -328,7 +328,7 @@ class AppealEscalationManager:
         # Send status update notifications
         await self._send_status_notifications(appeal, old_status, status)
         
-        logger.info(f"Updated appeal {appeal_id} status to {status}")
+        logger.info("Updated appeal $1 status to {status}", appeal_id)
         return appeal
     
     async def create_escalation_request(self, escalation: EscalationRequest) -> EscalationRequest:

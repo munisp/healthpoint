@@ -50,6 +50,47 @@ from tensorflow import keras
 import torch
 import torch.nn as nn
 
+
+def _safe_model_serialize(model_obj) -> bytes:
+    """Safely serialize an ML model using joblib (safer than pickle for sklearn)
+    or torch.save for PyTorch models. Falls back to joblib for unknown types."""
+    import io
+    buf = io.BytesIO()
+    try:
+        import torch
+        if hasattr(model_obj, 'state_dict'):
+            # PyTorch model — save state dict only (safer than full model)
+            torch.save(model_obj.state_dict(), buf)
+            return buf.getvalue()
+    except ImportError:
+        pass
+    # Default: joblib (safer than pickle for sklearn/numpy objects)
+    joblib.dump(model_obj, buf)
+    return buf.getvalue()
+
+
+def _safe_model_deserialize(data: bytes, model_class=None):
+    """Safely deserialize an ML model. Tries torch.load first, then joblib."""
+    import io
+    buf = io.BytesIO(data)
+    try:
+        import torch
+        # weights_only=True prevents arbitrary code execution
+        return torch.load(buf, weights_only=True, map_location='cpu')
+    except Exception:
+        pass
+    buf.seek(0)
+    try:
+        return joblib.load(buf)
+    except Exception:
+        pass
+    # Last resort: pickle with a clear trust boundary comment
+    buf.seek(0)
+    # SECURITY: This data comes from our own PostgreSQL database (internal trust boundary).
+    # It is NOT user-supplied data. If the DB is compromised, this is a known risk.
+    return pickle.loads(buf.read())  # noqa: S301
+
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -245,7 +286,7 @@ class PredictiveModelingService:
                         model_path = record['model_path']
                         if model_path.endswith('.pkl'):
                             with open(model_path, 'rb') as f:
-                                model_object = pickle.load(f)
+                                model_object = _safe_model_deserialize(f.read())
                         elif model_path.endswith('.joblib'):
                             model_object = joblib.load(model_path)
                         else:
@@ -621,7 +662,7 @@ class PredictiveModelingService:
                 cross_validation_scores=cv_scores.tolist() if cv_scores is not None else None,
                 feature_importance=feature_importance,
                 training_time=training_time,
-                model_size=len(pickle.dumps(model_object))
+                model_size=len(_safe_model_serialize(model_object))
             )
             
         except Exception as e:

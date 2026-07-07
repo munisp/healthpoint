@@ -277,7 +277,7 @@ class TrainingAndSupportManager:
             enrollment.completed_at = datetime.utcnow()
             await self._issue_certificate(enrollment)
         
-        logger.info(f"Updated progress for enrollment {enrollment_id}")
+        logger.info("Updated progress for enrollment $1", enrollment_id)
         return enrollment
     
     async def submit_quiz(self, quiz_id: str, user_id: str, answers: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -376,7 +376,7 @@ class TrainingAndSupportManager:
             ticket.resolution = resolution
             ticket.resolved_at = datetime.utcnow()
         
-        logger.info(f"Updated ticket {ticket_id} status to {status}")
+        logger.info("Updated ticket $1 status to {status}", ticket_id)
         return ticket
     
     async def create_knowledge_article(self, article: KnowledgeBaseArticle) -> KnowledgeBaseArticle:

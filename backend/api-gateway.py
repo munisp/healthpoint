@@ -335,4 +335,4 @@ if __name__ == '__main__':
     print("📱 React frontend will be served from /")
     print("🔗 API endpoints available at /api/*")
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)

@@ -58,7 +58,7 @@ spec:
                 topologyKey: kubernetes.io/hostname
       containers:
         - name: api-gateway
-          image: healthpoint/api-gateway:latest
+          image: ghcr.io/munisp/healthpoint/api-gateway:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
@@ -139,7 +139,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: nsa-idr-dispute
-          image: healthpoint/nsa-idr-dispute:latest
+          image: ghcr.io/munisp/healthpoint/nsa-idr-dispute-service:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8016
@@ -218,7 +218,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: payment-processing
-          image: healthpoint/payment-processing:latest
+          image: ghcr.io/munisp/healthpoint/payment-processing-service:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8016
@@ -303,7 +303,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: claims-processing
-          image: healthpoint/claims-processing:latest
+          image: ghcr.io/munisp/healthpoint/claims-processing-service:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8004
@@ -377,7 +377,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: provider-management
-          image: healthpoint/provider-management:latest
+          image: ghcr.io/munisp/healthpoint/provider-management:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8002
@@ -451,7 +451,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: security-auth
-          image: healthpoint/security-auth:latest
+          image: ghcr.io/munisp/healthpoint/security-authentication-service:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8031
@@ -525,7 +525,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: audit-compliance
-          image: healthpoint/audit-compliance:latest
+          image: ghcr.io/munisp/healthpoint/audit-compliance:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8005
@@ -599,7 +599,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: ai-fraud-detection
-          image: healthpoint/ai-fraud-detection:latest
+          image: ghcr.io/munisp/healthpoint/ai-fraud-detection-service:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8001
@@ -678,7 +678,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: notification
-          image: healthpoint/notification:latest
+          image: ghcr.io/munisp/healthpoint/notification-service:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8023
@@ -752,7 +752,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: gfe-management
-          image: healthpoint/gfe-management:latest
+          image: ghcr.io/munisp/healthpoint/gfe-management-service:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8036
@@ -826,7 +826,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: predictive-analytics
-          image: healthpoint/predictive-analytics:latest
+          image: ghcr.io/munisp/healthpoint/predictive-analytics:${IMAGE_TAG:-latest}
           imagePullPolicy: Always
           ports:
             - containerPort: 8081

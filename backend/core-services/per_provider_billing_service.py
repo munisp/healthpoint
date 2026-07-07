@@ -6,6 +6,7 @@ Handles payment processing, invoicing, and billing reconciliation
 
 
 # ── Shared HealthPoint infrastructure ─────────────────────────────────────────
+import os
 import sys, os as _os
 _repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 if _repo_root not in sys.path:
@@ -53,7 +54,7 @@ Base = declarative_base()
 # Use: from backend.shared.cache import get_client as get_redis_client
 
 # Stripe setup (for payment processing)
-stripe.api_key = "sk_test_stripe_api_key_placeholder"  # In production, use secure key management
+stripe.api_key = os.getenv("STRIPE_API_KEY", "")  # In production, use secure key management
 
 class BillingPeriod(str, Enum):
     MONTHLY = "monthly"

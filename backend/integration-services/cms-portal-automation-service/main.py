@@ -745,7 +745,7 @@ async def list_submissions(
         where += f" AND status=${idx}"; params.append(status); idx += 1
     params.extend([limit, offset])
     rows = await pool.fetch(
-        f"SELECT * FROM cms_submissions {where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx+1}",
+        "SELECT * FROM cms_submissions $1 ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx+1}", where,
         *params
     )
     return {"submissions": [dict(r) for r in rows], "total": len(rows)}
@@ -761,7 +761,7 @@ async def cms_stats(
     where = "WHERE tenant_id=$1" if tenant_id else ""
     params = [tenant_id] if tenant_id else []
     rows = await pool.fetch(
-        f"SELECT status, COUNT(*) as count FROM cms_submissions {where} GROUP BY status", *params
+        "SELECT status, COUNT(*) as count FROM cms_submissions $1 GROUP BY status", where, *params
     )
     return {"by_status": {r["status"]: r["count"] for r in rows}}
 

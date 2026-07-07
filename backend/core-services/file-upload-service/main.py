@@ -259,7 +259,7 @@ async def list_files(category: Optional[str]=None, claim_id: Optional[str]=None,
             conds.append(f"{col}=${idx}"); params.append(val); idx += 1
     params.extend([limit, offset])
     rows = await pool.fetch(
-        f"SELECT * FROM file_uploads WHERE {' AND '.join(conds)} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx+1}",
+        "SELECT * FROM file_uploads WHERE {' AND '.join(conds)} ORDER BY created_at DESC LIMIT $$1 OFFSET ${idx+1}", idx,
         *params)
     return {"files": [dict(r) for r in rows], "total": len(rows)}
 

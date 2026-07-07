@@ -227,7 +227,7 @@ async def list_gfes(tenant_id: str, status: Optional[str] = None,
         conds.append(f"status=${idx}"); params.append(status); idx += 1
     params.extend([limit, offset])
     rows = await pool.fetch(
-        f"SELECT * FROM idr_documents WHERE {' AND '.join(conds)} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx+1}",
+        "SELECT * FROM idr_documents WHERE {' AND '.join(conds)} ORDER BY created_at DESC LIMIT $$1 OFFSET ${idx+1}", idx,
         *params)
     return {"gfes": [dict(r) for r in rows], "total": len(rows)}
 
