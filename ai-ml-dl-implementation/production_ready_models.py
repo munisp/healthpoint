@@ -43,16 +43,33 @@ warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://claimuser:password@localhost/healthcare_platform")
-MODEL_DIR = "/tmp/healthpoint-unified-platform-complete/ai-ml-dl-implementation/models"
-MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
+# ---------------------------------------------------------------------------
+# Configuration  (all values overridable via environment variables)
+# ---------------------------------------------------------------------------
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://claimuser:password@localhost/healthcare_platform",
+)
+
+# MODEL_DIR is used ONLY during training to persist artefacts locally.
+# At inference time all models are loaded from the MLflow Model Registry.
+MODEL_DIR = os.getenv(
+    "MODEL_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"),
+)
+
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+MLFLOW_S3_ENDPOINT_URL = os.getenv("MLFLOW_S3_ENDPOINT_URL", "")
+
+# Configure MinIO/S3 endpoint for artefact downloads when running in Docker
+if MLFLOW_S3_ENDPOINT_URL:
+    os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", MLFLOW_S3_ENDPOINT_URL)
 
 # Set up MLflow
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 mlflow.set_experiment("HealthPoint_Production_Models")
 
-# Create model directory
+# Create model directory (used during training only)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 class AdvancedFraudDetectionDNN(nn.Module):
@@ -495,49 +512,173 @@ class ProductionModelTrainer:
         logger.info("Preprocessing artifacts saved")
 
 class ProductionInferenceEngine:
-    """Production-ready inference engine for real-time predictions"""
-    
-    def __init__(self, model_dir: str = MODEL_DIR):
+    """
+    Production-ready inference engine for real-time predictions.
+
+    Model loading strategy (attempted in order):
+      1. MLflow Model Registry  — preferred in production / Docker
+      2. Local MODEL_DIR        — fallback for development / offline use
+
+    Environment variables:
+      MLFLOW_TRACKING_URI      MLflow server URL (default: http://localhost:5000)
+      MLFLOW_S3_ENDPOINT_URL   MinIO/S3 endpoint for artefact downloads
+      MODEL_DIR                Local directory for training artefacts
+    """
+
+    # Registry name → sklearn flavour
+    _SKLEARN_REGISTRY: Dict[str, str] = {
+        "random_forest":     "random_forest",
+        "gradient_boosting": "gradient_boosting",
+        "svm":               "svm_classifier",
+        "isolation_forest":  "isolation_forest",
+    }
+    # Registry name → PyTorch state-dict (pyfunc flavour)
+    _PYTORCH_REGISTRY: Dict[str, str] = {
+        "fraud_dnn": "fraud_dnn",
+        "idr_model": "idr_model",
+    }
+
+    def __init__(self, model_dir: str = MODEL_DIR, stage: str = "Production"):
         self.model_dir = model_dir
-        self.models = {}
-        self.preprocessing_artifacts = None
+        self.stage = stage
+        self.models: Dict[str, Any] = {}
+        self.preprocessing_artifacts: Optional[Dict] = None
+        self._mlflow_available = self._check_mlflow()
         self.load_models()
-    
-    def load_models(self):
-        """Load all trained models for inference"""
-        logger.info("Loading production models...")
-        
-        # Load sklearn models
-        sklearn_models = ['random_forest', 'gradient_boosting', 'svm', 'isolation_forest']
-        for model_name in sklearn_models:
-            model_path = os.path.join(self.model_dir, f"{model_name}_production.pkl")
-            if os.path.exists(model_path):
-                self.models[model_name] = joblib.load(model_path)
-                logger.info(f"Loaded {model_name} model")
-        
-        # Load PyTorch models
-        fraud_dnn_path = os.path.join(self.model_dir, "fraud_dnn_production.pth")
-        if os.path.exists(fraud_dnn_path):
-            fraud_dnn = AdvancedFraudDetectionDNN(input_dim=50)  # Adjust based on feature selection
-            fraud_dnn.load_state_dict(torch.load(fraud_dnn_path))
-            fraud_dnn.eval()
-            self.models['fraud_dnn'] = fraud_dnn
-            logger.info("Loaded fraud DNN model")
-        
-        idr_model_path = os.path.join(self.model_dir, "idr_model_production.pth")
-        if os.path.exists(idr_model_path):
-            idr_model = IDROutcomePredictionModel(input_dim=50)
-            idr_model.load_state_dict(torch.load(idr_model_path))
-            idr_model.eval()
-            self.models['idr_model'] = idr_model
-            logger.info("Loaded IDR model")
-        
-        # Load preprocessing artifacts
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_mlflow() -> bool:
+        """Return True if the MLflow tracking server is reachable."""
+        import urllib.request
+        try:
+            with urllib.request.urlopen(f"{MLFLOW_TRACKING_URI}/health", timeout=3) as r:
+                return r.status == 200
+        except Exception:
+            return False
+
+    def _load_sklearn_from_registry(self, registry_name: str, local_key: str) -> bool:
+        """Try to load a sklearn model from the MLflow Model Registry."""
+        try:
+            uri = f"models:/{registry_name}/{self.stage}"
+            self.models[local_key] = mlflow.sklearn.load_model(uri)
+            logger.info("Loaded %-25s from MLflow Registry (%s)", local_key, uri)
+            return True
+        except Exception as exc:
+            logger.warning("MLflow sklearn load failed for '%s': %s", registry_name, exc)
+            return False
+
+    def _load_sklearn_from_disk(self, local_key: str, filename: str) -> bool:
+        """Fallback: load a sklearn model from MODEL_DIR."""
+        path = os.path.join(self.model_dir, filename)
+        if os.path.exists(path):
+            self.models[local_key] = joblib.load(path)
+            logger.info("Loaded %-25s from disk (%s)", local_key, path)
+            return True
+        logger.warning("Disk model not found: %s", path)
+        return False
+
+    def _load_pytorch_from_registry(
+        self, registry_name: str, local_key: str,
+        model_class: type, input_dim: int = 50,
+    ) -> bool:
+        """Try to load a PyTorch model from the MLflow Model Registry (pyfunc)."""
+        try:
+            uri = f"models:/{registry_name}/{self.stage}"
+            pyfunc_model = mlflow.pyfunc.load_model(uri)
+            # The pyfunc wrapper exposes the underlying PyTorch model via .get_raw_model()
+            # when logged with mlflow.pytorch.log_model; fall back to direct load otherwise.
+            try:
+                net = pyfunc_model._model_impl.python_model.model  # type: ignore[attr-defined]
+            except AttributeError:
+                # Reconstruct from state-dict stored as numpy array prediction
+                net = model_class(input_dim=input_dim)
+                import numpy as _np  # noqa: F401
+                state = pyfunc_model.predict(None)
+                if isinstance(state, dict):
+                    net.load_state_dict({k: torch.tensor(v) for k, v in state.items()})
+            net.eval()
+            self.models[local_key] = net
+            logger.info("Loaded %-25s from MLflow Registry (%s)", local_key, uri)
+            return True
+        except Exception as exc:
+            logger.warning("MLflow pytorch load failed for '%s': %s", registry_name, exc)
+            return False
+
+    def _load_pytorch_from_disk(
+        self, local_key: str, filename: str,
+        model_class: type, input_dim: int = 50,
+    ) -> bool:
+        """Fallback: load a PyTorch state-dict from MODEL_DIR."""
+        path = os.path.join(self.model_dir, filename)
+        if os.path.exists(path):
+            net = model_class(input_dim=input_dim)
+            net.load_state_dict(torch.load(path, map_location="cpu"))
+            net.eval()
+            self.models[local_key] = net
+            logger.info("Loaded %-25s from disk (%s)", local_key, path)
+            return True
+        logger.warning("Disk model not found: %s", path)
+        return False
+
+    # ------------------------------------------------------------------
+    # Public load_models
+    # ------------------------------------------------------------------
+
+    def load_models(self) -> None:
+        """
+        Load all production models.
+        Tries MLflow Model Registry first; falls back to local MODEL_DIR.
+        """
+        logger.info(
+            "Loading production models (MLflow=%s, stage=%s)…",
+            "available" if self._mlflow_available else "unavailable",
+            self.stage,
+        )
+
+        # ── sklearn models ────────────────────────────────────────────────
+        sklearn_map: List[Tuple[str, str, str]] = [
+            ("random_forest",     "random_forest",     "random_forest_production.pkl"),
+            ("gradient_boosting", "gradient_boosting", "gradient_boosting_production.pkl"),
+            ("svm_classifier",    "svm",               "svm_production.pkl"),
+            ("isolation_forest",  "isolation_forest",  "isolation_forest_production.pkl"),
+        ]
+        for registry_name, local_key, filename in sklearn_map:
+            loaded = (
+                self._mlflow_available
+                and self._load_sklearn_from_registry(registry_name, local_key)
+            )
+            if not loaded:
+                self._load_sklearn_from_disk(local_key, filename)
+
+        # ── PyTorch models ────────────────────────────────────────────────
+        pytorch_map: List[Tuple[str, str, type, str]] = [
+            ("fraud_dnn",  "fraud_dnn",  AdvancedFraudDetectionDNN,   "fraud_dnn_production.pth"),
+            ("idr_model",  "idr_model",  IDROutcomePredictionModel,    "idr_model_production.pth"),
+        ]
+        for registry_name, local_key, model_class, filename in pytorch_map:
+            loaded = (
+                self._mlflow_available
+                and self._load_pytorch_from_registry(registry_name, local_key, model_class)
+            )
+            if not loaded:
+                self._load_pytorch_from_disk(local_key, filename, model_class)
+
+        # ── Preprocessing artefacts (disk only — not a versioned model) ───
         artifacts_path = os.path.join(self.model_dir, "preprocessing_artifacts.pkl")
         if os.path.exists(artifacts_path):
-            with open(artifacts_path, 'rb') as f:
-                self.preprocessing_artifacts = pickle.load(f)
-            logger.info("Loaded preprocessing artifacts")
+            with open(artifacts_path, "rb") as fh:
+                self.preprocessing_artifacts = pickle.load(fh)
+            logger.info("Loaded preprocessing artifacts from disk")
+        else:
+            logger.warning(
+                "preprocessing_artifacts.pkl not found at %s — "
+                "feature scaling will be skipped",
+                artifacts_path,
+            )
     
     def predict_fraud(self, claim_data: Dict[str, Any]) -> Dict[str, Any]:
         """Predict fraud probability for a claim"""

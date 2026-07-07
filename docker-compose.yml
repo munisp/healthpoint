@@ -38,28 +38,113 @@ services:
     networks:
       - healthcare-network
 
-  # MLflow Tracking Server
+  # ─── MinIO S3-compatible artifact store ─────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    container_name: healthcare-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - healthcare-network
+
+  # ─── MinIO bucket initialisation (runs once then exits) ──────────────────────
+  minio-init:
+    image: minio/mc:RELEASE.2024-01-16T16-06-34Z
+    container_name: healthcare-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin} &&
+        mc mb --ignore-existing local/mlflow &&
+        mc mb --ignore-existing local/healthpoint-models &&
+        mc anonymous set download local/healthpoint-models &&
+        echo 'MinIO buckets ready' &&
+        exit 0
+      "
+    networks:
+      - healthcare-network
+    restart: "no"
+
+  # ─── MLflow Tracking Server (backed by PostgreSQL + MinIO/S3) ────────────────
   mlflow:
     image: python:3.11-slim
     container_name: healthcare-mlflow
     working_dir: /mlflow
     environment:
       MLFLOW_BACKEND_STORE_URI: postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: s3://mlflow/
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
       - "5000:5000"
-    volumes:
-      - mlflow_artifacts:/mlflow/artifacts
     command: >
       bash -c "
-        pip install mlflow psycopg2-binary &&
-        mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform --default-artifact-root /mlflow/artifacts
+        pip install --quiet mlflow psycopg2-binary boto3 &&
+        mlflow server
+          --host 0.0.0.0
+          --port 5000
+          --backend-store-uri postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
+          --default-artifact-root s3://mlflow/
       "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     networks:
       - healthcare-network
+
+  # ─── Model Registration init container (runs once after MLflow is healthy) ───
+  model-registration:
+    image: python:3.11-slim
+    container_name: healthcare-model-registration
+    working_dir: /app
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./ai-ml-dl-implementation/models:/app/models/ai-ml-dl:ro
+      - ./backend/core-services/predictive-analytics-service/models:/app/models/analytics:ro
+    command: >
+      bash -c "
+        pip install --quiet mlflow scikit-learn torch boto3 joblib &&
+        python scripts/register_models.py
+          --mlflow-uri http://mlflow:5000
+          --ai-models-dir /app/models/ai-ml-dl
+          --analytics-models-dir /app/models/analytics
+          --stage Production
+      "
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    networks:
+      - healthcare-network
+    restart: "no"
 
   # API Gateway
   api-gateway:
@@ -90,6 +175,9 @@ services:
       - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
       - REDIS_URL=redis://redis:6379
       - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER:-minioadmin}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - ai_models:/app/models
     depends_on:
@@ -97,8 +185,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      mlflow:
-        condition: service_started
+      model-registration:
+        condition: service_completed_successfully
     networks:
       - healthcare-network
 
@@ -497,6 +585,8 @@ volumes:
   redis_data:
     driver: local
   mlflow_artifacts:
+    driver: local
+  minio_data:
     driver: local
   ai_models:
     driver: local

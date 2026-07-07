@@ -17,21 +17,110 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 import joblib
 import os
+import mlflow
+import mlflow.sklearn
+from mlflow.tracking import MlflowClient
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Configuration  (all values overridable via environment variables)
+# ---------------------------------------------------------------------------
+_DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "puf_models")
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+MLFLOW_S3_ENDPOINT_URL = os.getenv("MLFLOW_S3_ENDPOINT_URL", "")
+if MLFLOW_S3_ENDPOINT_URL:
+    os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", MLFLOW_S3_ENDPOINT_URL)
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+
+
 class PUFEnhancedAnalytics:
-    """Enhanced analytics engine supporting CMS PUF data structure"""
-    
-    def __init__(self, puf_db_path: str = "/tmp/puf_data.db"):
+    """Enhanced analytics engine supporting CMS PUF data structure."""
+
+    # MLflow Model Registry names for PUF models
+    _REGISTRY: Dict[str, str] = {
+        "outcome_prediction": "puf_outcome_prediction",
+        "payment_prediction": "puf_payment_prediction",
+        "payment_scaler":     "puf_payment_scaler",
+    }
+
+    def __init__(
+        self,
+        puf_db_path: str = os.getenv("PUF_DB_PATH", "/tmp/puf_data.db"),
+        model_path: Optional[str] = None,
+        mlflow_stage: str = "Production",
+    ):
         self.puf_db_path = puf_db_path
-        self.models = {}
-        self.encoders = {}
-        self.scalers = {}
-        self.model_path = "/tmp/puf_models/"
+        self.models: Dict[str, Any] = {}
+        self.encoders: Dict[str, Any] = {}
+        self.scalers: Dict[str, Any] = {}
+        self.model_path = model_path or os.getenv("PUF_MODEL_PATH", _DEFAULT_MODEL_PATH)
+        self.mlflow_stage = mlflow_stage
         os.makedirs(self.model_path, exist_ok=True)
+        # Attempt to pre-load models from the MLflow Registry on startup
+        self._mlflow_available = self._check_mlflow()
+        if self._mlflow_available:
+            self._load_models_from_registry()
+
+    # ------------------------------------------------------------------
+    # MLflow helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_mlflow() -> bool:
+        """Return True if the MLflow tracking server is reachable."""
+        import urllib.request
+        try:
+            with urllib.request.urlopen(f"{MLFLOW_TRACKING_URI}/health", timeout=3) as r:
+                return r.status == 200
+        except Exception:
+            return False
+
+    def _load_models_from_registry(self) -> None:
+        """Pre-load all PUF models from the MLflow Model Registry."""
+        for local_key, registry_name in self._REGISTRY.items():
+            try:
+                uri = f"models:/{registry_name}/{self.mlflow_stage}"
+                loaded = mlflow.sklearn.load_model(uri)
+                if local_key == "payment_scaler":
+                    self.scalers["payment_prediction"] = loaded
+                else:
+                    self.models[local_key] = loaded
+                logger.info("Loaded %-25s from MLflow Registry (%s)", local_key, uri)
+            except Exception as exc:
+                logger.warning(
+                    "MLflow load failed for '%s': %s — will train on demand",
+                    registry_name, exc,
+                )
+
+    def _register_model_in_mlflow(
+        self, local_key: str, run_id: str, artifact_path: str,
+    ) -> None:
+        """Register a trained model in the MLflow Model Registry as Staging."""
+        if not self._mlflow_available:
+            return
+        registry_name = self._REGISTRY.get(local_key)
+        if not registry_name:
+            return
+        try:
+            client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+            try:
+                client.create_registered_model(registry_name)
+            except Exception:
+                pass  # model already exists in registry
+            mv = client.create_model_version(
+                name=registry_name,
+                source=f"runs:/{run_id}/{artifact_path}",
+                run_id=run_id,
+            )
+            client.transition_model_version_stage(
+                name=registry_name, version=mv.version, stage="Staging"
+            )
+            logger.info("Registered '%s' v%s → Staging", registry_name, mv.version)
+        except Exception as exc:
+            logger.warning("Could not register '%s' in MLflow: %s", registry_name, exc)
         
         # Georgetown research insights
         self.georgetown_insights = {
@@ -207,21 +296,35 @@ class PUFEnhancedAnalytics:
             y_pred = model.predict(X_test)
             accuracy = accuracy_score(y_test, y_pred)
             
-            # Store model
+            # Store model locally (fallback)
             self.models['outcome_prediction'] = model
-            joblib.dump(model, os.path.join(self.model_path, 'outcome_prediction.pkl'))
-            
+            local_path = os.path.join(self.model_path, 'outcome_prediction.pkl')
+            joblib.dump(model, local_path)
+
+            # Log and register in MLflow when available
+            run_id = None
+            if self._mlflow_available:
+                with mlflow.start_run(run_name="puf_outcome_prediction") as run:
+                    mlflow.log_param("n_estimators", 100)
+                    mlflow.log_param("learning_rate", 0.1)
+                    mlflow.log_param("max_depth", 6)
+                    mlflow.log_metric("accuracy", accuracy)
+                    mlflow.sklearn.log_model(model, artifact_path="model")
+                    run_id = run.info.run_id
+                self._register_model_in_mlflow("outcome_prediction", run_id, "model")
+
             # Feature importance
             feature_importance = dict(zip(X.columns, model.feature_importances_))
-            
-            logger.info(f"Outcome prediction model trained with accuracy: {accuracy:.3f}")
-            
+
+            logger.info("Outcome prediction model trained with accuracy: %.3f", accuracy)
+
             return {
                 "model_type": "outcome_prediction",
                 "accuracy": accuracy,
                 "feature_importance": feature_importance,
                 "training_samples": len(X_train),
-                "test_samples": len(X_test)
+                "test_samples": len(X_test),
+                "mlflow_run_id": run_id,
             }
             
         except Exception as e:
@@ -277,19 +380,34 @@ class PUFEnhancedAnalytics:
             y_pred = model.predict(X_test)
             mae = mean_absolute_error(y_test, y_pred)
             
-            # Store model
+            # Store model locally (fallback)
             self.models['payment_prediction'] = model
             joblib.dump(model, os.path.join(self.model_path, 'payment_prediction.pkl'))
             joblib.dump(scaler, os.path.join(self.model_path, 'payment_scaler.pkl'))
-            
-            logger.info(f"Payment prediction model trained with MAE: {mae:.2f}%")
-            
+
+            # Log and register in MLflow when available
+            run_id = None
+            if self._mlflow_available:
+                with mlflow.start_run(run_name="puf_payment_prediction") as run:
+                    mlflow.log_param("n_estimators", 100)
+                    mlflow.log_param("max_depth", 10)
+                    mlflow.log_param("min_samples_split", 5)
+                    mlflow.log_metric("mae", mae)
+                    mlflow.sklearn.log_model(model, artifact_path="model")
+                    mlflow.sklearn.log_model(scaler, artifact_path="scaler")
+                    run_id = run.info.run_id
+                self._register_model_in_mlflow("payment_prediction", run_id, "model")
+                self._register_model_in_mlflow("payment_scaler", run_id, "scaler")
+
+            logger.info("Payment prediction model trained with MAE: %.2f%%", mae)
+
             return {
                 "model_type": "payment_prediction",
                 "mae": mae,
                 "training_samples": len(X_train),
                 "test_samples": len(X_test),
-                "target_range": {"min": float(y.min()), "max": float(y.max()), "mean": float(y.mean())}
+                "target_range": {"min": float(y.min()), "max": float(y.max()), "mean": float(y.mean())},
+                "mlflow_run_id": run_id,
             }
             
         except Exception as e:
