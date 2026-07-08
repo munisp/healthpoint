@@ -162,3 +162,26 @@
 - [x] profiles tRPC router — profiles.get, profiles.save, profiles.completeOnboarding procedures
 - [x] Onboarding.tsx wired to trpc.profiles.save and trpc.profiles.completeOnboarding — org data persisted to DB on step 2, onboarding marked complete on finish
 - [x] TypeScript: 0 errors | Tests: 17/17 passing
+
+## Session 15 — HealthPoint Logo, Leads CRM, Lead-Capture Form Wired
+- [x] HealthPoint logo generated (shield + heartbeat, navy/sky-blue) — set as APP_LOGO default in const.ts
+- [x] marketing_leads DB table — 18 columns, 3 indexes, migration 0006 applied
+- [x] leads.submit (public), leads.list (admin), leads.updateStatus (admin) tRPC procedures
+- [x] Home.tsx lead-capture form wired to trpc.leads.submit — persists to DB with UTM tracking before Keycloak redirect
+- [x] LeadsManager.tsx admin CRM page at /admin/leads — KPI cards, search/filter, status-update dialog
+- [x] Leads CRM added to sidebar nav (UserRoundSearch icon)
+- [x] React hooks ordering fix — useMutation moved above early return in Home.tsx
+- [x] TypeScript: 0 errors | Tests: 17/17 passing
+
+## Session 16 — Resend Email Integration, HealthPoint Title Default
+- [x] APP_TITLE default set to "HealthPoint" in const.ts and vite.config.ts define block
+- [x] Resend SDK installed (v6.17.1)
+- [x] server/email.ts — branded HTML+text email template for new-lead notifications
+- [x] sendNewLeadNotification() wired in leads.submit — fire-and-forget, gracefully skips if RESEND_API_KEY absent
+- [x] TypeScript: 0 errors | Tests: 17/17 passing
+
+## Session 17 — ENV Refactor, Publish-Ready Checkpoint
+- [x] ENV constants added: appUrl, resendApiKey, leadNotificationEmail, leadFromEmail
+- [x] email.ts refactored to use ENV constants (lazy Resend init, no direct process.env access)
+- [x] VITE_APP_URL wired into email CTA links via ENV.appUrl
+- [x] TypeScript: 0 errors | Tests: 17/17 passing — publish-ready
