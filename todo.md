@@ -39,3 +39,9 @@
 - [x] Vitest tests: 17 passing (business days, reference numbers, step sequence, status transitions, financial validation)
 - [x] TypeScript: 0 errors
 - [x] Checkpoint saved
+
+## New Features (Session 3)
+- [x] Seed script — 25+ disputes at various workflow stages, IDR entities, offers, timeline events, notifications
+- [x] Document Upload modal — on Dispute Detail page, wired to documents.upload tRPC, with document list
+- [x] Fraud Alert Detail view — clickable alerts on Dashboard showing AI reasoning, confidence breakdown, transaction details
+- [x] Final publish-ready checkpoint

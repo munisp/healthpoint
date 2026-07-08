@@ -138,7 +138,7 @@ export default function NewDispute() {
     if (existingDraft && !draftLoaded) {
       const fd = existingDraft.formData as Partial<FormData>;
       setForm(prev => ({ ...prev, ...fd }));
-      setCurrentStep(existingDraft.currentWizardStep ?? 1);
+      setCurrentStep(existingDraft.currentStep ?? 1);
       setDraftLoaded(true);
       toast.info("Draft restored from your last session", { duration: 3000 });
     } else if (existingDraft === null && !draftLoaded) {
@@ -231,7 +231,7 @@ export default function NewDispute() {
       respondingPartyType: form.respondingPartyType as "provider" | "facility" | "payer" | "aggregator",
       respondingPartyName: form.respondingPartyName || undefined,
       respondingPartyNpi: form.respondingPartyNpi || undefined,
-      serviceType: form.serviceType as "emergency_medicine" | "anesthesiology" | "pathology" | "radiology" | "neonatology" | "surgery" | "hospitalist" | "air_ambulance" | "ground_ambulance" | "other",
+      serviceType: form.serviceType as "emergency_medicine" | "anesthesiology" | "pathology" | "radiology" | "neonatology" | "assistant_surgeon" | "hospitalist" | "intensivist" | "air_ambulance" | "ground_ambulance" | "other",
       serviceDate: new Date(form.serviceDate).toISOString(),
       patientState: form.patientState,
       facilityState: form.facilityState,

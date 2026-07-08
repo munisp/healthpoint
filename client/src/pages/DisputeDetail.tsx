@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useParams, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -62,6 +62,13 @@ export default function DisputeDetail() {
 
   const [showOfferModal, setShowOfferModal] = useState(false);
   const [showArbitratorModal, setShowArbitratorModal] = useState(false);
+  const [showDocModal, setShowDocModal] = useState(false);
+  const [docTitle, setDocTitle] = useState("");
+  const [docType, setDocType] = useState<"qpa_documentation" | "eob" | "contract" | "medical_records" | "cost_sharing_info" | "prior_authorization" | "other">("other");
+  const [docDescription, setDocDescription] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [docFileName, setDocFileName] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [offerAmount, setOfferAmount] = useState("");
   const [offerRationale, setOfferRationale] = useState("");
   const [offerType, setOfferType] = useState<"initiating_party" | "responding_party" | "qpa">("initiating_party");
@@ -71,6 +78,10 @@ export default function DisputeDetail() {
   const [determinationBasis, setDeterminationBasis] = useState("");
 
   const { data: timelineData, isLoading } = trpc.disputes.getTimeline.useQuery({ disputeId: id! });
+  const { data: documentList, refetch: refetchDocs } = trpc.documents.list.useQuery(
+    { disputeId: id! },
+    { enabled: !!id }
+  );
   const { data: arbitrators } = trpc.arbitrators.list.useQuery({}, { enabled: showArbitratorModal });
 
   const advanceMutation = trpc.disputes.advance.useMutation({
@@ -85,6 +96,21 @@ export default function DisputeDetail() {
 
   const selectArbitratorMutation = trpc.disputes.selectArbitrator.useMutation({
     onSuccess: () => { utils.disputes.getTimeline.invalidate(); setShowArbitratorModal(false); toast.success("IDR entity selected"); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const uploadDocMutation = trpc.documents.upload.useMutation({
+    onSuccess: () => {
+      utils.disputes.getTimeline.invalidate();
+      refetchDocs();
+      setShowDocModal(false);
+      setDocTitle("");
+      setDocDescription("");
+      setDocFileName("");
+      setSelectedFile(null);
+      setDocType("other");
+      toast.success("Document attached successfully");
+    },
     onError: (err) => toast.error(err.message),
   });
 
@@ -158,6 +184,9 @@ export default function DisputeDetail() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setShowDocModal(true)} className="flex items-center gap-2">
+              <Upload size={14} />Attach Evidence
+            </Button>
             {dispute.currentStep === "STEP_06_IDR_ENTITY_SELECTION" && (
               <Button variant="outline" onClick={() => setShowArbitratorModal(true)} className="flex items-center gap-2">
                 <Gavel size={14} />Select IDR Entity
@@ -345,10 +374,39 @@ export default function DisputeDetail() {
                 ))}
               </CardContent>
             </Card>
+                    {/* Evidence Documents */}
+          <Card className="border-slate-200">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold text-slate-700 flex items-center justify-between">
+                <span className="flex items-center gap-2"><FileText size={14} className="text-orange-500" />Evidence Documents</span>
+                <button onClick={() => setShowDocModal(true)} className="text-xs text-blue-600 hover:underline font-normal">+ Attach</button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {!documentList || documentList.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-3">No documents attached yet</p>
+              ) : (
+                <div className="space-y-2">
+                  {documentList.map((doc: any) => (
+                    <div key={doc.id} className="flex items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
+                      <FileText size={14} className="text-slate-400 mt-0.5 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-semibold text-slate-700 truncate">{doc.title}</div>
+                        <div className="text-xs text-slate-400 capitalize">{doc.documentType?.replace(/_/g, " ")}</div>
+                        {doc.fileSize && doc.fileSize > 0 && (
+                          <div className="text-xs text-slate-400">{(doc.fileSize / 1024).toFixed(1)} KB</div>
+                        )}
+                        <div className="text-xs text-slate-400">{doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : ""}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
           </div>
         </div>
       </main>
-
       {/* Offer Submission Modal */}
       {showOfferModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -382,6 +440,77 @@ export default function DisputeDetail() {
               <Button className="flex-1" disabled={!offerAmount || submitOfferMutation.isPending}
                 onClick={() => submitOfferMutation.mutate({ disputeId: dispute.id, offerType, amount: offerAmount, rationale: offerRationale || undefined })}>
                 {submitOfferMutation.isPending ? "Submitting..." : "Submit Offer"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Document Upload Modal */}
+      {showDocModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Attach Supporting Evidence</h3>
+            <p className="text-xs text-slate-500 mb-4">Attach documents such as QPA evidence, EOBs, operative notes, or contracts to this dispute record.</p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Document Type</label>
+                <select value={docType} onChange={e => setDocType(e.target.value as any)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="qpa_documentation">QPA Documentation</option>
+                  <option value="eob">Explanation of Benefits (EOB)</option>
+                  <option value="contract">Contract / Fee Schedule</option>
+                  <option value="medical_records">Medical Records / Operative Notes</option>
+                  <option value="cost_sharing_info">Cost Sharing Information</option>
+                  <option value="prior_authorization">Prior Authorization</option>
+                  <option value="other">Other Supporting Document</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Document Title</label>
+                <input type="text" value={docTitle} onChange={e => setDocTitle(e.target.value)}
+                  placeholder="e.g., QPA Calculation Worksheet Q3 2025"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">File (reference name)</label>
+                <div className="flex gap-2">
+                  <input type="text" value={docFileName} onChange={e => setDocFileName(e.target.value)}
+                    placeholder="filename.pdf"
+                    className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.docx,.xlsx,.png,.jpg"
+                    onChange={e => {
+                      const f = e.target.files?.[0];
+                      if (f) { setDocFileName(f.name); setSelectedFile(f); }
+                    }} />
+                  <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>Browse</Button>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">Accepted: PDF, DOCX, XLSX, PNG, JPG</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Description (optional)</label>
+                <textarea value={docDescription} onChange={e => setDocDescription(e.target.value)} rows={2}
+                  placeholder="Brief description of what this document demonstrates..."
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <Button variant="outline" className="flex-1" onClick={() => setShowDocModal(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!docTitle || !docFileName || uploadDocMutation.isPending}
+                onClick={() => uploadDocMutation.mutate({
+                  disputeId: dispute.id,
+                  documentType: docType,
+                  fileName: docFileName,
+                  fileType: docFileName.endsWith(".pdf") ? "application/pdf" :
+                    docFileName.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" :
+                    docFileName.endsWith(".xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" :
+                    "application/octet-stream",
+                  fileSize: selectedFile?.size ?? 0,
+                  storageKey: `disputes/${dispute.id}/${Date.now()}-${docFileName}`,
+                  storageUrl: `disputes/${dispute.id}/${Date.now()}-${docFileName}`,
+                  description: docDescription || undefined,
+                })}>
+                {uploadDocMutation.isPending ? "Attaching..." : "Attach Document"}
               </Button>
             </div>
           </div>

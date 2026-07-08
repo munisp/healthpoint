@@ -1,5 +1,6 @@
 import { eq, desc, and, or, like, count, sql, inArray } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import {
   InsertUser, users,
   disputes, InsertDispute, Dispute,
@@ -13,12 +14,16 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
+const LOCAL_PG_URL = "postgresql://idr_user:idr_pass123@localhost:5432/idr_demo";
+
 let _db: ReturnType<typeof drizzle> | null = null;
 
 export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
+  if (!_db) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      const connectionString = LOCAL_PG_URL;
+      const client = postgres(connectionString, { max: 10 });
+      _db = drizzle(client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -49,7 +54,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     if (user.lastSignedIn !== undefined) { values.lastSignedIn = user.lastSignedIn; updateSet.lastSignedIn = user.lastSignedIn; }
     if (user.role === undefined && user.id === ENV.ownerId) { user.role = 'admin'; values.role = 'admin'; updateSet.role = 'admin'; }
     if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
-    await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
+    await db.insert(users).values(values).onConflictDoUpdate({ target: users.id, set: updateSet });
   } catch (error) { console.error("[Database] Failed to upsert user:", error); throw error; }
 }
 
@@ -320,7 +325,7 @@ export async function seedIDREntities() {
     { id: crypto.randomUUID(), name: "FINRA Healthcare Billing Arbitration", certificationNumber: "IDR-CERT-005", specialties: ["surgery", "emergency_medicine", "hospitalist"], states: ["DC", "MD", "VA", "DE", "WV"], contactEmail: "idr@finra.org", contactPhone: "1-301-590-6500", website: "https://www.finra.org", avgResolutionDays: 27, totalCasesHandled: 318, isActive: true },
   ];
   for (const entity of entities) {
-    await db.insert(idrEntities).values(entity).onDuplicateKeyUpdate({ set: { name: entity.name } });
+    await db.insert(idrEntities).values(entity).onConflictDoUpdate({ target: idrEntities.id, set: { name: entity.name } });
   }
 }
 
@@ -377,38 +382,37 @@ export async function upsertDisputeDraft(
   userId: string,
   wizardStep: number,
   formData: Record<string, unknown>,
-  qpaResult?: DisputeDraft["qpaValidationResult"],
+  qpaResult?: QPAValidationResult,
   lastQpaAmount?: string
 ): Promise<DisputeDraft> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // Check if draft exists for this user
-  const existing = await db.select().from(disputeDrafts).where(eq(disputeDrafts.userId, userId)).limit(1);
+  // Embed QPA result inside formData so it survives schema changes
+  const enrichedFormData: Record<string, unknown> = {
+    ...formData,
+    ...(qpaResult !== undefined ? { _qpaResult: qpaResult } : {}),
+    ...(lastQpaAmount !== undefined ? { _lastQpaAmount: lastQpaAmount } : {}),
+  };
   const now = new Date();
+  const existing = await db.select().from(disputeDrafts).where(eq(disputeDrafts.userId, userId)).limit(1);
   if (existing.length > 0) {
-    const updateData: Partial<InsertDisputeDraft> = {
-      currentWizardStep: wizardStep,
-      formData,
-      updatedAt: now,
-    };
-    if (qpaResult !== undefined) updateData.qpaValidationResult = qpaResult;
-    if (lastQpaAmount !== undefined) updateData.lastQpaValidatedAmount = lastQpaAmount;
-    await db.update(disputeDrafts).set(updateData).where(eq(disputeDrafts.userId, userId));
+    await db.update(disputeDrafts).set({
+      currentStep: wizardStep,
+      formData: enrichedFormData,
+      lastSavedAt: now,
+    }).where(eq(disputeDrafts.userId, userId));
     const updated = await db.select().from(disputeDrafts).where(eq(disputeDrafts.userId, userId)).limit(1);
     return updated[0];
   } else {
     const id = crypto.randomUUID();
-    const insertData: InsertDisputeDraft = {
+    await db.insert(disputeDrafts).values({
       id,
       userId,
-      currentWizardStep: wizardStep,
-      formData,
-      qpaValidationResult: qpaResult ?? null,
-      lastQpaValidatedAmount: lastQpaAmount ?? null,
+      currentStep: wizardStep,
+      formData: enrichedFormData,
+      lastSavedAt: now,
       createdAt: now,
-      updatedAt: now,
-    };
-    await db.insert(disputeDrafts).values(insertData);
+    });
     const inserted = await db.select().from(disputeDrafts).where(eq(disputeDrafts.userId, userId)).limit(1);
     return inserted[0];
   }
