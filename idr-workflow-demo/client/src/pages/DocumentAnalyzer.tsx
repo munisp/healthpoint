@@ -4,19 +4,21 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import {
   Upload, FileText, Scan, CheckCircle2, AlertCircle, Loader2,
   Eye, Copy, ArrowRight, Brain, FileSearch, Zap, RotateCcw,
-  ChevronRight, Info,
+  ChevronRight, Info, Columns2, LayoutList, ZoomIn, ZoomOut,
 } from "lucide-react";
 
 type DocType = "eob" | "ra" | "cms1500" | "ub04" | "appeal" | "other";
+type ViewMode = "side-by-side" | "fields-only";
 
 interface ExtractedFields {
   patientName: string;
@@ -62,15 +64,103 @@ const PIPELINE_STEPS = [
   { id: "validate", label: "Validation", icon: CheckCircle2, desc: "NSA compliance check" },
 ];
 
-function FieldRow({ label, value, mono = false }: { label: string; value: string | boolean | string[]; mono?: boolean }) {
-  const display = Array.isArray(value) ? value.join(", ") || "—" : typeof value === "boolean" ? (value ? "Yes" : "No") : value || "—";
+// Field groups with their labels for side-by-side comparison
+const FIELD_GROUPS = [
+  {
+    title: "Patient Information",
+    color: "blue",
+    fields: [
+      { key: "patientName", label: "Patient Name" },
+      { key: "patientDOB", label: "Date of Birth" },
+      { key: "patientId", label: "Member ID", mono: true },
+    ],
+  },
+  {
+    title: "Provider Information",
+    color: "purple",
+    fields: [
+      { key: "providerName", label: "Provider Name" },
+      { key: "providerNPI", label: "NPI", mono: true },
+      { key: "isOutOfNetwork", label: "Out-of-Network" },
+    ],
+  },
+  {
+    title: "Payer / Claim Details",
+    color: "orange",
+    fields: [
+      { key: "payerName", label: "Payer Name" },
+      { key: "payerId", label: "Payer ID", mono: true },
+      { key: "claimNumber", label: "Claim Number", mono: true },
+      { key: "dateOfService", label: "Date of Service" },
+    ],
+  },
+  {
+    title: "Financial Summary",
+    color: "green",
+    fields: [
+      { key: "billedAmount", label: "Billed Amount", mono: true },
+      { key: "allowedAmount", label: "Allowed Amount", mono: true },
+      { key: "paidAmount", label: "Paid Amount", mono: true },
+      { key: "patientResponsibility", label: "Patient Resp.", mono: true },
+    ],
+  },
+  {
+    title: "Denial / Adjustment",
+    color: "red",
+    fields: [
+      { key: "denialCode", label: "Denial Code", mono: true },
+      { key: "denialReason", label: "Denial Reason" },
+    ],
+  },
+  {
+    title: "Procedure & Diagnosis Codes",
+    color: "teal",
+    fields: [
+      { key: "cptCodes", label: "CPT Codes", mono: true },
+      { key: "icd10Codes", label: "ICD-10 Codes", mono: true },
+      { key: "serviceType", label: "Service Type" },
+      { key: "facilityState", label: "Facility State" },
+    ],
+  },
+];
+
+const COLOR_CLASSES: Record<string, { border: string; bg: string; dot: string; header: string }> = {
+  blue:   { border: "border-blue-500/30",   bg: "bg-blue-500/5",   dot: "bg-blue-500",   header: "text-blue-700 dark:text-blue-400" },
+  purple: { border: "border-purple-500/30", bg: "bg-purple-500/5", dot: "bg-purple-500", header: "text-purple-700 dark:text-purple-400" },
+  orange: { border: "border-orange-500/30", bg: "bg-orange-500/5", dot: "bg-orange-500", header: "text-orange-700 dark:text-orange-400" },
+  green:  { border: "border-green-500/30",  bg: "bg-green-500/5",  dot: "bg-green-500",  header: "text-green-700 dark:text-green-400" },
+  red:    { border: "border-red-500/30",    bg: "bg-red-500/5",    dot: "bg-red-500",    header: "text-red-700 dark:text-red-400" },
+  teal:   { border: "border-teal-500/30",   bg: "bg-teal-500/5",   dot: "bg-teal-500",   header: "text-teal-700 dark:text-teal-400" },
+};
+
+function getFieldValue(fields: ExtractedFields, key: string): string | boolean | string[] {
+  return (fields as unknown as Record<string, string | boolean | string[]>)[key] ?? "—";
+}
+
+function formatFieldValue(value: string | boolean | string[]): string {
+  if (Array.isArray(value)) return value.join(", ") || "—";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return value || "—";
+}
+
+function FieldRow({
+  label, value, mono = false, highlighted = false,
+}: {
+  label: string;
+  value: string | boolean | string[];
+  mono?: boolean;
+  highlighted?: boolean;
+}) {
+  const display = formatFieldValue(value);
   const copyValue = Array.isArray(value) ? value.join(", ") : String(value);
 
   return (
-    <div className="flex items-start justify-between py-2 border-b border-border/40 last:border-0 gap-4">
-      <span className="text-xs text-muted-foreground shrink-0 w-40">{label}</span>
-      <span className={`text-sm font-medium text-right flex-1 ${mono ? "font-mono" : ""}`}>{display}</span>
-      {copyValue && copyValue !== "—" && (
+    <div className={`flex items-start justify-between py-2 border-b border-border/40 last:border-0 gap-4 rounded px-1 transition-colors ${highlighted ? "bg-primary/10" : ""}`}>
+      <span className="text-xs text-muted-foreground shrink-0 w-36">{label}</span>
+      <span className={`text-sm font-medium text-right flex-1 ${mono ? "font-mono" : ""} ${display === "—" ? "text-muted-foreground" : ""}`}>
+        {display}
+      </span>
+      {copyValue && copyValue !== "—" && copyValue !== "false" && (
         <button
           onClick={() => { navigator.clipboard.writeText(copyValue); toast.success("Copied!"); }}
           className="text-muted-foreground hover:text-foreground shrink-0"
@@ -92,8 +182,10 @@ export default function DocumentAnalyzer() {
   const [currentStep, setCurrentStep] = useState<number>(-1);
   const [stepProgress, setStepProgress] = useState(0);
   const [extractedFields, setExtractedFields] = useState<ExtractedFields | null>(null);
-  const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [showRawText, setShowRawText] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>("side-by-side");
+  const [imageZoom, setImageZoom] = useState(100);
+  const [highlightedGroup, setHighlightedGroup] = useState<string | null>(null);
 
   const analyzeMutation = trpc.docIntelligence.analyze.useMutation({
     onSuccess: (data) => {
@@ -102,7 +194,6 @@ export default function DocumentAnalyzer() {
       if (data.extractedFields) {
         setExtractedFields(data.extractedFields as ExtractedFields);
       }
-      setAnalysisId(data.id);
       toast.success("Document analysis complete!", { description: `${data.confidence ?? 0}% confidence` });
     },
     onError: (err) => {
@@ -125,6 +216,7 @@ export default function DocumentAnalyzer() {
     setExtractedFields(null);
     setCurrentStep(-1);
     setStepProgress(0);
+    setHighlightedGroup(null);
     const url = URL.createObjectURL(file);
     setPreviewUrl(url);
   }, []);
@@ -138,22 +230,17 @@ export default function DocumentAnalyzer() {
 
   const runAnalysis = useCallback(async () => {
     if (!selectedFile) return;
-
-    // Simulate pipeline progress
     setCurrentStep(0);
     setStepProgress(20);
 
     const reader = new FileReader();
     reader.onload = async (e) => {
       const base64 = (e.target?.result as string).split(",")[1];
-
       setCurrentStep(1);
       setStepProgress(40);
       await new Promise(r => setTimeout(r, 400));
-
       setCurrentStep(2);
       setStepProgress(60);
-
       try {
         await analyzeMutation.mutateAsync({
           fileName: selectedFile.name,
@@ -185,9 +272,9 @@ export default function DocumentAnalyzer() {
 
   return (
     <DashboardLayout>
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="p-6 max-w-screen-2xl mx-auto space-y-4">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <Brain className="h-6 w-6 text-primary" />
@@ -197,23 +284,48 @@ export default function DocumentAnalyzer() {
               VLM-powered OCR pipeline — extract structured fields from EOB, RA, CMS-1500, and UB-04 documents
             </p>
           </div>
-          <Badge variant="secondary" className="gap-1">
-            <Zap className="h-3 w-3" />
-            Vision Language Model
-          </Badge>
+          <div className="flex items-center gap-2">
+            {extractedFields && (
+              <div className="flex items-center border rounded-lg p-0.5 gap-0.5">
+                <Button
+                  variant={viewMode === "side-by-side" ? "default" : "ghost"}
+                  size="sm"
+                  className="h-7 px-2 gap-1"
+                  onClick={() => setViewMode("side-by-side")}
+                >
+                  <Columns2 className="h-3.5 w-3.5" />
+                  <span className="text-xs">Side by Side</span>
+                </Button>
+                <Button
+                  variant={viewMode === "fields-only" ? "default" : "ghost"}
+                  size="sm"
+                  className="h-7 px-2 gap-1"
+                  onClick={() => setViewMode("fields-only")}
+                >
+                  <LayoutList className="h-3.5 w-3.5" />
+                  <span className="text-xs">Fields Only</span>
+                </Button>
+              </div>
+            )}
+            <Badge variant="secondary" className="gap-1">
+              <Zap className="h-3 w-3" />
+              Vision Language Model
+            </Badge>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          {/* Left: Upload + Pipeline */}
-          <div className="lg:col-span-2 space-y-4">
-            {/* Document Type Selector */}
+        {/* Main layout: upload controls + content area */}
+        <div className={`grid gap-4 ${extractedFields && viewMode === "side-by-side" ? "grid-cols-1 xl:grid-cols-[320px_1fr]" : "grid-cols-1 lg:grid-cols-[320px_1fr]"}`}>
+          {/* Left column: controls */}
+          <div className="space-y-3">
+            {/* Document Type */}
             <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Document Type</CardTitle>
+              <CardHeader className="pb-2 pt-3 px-4">
+                <CardTitle className="text-xs text-muted-foreground uppercase tracking-wide">Document Type</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="px-4 pb-3">
                 <Select value={docType} onValueChange={(v) => setDocType(v as DocType)}>
-                  <SelectTrigger>
+                  <SelectTrigger className="h-8 text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -235,7 +347,7 @@ export default function DocumentAnalyzer() {
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
             >
-              <CardContent className="py-8 text-center">
+              <CardContent className="py-6 text-center">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -245,15 +357,23 @@ export default function DocumentAnalyzer() {
                 />
                 {selectedFile ? (
                   <div className="space-y-2">
-                    <FileText className="h-10 w-10 mx-auto text-primary" />
-                    <p className="font-medium text-sm">{selectedFile.name}</p>
+                    <FileText className="h-8 w-8 mx-auto text-primary" />
+                    <p className="font-medium text-sm truncate px-2">{selectedFile.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {(selectedFile.size / 1024).toFixed(1)} KB · {selectedFile.type}
+                      {(selectedFile.size / 1024).toFixed(1)} KB
                     </p>
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={(e) => { e.stopPropagation(); setSelectedFile(null); setPreviewUrl(null); setExtractedFields(null); setCurrentStep(-1); }}
+                      className="h-7 text-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedFile(null);
+                        setPreviewUrl(null);
+                        setExtractedFields(null);
+                        setCurrentStep(-1);
+                        setHighlightedGroup(null);
+                      }}
                     >
                       <RotateCcw className="h-3 w-3 mr-1" />
                       Change file
@@ -261,7 +381,7 @@ export default function DocumentAnalyzer() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <Upload className="h-10 w-10 mx-auto text-muted-foreground" />
+                    <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
                     <p className="font-medium text-sm">Drop document here</p>
                     <p className="text-xs text-muted-foreground">PNG, JPG, WEBP, PDF · Max 10 MB</p>
                   </div>
@@ -269,24 +389,10 @@ export default function DocumentAnalyzer() {
               </CardContent>
             </Card>
 
-            {/* Preview */}
-            {previewUrl && selectedFile?.type.startsWith("image/") && (
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-xs text-muted-foreground flex items-center gap-1">
-                    <Eye className="h-3 w-3" /> Preview
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <img src={previewUrl} alt="Document preview" className="w-full rounded border object-contain max-h-48" />
-                </CardContent>
-              </Card>
-            )}
-
             {/* Analyze Button */}
             <Button
               className="w-full"
-              size="lg"
+              size="default"
               disabled={!selectedFile || isAnalyzing}
               onClick={runAnalysis}
             >
@@ -300,29 +406,53 @@ export default function DocumentAnalyzer() {
             {/* Pipeline Steps */}
             {currentStep >= 0 && (
               <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm">Analysis Pipeline</CardTitle>
+                <CardHeader className="pb-2 pt-3 px-4">
+                  <CardTitle className="text-xs text-muted-foreground uppercase tracking-wide">Analysis Pipeline</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-3">
-                  <Progress value={stepProgress} className="h-2" />
+                <CardContent className="px-4 pb-3 space-y-2">
+                  <Progress value={stepProgress} className="h-1.5" />
                   {PIPELINE_STEPS.map((step, i) => {
                     const Icon = step.icon;
                     const done = i < currentStep || (i === currentStep && !isAnalyzing);
                     const active = i === currentStep && isAnalyzing;
                     return (
-                      <div key={step.id} className={`flex items-center gap-3 text-sm ${done ? "text-foreground" : active ? "text-primary" : "text-muted-foreground"}`}>
+                      <div key={step.id} className={`flex items-center gap-2 text-xs ${done ? "text-foreground" : active ? "text-primary" : "text-muted-foreground"}`}>
                         {done ? (
-                          <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                          <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
                         ) : active ? (
-                          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                          <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
                         ) : (
-                          <Icon className="h-4 w-4 shrink-0 opacity-40" />
+                          <Icon className="h-3.5 w-3.5 shrink-0 opacity-40" />
                         )}
-                        <div>
-                          <p className="font-medium leading-none">{step.label}</p>
-                          <p className="text-xs text-muted-foreground">{step.desc}</p>
-                        </div>
+                        <span className="font-medium">{step.label}</span>
                       </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Field group legend (side-by-side mode) */}
+            {extractedFields && viewMode === "side-by-side" && (
+              <Card>
+                <CardHeader className="pb-2 pt-3 px-4">
+                  <CardTitle className="text-xs text-muted-foreground uppercase tracking-wide">Field Groups</CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-3 space-y-1.5">
+                  <p className="text-xs text-muted-foreground mb-2">Click a group to highlight it in both panels</p>
+                  {FIELD_GROUPS.map(group => {
+                    const colors = COLOR_CLASSES[group.color];
+                    const isActive = highlightedGroup === group.title;
+                    return (
+                      <button
+                        key={group.title}
+                        className={`w-full flex items-center gap-2 text-xs px-2 py-1.5 rounded transition-colors text-left ${isActive ? `${colors.bg} ${colors.border} border` : "hover:bg-muted/50"}`}
+                        onClick={() => setHighlightedGroup(isActive ? null : group.title)}
+                      >
+                        <span className={`h-2 w-2 rounded-full shrink-0 ${colors.dot}`} />
+                        <span className={isActive ? colors.header : ""}>{group.title}</span>
+                        <span className="ml-auto text-muted-foreground">{group.fields.length} fields</span>
+                      </button>
                     );
                   })}
                 </CardContent>
@@ -330,13 +460,13 @@ export default function DocumentAnalyzer() {
             )}
           </div>
 
-          {/* Right: Extracted Fields */}
-          <div className="lg:col-span-3 space-y-4">
+          {/* Right column: content */}
+          <div className="min-w-0">
             {extractedFields ? (
               <>
                 {/* Confidence Banner */}
-                <Card className={confidence >= 80 ? "border-green-500/30 bg-green-500/5" : confidence >= 60 ? "border-yellow-500/30 bg-yellow-500/5" : "border-red-500/30 bg-red-500/5"}>
-                  <CardContent className="py-3 flex items-center justify-between">
+                <Card className={`mb-4 ${confidence >= 80 ? "border-green-500/30 bg-green-500/5" : confidence >= 60 ? "border-yellow-500/30 bg-yellow-500/5" : "border-red-500/30 bg-red-500/5"}`}>
+                  <CardContent className="py-3 flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2">
                       {confidence >= 80 ? (
                         <CheckCircle2 className="h-5 w-5 text-green-500" />
@@ -359,118 +489,212 @@ export default function DocumentAnalyzer() {
                   </CardContent>
                 </Card>
 
-                {/* Fields Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Patient Info */}
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm">Patient Information</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <FieldRow label="Patient Name" value={extractedFields.patientName} />
-                      <FieldRow label="Date of Birth" value={extractedFields.patientDOB} />
-                      <FieldRow label="Member ID" value={extractedFields.patientId} mono />
-                    </CardContent>
-                  </Card>
+                {viewMode === "side-by-side" ? (
+                  /* ── SIDE-BY-SIDE VIEW ── */
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+                    {/* Left panel: Original document */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                          <Eye className="h-4 w-4 text-muted-foreground" />
+                          Original Document
+                        </h3>
+                        {previewUrl && selectedFile?.type.startsWith("image/") && (
+                          <div className="flex items-center gap-1">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setImageZoom(z => Math.max(50, z - 25))}>
+                              <ZoomOut className="h-3.5 w-3.5" />
+                            </Button>
+                            <span className="text-xs text-muted-foreground w-10 text-center">{imageZoom}%</span>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setImageZoom(z => Math.min(200, z + 25))}>
+                              <ZoomIn className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                      <Card className="overflow-hidden">
+                        <CardContent className="p-0">
+                          {previewUrl && selectedFile?.type.startsWith("image/") ? (
+                            <ScrollArea className="h-[600px]">
+                              <div className="flex items-start justify-center p-2 bg-muted/30 min-h-full">
+                                <img
+                                  src={previewUrl}
+                                  alt="Original document"
+                                  className="rounded border shadow-sm object-contain transition-all"
+                                  style={{ width: `${imageZoom}%`, maxWidth: "none" }}
+                                />
+                              </div>
+                            </ScrollArea>
+                          ) : selectedFile?.type === "application/pdf" ? (
+                            <div className="h-[600px] flex flex-col items-center justify-center text-muted-foreground bg-muted/20 gap-3">
+                              <FileText className="h-16 w-16 opacity-30" />
+                              <div className="text-center">
+                                <p className="font-medium text-sm">{selectedFile.name}</p>
+                                <p className="text-xs mt-1">PDF preview not available in browser</p>
+                                <p className="text-xs text-muted-foreground/70 mt-0.5">Fields extracted via VLM OCR pipeline</p>
+                              </div>
+                              <Badge variant="outline" className="gap-1 text-xs">
+                                <CheckCircle2 className="h-3 w-3 text-green-500" />
+                                Successfully analyzed
+                              </Badge>
+                            </div>
+                          ) : (
+                            <div className="h-[600px] flex items-center justify-center text-muted-foreground bg-muted/20">
+                              <div className="text-center">
+                                <Upload className="h-12 w-12 mx-auto mb-2 opacity-30" />
+                                <p className="text-sm">No document preview</p>
+                              </div>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
 
-                  {/* Provider Info */}
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm">Provider Information</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <FieldRow label="Provider Name" value={extractedFields.providerName} />
-                      <FieldRow label="NPI" value={extractedFields.providerNPI} mono />
-                      <FieldRow label="Out-of-Network" value={extractedFields.isOutOfNetwork} />
-                    </CardContent>
-                  </Card>
-
-                  {/* Payer Info */}
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm">Payer / Claim Details</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <FieldRow label="Payer Name" value={extractedFields.payerName} />
-                      <FieldRow label="Payer ID" value={extractedFields.payerId} mono />
-                      <FieldRow label="Claim Number" value={extractedFields.claimNumber} mono />
-                      <FieldRow label="Date of Service" value={extractedFields.dateOfService} />
-                    </CardContent>
-                  </Card>
-
-                  {/* Financial */}
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm">Financial Summary</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <FieldRow label="Billed Amount" value={extractedFields.billedAmount} mono />
-                      <FieldRow label="Allowed Amount" value={extractedFields.allowedAmount} mono />
-                      <FieldRow label="Paid Amount" value={extractedFields.paidAmount} mono />
-                      <FieldRow label="Patient Resp." value={extractedFields.patientResponsibility} mono />
-                    </CardContent>
-                  </Card>
-
-                  {/* Denial */}
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm">Denial / Adjustment</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <FieldRow label="Denial Code" value={extractedFields.denialCode} mono />
-                      <FieldRow label="Denial Reason" value={extractedFields.denialReason} />
-                    </CardContent>
-                  </Card>
-
-                  {/* Codes */}
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm">Procedure & Diagnosis Codes</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <FieldRow label="CPT Codes" value={extractedFields.cptCodes} mono />
-                      <FieldRow label="ICD-10 Codes" value={extractedFields.icd10Codes} mono />
-                      <FieldRow label="Service Type" value={extractedFields.serviceType} />
-                      <FieldRow label="Facility State" value={extractedFields.facilityState} />
-                    </CardContent>
-                  </Card>
-                </div>
-
-                {/* NSA Applicability */}
-                <Card className={extractedFields.nsaApplicable ? "border-primary/30" : ""}>
-                  <CardContent className="py-3 flex items-center gap-3">
-                    <Info className="h-4 w-4 text-primary shrink-0" />
-                    <div>
-                      <p className="text-sm font-medium">
-                        NSA / No Surprises Act: {extractedFields.nsaApplicable ? "Likely Applicable" : "May Not Apply"}
-                      </p>
-                      {extractedFields.notes && (
-                        <p className="text-xs text-muted-foreground mt-0.5">{extractedFields.notes}</p>
-                      )}
+                      {/* Raw OCR text in side-by-side */}
+                      <Card>
+                        <CardHeader
+                          className="pb-2 pt-3 px-4 cursor-pointer"
+                          onClick={() => setShowRawText(v => !v)}
+                        >
+                          <CardTitle className="text-xs flex items-center justify-between">
+                            <span className="flex items-center gap-1.5 text-muted-foreground uppercase tracking-wide">
+                              <FileText className="h-3.5 w-3.5" />Raw OCR Text
+                            </span>
+                            <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${showRawText ? "rotate-90" : ""}`} />
+                          </CardTitle>
+                        </CardHeader>
+                        {showRawText && (
+                          <CardContent className="px-4 pb-3">
+                            <ScrollArea className="h-40">
+                              <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-mono leading-relaxed">
+                                {extractedFields.rawText || "No raw text extracted"}
+                              </pre>
+                            </ScrollArea>
+                          </CardContent>
+                        )}
+                      </Card>
                     </div>
-                  </CardContent>
-                </Card>
 
-                {/* Raw OCR Text Toggle */}
-                <Card>
-                  <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowRawText(v => !v)}>
-                    <CardTitle className="text-sm flex items-center justify-between">
-                      <span className="flex items-center gap-2"><FileText className="h-4 w-4" />Raw OCR Text</span>
-                      <ChevronRight className={`h-4 w-4 transition-transform ${showRawText ? "rotate-90" : ""}`} />
-                    </CardTitle>
-                  </CardHeader>
-                  {showRawText && (
-                    <CardContent>
-                      <ScrollArea className="h-48">
-                        <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-mono leading-relaxed">
-                          {extractedFields.rawText || "No raw text extracted"}
-                        </pre>
+                    {/* Right panel: Extracted fields */}
+                    <div className="space-y-2">
+                      <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                        <Brain className="h-4 w-4 text-muted-foreground" />
+                        Extracted Fields
+                        <Badge variant="secondary" className="text-xs ml-1">{confidence}% confidence</Badge>
+                      </h3>
+                      <ScrollArea className="h-[600px] pr-1">
+                        <div className="space-y-3 pr-1">
+                          {FIELD_GROUPS.map(group => {
+                            const colors = COLOR_CLASSES[group.color];
+                            const isHighlighted = highlightedGroup === group.title;
+                            return (
+                              <Card
+                                key={group.title}
+                                className={`transition-all cursor-pointer ${isHighlighted ? `${colors.border} ${colors.bg} shadow-sm` : "hover:border-border/80"}`}
+                                onClick={() => setHighlightedGroup(isHighlighted ? null : group.title)}
+                              >
+                                <CardHeader className="pb-1 pt-3 px-4">
+                                  <CardTitle className={`text-xs font-semibold flex items-center gap-1.5 ${isHighlighted ? colors.header : ""}`}>
+                                    <span className={`h-2 w-2 rounded-full ${colors.dot}`} />
+                                    {group.title}
+                                  </CardTitle>
+                                </CardHeader>
+                                <CardContent className="px-4 pb-3">
+                                  {group.fields.map(f => (
+                                    <FieldRow
+                                      key={f.key}
+                                      label={f.label}
+                                      value={getFieldValue(extractedFields, f.key)}
+                                      mono={f.mono}
+                                      highlighted={isHighlighted}
+                                    />
+                                  ))}
+                                </CardContent>
+                              </Card>
+                            );
+                          })}
+
+                          {/* NSA Card */}
+                          <Card className={extractedFields.nsaApplicable ? "border-primary/30 bg-primary/5" : ""}>
+                            <CardContent className="py-3 px-4 flex items-center gap-3">
+                              <Info className="h-4 w-4 text-primary shrink-0" />
+                              <div>
+                                <p className="text-sm font-medium">
+                                  NSA / No Surprises Act: {extractedFields.nsaApplicable ? "Likely Applicable" : "May Not Apply"}
+                                </p>
+                                {extractedFields.notes && (
+                                  <p className="text-xs text-muted-foreground mt-0.5">{extractedFields.notes}</p>
+                                )}
+                              </div>
+                            </CardContent>
+                          </Card>
+                        </div>
                       </ScrollArea>
-                    </CardContent>
-                  )}
-                </Card>
+                    </div>
+                  </div>
+                ) : (
+                  /* ── FIELDS ONLY VIEW ── */
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {FIELD_GROUPS.map(group => {
+                        const colors = COLOR_CLASSES[group.color];
+                        return (
+                          <Card key={group.title}>
+                            <CardHeader className="pb-2">
+                              <CardTitle className={`text-sm flex items-center gap-1.5 ${colors.header}`}>
+                                <span className={`h-2 w-2 rounded-full ${colors.dot}`} />
+                                {group.title}
+                              </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                              {group.fields.map(f => (
+                                <FieldRow
+                                  key={f.key}
+                                  label={f.label}
+                                  value={getFieldValue(extractedFields, f.key)}
+                                  mono={f.mono}
+                                />
+                              ))}
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                    </div>
+
+                    <Card className={extractedFields.nsaApplicable ? "border-primary/30" : ""}>
+                      <CardContent className="py-3 flex items-center gap-3">
+                        <Info className="h-4 w-4 text-primary shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium">
+                            NSA / No Surprises Act: {extractedFields.nsaApplicable ? "Likely Applicable" : "May Not Apply"}
+                          </p>
+                          {extractedFields.notes && (
+                            <p className="text-xs text-muted-foreground mt-0.5">{extractedFields.notes}</p>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowRawText(v => !v)}>
+                        <CardTitle className="text-sm flex items-center justify-between">
+                          <span className="flex items-center gap-2"><FileText className="h-4 w-4" />Raw OCR Text</span>
+                          <ChevronRight className={`h-4 w-4 transition-transform ${showRawText ? "rotate-90" : ""}`} />
+                        </CardTitle>
+                      </CardHeader>
+                      {showRawText && (
+                        <CardContent>
+                          <ScrollArea className="h-48">
+                            <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-mono leading-relaxed">
+                              {extractedFields.rawText || "No raw text extracted"}
+                            </pre>
+                          </ScrollArea>
+                        </CardContent>
+                      )}
+                    </Card>
+                  </div>
+                )}
               </>
             ) : (
+              /* Empty state */
               <Card className="h-full min-h-96">
                 <CardContent className="h-full flex flex-col items-center justify-center text-center py-16 space-y-4">
                   <div className="rounded-full bg-muted p-6">
@@ -483,12 +707,19 @@ export default function DocumentAnalyzer() {
                     </p>
                   </div>
                   <div className="grid grid-cols-3 gap-3 mt-4 text-xs text-muted-foreground">
-                    {["Patient & Provider", "Financial Data", "CPT / ICD Codes"].map(label => (
-                      <div key={label} className="flex flex-col items-center gap-1 p-3 rounded-lg bg-muted/50">
-                        <CheckCircle2 className="h-4 w-4 text-primary" />
-                        <span>{label}</span>
-                      </div>
-                    ))}
+                    {[
+                      { label: "Side-by-Side View", icon: Columns2 },
+                      { label: "25 Structured Fields", icon: CheckCircle2 },
+                      { label: "Auto-fill Dispute", icon: ArrowRight },
+                    ].map(item => {
+                      const Icon = item.icon;
+                      return (
+                        <div key={item.label} className="flex flex-col items-center gap-1 p-3 rounded-lg bg-muted/50">
+                          <Icon className="h-4 w-4 text-primary" />
+                          <span>{item.label}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                   <Separator className="w-32" />
                   <p className="text-xs text-muted-foreground">
