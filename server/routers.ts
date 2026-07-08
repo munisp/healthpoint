@@ -323,6 +323,61 @@ export const appRouter = router({
         };
       }),
 
+    exportCSV: protectedProcedure
+      .input(z.object({
+        status: z.enum(DISPUTE_STATUS).optional(),
+        serviceType: z.enum(["emergency_medicine", "anesthesiology", "pathology", "radiology", "neonatology", "assistant_surgeon", "hospitalist", "intensivist", "air_ambulance", "ground_ambulance", "other"]).optional(),
+        search: z.string().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        // Fetch up to 10,000 rows for export
+        const { items } = await listDisputes({ userId: ctx.user.id, ...input, limit: 10000, offset: 0 });
+        const headers = [
+          "Reference #", "Status", "Current Step", "Service Type", "Service Date",
+          "Initiating Party", "Initiating Party Type", "Responding Party", "Responding Party Type",
+          "Billed Amount", "QPA Amount", "Initiating Offer", "Responding Offer",
+          "Determination Amount", "Patient State", "Facility State",
+          "Open Negotiation Deadline", "Offer Submission Deadline", "Payment Deadline",
+          "Created At", "Closed At",
+        ];
+        const escape = (v: unknown) => {
+          if (v == null) return "";
+          const s = String(v);
+          return s.includes(",") || s.includes('"') || s.includes("\n")
+            ? `"${s.replace(/"/g, '""')}"`
+            : s;
+        };
+        const rows = items.map(d => [
+          d.referenceNumber,
+          d.status,
+          d.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ").toLowerCase() ?? "",
+          d.serviceType,
+          d.serviceDate ? new Date(d.serviceDate).toLocaleDateString() : "",
+          d.initiatingPartyName,
+          d.initiatingPartyType,
+          d.respondingPartyName ?? "",
+          d.respondingPartyType ?? "",
+          d.billedAmount != null ? Number(d.billedAmount).toFixed(2) : "",
+          d.qpaAmount != null ? Number(d.qpaAmount).toFixed(2) : "",
+          d.initiatingPartyOffer != null ? Number(d.initiatingPartyOffer).toFixed(2) : "",
+          d.respondingPartyOffer != null ? Number(d.respondingPartyOffer).toFixed(2) : "",
+          d.determinationAmount != null ? Number(d.determinationAmount).toFixed(2) : "",
+          d.patientState,
+          d.facilityState,
+          d.openNegotiationDeadline ? new Date(d.openNegotiationDeadline).toLocaleDateString() : "",
+          d.offerSubmissionDeadline ? new Date(d.offerSubmissionDeadline).toLocaleDateString() : "",
+          d.paymentDeadline ? new Date(d.paymentDeadline).toLocaleDateString() : "",
+          d.createdAt ? new Date(d.createdAt).toLocaleDateString() : "",
+          d.closedAt ? new Date(d.closedAt).toLocaleDateString() : "",
+        ].map(escape).join(","));
+        const csv = [headers.join(","), ...rows].join("\n");
+        return {
+          csv,
+          filename: `IDR-Disputes-Export-${new Date().toISOString().slice(0, 10)}.csv`,
+          rowCount: items.length,
+        };
+      }),
+
     sendNotification: protectedProcedure
       .input(z.object({
         disputeId: z.string(),

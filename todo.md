@@ -80,3 +80,11 @@
 - [x] Due Soon KPI card — getDashboardStats extended with dueSoon count (7-day window), amber pulse ring KPI card on Dashboard
 - [x] Scheduled deadline-check heartbeat — POST /api/scheduled/deadline-check handler, idempotent, scans all open disputes, warning + overdue notifications, mounted in index.ts
 - [x] Agentic AI value analysis document — docs/agentic-ai-value-analysis.md: 7-section analysis, before/after tables, 94%/88%/99% improvement metrics, equity impact, 6 citations
+
+## Session 8 — Heartbeat Crons, CSV Export, Weekly Digest, GitHub Push
+- [x] Register daily deadline-check heartbeat cron — task_uid: eSu5Yu9ZEaCiN7EWNZr29f, runs 08:00 UTC daily
+- [x] disputes.exportCSV tRPC procedure — exports up to 10,000 rows with all 21 fields, respects status/serviceType/search filters
+- [x] CSV download button on DisputesList — Export CSV (N) button in page header, client-side Blob download
+- [x] Weekly AI digest heartbeat handler at /api/scheduled/weekly-digest — IDRAssistantAgent summary, idempotent per admin per week, fallback summary if AI unavailable
+- [x] Register weekly digest heartbeat cron — task_uid: ZDznRd9mLrf54uBzvgJ8BD, runs 09:00 UTC every Monday, next: 2026-07-13
+- [ ] Push latest code to munisp/healthpoint GitHub repository

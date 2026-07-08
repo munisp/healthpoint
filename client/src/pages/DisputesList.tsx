@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { APP_LOGO, APP_TITLE, getLoginUrl } from "@/const";
 import {
   AlertTriangle, Bell, ChevronLeft, ChevronRight,
-  FileText, Gavel, LogOut, Plus, Scale, Search, X, SlidersHorizontal
+  FileText, Gavel, LogOut, Plus, Scale, Search, X, SlidersHorizontal, Download
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useEffect, useRef } from "react";
@@ -79,7 +79,35 @@ export default function DisputesList() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [searchInput]);
 
+  const [csvExporting, setCsvExporting] = useState<boolean>(false);
   const hasActiveFilters = statusFilter !== "all" || serviceTypeFilter !== "all" || search;
+
+  const exportCSVQuery = trpc.disputes.exportCSV.useQuery(
+    {
+      status: statusFilter !== "all" ? (statusFilter as any) : undefined,
+      serviceType: serviceTypeFilter !== "all" ? (serviceTypeFilter as any) : undefined,
+      search: search || undefined,
+    },
+    { enabled: false } // only fetch on demand
+  );
+
+  const handleExportCSV = async () => {
+    setCsvExporting(true);
+    try {
+      const result = await exportCSVQuery.refetch();
+      if (result.data) {
+        const blob = new Blob([result.data.csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = result.data.filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } finally {
+      setCsvExporting(false);
+    }
+  };
 
   const clearAllFilters = () => {
     setSearch("");
@@ -140,9 +168,16 @@ export default function DisputesList() {
             <h1 className="text-2xl font-bold text-slate-800">IDR Disputes</h1>
             <p className="text-sm text-slate-500 mt-0.5">{total.toLocaleString()} total disputes</p>
           </div>
-          <Button onClick={() => navigate("/disputes/new")} className="flex items-center gap-2">
-            <Plus size={16} />Initiate Dispute
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={handleExportCSV} disabled={csvExporting}
+              className="flex items-center gap-2 text-slate-600">
+              <Download size={15} />
+              {csvExporting ? "Exporting..." : `Export CSV${total > 0 ? ` (${total.toLocaleString()})` : ""}`}
+            </Button>
+            <Button onClick={() => navigate("/disputes/new")} className="flex items-center gap-2">
+              <Plus size={16} />Initiate Dispute
+            </Button>
+          </div>
         </div>
 
         {/* Search + Filter bar */}
