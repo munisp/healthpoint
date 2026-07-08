@@ -14,4 +14,10 @@ export const ENV = {
   keycloakRealm: process.env.KEYCLOAK_REALM ?? "healthpoint",
   keycloakClientId: process.env.KEYCLOAK_CLIENT_ID ?? "healthpoint-app",
   keycloakClientSecret: process.env.KEYCLOAK_CLIENT_SECRET ?? "placeholder-secret",
+  // ─── App public URL (used in email CTAs) ────────────────────────────────
+  appUrl: process.env.VITE_APP_URL ?? "https://healthpoint.manus.space",
+  // ─── Email notifications (Resend) ───────────────────────────────────────
+  resendApiKey: process.env.RESEND_API_KEY ?? "",
+  leadNotificationEmail: process.env.LEAD_NOTIFICATION_EMAIL ?? "team@healthpoint.io",
+  leadFromEmail: process.env.LEAD_FROM_EMAIL ?? "HealthPoint <onboarding@resend.dev>",
 };

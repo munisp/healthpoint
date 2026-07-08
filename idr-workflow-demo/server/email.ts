@@ -14,16 +14,20 @@
  */
 
 import { Resend } from "resend";
+import { ENV } from "./_core/env";
 
-const resend = process.env.RESEND_API_KEY
-  ? new Resend(process.env.RESEND_API_KEY)
-  : null;
+// Lazily initialised so the module can be imported without crashing when the
+// key is absent (graceful degradation in dev / staging environments).
+let _resend: Resend | null = null;
+function getResend(): Resend | null {
+  if (!_resend && ENV.resendApiKey) {
+    _resend = new Resend(ENV.resendApiKey);
+  }
+  return _resend;
+}
 
-const NOTIFICATION_TO =
-  process.env.LEAD_NOTIFICATION_EMAIL ?? "team@healthpoint.io";
-
-const FROM_EMAIL =
-  process.env.LEAD_FROM_EMAIL ?? "HealthPoint <onboarding@resend.dev>";
+const NOTIFICATION_TO = ENV.leadNotificationEmail;
+const FROM_EMAIL = ENV.leadFromEmail;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -153,7 +157,7 @@ function buildNewLeadHtml(lead: NewLeadEmailPayload): string {
           <!-- CTA -->
           <tr>
             <td style="padding:0 32px 32px;">
-              <a href="${process.env.VITE_APP_URL ?? "https://healthpoint.manus.space"}/admin/leads"
+              <a   href="${ENV.appUrl}/admin/leads"
                  style="display:inline-block;background:#0ea5e9;color:#ffffff;font-size:14px;font-weight:600;padding:12px 24px;border-radius:8px;text-decoration:none;">
                 View in Leads CRM →
               </a>
@@ -186,7 +190,7 @@ function buildNewLeadText(lead: NewLeadEmailPayload): string {
     lead.phone ? `Phone: ${lead.phone}` : null,
     lead.message ? `\nMessage:\n${lead.message}` : null,
     `\nLead ID: ${lead.id}`,
-    `View: ${process.env.VITE_APP_URL ?? "https://healthpoint.manus.space"}/admin/leads`,
+    `View: ${ENV.appUrl}/admin/leads`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -201,6 +205,7 @@ function buildNewLeadText(lead: NewLeadEmailPayload): string {
 export async function sendNewLeadNotification(
   lead: NewLeadEmailPayload
 ): Promise<void> {
+  const resend = getResend();
   if (!resend) {
     console.info(
       "[email] RESEND_API_KEY not set — skipping lead notification email"
@@ -209,7 +214,7 @@ export async function sendNewLeadNotification(
   }
 
   try {
-    const { error } = await resend.emails.send({
+    const { error } = await resend!.emails.send({
       from: FROM_EMAIL,
       to: [NOTIFICATION_TO],
       subject: `New HealthPoint Lead: ${lead.firstName ?? ""} ${lead.lastName ?? ""} (${roleLabel(lead.stakeholderRole)})`.trim(),
