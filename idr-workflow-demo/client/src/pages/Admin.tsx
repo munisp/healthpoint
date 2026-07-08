@@ -6,10 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { APP_LOGO, APP_TITLE } from "@/const";
+import { toast } from "sonner";
 import {
-  AlertTriangle, ArrowLeft, CheckCircle2, Clock, FileText,
-  Gavel, LogOut, RefreshCw, Scale, Search, Shield, TrendingUp,
+  AlertTriangle, ArrowLeft, Bell, CheckCircle2, Clock, FileText,
+  Gavel, Loader2, LogOut, RefreshCw, Scale, Search, Shield, TrendingUp,
 } from "lucide-react";
 
 const STATUS_TABS = [
@@ -61,6 +64,21 @@ export default function Admin() {
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 25;
+  const [showNotifComposer, setShowNotifComposer] = useState(false);
+  const [notifUserId, setNotifUserId] = useState("");
+  const [notifType, setNotifType] = useState("system");
+  const [notifMessage, setNotifMessage] = useState("");
+  const utils = trpc.useUtils();
+  const sendNotifMutation = trpc.notifications.sendNotification.useMutation({
+    onSuccess: () => {
+      toast.success("Notification sent");
+      setShowNotifComposer(false);
+      setNotifMessage("");
+      setNotifUserId("");
+      utils.notifications.list.invalidate();
+    },
+    onError: (err: { message: string }) => toast.error(err.message),
+  });
 
   const { data: stats, isLoading: statsLoading } = trpc.admin.stats.useQuery();
   const { data, isLoading, refetch, isFetching } = trpc.admin.allDisputes.useQuery({
@@ -114,9 +132,14 @@ export default function Admin() {
               <p className="text-sm text-slate-500">Platform-wide view across all parties and disputes</p>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-            <RefreshCw size={13} className={isFetching ? "animate-spin" : ""} />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setShowNotifComposer(true)}>
+              <Bell size={13} className="mr-1.5" />Send Notification
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+              <RefreshCw size={13} className={isFetching ? "animate-spin" : ""} />
+            </Button>
+          </div>
         </div>
 
         {/* KPI bar */}
@@ -251,6 +274,55 @@ export default function Admin() {
           </CardContent>
         </Card>
       </main>
+
+      {/* Notification Composer Dialog */}
+      <Dialog open={showNotifComposer} onOpenChange={setShowNotifComposer}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Bell size={18} className="text-blue-600" />Send Notification</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="text-xs font-medium text-slate-600 mb-1 block">Recipient User ID <span className="text-slate-400">(leave blank to broadcast to all users)</span></label>
+              <Input placeholder="User ID" value={notifUserId} onChange={e => setNotifUserId(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-600 mb-1 block">Notification Type</label>
+              <Select value={notifType} onValueChange={setNotifType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="deadline_warning">Deadline Warning</SelectItem>
+                  <SelectItem value="step_completed">Step Completed</SelectItem>
+                  <SelectItem value="offer_received">Offer Received</SelectItem>
+                  <SelectItem value="determination_issued">Determination Issued</SelectItem>
+                  <SelectItem value="document_uploaded">Document Uploaded</SelectItem>
+                  <SelectItem value="system">System Message</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-600 mb-1 block">Message</label>
+              <textarea
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                rows={3}
+                placeholder="Notification message content..."
+                value={notifMessage}
+                onChange={e => setNotifMessage(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNotifComposer(false)}>Cancel</Button>
+            <Button
+              onClick={() => sendNotifMutation.mutate({ userId: notifUserId.trim() || undefined, type: notifType as "deadline_warning" | "step_completed" | "offer_received" | "determination_issued" | "document_uploaded" | "system", message: notifMessage.trim() })}
+              disabled={!notifMessage.trim() || sendNotifMutation.isPending}
+            >
+              {sendNotifMutation.isPending ? <Loader2 size={14} className="animate-spin mr-1" /> : <Bell size={14} className="mr-1" />}
+              Send
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

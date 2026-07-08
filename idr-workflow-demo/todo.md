@@ -185,3 +185,31 @@
 - [x] email.ts refactored to use ENV constants (lazy Resend init, no direct process.env access)
 - [x] VITE_APP_URL wired into email CTA links via ENV.appUrl
 - [x] TypeScript: 0 errors | Tests: 17/17 passing — publish-ready
+
+## Session 18 — Production-Readiness Audit & 100/100 Fix Sprint
+
+### Critical Gaps (blocking production)
+- [x] Security: add helmet (HTTP security headers), cors (CORS policy), express-rate-limit (API rate limiting)
+- [x] Security: ENV startup validation — throw on missing KEYCLOAK_URL / JWT_SECRET in production
+- [x] Security: graceful shutdown — SIGTERM/SIGINT handlers to drain connections before exit
+- [x] Security: scheduled endpoint auth — deadlineCheck and weeklyDigest handlers need bearer token guard
+
+### Data-Flow Gaps (orphan routers / pages not wired to tRPC)
+- [x] StateBalanceBilling page: wire trpc.stateLaws.getStateInfo and trpc.stateLaws.checkCompliance calls
+- [x] ExpertReview page: wire trpc.expertReview.request and trpc.expertReview.getAnalysis calls
+- [x] Reports page: wire trpc.reports.summary call for live data instead of static mock data
+- [x] notifications.sendNotification: expose in Admin page or notification composer UI
+- [x] arbitrators.caseload: wire to IDREntityDashboard or ArbitratorDetail view
+- [x] disputes.getById: wire to DisputeDetail as a fallback when getTimeline is unavailable
+
+### UX Gaps
+- [x] ComponentShowcase page: N/A — file does not exist, no dead code
+- [x] Templates route: clean up inline component wrapper in App.tsx (use proper import)
+- [x] Home.tsx stat counters: animated counters are marketing copy (platform-wide), correctly fixed values
+- [x] All pages: loading spinners on all data-heavy pages (skeleton upgrade deferred to post-launch)
+- [x] Mobile: DashboardLayout uses shadcn SidebarProvider with PanelLeft hamburger toggle
+
+### Infrastructure Gaps
+- [x] Health check endpoint: GET /api/health returns {ok, db, version, uptime}
+- [x] Request logging: morgan added (combined format in production, dev format in development)
+- [x] Error tracking: uncaughtException and unhandledRejection handlers in server/index.ts

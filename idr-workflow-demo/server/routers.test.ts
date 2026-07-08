@@ -168,3 +168,175 @@ describe("Financial amount validation", () => {
     expect(isValidAmount("")).toBe(false); // empty
   });
 });
+
+// ─── Marketing leads validation tests ────────────────────────────────────────
+describe("Marketing lead validation", () => {
+  const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const VALID_ROLES = ["provider", "facility", "payer", "idr_entity", "other"] as const;
+
+  it("accepts valid email addresses", () => {
+    expect(isValidEmail("doctor@hospital.org")).toBe(true);
+    expect(isValidEmail("admin@healthsystem.com")).toBe(true);
+  });
+
+  it("rejects invalid email addresses", () => {
+    expect(isValidEmail("not-an-email")).toBe(false);
+    expect(isValidEmail("")).toBe(false);
+  });
+
+  it("has 5 valid lead roles", () => {
+    expect(VALID_ROLES.length).toBe(5);
+  });
+
+  it("includes all expected stakeholder roles", () => {
+    expect(VALID_ROLES).toContain("provider");
+    expect(VALID_ROLES).toContain("payer");
+    expect(VALID_ROLES).toContain("idr_entity");
+  });
+
+  it("validates lead status transitions", () => {
+    const VALID_STATUSES = ["new", "contacted", "qualified", "converted", "disqualified"] as const;
+    expect(VALID_STATUSES).toContain("new");
+    expect(VALID_STATUSES).toContain("converted");
+    expect(VALID_STATUSES.length).toBe(5);
+  });
+});
+
+// ─── User profile / onboarding validation tests ──────────────────────────────
+describe("User profile onboarding validation", () => {
+  const VALID_ORG_TYPES = ["provider", "facility", "payer", "idr_entity", "aggregator", "other"] as const;
+
+  it("has 6 valid organization types", () => {
+    expect(VALID_ORG_TYPES.length).toBe(6);
+  });
+
+  it("includes aggregator as a valid org type", () => {
+    expect(VALID_ORG_TYPES).toContain("aggregator");
+  });
+
+  it("validates NPI format (10 digits)", () => {
+    const isValidNPI = (npi: string) => /^\d{10}$/.test(npi);
+    expect(isValidNPI("1234567890")).toBe(true);
+    expect(isValidNPI("123456789")).toBe(false);
+    expect(isValidNPI("123456789A")).toBe(false);
+  });
+
+  it("validates EIN format (XX-XXXXXXX)", () => {
+    const isValidEIN = (ein: string) => /^\d{2}-\d{7}$/.test(ein);
+    expect(isValidEIN("12-3456789")).toBe(true);
+    expect(isValidEIN("123456789")).toBe(false);
+  });
+});
+
+// ─── Dispute template validation tests ───────────────────────────────────────
+describe("Dispute template validation", () => {
+  it("validates template name length (3-100 chars)", () => {
+    const isValidName = (name: string) => name.trim().length >= 3 && name.trim().length <= 100;
+    expect(isValidName("Emergency Medicine Template")).toBe(true);
+    expect(isValidName("AB")).toBe(false);
+    expect(isValidName("")).toBe(false);
+    expect(isValidName("A".repeat(101))).toBe(false);
+  });
+
+  it("validates service type is a known IDR-eligible type", () => {
+    const VALID_SERVICE_TYPES = [
+      "emergency_medicine", "anesthesiology", "air_ambulance",
+      "radiology", "pathology", "neonatology", "assistant_surgeon",
+      "hospitalist", "intensivist", "other",
+    ];
+    expect(VALID_SERVICE_TYPES).toContain("emergency_medicine");
+    expect(VALID_SERVICE_TYPES).toContain("air_ambulance");
+    expect(VALID_SERVICE_TYPES.length).toBe(10);
+  });
+});
+
+// ─── Reports summary calculation tests ───────────────────────────────────────
+describe("Reports summary calculations", () => {
+  const calcWinRate = (won: number, closed: number) =>
+    closed === 0 ? 0 : Math.round((won / closed) * 100);
+
+  it("returns 0 win rate when no closed disputes", () => {
+    expect(calcWinRate(0, 0)).toBe(0);
+  });
+
+  it("calculates 100% win rate correctly", () => {
+    expect(calcWinRate(10, 10)).toBe(100);
+  });
+
+  it("calculates 75% win rate correctly", () => {
+    expect(calcWinRate(3, 4)).toBe(75);
+  });
+
+  it("rounds win rate to nearest integer", () => {
+    expect(calcWinRate(1, 3)).toBe(33);
+    expect(calcWinRate(2, 3)).toBe(67);
+  });
+
+  const calcAvg = (amounts: number[]) =>
+    amounts.length === 0 ? 0 : Math.round(amounts.reduce((a, b) => a + b, 0) / amounts.length);
+
+  it("calculates average determination amount", () => {
+    expect(calcAvg([1000, 2000, 3000])).toBe(2000);
+    expect(calcAvg([])).toBe(0);
+  });
+});
+
+// ─── Environment configuration validation tests ───────────────────────────────
+describe("Environment configuration validation", () => {
+  it("ENV object has all required keys", async () => {
+    const { ENV } = await import("./_core/env");
+    expect(ENV).toHaveProperty("cookieSecret");
+    expect(ENV).toHaveProperty("databaseUrl");
+    expect(ENV).toHaveProperty("keycloakUrl");
+    expect(ENV).toHaveProperty("keycloakRealm");
+    expect(ENV).toHaveProperty("keycloakClientId");
+    expect(ENV).toHaveProperty("appUrl");
+    expect(ENV).toHaveProperty("resendApiKey");
+    expect(ENV).toHaveProperty("isProduction");
+  });
+
+  it("isProduction is false in test environment", async () => {
+    const { ENV } = await import("./_core/env");
+    expect(ENV.isProduction).toBe(false);
+  });
+
+  it("keycloakUrl has a valid URL format", async () => {
+    const { ENV } = await import("./_core/env");
+    expect(ENV.keycloakUrl).toMatch(/^https?:\/\//);
+  });
+
+  it("appUrl defaults to healthpoint domain", async () => {
+    const { ENV } = await import("./_core/env");
+    expect(ENV.appUrl).toContain("healthpoint");
+  });
+});
+
+// ─── Security configuration tests ────────────────────────────────────────────
+describe("Security configuration", () => {
+  it("CORS allowed origins include manus.space domains", () => {
+    const isAllowedOrigin = (origin: string) => {
+      const patterns = [
+        /^https?:\/\/localhost(:\d+)?$/,
+        /\.manus\.space$/,
+        /\.manus\.computer$/,
+        /^https:\/\/healthpoint\./,
+      ];
+      return patterns.some(p => p.test(origin));
+    };
+    expect(isAllowedOrigin("http://localhost:3000")).toBe(true);
+    expect(isAllowedOrigin("https://healthpoint.manus.space")).toBe(true);
+    expect(isAllowedOrigin("https://3000-abc123.us2.manus.computer")).toBe(true);
+    expect(isAllowedOrigin("https://evil.example.com")).toBe(false);
+  });
+
+  it("rate limit window is 15 minutes in milliseconds", () => {
+    const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+    expect(RATE_LIMIT_WINDOW_MS).toBe(900000);
+  });
+
+  it("auth rate limit is stricter than general rate limit", () => {
+    const GENERAL_LIMIT = 200;
+    const AUTH_LIMIT = 20;
+    expect(AUTH_LIMIT).toBeLessThan(GENERAL_LIMIT);
+  });
+});

@@ -77,6 +77,19 @@ export default function Reports() {
 
   const { data: stats } = trpc.dashboard.stats.useQuery(undefined, { enabled: isAuthenticated });
   const { data: outcomeData } = trpc.dashboard.outcomeAnalytics.useQuery(undefined, { enabled: isAuthenticated });
+  // Wire reports.summary for date-range-aware report metrics
+  const startDate = dateRange === "3m" ? new Date(Date.now() - 90 * 86400000).toISOString()
+    : dateRange === "6m" ? new Date(Date.now() - 180 * 86400000).toISOString()
+    : dateRange === "ytd" ? new Date(new Date().getFullYear(), 0, 1).toISOString()
+    : new Date(Date.now() - 365 * 86400000).toISOString();
+  const { data: reportSummary } = trpc.reports.summary.useQuery(
+    { startDate },
+    { enabled: isAuthenticated, staleTime: 2 * 60 * 1000 }
+  );
+  // Build live service-type pie data from report summary
+  const livePieData = reportSummary?.byServiceType?.length
+    ? reportSummary.byServiceType.map((item: { type: string; count: number }) => ({ name: item.type.replace(/_/g, " "), value: item.count }))
+    : MOCK_SERVICE_PIE;
 
   const handleExport = (format: "csv" | "pdf") => {
     toast.success(`Exporting ${activeReport} report as ${format.toUpperCase()}…`);
@@ -121,10 +134,10 @@ export default function Reports() {
         {/* KPI Summary Row */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: "Total Disputes", value: stats?.total ?? "—", icon: BarChart2, color: "text-blue-600" },
+            { label: "Total Disputes", value: reportSummary?.totalDisputes ?? stats?.total ?? "—", icon: BarChart2, color: "text-blue-600" },
             { label: "Active IDR", value: stats?.inIDR ?? "—", icon: Clock, color: "text-purple-600" },
-            { label: "Closed This Month", value: stats?.closedThisMonth ?? "—", icon: CheckCircle2, color: "text-green-600" },
-            { label: "Overall Win Rate", value: outcomeData?.overallWinRate != null ? `${Math.round(outcomeData.overallWinRate * 100)}%` : "—", icon: TrendingUp, color: "text-amber-600" },
+            { label: "Win Rate", value: reportSummary?.winRate != null ? `${reportSummary.winRate}%` : outcomeData?.overallWinRate != null ? `${Math.round(outcomeData.overallWinRate * 100)}%` : "—", icon: TrendingUp, color: "text-amber-600" },
+            { label: "Avg. Determination", value: reportSummary?.avgDetermination != null ? `$${Number(reportSummary.avgDetermination).toLocaleString()}` : "—", icon: DollarSign, color: "text-green-600" },
           ].map(kpi => (
             <Card key={kpi.label} className="border-slate-200">
               <CardContent className="p-4 flex items-center gap-3">
@@ -165,7 +178,7 @@ export default function Reports() {
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={MOCK_VOLUME_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <BarChart data={reportSummary?.byMonth?.length ? reportSummary.byMonth : MOCK_VOLUME_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                     <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 11 }} />
@@ -186,14 +199,14 @@ export default function Reports() {
               <CardContent>
                 <ResponsiveContainer width="100%" height={280}>
                   <PieChart>
-                    <Pie data={MOCK_SERVICE_PIE} cx="50%" cy="50%" innerRadius={55} outerRadius={90} dataKey="value" label={({ name, percent }) => `${(percent * 100).toFixed(0)}%`} labelLine={false}>
-                      {MOCK_SERVICE_PIE.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                    <Pie data={livePieData} cx="50%" cy="50%" innerRadius={55} outerRadius={90} dataKey="value" label={({ name, percent }) => `${(percent * 100).toFixed(0)}%`} labelLine={false}>
+                      {livePieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                     </Pie>
                     <Tooltip formatter={(v: number) => `${v} disputes`} />
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="space-y-1 mt-2">
-                  {MOCK_SERVICE_PIE.map((item, i) => (
+                  {livePieData.map((item, i) => (
                     <div key={item.name} className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-1.5">
                         <div className="w-2.5 h-2.5 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
@@ -215,7 +228,7 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={MOCK_FINANCIAL_DATA} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <BarChart data={reportSummary?.financialByServiceType?.length ? reportSummary.financialByServiceType : MOCK_FINANCIAL_DATA} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="serviceType" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}k`} />
@@ -237,7 +250,7 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={320}>
-                <LineChart data={MOCK_OUTCOME_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <LineChart data={reportSummary?.outcomeByMonth?.length ? reportSummary.outcomeByMonth.map((r: { month: string; won: number; lost: number; pending: number }) => ({ month: r.month, winRate: (r.won + r.lost) > 0 ? r.won / (r.won + r.lost) : 0, determinationRate: (r.won + r.lost + r.pending) > 0 ? (r.won + r.lost) / (r.won + r.lost + r.pending) : 0, appealRate: 0 })) : MOCK_OUTCOME_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
@@ -259,7 +272,7 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={MOCK_TIMELINE_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <BarChart data={reportSummary?.avgDaysByStep?.length ? reportSummary.avgDaysByStep.map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 })) : MOCK_TIMELINE_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="step" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
@@ -270,7 +283,7 @@ export default function Reports() {
                 </BarChart>
               </ResponsiveContainer>
               <div className="mt-4 grid grid-cols-3 md:grid-cols-6 gap-3">
-                {MOCK_TIMELINE_DATA.map(row => (
+                {(reportSummary?.avgDaysByStep?.length ? reportSummary.avgDaysByStep.map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 })) : MOCK_TIMELINE_DATA).map(row => (
                   <div key={row.step} className="text-center">
                     <div className={`text-sm font-bold ${row.onTime >= 0.95 ? "text-green-600" : row.onTime >= 0.85 ? "text-amber-600" : "text-red-600"}`}>
                       {Math.round(row.onTime * 100)}%

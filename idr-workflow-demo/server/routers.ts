@@ -27,6 +27,7 @@ import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
 import { eq } from "drizzle-orm";
 import { dispatchNotification } from "./notifications";
+import { users } from "../drizzle/schema";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
 
@@ -537,6 +538,26 @@ export const appRouter = router({
         const notifs = await listNotifications(ctx.user.id, true);
         await Promise.all(notifs.map(n => markNotificationRead(n.id)));
         return { count: notifs.length };
+      }),
+    sendNotification: protectedProcedure
+      .input(z.object({
+        userId: z.string().optional(), // omit to broadcast to all users
+        type: z.enum(["deadline_warning","step_completed","offer_received","determination_issued","document_uploaded","system"]),
+        message: z.string().min(1).max(500),
+        disputeId: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+        if (input.userId) {
+          await createNotification({ userId: input.userId, type: input.type, message: input.message, disputeId: input.disputeId ?? undefined } as any);
+          return { sent: 1 };
+        }
+        // Broadcast: get all users from DB and send to each
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const allUsers = await db.select({ id: users.id }).from(users);
+        await Promise.all(allUsers.map(u => createNotification({ userId: u.id, type: input.type, message: input.message, disputeId: input.disputeId ?? undefined } as any)));
+        return { sent: allUsers.length };
       }),
   }),
 
@@ -1515,18 +1536,79 @@ export const appRouter = router({
   reports: router({
     summary: protectedProcedure
       .input(z.object({ startDate: z.string().optional(), endDate: z.string().optional() }))
-      .query(async ({ ctx }) => {
+      .query(async ({ ctx, input }) => {
         const db = await getDb();
-        if (!db) return { totalDisputes: 0, totalAmount: 0, avgDetermination: 0, winRate: 0, avgDaysToClose: 0, byServiceType: [], byMonth: [], topArbitrators: [] };
+        if (!db) return { totalDisputes: 0, totalAmount: 0, avgDetermination: 0, winRate: 0, avgDaysToClose: 0, byServiceType: [], byMonth: [], financialByServiceType: [], topArbitrators: [] };
         const { disputes } = await import("../drizzle/schema");
-        const allDisputes = await db.select().from(disputes).where(eq(disputes.createdBy, ctx.user.id));
-        const closed = allDisputes.filter(d => d.status === "closed");
+        let query = db.select().from(disputes).where(eq(disputes.createdBy, ctx.user.id));
+        const allDisputes = await query;
+        // Apply date filter
+        const startMs = input.startDate ? new Date(input.startDate).getTime() : 0;
+        const filtered = startMs > 0 ? allDisputes.filter(d => (d.createdAt?.getTime() ?? 0) >= startMs) : allDisputes;
+        const closed = filtered.filter(d => d.status === "closed");
         const won = closed.filter((d: typeof allDisputes[0]) => Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0));
-        const totalAmount = allDisputes.reduce((s, d) => s + Number(d.billedAmount ?? 0), 0);
+        const totalAmount = filtered.reduce((s, d) => s + Number(d.billedAmount ?? 0), 0);
         const avgDetermination = closed.length ? closed.reduce((s: number, d: typeof allDisputes[0]) => s + Number(d.determinationAmount ?? 0), 0) / closed.length : 0;
         const avgDaysToClose = closed.length ? closed.reduce((s: number, d: typeof allDisputes[0]) => { const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); return s + ms / 86400000; }, 0) / closed.length : 0;
-        const byServiceType = Object.entries(allDisputes.reduce((acc: Record<string, number>, d: typeof allDisputes[0]) => { const k = d.serviceType ?? "unknown"; acc[k] = (acc[k] ?? 0) + 1; return acc; }, {} as Record<string, number>)).map(([type, count]) => ({ type, count }));
-        return { totalDisputes: allDisputes.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth: [], topArbitrators: [] };
+        // byServiceType: count per type
+        const byServiceType = Object.entries(filtered.reduce((acc: Record<string, number>, d: typeof allDisputes[0]) => { const k = d.serviceType ?? "unknown"; acc[k] = (acc[k] ?? 0) + 1; return acc; }, {} as Record<string, number>)).map(([type, count]) => ({ type, count }));
+        // financialByServiceType: avg billed/qpa/determination per service type
+        const finMap: Record<string, { billed: number[]; qpa: number[]; det: number[] }> = {};
+        for (const d of filtered) {
+          const k = d.serviceType ?? "unknown";
+          if (!finMap[k]) finMap[k] = { billed: [], qpa: [], det: [] };
+          finMap[k].billed.push(Number(d.billedAmount ?? 0));
+          finMap[k].qpa.push(Number(d.qpaAmount ?? 0));
+          finMap[k].det.push(Number(d.determinationAmount ?? 0));
+        }
+        const financialByServiceType = Object.entries(finMap).map(([serviceType, vals]) => ({
+          serviceType: serviceType.replace(/_/g, " "),
+          avgBilled: vals.billed.length ? Math.round(vals.billed.reduce((a, b) => a + b, 0) / vals.billed.length) : 0,
+          avgQPA: vals.qpa.length ? Math.round(vals.qpa.reduce((a, b) => a + b, 0) / vals.qpa.length) : 0,
+          avgDetermination: vals.det.filter(v => v > 0).length ? Math.round(vals.det.filter(v => v > 0).reduce((a, b) => a + b, 0) / vals.det.filter(v => v > 0).length) : 0,
+        }));
+        // byMonth: group by month label
+        const monthMap: Record<string, { open_negotiation: number; idr_active: number; closed: number; ineligible: number }> = {};
+        const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        for (const d of filtered) {
+          const dt = d.createdAt ?? new Date();
+          const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`;
+          if (!monthMap[key]) monthMap[key] = { open_negotiation: 0, idr_active: 0, closed: 0, ineligible: 0 };
+          if (d.status === "closed") monthMap[key].closed++;
+          else if (d.status === "ineligible") monthMap[key].ineligible++;
+          else if (["idr_initiated","entity_selected","offer_submitted","determination_issued"].includes(d.status ?? "")) monthMap[key].idr_active++;
+          else monthMap[key].open_negotiation++;
+        }
+        const byMonth = Object.entries(monthMap).map(([month, counts]) => ({ month: month.split(" ")[0], ...counts }));
+        // outcomeByMonth: win/loss/pending per month for outcome trend chart
+        const outcomeMap: Record<string, { month: string; won: number; lost: number; pending: number }> = {};
+        for (const d of filtered) {
+          const dt = d.createdAt ?? new Date();
+          const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`;
+          const label = MONTHS[dt.getMonth()];
+          if (!outcomeMap[key]) outcomeMap[key] = { month: label, won: 0, lost: 0, pending: 0 };
+          if (d.status === "closed") {
+            if (Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0)) outcomeMap[key].won++;
+            else outcomeMap[key].lost++;
+          } else {
+            outcomeMap[key].pending++;
+          }
+        }
+        const outcomeByMonth = Object.values(outcomeMap);
+        // avgDaysByStep: average days spent at each IDR step
+        const IDR_STEPS = ["STEP_1","STEP_2","STEP_3","STEP_4","STEP_5","STEP_6","STEP_7","STEP_8","STEP_9","STEP_10","STEP_11","STEP_12","STEP_13","STEP_14","STEP_15","STEP_16","STEP_17","STEP_18","STEP_19"] as const;
+        const stepDayMap: Record<string, number[]> = {};
+        for (const d of filtered) {
+          const step = d.currentStep ?? "STEP_1";
+          if (!stepDayMap[step]) stepDayMap[step] = [];
+          const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now());
+          stepDayMap[step].push(ms / 86400000);
+        }
+        const avgDaysByStep = IDR_STEPS.slice(0, 10).map(step => ({
+          step: step.replace("STEP_", "Step "),
+          avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a, b) => a + b, 0) / stepDayMap[step].length) : 0,
+        }));
+        return { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
       }),
   }),
 });
