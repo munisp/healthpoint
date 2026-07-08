@@ -897,6 +897,7 @@ export async function listAllCMSDrafts(): Promise<CMSDraft[]> {
 // ─── EMR Connection helpers ───────────────────────────────────────────────────
 import {
   emrConnections, EMRConnection, InsertEMRConnection,
+  emrSyncLogs, InsertEMRSyncLog,
 } from "../drizzle/schema";
 
 export async function createEMRConnection(data: InsertEMRConnection): Promise<EMRConnection> {
@@ -966,4 +967,23 @@ export async function deleteEMRConnection(id: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.delete(emrConnections).where(eq(emrConnections.id, id));
+}
+
+// ─── EMR Sync Log helpers ─────────────────────────────────────────────────────
+
+export async function createEMRSyncLog(entry: InsertEMRSyncLog): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(emrSyncLogs).values(entry);
+}
+
+export async function listEMRSyncLogs(connectionId: string, limit = 50) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(emrSyncLogs)
+    .where(eq(emrSyncLogs.connectionId, connectionId))
+    .orderBy(desc(emrSyncLogs.createdAt))
+    .limit(limit);
 }

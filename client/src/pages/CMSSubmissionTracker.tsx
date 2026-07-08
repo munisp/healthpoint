@@ -208,6 +208,80 @@ export default function CMSSubmissionTracker() {
     });
   };
 
+  // ── AI Auto-Fix ──────────────────────────────────────────────────────────────
+  const [autoFixResult, setAutoFixResult] = useState<{
+    fixesApplied: Array<{ code: string; field: string | null; fix: string }>;
+    unfixableIssues: Array<{ code: string; field: string | null; reason: string }>;
+    fixCount: number;
+    unfixableCount: number;
+    summary: string;
+  } | null>(null);
+  const [autoFixingId, setAutoFixingId] = useState<string | null>(null);
+
+  const autoFixMutation = trpc.ai.autoFixCMSSubmission.useMutation({
+    onSuccess: (result, variables) => {
+      setAutoFixingId(null);
+      setAutoFixResult(result);
+      // Patch the draft's formFields with the fixed values
+      if (result.fixCount > 0) {
+        setDrafts((prev) =>
+          prev.map((d) => {
+            if (d.disputeId !== selectedDraftId) return d;
+            return {
+              ...d,
+              draft: {
+                ...d.draft,
+                formFields: { ...d.draft.formFields, ...(result.patchedSubmission as Record<string, string>) },
+                submissionNarrative:
+                  (result.patchedSubmission.submission_narrative as string) ?? d.draft.submissionNarrative,
+              },
+            };
+          })
+        );
+        // Clear old validation so user re-runs it on the patched draft
+        setValidationResult(null);
+        toast.success(`Auto-fix applied ${result.fixCount} correction${result.fixCount !== 1 ? "s" : ""}. Re-run validation to confirm.`);
+      } else {
+        toast.warning("No automatic fixes could be applied. Manual corrections are required.");
+      }
+    },
+    onError: (err) => {
+      setAutoFixingId(null);
+      toast.error(`Auto-fix failed: ${err.message}`);
+    },
+  });
+
+  const runAutoFix = (draft: CMSDraft) => {
+    if (!validationResult) return;
+    setAutoFixingId(draft.disputeId);
+    setAutoFixResult(null);
+    const ff = draft.draft.formFields;
+    autoFixMutation.mutate({
+      submission: {
+        initiating_party_name: ff.initiatingParty ?? ff.initiating_party_name ?? "",
+        initiating_party_type: ff.initiatingPartyType ?? ff.initiating_party_type ?? "provider",
+        responding_party_name: ff.respondingParty ?? ff.responding_party_name ?? "",
+        responding_party_type: ff.respondingPartyType ?? ff.responding_party_type ?? "payer",
+        service_type: (draft.serviceType ?? "emergency_medicine").toLowerCase().replace(/ /g, "_"),
+        service_date: ff.serviceDate ?? ff.service_date ?? new Date().toISOString().split("T")[0],
+        patient_state: ff.patientState ?? ff.patient_state ?? "NY",
+        facility_state: ff.facilityState ?? ff.facility_state ?? "NY",
+        billed_amount: parseFloat(String(ff.billedAmount ?? draft.billedAmount ?? "0").replace(/[^0-9.]/g, "")) || 0,
+        qpa_amount: parseFloat(String(ff.qpaAmount ?? ff.qpa_amount ?? "0").replace(/[^0-9.]/g, "")) || 0,
+        initiating_offer: parseFloat(String(ff.initiatingOffer ?? ff.initiating_offer ?? "0").replace(/[^0-9.]/g, "")) || 0,
+        open_negotiation_start: ff.openNegotiationStart ?? ff.open_negotiation_start ?? "",
+        open_negotiation_end: ff.openNegotiationEnd ?? ff.open_negotiation_end ?? "",
+        idr_initiation_date: ff.idrInitiationDate ?? ff.idr_initiation_date ?? "",
+        attached_documents: draft.draft.attachmentChecklist.filter(a => a.status === "required" || a.status === "attached").map(a => a.item),
+        submission_narrative: draft.draft.submissionNarrative ?? "",
+        qpa_methodology: ff.qpaMethodology ?? ff.qpa_methodology,
+        idr_entity_name: ff.idrEntityName ?? ff.idr_entity_name,
+      },
+      issues: validationResult.issues,
+      remediation_plan: validationResult.remediation_plan,
+    });
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     toast.success("Copied to clipboard");
@@ -584,6 +658,68 @@ export default function CMSSubmissionTracker() {
                               {validationResult.remediation_plan.map((step, i) => <li key={i}>{step}</li>)}
                             </ol>
                           </div>
+                        )}
+                        {/* Auto-Fix Button */}
+                        {(validationResult.blocking_count > 0 || validationResult.warning_count > 0) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full border-orange-300 text-orange-700 hover:bg-orange-50 dark:hover:bg-orange-950/20 font-medium"
+                            disabled={autoFixingId === selectedDraft.disputeId}
+                            onClick={() => runAutoFix(selectedDraft)}
+                          >
+                            {autoFixingId === selectedDraft.disputeId
+                              ? <><Loader2 size={12} className="mr-1.5 animate-spin" />Applying AI fixes…</>
+                              : <>⚡ AI Auto-Fix — Apply {validationResult.blocking_count + validationResult.warning_count} Suggested Remediation{validationResult.blocking_count + validationResult.warning_count !== 1 ? "s" : ""}</>}
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {/* Auto-Fix Result Card */}
+                    {autoFixResult && selectedDraft.disputeId === selectedDraftId && (
+                      <div className="rounded-md border border-orange-200 bg-orange-50 dark:bg-orange-950/20 p-3 text-xs space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-orange-700 dark:text-orange-300 font-semibold">⚡ Auto-Fix Report</span>
+                          <Badge variant="outline" className="text-xs border-orange-300 text-orange-700">
+                            {autoFixResult.fixCount} fixed
+                          </Badge>
+                          {autoFixResult.unfixableCount > 0 && (
+                            <Badge variant="outline" className="text-xs border-red-300 text-red-700">
+                              {autoFixResult.unfixableCount} manual
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-muted-foreground">{autoFixResult.summary}</p>
+                        {autoFixResult.fixesApplied.length > 0 && (
+                          <div>
+                            <p className="font-medium text-green-700 dark:text-green-300 mb-1">Applied fixes:</p>
+                            <ul className="space-y-0.5">
+                              {autoFixResult.fixesApplied.map((f, i) => (
+                                <li key={i} className="flex gap-1.5 text-green-700 dark:text-green-300">
+                                  <span className="shrink-0">✓</span>
+                                  <span><strong>[{f.code}]</strong> {f.fix}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {autoFixResult.unfixableIssues.length > 0 && (
+                          <div>
+                            <p className="font-medium text-red-700 dark:text-red-300 mb-1">Requires manual correction:</p>
+                            <ul className="space-y-0.5">
+                              {autoFixResult.unfixableIssues.map((f, i) => (
+                                <li key={i} className="flex gap-1.5 text-red-700 dark:text-red-300">
+                                  <span className="shrink-0">✗</span>
+                                  <span><strong>[{f.code}]</strong> {f.reason}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {autoFixResult.fixCount > 0 && (
+                          <p className="text-orange-700 dark:text-orange-300 font-medium">
+                            → Draft fields have been patched. Click “✓ Validate” to re-run the 5-layer validation on the updated submission.
+                          </p>
                         )}
                       </div>
                     )}
