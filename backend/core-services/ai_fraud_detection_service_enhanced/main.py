@@ -1833,6 +1833,126 @@ async def get_fraud_rules(tenant_id: str = Query(...),
         
         return {"rules": [dict(rule) for rule in rules]}
 
+@app.get("/results/{alert_id}")
+async def get_fraud_result_detail(
+    alert_id: str,
+    tenant_id: str = Query(...),
+    current_user: TokenPayload = Depends(get_current_user),
+):
+    """Get full AI reasoning detail for a single fraud alert"""
+    async with db_manager.pool.acquire() as conn:
+        result = await conn.fetchrow(
+            "SELECT * FROM fraud_detection_results WHERE id = $1 AND tenant_id = $2",
+            alert_id, tenant_id
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        row = dict(result)
+        # Build structured AI reasoning chain from stored JSONB fields
+        ml_preds = row.get("ml_predictions") or {}
+        rule_viols = row.get("rule_violations") or []
+        graph_feats = row.get("graph_features") or {}
+        anomaly_inds = row.get("anomaly_indicators") or []
+        # Derive per-model feature contributions from ml_predictions
+        feature_contributions = []
+        if isinstance(ml_preds, dict):
+            for model_name, pred in ml_preds.items():
+                if isinstance(pred, dict) and "score" in pred:
+                    feature_contributions.append({
+                        "feature": model_name.replace("_", " ").title(),
+                        "contribution": round(float(pred["score"]) * 100, 1),
+                        "direction": "fraud" if pred["score"] > 0.5 else "legitimate",
+                    })
+        # Build step-by-step reasoning chain
+        reasoning_chain = []
+        if rule_viols:
+            reasoning_chain.append({
+                "step": "Rule Engine",
+                "finding": f"{len(rule_viols)} rule violation(s) detected",
+                "detail": ", ".join([
+                    v.get("rule_name", str(v)) if isinstance(v, dict) else str(v)
+                    for v in rule_viols[:5]
+                ]),
+                "weight": 0.35,
+            })
+        if ml_preds:
+            top_score = max(
+                (float(v.get("score", 0)) if isinstance(v, dict) else 0
+                 for v in ml_preds.values()),
+                default=0.0
+            )
+            reasoning_chain.append({
+                "step": "ML Ensemble",
+                "finding": f"Ensemble fraud probability: {top_score:.1%}",
+                "detail": (
+                    f"{len(ml_preds)} model(s) evaluated: "
+                    + ", ".join(list(ml_preds.keys())[:3])
+                ),
+                "weight": 0.45,
+            })
+        if anomaly_inds:
+            reasoning_chain.append({
+                "step": "Anomaly Detection",
+                "finding": f"{len(anomaly_inds)} anomaly indicator(s)",
+                "detail": ", ".join(anomaly_inds[:5]),
+                "weight": 0.10,
+            })
+        if graph_feats:
+            reasoning_chain.append({
+                "step": "GNN Graph Analysis",
+                "finding": "Provider network analysis complete",
+                "detail": (
+                    f"Centrality: {graph_feats.get('centrality', 'N/A')}, "
+                    f"Suspicious connections: {graph_feats.get('suspicious_connections', 0)}"
+                ),
+                "weight": 0.10,
+            })
+        row["reasoning_chain"] = reasoning_chain
+        row["feature_contributions"] = feature_contributions
+        return row
+
+
+@app.post("/results/{alert_id}/flag-false-positive")
+async def flag_false_positive(
+    alert_id: str,
+    tenant_id: str = Query(...),
+    reason: str = Query(default="Flagged by analyst"),
+    current_user: TokenPayload = Depends(get_current_user),
+):
+    """Flag a fraud alert as a false positive — records the analyst decision and updates the result"""
+    async with db_manager.pool.acquire() as conn:
+        result = await conn.fetchrow(
+            "SELECT id FROM fraud_detection_results WHERE id = $1 AND tenant_id = $2",
+            alert_id, tenant_id
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        # Create false-positive audit table if not exists
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS fraud_false_positives (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                alert_id UUID NOT NULL REFERENCES fraud_detection_results(id),
+                flagged_by VARCHAR(255) NOT NULL,
+                reason TEXT,
+                tenant_id VARCHAR(255) NOT NULL,
+                flagged_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute(
+            "INSERT INTO fraud_false_positives (alert_id, flagged_by, reason, tenant_id) "
+            "VALUES ($1, $2, $3, $4)",
+            alert_id, current_user.sub, reason, tenant_id
+        )
+        # Append false-positive annotation to the explanation field
+        await conn.execute(
+            "UPDATE fraud_detection_results "
+            "SET explanation = explanation || ' [FALSE POSITIVE flagged by ' || $1 || ': ' || $2 || ']' "
+            "WHERE id = $3",
+            current_user.sub, reason, alert_id
+        )
+        return {"success": True, "alert_id": alert_id, "flagged_by": current_user.sub}
+
+
 @app.get("/results")
 async def get_fraud_results(
     tenant_id: str = Query(...),

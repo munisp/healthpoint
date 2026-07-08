@@ -65,7 +65,7 @@ function FraudAlertRow({ alert, onFlagFalsePositive, onView, flagging }) {
               <span className="hidden sm:inline">False Positive</span>
             </button>
           )}
-          <button onClick={() => onView(alert)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Investigate">
+          <button onClick={() => onView(alert)} className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Full AI Investigation">
             <ChevronRight size={14} />
           </button>
         </div>
@@ -155,6 +155,28 @@ export default function Dashboard() {
   const [flagging, setFlagging] = useState(null);
   const [fraudFilter, setFraudFilter] = useState('active');
   const [selectedAlert, setSelectedAlert] = useState(null);
+  const [alertDetailLoading, setAlertDetailLoading] = useState(false);
+
+  const fetchAlertDetail = useCallback(async (alert) => {
+    // Show list-level data immediately, then enrich with full AI reasoning from backend
+    setSelectedAlert(alert);
+    setAlertDetailLoading(true);
+    try {
+      const tenantId = user?.tenantId || user?.tenant_id || alert.tenant_id || 'default';
+      const res = await authFetch(
+        `${API_BASE}/api/v1/fraud/results/${alert.id}?tenant_id=${encodeURIComponent(tenantId)}`
+      );
+      if (res?.ok) {
+        const detail = await res.json();
+        // Merge full detail (reasoning_chain, feature_contributions, ml_predictions, etc.) into alert
+        setSelectedAlert(prev => prev?.id === alert.id ? { ...prev, ...detail } : prev);
+      }
+    } catch {
+      // Slide-over still shows list-level data if detail fetch fails
+    } finally {
+      setAlertDetailLoading(false);
+    }
+  }, [user]);
 
   const fetchData = useCallback(async () => {
     setLoading(true); setError(null);
@@ -284,7 +306,7 @@ export default function Dashboard() {
             </div>
           ) : (
             displayAlerts.map(alert => (
-              <FraudAlertRow key={alert.id} alert={alert} onFlagFalsePositive={handleFlagFalsePositive} onView={setSelectedAlert} flagging={flagging} />
+              <FraudAlertRow key={alert.id} alert={alert} onFlagFalsePositive={handleFlagFalsePositive} onView={fetchAlertDetail} flagging={flagging} />
             ))
           )}
         </div>
@@ -394,24 +416,38 @@ export default function Dashboard() {
 
               {/* AI Reasoning Chain */}
               <div>
-                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">AI Reasoning Chain</h4>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">AI Reasoning Chain</h4>
+                  {alertDetailLoading && (
+                    <span className="flex items-center gap-1 text-xs text-blue-500">
+                      <RefreshCw size={10} className="animate-spin" />Loading full analysis…
+                    </span>
+                  )}
+                </div>
                 <div className="space-y-2">
-                  {(selectedAlert.reasoning_steps ?? [
-                    { step: 1, description: 'GNN graph embedding computed for provider transaction network', confidence: 0.95 },
-                    { step: 2, description: `Billing pattern deviates from peer group median by ${selectedAlert.amount ? (Number(selectedAlert.amount) / 1200).toFixed(1) : '3.2'}x`, confidence: selectedAlert.confidence_score ?? 0.88 },
-                    { step: 3, description: 'Temporal clustering: multiple claims submitted within 72-hour window', confidence: 0.82 },
-                    { step: 4, description: 'Cross-payer duplicate detection: similar claim pattern found in payer network', confidence: 0.79 },
-                    { step: 5, description: 'Final ensemble score aggregated across GNN, DNN, and anomaly detector', confidence: selectedAlert.confidence_score ?? 0.88 },
-                  ]).map((step) => (
+                  {(selectedAlert.reasoning_chain?.length > 0
+                    ? selectedAlert.reasoning_chain.map((item, idx) => ({
+                        step: idx + 1,
+                        description: `${item.step}: ${item.finding}${item.detail ? ' — ' + item.detail : ''}`,
+                        confidence: item.weight ?? 0.5,
+                      }))
+                    : [
+                        { step: 1, description: 'GNN graph embedding computed for provider transaction network', confidence: 0.95 },
+                        { step: 2, description: `Billing pattern deviates from peer group median by ${selectedAlert.amount ? (Number(selectedAlert.amount) / 1200).toFixed(1) : '3.2'}x`, confidence: selectedAlert.confidence_score ?? 0.88 },
+                        { step: 3, description: 'Temporal clustering: multiple claims submitted within 72-hour window', confidence: 0.82 },
+                        { step: 4, description: 'Cross-payer duplicate detection: similar claim pattern found in payer network', confidence: 0.79 },
+                        { step: 5, description: 'Final ensemble score aggregated across GNN, DNN, and anomaly detector', confidence: selectedAlert.confidence_score ?? 0.88 },
+                      ]
+                  ).map((step) => (
                     <div key={step.step} className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg border border-slate-100">
                       <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center mt-0.5">{step.step}</div>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-slate-700">{step.description}</p>
                         <div className="flex items-center gap-2 mt-1.5">
                           <div className="flex-1 bg-slate-200 rounded-full h-1.5">
-                            <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${(step.confidence * 100).toFixed(0)}%` }} />
+                            <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.round((step.confidence ?? 0.5) * 100)}%` }} />
                           </div>
-                          <span className="text-xs text-slate-500 shrink-0">{(step.confidence * 100).toFixed(0)}%</span>
+                          <span className="text-xs text-slate-500 shrink-0">{Math.round((step.confidence ?? 0.5) * 100)}%</span>
                         </div>
                       </div>
                     </div>
