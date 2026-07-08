@@ -11,8 +11,12 @@ export function useAuth() {
   });
 
   const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       utils.auth.me.setData(undefined, null);
+      // Redirect to Keycloak end-session endpoint to fully sign out
+      if (data?.logoutUrl) {
+        window.location.href = data.logoutUrl;
+      }
     },
   });
 
@@ -24,6 +28,8 @@ export function useAuth() {
         error instanceof TRPCClientError &&
         error.data?.code === "UNAUTHORIZED"
       ) {
+        // Already logged out — redirect to Keycloak logout anyway
+        window.location.href = "/api/auth/logout";
         return;
       }
       throw error;
@@ -34,9 +40,10 @@ export function useAuth() {
   }, [logoutMutation, utils]);
 
   const state = useMemo(() => {
+    // Store user info for quick access across components
     localStorage.setItem(
-      "manus-runtime-user-info",
-      JSON.stringify(meQuery.data)
+      "healthpoint-user-info",
+      JSON.stringify(meQuery.data ?? null)
     );
     return {
       user: meQuery.data ?? null,

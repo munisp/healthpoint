@@ -135,3 +135,18 @@
 - [x] Marketing site: testimonials / social proof section (pricing section)
 - [x] Marketing site: pricing / CTA section
 - [x] Marketing site: footer with regulatory references and links
+
+## Session 13 — Keycloak OIDC, Onboarding Flow, Marketing Site v2
+
+- [x] Keycloak OIDC integration — replace Manus OAuth with Keycloak Authorization Code + PKCE flow
+- [x] server/_core/keycloak.ts — /api/auth/login, /api/auth/register, /api/auth/callback, /api/auth/logout
+- [x] New-user detection in callback — first-time logins redirect to /onboarding with role param
+- [x] Onboarding page (/onboarding) — 4-step wizard: role selection, org details, feature tour, done
+- [x] Role-based redirect after onboarding — providers/facilities → /disputes, IDR entities → /idr-entities
+- [x] client/src/const.ts — getLoginUrl, getRegisterUrl, getLogoutUrl helpers for Keycloak
+- [x] useAuth hook — logout redirects to /api/auth/logout (Keycloak end-session)
+- [x] Marketing site v2 — full 693-line HTML: hero, 19-step grid, AI terminal, audience cards, testimonials, pricing, NSA guide, lead-capture form, regulatory footer
+- [x] Lead-capture form — collects name, email, org, role; redirects to /api/auth/register?role=...
+- [x] Audience-specific sign-up CTAs — per-role register links (provider/facility/payer/idr_entity)
+- [x] Regulatory footer links — CMS NSA Hub, 45 CFR § 149.510, § 149.140, HRSA, Open Negotiation Guidance
+- [x] TypeScript: 0 errors | Tests: 17/17 passing

@@ -50,7 +50,7 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx });
 });
 
-// ─── Zod schemas ──────────────────────────────────────────────────────────────
+// --- Zod schemas --------------------------------------------------------------
 
 const createDisputeSchema = z.object({
   initiatingPartyType: z.enum(PARTY_TYPE),
@@ -99,17 +99,19 @@ export const appRouter = router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: protectedProcedure.mutation(opts => {
       const { ctx } = opts;
+      // Clear the internal session cookie; Keycloak end-session is handled
+      // by redirecting the browser to /api/auth/logout after this mutation.
       ctx.res.clearCookie(COOKIE_NAME, {
         httpOnly: true,
         sameSite: "lax",
         secure: ENV.isProduction,
         path: "/",
       });
-      return { success: true } as const;
+      return { success: true, logoutUrl: "/api/auth/logout" } as const;
     }),
   }),
 
-  // ─── Dashboard ──────────────────────────────────────────────────────────────
+  // --- Dashboard --------------------------------------------------------------
   dashboard: router({
     stats: protectedProcedure.query(async ({ ctx }) => {
       const stats = await getDashboardStats(ctx.user.id);
@@ -153,7 +155,7 @@ export const appRouter = router({
     }),
   }),
 
-  // ─── Disputes ───────────────────────────────────────────────────────────────
+  // --- Disputes ---------------------------------------------------------------
   disputes: router({
     list: protectedProcedure
       .input(z.object({
@@ -449,7 +451,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── IDR Entities ────────────────────────────────────────────────────────────
+  // --- IDR Entities ------------------------------------------------------------
   arbitrators: router({
     list: protectedProcedure
       .input(z.object({
@@ -477,7 +479,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Draft disputes ───────────────────────────────────────────────────────────
+  // --- Draft disputes -----------------------------------------------------------
   drafts: router({
     get: protectedProcedure.query(async ({ ctx }) => {
       return getDisputeDraft(ctx.user.id);
@@ -498,7 +500,7 @@ export const appRouter = router({
     }),
   }),
 
-  // ─── QPA validation ───────────────────────────────────────────────────────────
+  // --- QPA validation -----------------------------------------------------------
   qpa: router({
     validate: protectedProcedure
       .input(z.object({
@@ -512,7 +514,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Notifications ───────────────────────────────────────────────────────────
+  // --- Notifications -----------------------------------------------------------
   notifications: router({
     list: protectedProcedure
       .input(z.object({ unreadOnly: z.boolean().default(false) }))
@@ -535,7 +537,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Document upload ──────────────────────────────────────────────────────────
+  // --- Document upload ----------------------------------------------------------
   documents: router({
     upload: protectedProcedure
       .input(z.object({
@@ -576,7 +578,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Admin ────────────────────────────────────────────────────────────────────
+  // --- Admin --------------------------------------------------------------------
   admin: router({
     allDisputes: adminProcedure
       .input(z.object({
@@ -601,7 +603,7 @@ export const appRouter = router({
     }),
   }),
 
-  // ─── Agentic AI Layer (proxied to Python LangGraph microservice) ──────────────────
+  // --- Agentic AI Layer (proxied to Python LangGraph microservice) ------------------
   ai: router({
     // Health check for the Python AI microservice
     serviceHealth: publicProcedure.query(async () => {
@@ -1017,7 +1019,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── EMR Connections ────────────────────────────────────────────────────────
+  // --- EMR Connections --------------------------------------------------------
   emr: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       const conns = await listEMRConnections(ctx.user.id);
@@ -1221,7 +1223,7 @@ export const appRouter = router({
             }),
     }),
 
-  // ─── State Balance-Billing Laws ───────────────────────────────────────────
+  // --- State Balance-Billing Laws -------------------------------------------
   stateLaws: router({
     list: publicProcedure
       .input(z.object({ state: z.string().optional(), hasProtection: z.boolean().optional() }))
@@ -1274,7 +1276,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Expert Review Workflow ────────────────────────────────────────────────
+  // --- Expert Review Workflow ------------------------------------------------
   expertReview: router({
     request: protectedProcedure
       .input(z.object({ disputeId: z.string(), reason: z.string().min(10), urgency: z.enum(["standard", "urgent", "critical"]) }))
@@ -1307,7 +1309,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Dispute Templates ─────────────────────────────────────────────────────
+  // --- Dispute Templates -----------------------------------------------------
   templates: router({
     list: protectedProcedure
       .query(async ({ ctx }) => {
@@ -1399,7 +1401,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Reports & Analytics ──────────────────────────────────────────────────
+  // --- Reports & Analytics --------------------------------------------------
   reports: router({
     summary: protectedProcedure
       .input(z.object({ startDate: z.string().optional(), endDate: z.string().optional() }))

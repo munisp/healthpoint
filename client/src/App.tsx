@@ -5,6 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
+import Onboarding from "./pages/Onboarding";
 import IDREntityDashboard from "@/pages/IDREntityDashboard";
 import Notifications from "@/pages/Notifications";
 import Admin from "@/pages/Admin";
@@ -26,6 +27,7 @@ function Router() {
   return (
     <Switch>
       <Route path={"/"} component={Home} />
+      <Route path={"/onboarding"} component={Onboarding} />
       <Route path={"/dashboard"} component={Dashboard} />
       <Route path={"/disputes"} component={DisputesList} />
       <Route path={"/disputes/new"} component={NewDispute} />

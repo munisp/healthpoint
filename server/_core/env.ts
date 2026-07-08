@@ -9,4 +9,9 @@ export const ENV = {
   openAiApiKey: process.env.BUILT_IN_OPENAI_API_KEY ?? "",
   storageApiUrl: process.env.BUILT_IN_STORAGE_API_URL ?? "",
   storageApiKey: process.env.BUILT_IN_STORAGE_API_KEY ?? "",
+  // ─── Keycloak OIDC (replaces Manus OAuth) ───────────────────────────────
+  keycloakUrl: process.env.KEYCLOAK_URL ?? "https://auth.placeholder.example.com",
+  keycloakRealm: process.env.KEYCLOAK_REALM ?? "healthpoint",
+  keycloakClientId: process.env.KEYCLOAK_CLIENT_ID ?? "healthpoint-app",
+  keycloakClientSecret: process.env.KEYCLOAK_CLIENT_SECRET ?? "placeholder-secret",
 };
