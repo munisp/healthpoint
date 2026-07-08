@@ -26,7 +26,10 @@ import LeadsManager from "./pages/LeadsManager";
 import DocumentAnalyzer from "./pages/DocumentAnalyzer";
 import AuditTrail from "./pages/AuditTrail";
 import PayerIntelligence from "./pages/PayerIntelligence";
-import WebhookManager from "./pages/WebhookManager";
+import WebhookManager from "@/pages/WebhookManager";
+import FinancialLedger from "@/pages/FinancialLedger";
+import GlobalSearch from "@/pages/GlobalSearch";
+import LakehouseExport from "@/pages/LakehouseExport";
 
 function Router() {
   return (
@@ -52,7 +55,10 @@ function Router() {
       <Route path="/doc-analyzer" component={DocumentAnalyzer} />
       <Route path="/audit-trail" component={AuditTrail} />
       <Route path="/payer-intelligence" component={PayerIntelligence} />
-      <Route path="/webhooks" component={WebhookManager} />
+      <Route path={"/webhooks"} component={WebhookManager} />
+      <Route path={"/ledger"} component={FinancialLedger} />
+      <Route path={"/search"} component={GlobalSearch} />
+      <Route path={"/lakehouse"} component={LakehouseExport} />
       <Route path="/templates" component={() => {
         const DashboardLayout = require("./components/DashboardLayout").default;
         return <DashboardLayout><DisputeTemplates /></DashboardLayout>;

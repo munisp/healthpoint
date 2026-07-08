@@ -28,6 +28,12 @@ import {
 } from "./db";
 import { sendNewLeadNotification } from "./email";
 import { invokeLLM } from "./_core/llm";
+import { withDisputeLock } from "./redis";
+import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDisputeAccess, listDisputeAccess } from "./authz";
+import { eventBus } from "./events/bus";
+import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, addBusinessDays, daysUntilDeadline } from "./workflow/idr-workflow";
+import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
+import { search, generateLakehouseExport, invalidateSearchIndex } from "./search";
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
@@ -1940,6 +1946,167 @@ Based on NSA IDR historical data and legal precedent, provide:
         if (!analysis?.s3Key) throw new TRPCError({ code: 'NOT_FOUND', message: 'No file stored' });
         const { url } = await storageGet(analysis.s3Key, 300);
         return { url };
+      }),
+  }),
+
+  // ── Workflow engine ────────────────────────────────────────────────────────
+  workflow: router({
+    steps: publicProcedure.query(() => {
+      return Object.values(IDR_WORKFLOW_STEPS).map(s => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        deadlineBusinessDays: s.deadlineBusinessDays,
+        allowedTransitions: s.allowedTransitions,
+        isTerminal: s.isTerminal,
+        nsaReference: s.nsaReference,
+      }));
+    }),
+    progress: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
+        const dispute = await getDisputeById(input.disputeId);
+        if (!dispute) throw new TRPCError({ code: 'NOT_FOUND', message: 'Dispute not found' });
+        const progress = getWorkflowProgress(dispute.currentStep as Parameters<typeof getWorkflowProgress>[0]);
+        const validTransitions = getValidTransitions(dispute.currentStep as Parameters<typeof getValidTransitions>[0]);
+        const stepDef = IDR_WORKFLOW_STEPS[dispute.currentStep as keyof typeof IDR_WORKFLOW_STEPS];
+        const deadline = dispute.determinationDeadline ?? null;
+        return {
+          currentStep: dispute.currentStep,
+          currentStepDef: stepDef,
+          progress,
+          validTransitions,
+          daysUntilDeadline: daysUntilDeadline(deadline),
+          deadline,
+        };
+      }),
+    advance: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        targetStep: z.string(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
+        return advanceWorkflow(
+          input.disputeId,
+          input.targetStep as Parameters<typeof advanceWorkflow>[1],
+          ctx.user.id,
+          input.notes
+        );
+      }),
+  }),
+
+  // ── Financial Ledger ───────────────────────────────────────────────────────
+  ledger: router({
+    balances: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
+        return getDisputeBalances(input.disputeId);
+      }),
+    history: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
+        return getDisputeLedgerHistory(input.disputeId);
+      }),
+    summary: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
+        return getDisputeFinancialSummary(input.disputeId);
+      }),
+    recordPayment: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        amountDollars: z.number().positive(),
+        referenceId: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
+        const amountCents = Math.round(input.amountDollars * 100);
+        const entry = await recordPayment(input.disputeId, amountCents, input.referenceId);
+        await eventBus.publish('dispute.offer_submitted', input.disputeId, 'dispute',
+          { type: 'payment', amountDollars: input.amountDollars },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() }
+        );
+        return entry;
+      }),
+  }),
+
+  // ── Full-text Search ───────────────────────────────────────────────────────
+  search: router({
+    query: protectedProcedure
+      .input(z.object({
+        q: z.string().min(1).max(200),
+        entityTypes: z.array(z.enum(['dispute', 'document', 'audit'])).optional(),
+        limit: z.number().int().min(1).max(50).default(20),
+      }))
+      .query(async ({ ctx, input }) => {
+        return search({
+          q: input.q,
+          entityTypes: input.entityTypes,
+          limit: input.limit,
+          userId: ctx.user.id,
+          userRole: ctx.user.role,
+        });
+      }),
+  }),
+
+  // ── Authorization (ReBAC) ──────────────────────────────────────────────────
+  authz: router({
+    grantAccess: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        userId: z.string(),
+        permission: z.enum(['read', 'write', 'admin']),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'admin');
+        await grantDisputeAccess(input.disputeId, input.userId, input.permission, ctx.user.id);
+        return { success: true };
+      }),
+    revokeAccess: protectedProcedure
+      .input(z.object({ disputeId: z.string(), userId: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'admin');
+        await revokeDisputeAccess(input.disputeId, input.userId);
+        return { success: true };
+      }),
+    listAccess: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
+        return listDisputeAccess(input.disputeId);
+      }),
+  }),
+
+  // ── Lakehouse Export ───────────────────────────────────────────────────────
+  lakehouse: router({
+    export: protectedProcedure
+      .input(z.object({
+        tables: z.array(z.enum(['disputes', 'documents', 'audit', 'ledger', 'events'])),
+        format: z.enum(['ndjson', 'csv']).default('ndjson'),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        assertAdminAccess(ctx.user.role, 'export lakehouse data');
+        const result = await generateLakehouseExport({
+          tables: input.tables,
+          format: input.format,
+        });
+        // Store the export in S3
+        const key = `lakehouse-exports/${ctx.user.id}/${Date.now()}.${input.format === 'ndjson' ? 'ndjson' : 'csv'}`;
+        const { url } = await storagePut(key, Buffer.from(result.content, 'utf-8'), input.format === 'ndjson' ? 'application/x-ndjson' : 'text/csv');
+        const { url: downloadUrl } = await storageGet(key, 3600);
+        return {
+          downloadUrl,
+          rowCount: result.rowCount,
+          tables: result.tables,
+          format: input.format,
+          exportedAt: new Date().toISOString(),
+        };
       }),
   }),
 });
