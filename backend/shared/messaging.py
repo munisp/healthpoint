@@ -37,6 +37,15 @@ class Topics:
     WORKFLOW_FAILED       = "workflow.failed"
     USER_CREATED          = "user.created"
     USER_ROLE_CHANGED     = "user.role_changed"
+    STAKEHOLDER_INVITED               = "stakeholder.invited"
+    STAKEHOLDER_VERIFICATION_COMPLETE = "stakeholder.verification_complete"
+    STAKEHOLDER_APPROVED              = "stakeholder.approved"
+    STAKEHOLDER_REJECTED              = "stakeholder.rejected"
+    EMR_ONBOARDING_STARTED            = "emr.onboarding.started"
+    EMR_ONBOARDING_COMPLETED          = "emr.onboarding.completed"
+    MODEL_TRAINED                     = "ml.model.trained"
+    MODEL_DRIFT_DETECTED              = "ml.model.drift_detected"
+    AB_TEST_RESULT                    = "ml.ab_test.result"
 
 
 # ── Producer singleton ────────────────────────────────────────────────────────

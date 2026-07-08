@@ -1,177 +1,189 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
 import { authFetch } from '../auth/keycloak.js';
-import { AlertTriangle, Plus, Search, RefreshCw, ChevronLeft, ChevronRight, AlertCircle } from 'lucide-react';
+import { Ambulance, DollarSign, Scale, ShieldCheck, Filter, Eye, Edit, Trash2 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://api.healthpoint.gov';
 
-export default function EmergencyServices() {
-  const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [items, setItems] = useState([]);
+const EmergencyServices = () => {
+  const [claims, setClaims] = useState([]);
+  const [stats, setStats] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState(searchParams.get('q') || '');
-  const PAGE_SIZE = 20;
+  const [nsaFilter, setNsaFilter] = useState('All'); // 'All', 'Protected', 'Exempt', 'Disputed'
 
-  const fetchItems = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({
-        limit: PAGE_SIZE,
-        offset: (page - 1) * PAGE_SIZE,
-        ...(search && { search }),
-        ...Object.fromEntries(searchParams.entries()),
-      });
-      const res = await authFetch(`${API_BASE}/api/v1/emergency-services?${params}`);
-      if (!res?.ok) throw new Error(`HTTP ${res?.status}`);
-      const data = await res.json();
-      setItems(data.items || data.emergency_services || data.data || []);
-      setTotal(data.total || data.count || 0);
-    } catch (err) {
-      setError(err.message || 'Failed to load data');
-    } finally {
-      setLoading(false);
-    }
-  }, [page, search, searchParams]);
+  useEffect(() => {
+    const fetchEmergencyData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const claimsResponse = await authFetch(`${API_BASE}/api/v1/claims?type=emergency`);
+        if (!claimsResponse.ok) {
+          throw new Error(`HTTP error! status: ${claimsResponse.status}`);
+        }
+        const claimsData = await claimsResponse.json();
+        setClaims(claimsData);
 
-  useEffect(() => { fetchItems(); }, [fetchItems]);
+        // Assuming /claims/stats can be filtered by type=emergency or we calculate from claimsData
+        const statsResponse = await authFetch(`${API_BASE}/claims/stats?type=emergency`);
+        if (!statsResponse.ok) {
+          throw new Error(`HTTP error! status: ${statsResponse.status}`);
+        }
+        const statsData = await statsResponse.json();
+        setStats(statsData);
 
-  const handleSearch = (e) => {
-    e.preventDefault();
-    setPage(1);
-    setSearchParams(search ? { q: search } : {});
-  };
+      } catch (err) {
+        console.error('Failed to fetch emergency services data:', err);
+        setError('Failed to load emergency services data. Please try again later.');
+      } finally {
+        setLoading(false);
+      }
+    };
 
-  const totalPages = Math.ceil(total / PAGE_SIZE);
+    fetchEmergencyData();
+  }, []);
+
+  const filteredClaims = claims.filter(claim => {
+    if (nsaFilter === 'All') return true;
+    return claim.nsaProtectionStatus === nsaFilter;
+  });
+
+  // Calculate KPIs if stats API doesn't provide them directly or needs aggregation
+  const emergencyClaimsThisMonth = stats.emergencyClaimsThisMonth || 0; // Assuming API provides this
+  const balanceBillingDisputes = stats.balanceBillingDisputes || 0; // Assuming API provides this
+
+  const totalBilledAmount = claims.reduce((sum, claim) => sum + (claim.billedAmount || 0), 0);
+  const totalAllowedAmount = claims.reduce((sum, claim) => sum + (claim.allowedAmount || 0), 0);
+  const avgEmergencyBilledAmount = claims.length > 0 ? (totalBilledAmount / claims.length).toFixed(2) : '0.00';
+  const avgAllowedAmount = claims.length > 0 ? (totalAllowedAmount / claims.length).toFixed(2) : '0.00';
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <div className="text-lg font-semibold text-gray-700">Loading emergency claims data...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <div className="text-red-600 text-lg font-semibold">Error: {error}</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-4">
-      {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-slate-500">Manage emergency and air ambulance service disputes per NSA §2799B-1.</p>
+    <div className="container mx-auto p-6 bg-gray-50 min-h-screen">
+      <h1 className="text-3xl font-bold text-gray-800 mb-8">Emergency Services Claims</h1>
+
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="bg-white p-6 rounded-lg shadow-md flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-500">Claims This Month</p>
+            <p className="text-2xl font-semibold text-gray-900">{emergencyClaimsThisMonth}</p>
+          </div>
+          <Ambulance className="text-blue-500" size={32} />
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={fetchItems}
-            disabled={loading}
-            className="p-2 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          </button>
-          <button
-            onClick={() => navigate('/emergency/new')}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
-          >
-            <Plus size={14} />
-            New Case
-          </button>
+
+        <div className="bg-white p-6 rounded-lg shadow-md flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-500">Balance Billing Disputes</p>
+            <p className="text-2xl font-semibold text-gray-900">{balanceBillingDisputes}</p>
+          </div>
+          <Scale className="text-yellow-500" size={32} />
+        </div>
+
+        <div className="bg-white p-6 rounded-lg shadow-md flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-500">Avg Billed Amount</p>
+            <p className="text-2xl font-semibold text-gray-900">${avgEmergencyBilledAmount}</p>
+          </div>
+          <DollarSign className="text-green-500" size={32} />
+        </div>
+
+        <div className="bg-white p-6 rounded-lg shadow-md flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-500">Avg Allowed Amount</p>
+            <p className="text-2xl font-semibold text-gray-900">${avgAllowedAmount}</p>
+          </div>
+          <ShieldCheck className="text-purple-500" size={32} />
         </div>
       </div>
 
-      {/* Search bar */}
-      <form onSubmit={handleSearch} className="flex gap-2">
-        <div className="relative flex-1">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="search"
-            placeholder="Search..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-        <button type="submit" className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
-          Search
-        </button>
-      </form>
+      {/* Filters */}
+      <div className="flex items-center space-x-4 mb-6">
+        <Filter className="text-gray-600" size={20} />
+        <label htmlFor="nsaFilter" className="text-gray-700 font-medium">NSA Protection Status:</label>
+        <select
+          id="nsaFilter"
+          className="mt-1 block w-48 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+          value={nsaFilter}
+          onChange={(e) => setNsaFilter(e.target.value)}
+        >
+          <option value="All">All</option>
+          <option value="Protected">Protected</option>
+          <option value="Exempt">Exempt</option>
+          <option value="Disputed">Disputed</option>
+        </select>
+      </div>
 
-      {/* Error state */}
-      {error && (
-        <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
-          <AlertCircle size={16} />
-          {error}
-        </div>
-      )}
-
-      {/* Table */}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
-          </div>
-        ) : items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-slate-400">
-            <AlertTriangle size={40} className="mb-3 opacity-30" />
-            <p className="font-medium">No records found</p>
-            <p className="text-sm">{search ? 'Try a different search term' : 'No data available yet'}</p>
+      {/* Claims Table */}
+      <div className="bg-white rounded-lg shadow-md overflow-hidden">
+        {filteredClaims.length === 0 ? (
+          <div className="p-6 text-center text-gray-600">
+            No emergency claims found {nsaFilter !== 'All' && `for status '${nsaFilter}'`}.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Id</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Patient Name</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Service Type</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Transport Type</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Amount</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium text-slate-500 uppercase">Actions</th>
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Claim ID</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Patient</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Facility</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Emergency Type</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Billed Amount</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Allowed Amount</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Patient Responsibility</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Balance Billing Amount</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">NSA Protection Status</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {filteredClaims.map((claim) => (
+                <tr key={claim.id}>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{claim.claimId}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{claim.patientName}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{claim.facility}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{claim.emergencyType}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${(claim.billedAmount || 0).toFixed(2)}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${(claim.allowedAmount || 0).toFixed(2)}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${(claim.patientResponsibility || 0).toFixed(2)}</td>
+                  <td className={`px-6 py-4 whitespace-nowrap text-sm ${claim.balanceBillingAmount > 0 ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
+                    ${(claim.balanceBillingAmount || 0).toFixed(2)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full
+                      ${claim.nsaProtectionStatus === 'Protected' ? 'bg-green-100 text-green-800' :
+                        claim.nsaProtectionStatus === 'Exempt' ? 'bg-blue-100 text-blue-800' :
+                        'bg-yellow-100 text-yellow-800'}`}>
+                      {claim.nsaProtectionStatus}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <button className="text-blue-600 hover:text-blue-900 mr-3"><Eye size={18} /></button>
+                    <button className="text-indigo-600 hover:text-indigo-900 mr-3"><Edit size={18} /></button>
+                    <button className="text-red-600 hover:text-red-900"><Trash2 size={18} /></button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {items.map((item, idx) => (
-                  <tr key={item.id || idx} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                    <td className="px-4 py-3 text-sm text-slate-700">{String(item.id ?? '—')}</td>
-                    <td className="px-4 py-3 text-sm text-slate-700">{String(item.patient_name ?? '—')}</td>
-                    <td className="px-4 py-3 text-sm text-slate-700">{String(item.service_type ?? '—')}</td>
-                    <td className="px-4 py-3 text-sm text-slate-700">{String(item.transport_type ?? '—')}</td>
-                    <td className="px-4 py-3 text-sm text-slate-700">{String(item.amount ?? '—')}</td>
-                    <td className="px-4 py-3 text-sm text-slate-700">{String(item.status ?? '—')}</td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => navigate(`/emergency-services/${item.id}`)}
-                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                      >
-                        View →
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm text-slate-500">
-          <span>Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}</span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="p-1.5 border border-slate-200 rounded hover:bg-slate-50 disabled:opacity-40"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <span>Page {page} of {totalPages}</span>
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className="p-1.5 border border-slate-200 rounded hover:bg-slate-50 disabled:opacity-40"
-            >
-              <ChevronRight size={16} />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
-}
+};
+
+export default EmergencyServices;
