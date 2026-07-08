@@ -1,0 +1,425 @@
+import { useState } from "react";
+import { useParams, useLocation } from "wouter";
+import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { APP_LOGO, APP_TITLE } from "@/const";
+import { toast } from "sonner";
+import {
+  AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock,
+  DollarSign, FileText, Gavel, LogOut, Scale, Upload, Users
+} from "lucide-react";
+
+const IDR_STEPS = [
+  { key: "STEP_01_OPEN_NEGOTIATION_INITIATED", label: "Open Negotiation Initiated", description: "Party sends open negotiation notice per NSA §2799A-1", days: "Day 0" },
+  { key: "STEP_02_OPEN_NEGOTIATION_PERIOD", label: "Open Negotiation Period", description: "30-business-day window for parties to reach agreement", days: "Days 1–30" },
+  { key: "STEP_03_OPEN_NEGOTIATION_FAILED", label: "Open Negotiation Failed", description: "Parties failed to reach agreement within 30 business days", days: "Day 30+" },
+  { key: "STEP_04_IDR_INITIATED", label: "IDR Initiated", description: "Either party initiates federal IDR within 4 business days", days: "+4 bd" },
+  { key: "STEP_05_IDR_NOTICE_SENT", label: "IDR Notice Sent", description: "CMS notified; certified IDR entity selection process begins", days: "+1 bd" },
+  { key: "STEP_06_IDR_ENTITY_SELECTION", label: "IDR Entity Selection", description: "Parties jointly select a certified IDR entity", days: "+4 bd" },
+  { key: "STEP_07_IDR_ENTITY_SELECTED", label: "IDR Entity Selected", description: "Certified IDR entity confirmed and assigned", days: "Day 0 of IDR" },
+  { key: "STEP_08_ELIGIBILITY_REVIEW", label: "Eligibility Review", description: "IDR entity reviews dispute eligibility per 45 CFR §149.510", days: "+3 bd" },
+  { key: "STEP_09_OFFER_SUBMISSION", label: "Offer Submission", description: "Both parties submit payment offers to IDR entity", days: "+10 bd" },
+  { key: "STEP_10_QPA_DISCLOSURE", label: "QPA Disclosure", description: "Qualifying Payment Amount (QPA) disclosed to IDR entity", days: "Concurrent" },
+  { key: "STEP_11_ADDITIONAL_INFORMATION", label: "Additional Information", description: "Parties may submit additional supporting information", days: "+5 bd" },
+  { key: "STEP_12_ARBITRATION_REVIEW", label: "Arbitration Review", description: "IDR entity reviews all offers and supporting information", days: "Active review" },
+  { key: "STEP_13_DETERMINATION_ISSUED", label: "Determination Issued", description: "IDR entity selects one party's offer as the payment amount", days: "+30 bd" },
+  { key: "STEP_14_PAYMENT_DETERMINATION", label: "Payment Determination", description: "Losing party notified; payment obligation established", days: "Day 0 of payment" },
+  { key: "STEP_15_PAYMENT_MADE", label: "Payment Made", description: "Determined payment amount transmitted to winning party", days: "+30 days" },
+  { key: "STEP_16_ADMINISTRATIVE_FEE_PAID", label: "Administrative Fee Paid", description: "Losing party pays IDR administrative fee to CMS", days: "Concurrent" },
+  { key: "STEP_17_DISPUTE_CLOSED", label: "Dispute Closed", description: "Dispute formally closed in the federal IDR portal", days: "Final" },
+  { key: "STEP_18_APPEAL_FILED", label: "Appeal Filed (Optional)", description: "Party files appeal in federal district court", days: "Optional" },
+  { key: "STEP_19_APPEAL_RESOLVED", label: "Appeal Resolved (Optional)", description: "Federal court issues final ruling on appeal", days: "Optional" },
+];
+
+const NEXT_STEP_MAP: Record<string, { step: string; status: string; label: string }> = {
+  STEP_01_OPEN_NEGOTIATION_INITIATED: { step: "STEP_02_OPEN_NEGOTIATION_PERIOD", status: "open_negotiation", label: "Begin Negotiation Period" },
+  STEP_02_OPEN_NEGOTIATION_PERIOD: { step: "STEP_03_OPEN_NEGOTIATION_FAILED", status: "open_negotiation", label: "Mark Negotiation Failed" },
+  STEP_03_OPEN_NEGOTIATION_FAILED: { step: "STEP_04_IDR_INITIATED", status: "idr_initiated", label: "Initiate Federal IDR" },
+  STEP_04_IDR_INITIATED: { step: "STEP_05_IDR_NOTICE_SENT", status: "idr_initiated", label: "Send IDR Notice to CMS" },
+  STEP_05_IDR_NOTICE_SENT: { step: "STEP_06_IDR_ENTITY_SELECTION", status: "idr_entity_selection", label: "Begin Entity Selection" },
+  STEP_06_IDR_ENTITY_SELECTION: { step: "STEP_07_IDR_ENTITY_SELECTED", status: "idr_entity_selection", label: "Confirm Entity Selected" },
+  STEP_07_IDR_ENTITY_SELECTED: { step: "STEP_08_ELIGIBILITY_REVIEW", status: "eligibility_review", label: "Begin Eligibility Review" },
+  STEP_08_ELIGIBILITY_REVIEW: { step: "STEP_09_OFFER_SUBMISSION", status: "offer_submission", label: "Open Offer Submission" },
+  STEP_09_OFFER_SUBMISSION: { step: "STEP_10_QPA_DISCLOSURE", status: "offer_submission", label: "Disclose QPA" },
+  STEP_10_QPA_DISCLOSURE: { step: "STEP_11_ADDITIONAL_INFORMATION", status: "offer_submission", label: "Open Additional Info Period" },
+  STEP_11_ADDITIONAL_INFORMATION: { step: "STEP_12_ARBITRATION_REVIEW", status: "under_arbitration", label: "Begin Arbitration Review" },
+  STEP_12_ARBITRATION_REVIEW: { step: "STEP_13_DETERMINATION_ISSUED", status: "determination_issued", label: "Issue Determination" },
+  STEP_13_DETERMINATION_ISSUED: { step: "STEP_14_PAYMENT_DETERMINATION", status: "payment_pending", label: "Notify Losing Party" },
+  STEP_14_PAYMENT_DETERMINATION: { step: "STEP_15_PAYMENT_MADE", status: "payment_pending", label: "Confirm Payment Made" },
+  STEP_15_PAYMENT_MADE: { step: "STEP_16_ADMINISTRATIVE_FEE_PAID", status: "payment_pending", label: "Confirm Admin Fee Paid" },
+  STEP_16_ADMINISTRATIVE_FEE_PAID: { step: "STEP_17_DISPUTE_CLOSED", status: "closed", label: "Close Dispute" },
+};
+
+export default function DisputeDetail() {
+  const { id } = useParams<{ id: string }>();
+  const [, navigate] = useLocation();
+  const { user, logout } = useAuth();
+  const utils = trpc.useUtils();
+
+  const [showOfferModal, setShowOfferModal] = useState(false);
+  const [showArbitratorModal, setShowArbitratorModal] = useState(false);
+  const [offerAmount, setOfferAmount] = useState("");
+  const [offerRationale, setOfferRationale] = useState("");
+  const [offerType, setOfferType] = useState<"initiating_party" | "responding_party" | "qpa">("initiating_party");
+  const [selectedArbitratorId, setSelectedArbitratorId] = useState("");
+  const [selectedArbitratorName, setSelectedArbitratorName] = useState("");
+  const [advanceDescription, setAdvanceDescription] = useState("");
+  const [determinationBasis, setDeterminationBasis] = useState("");
+
+  const { data: timelineData, isLoading } = trpc.disputes.getTimeline.useQuery({ disputeId: id! });
+  const { data: arbitrators } = trpc.arbitrators.list.useQuery({}, { enabled: showArbitratorModal });
+
+  const advanceMutation = trpc.disputes.advance.useMutation({
+    onSuccess: () => { utils.disputes.getTimeline.invalidate(); utils.dashboard.stats.invalidate(); toast.success("Dispute advanced to next step"); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const submitOfferMutation = trpc.disputes.submitOffer.useMutation({
+    onSuccess: () => { utils.disputes.getTimeline.invalidate(); setShowOfferModal(false); setOfferAmount(""); setOfferRationale(""); toast.success("Offer submitted successfully"); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const selectArbitratorMutation = trpc.disputes.selectArbitrator.useMutation({
+    onSuccess: () => { utils.disputes.getTimeline.invalidate(); setShowArbitratorModal(false); toast.success("IDR entity selected"); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  if (isLoading) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="animate-spin w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full" />
+    </div>
+  );
+
+  if (!timelineData) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="text-center">
+        <AlertTriangle size={40} className="text-red-500 mx-auto mb-3" />
+        <p className="text-slate-600">Dispute not found</p>
+        <Button variant="outline" className="mt-4" onClick={() => navigate("/disputes")}>Back to Disputes</Button>
+      </div>
+    </div>
+  );
+
+  const { dispute, timeline } = timelineData;
+  const nextStep = NEXT_STEP_MAP[dispute.currentStep];
+  const currentStepIndex = IDR_STEPS.findIndex(s => s.key === dispute.currentStep);
+
+  const handleAdvance = () => {
+    if (!nextStep) return;
+    const desc = advanceDescription || `Advanced to ${nextStep.step.replace(/^STEP_\d+_/, "").replace(/_/g, " ")}`;
+    advanceMutation.mutate({
+      disputeId: dispute.id,
+      newStep: nextStep.step as any,
+      newStatus: nextStep.status as any,
+      description: desc,
+      ...(determinationBasis ? { determinationBasis } : {}),
+    });
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
+        <div className="flex items-center gap-3">
+          <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
+          <span className="text-lg font-bold text-slate-800">{APP_TITLE}</span>
+        </div>
+        <nav className="flex items-center gap-4">
+          <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600">← Disputes</button>
+          <span className="text-sm text-slate-600">{user?.name}</span>
+          <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
+        </nav>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
+        {/* Header */}
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              <button onClick={() => navigate("/disputes")} className="text-slate-400 hover:text-slate-600">
+                <ArrowLeft size={18} />
+              </button>
+              <h1 className="text-2xl font-bold text-slate-800">{dispute.referenceNumber}</h1>
+              <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                dispute.status === "closed" ? "bg-green-100 text-green-700" :
+                dispute.status === "under_arbitration" ? "bg-red-100 text-red-700" :
+                dispute.status === "determination_issued" ? "bg-teal-100 text-teal-700" :
+                "bg-blue-100 text-blue-700"
+              }`}>
+                {dispute.status?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+              </span>
+            </div>
+            <p className="text-sm text-slate-500 ml-7">
+              {dispute.initiatingPartyName} vs {dispute.respondingPartyName ?? "TBD"} ·
+              {dispute.serviceType?.replace(/_/g, " ")} · Filed {dispute.createdAt ? new Date(dispute.createdAt as unknown as string).toLocaleDateString() : '—'}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {dispute.currentStep === "STEP_06_IDR_ENTITY_SELECTION" && (
+              <Button variant="outline" onClick={() => setShowArbitratorModal(true)} className="flex items-center gap-2">
+                <Gavel size={14} />Select IDR Entity
+              </Button>
+            )}
+            {["STEP_09_OFFER_SUBMISSION", "STEP_10_QPA_DISCLOSURE"].includes(dispute.currentStep) && (
+              <Button variant="outline" onClick={() => setShowOfferModal(true)} className="flex items-center gap-2">
+                <DollarSign size={14} />Submit Offer
+              </Button>
+            )}
+            {nextStep && !["STEP_06_IDR_ENTITY_SELECTION"].includes(dispute.currentStep) && dispute.status !== "closed" && (
+              <Button onClick={handleAdvance} disabled={advanceMutation.isPending} className="flex items-center gap-2">
+                <ChevronRight size={14} />
+                {advanceMutation.isPending ? "Advancing..." : nextStep.label}
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* 19-Step Timeline */}
+          <div className="lg:col-span-2 space-y-4">
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base font-semibold text-slate-800 flex items-center gap-2">
+                  <Scale size={16} className="text-blue-500" />NSA IDR 19-Step Workflow
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-4 pt-0">
+                <div className="space-y-1">
+                  {IDR_STEPS.map((step, index) => {
+                    const tStep = timeline.find(t => t.step === step.key);
+                    const isCompleted = tStep?.isCompleted ?? false;
+                    const isCurrent = tStep?.isCurrent ?? false;
+                    const isPending = tStep?.isPending ?? true;
+                    return (
+                      <div key={step.key} className={`flex items-start gap-3 p-3 rounded-lg transition-colors ${isCurrent ? "bg-blue-50 border border-blue-200" : isCompleted ? "bg-green-50" : "hover:bg-slate-50"}`}>
+                        {/* Step indicator */}
+                        <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold mt-0.5 ${
+                          isCompleted ? "bg-green-500 text-white" :
+                          isCurrent ? "bg-blue-600 text-white" :
+                          "bg-slate-200 text-slate-500"
+                        }`}>
+                          {isCompleted ? <CheckCircle2 size={14} /> : index + 1}
+                        </div>
+                        {/* Step content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-sm font-semibold ${isCurrent ? "text-blue-700" : isCompleted ? "text-green-700" : "text-slate-500"}`}>
+                              {step.label}
+                            </span>
+                            <span className="text-xs text-slate-400 shrink-0">{step.days}</span>
+                          </div>
+                          <p className={`text-xs mt-0.5 ${isCurrent ? "text-blue-600" : isCompleted ? "text-green-600" : "text-slate-400"}`}>
+                            {step.description}
+                          </p>
+                          {tStep?.event && (
+                            <div className="mt-1.5 text-xs text-slate-500 bg-white border border-slate-200 rounded px-2 py-1">
+                              {tStep.event.description} · {tStep.event.createdAt ? new Date(tStep.event.createdAt as unknown as string).toLocaleString() : ''}
+                            </div>
+                          )}
+                        </div>
+                        {/* Connector line */}
+                        {index < IDR_STEPS.length - 1 && (
+                          <div className="absolute left-[2.35rem] mt-8 w-0.5 h-4 bg-slate-200" style={{ display: "none" }} />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Right sidebar */}
+          <div className="space-y-4">
+            {/* Financial Summary */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <DollarSign size={14} className="text-green-500" />Financial Summary
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 pt-0">
+                {[
+                  { label: "Billed Amount", value: dispute.billedAmount, highlight: false },
+                  { label: "QPA", value: dispute.qpaAmount, highlight: false },
+                  { label: "Initiating Party Offer", value: dispute.initiatingPartyOffer, highlight: false },
+                  { label: "Responding Party Offer", value: dispute.respondingPartyOffer, highlight: false },
+                  { label: "Determination Amount", value: dispute.determinationAmount, highlight: true },
+                ].map(item => (
+                  <div key={item.label} className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">{item.label}</span>
+                    <span className={`font-semibold ${item.highlight ? "text-blue-700" : "text-slate-700"}`}>
+                      {item.value ? `$${Number(item.value).toLocaleString()}` : <span className="text-slate-300 font-normal">—</span>}
+                    </span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            {/* Deadlines */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <Clock size={14} className="text-amber-500" />NSA Deadlines
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 pt-0">
+                {[
+                  { label: "Open Negotiation", date: dispute.openNegotiationDeadline },
+                  { label: "IDR Initiation", date: dispute.idrInitiationDeadline },
+                  { label: "Entity Selection", date: dispute.entitySelectionDeadline },
+                  { label: "Eligibility Review", date: dispute.eligibilityDeadline },
+                  { label: "Offer Submission", date: dispute.offerSubmissionDeadline },
+                  { label: "Additional Info", date: dispute.additionalInfoDeadline },
+                  { label: "Determination", date: dispute.determinationDeadline },
+                  { label: "Payment Due", date: dispute.paymentDeadline },
+                ].filter(d => d.date != null).map(item => {
+                  const due = new Date(item.date as unknown as string);
+                  const isOverdue = due < new Date() && dispute.status !== "closed";
+                  return (
+                    <div key={item.label} className="flex items-center justify-between text-xs">
+                      <span className="text-slate-500">{item.label}</span>
+                      <span className={`font-medium ${isOverdue ? "text-red-600" : "text-slate-600"}`}>
+                        {due.toLocaleDateString()}
+                        {isOverdue && <span className="ml-1 text-red-500">⚠</span>}
+                      </span>
+                    </div>
+                  );
+                })}
+              </CardContent>
+            </Card>
+
+            {/* Parties */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <Users size={14} className="text-blue-500" />Parties
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 pt-0 text-sm">
+                <div>
+                  <div className="text-xs text-slate-400 mb-0.5">Initiating Party</div>
+                  <div className="font-medium text-slate-700">{dispute.initiatingPartyName}</div>
+                  <div className="text-xs text-slate-500 capitalize">{dispute.initiatingPartyType?.replace(/_/g, " ")} {dispute.initiatingPartyNpi ? `· NPI: ${dispute.initiatingPartyNpi}` : ""}</div>
+                </div>
+                <Separator />
+                <div>
+                  <div className="text-xs text-slate-400 mb-0.5">Responding Party</div>
+                  <div className="font-medium text-slate-700">{dispute.respondingPartyName ?? <span className="text-slate-400">Not yet identified</span>}</div>
+                  {dispute.respondingPartyType && <div className="text-xs text-slate-500 capitalize">{dispute.respondingPartyType?.replace(/_/g, " ")}</div>}
+                </div>
+                {dispute.idrEntityName && (
+                  <>
+                    <Separator />
+                    <div>
+                      <div className="text-xs text-slate-400 mb-0.5">Certified IDR Entity</div>
+                      <div className="font-medium text-slate-700">{dispute.idrEntityName}</div>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Service Details */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <FileText size={14} className="text-purple-500" />Service Details
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 pt-0 text-sm">
+                {[
+                  { label: "Service Type", value: dispute.serviceType?.replace(/_/g, " ") },
+                  { label: "Service Date", value: dispute.serviceDate ? new Date(dispute.serviceDate).toLocaleDateString() : null },
+                  { label: "Patient State", value: dispute.patientState },
+                  { label: "Facility State", value: dispute.facilityState },
+                  { label: "CPT Codes", value: Array.isArray(dispute.cptCodes) ? dispute.cptCodes.join(", ") : dispute.cptCodes },
+                ].map(item => (
+                  <div key={item.label} className="flex items-start justify-between gap-2">
+                    <span className="text-slate-400 shrink-0">{item.label}</span>
+                    <span className="text-slate-700 font-medium text-right capitalize">{item.value ?? "—"}</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </main>
+
+      {/* Offer Submission Modal */}
+      {showOfferModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-800 mb-4">Submit Payment Offer</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Offer Type</label>
+                <select value={offerType} onChange={e => setOfferType(e.target.value as any)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="initiating_party">Initiating Party Offer</option>
+                  <option value="responding_party">Responding Party Offer</option>
+                  <option value="qpa">Qualifying Payment Amount (QPA)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Amount ($)</label>
+                <input type="number" step="0.01" min="0" value={offerAmount} onChange={e => setOfferAmount(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Rationale (optional)</label>
+                <textarea value={offerRationale} onChange={e => setOfferRationale(e.target.value)} rows={3}
+                  placeholder="Explain the basis for this offer amount..."
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <Button variant="outline" className="flex-1" onClick={() => setShowOfferModal(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!offerAmount || submitOfferMutation.isPending}
+                onClick={() => submitOfferMutation.mutate({ disputeId: dispute.id, offerType, amount: offerAmount, rationale: offerRationale || undefined })}>
+                {submitOfferMutation.isPending ? "Submitting..." : "Submit Offer"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Arbitrator Selection Modal */}
+      {showArbitratorModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">
+            <h3 className="text-lg font-semibold text-slate-800 mb-4">Select Certified IDR Entity</h3>
+            <div className="space-y-3 max-h-80 overflow-y-auto">
+              {arbitrators?.map(a => (
+                <div key={a.id} onClick={() => { setSelectedArbitratorId(a.id); setSelectedArbitratorName(a.name); }}
+                  className={`p-3 rounded-lg border cursor-pointer transition-colors ${selectedArbitratorId === a.id ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-slate-300"}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-slate-800 text-sm">{a.name}</span>
+                    <span className="text-xs text-slate-500">Cert: {a.certificationNumber}</span>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    Avg. {a.avgResolutionDays} days · {a.totalCasesHandled?.toLocaleString()} cases handled
+                  </div>
+                  <div className="text-xs text-slate-400 mt-0.5">
+                    States: {Array.isArray(a.states) ? a.states.join(", ") : a.states}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-3 mt-5">
+              <Button variant="outline" className="flex-1" onClick={() => setShowArbitratorModal(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!selectedArbitratorId || selectArbitratorMutation.isPending}
+                onClick={() => selectArbitratorMutation.mutate({ disputeId: dispute.id, idrEntityId: selectedArbitratorId, idrEntityName: selectedArbitratorName })}>
+                {selectArbitratorMutation.isPending ? "Selecting..." : "Confirm Selection"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
