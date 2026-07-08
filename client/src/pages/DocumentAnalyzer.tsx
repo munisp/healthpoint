@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
 import { trpc } from "@/lib/trpc";
@@ -9,12 +9,15 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import {
   Upload, FileText, Scan, CheckCircle2, AlertCircle, Loader2,
   Eye, Copy, ArrowRight, Brain, FileSearch, Zap, RotateCcw,
   ChevronRight, Info, Columns2, LayoutList, ZoomIn, ZoomOut,
+  Pencil, Save, X, RefreshCw, CheckCheck,
 } from "lucide-react";
 
 type DocType = "eob" | "ra" | "cms1500" | "ub04" | "appeal" | "other";
@@ -47,6 +50,9 @@ interface ExtractedFields {
   notes: string;
 }
 
+// Editable overrides: only string/boolean scalar fields (arrays handled specially)
+type EditableKey = keyof Omit<ExtractedFields, "rawText" | "confidence">;
+
 const DOC_TYPE_LABELS: Record<DocType, string> = {
   eob: "Explanation of Benefits (EOB)",
   ra: "Remittance Advice (RA)",
@@ -64,62 +70,61 @@ const PIPELINE_STEPS = [
   { id: "validate", label: "Validation", icon: CheckCircle2, desc: "NSA compliance check" },
 ];
 
-// Field groups with their labels for side-by-side comparison
 const FIELD_GROUPS = [
   {
     title: "Patient Information",
     color: "blue",
     fields: [
-      { key: "patientName", label: "Patient Name" },
-      { key: "patientDOB", label: "Date of Birth" },
-      { key: "patientId", label: "Member ID", mono: true },
+      { key: "patientName", label: "Patient Name", type: "text" },
+      { key: "patientDOB", label: "Date of Birth", type: "text" },
+      { key: "patientId", label: "Member ID", mono: true, type: "text" },
     ],
   },
   {
     title: "Provider Information",
     color: "purple",
     fields: [
-      { key: "providerName", label: "Provider Name" },
-      { key: "providerNPI", label: "NPI", mono: true },
-      { key: "isOutOfNetwork", label: "Out-of-Network" },
+      { key: "providerName", label: "Provider Name", type: "text" },
+      { key: "providerNPI", label: "NPI", mono: true, type: "text" },
+      { key: "isOutOfNetwork", label: "Out-of-Network", type: "boolean" },
     ],
   },
   {
     title: "Payer / Claim Details",
     color: "orange",
     fields: [
-      { key: "payerName", label: "Payer Name" },
-      { key: "payerId", label: "Payer ID", mono: true },
-      { key: "claimNumber", label: "Claim Number", mono: true },
-      { key: "dateOfService", label: "Date of Service" },
+      { key: "payerName", label: "Payer Name", type: "text" },
+      { key: "payerId", label: "Payer ID", mono: true, type: "text" },
+      { key: "claimNumber", label: "Claim Number", mono: true, type: "text" },
+      { key: "dateOfService", label: "Date of Service", type: "text" },
     ],
   },
   {
     title: "Financial Summary",
     color: "green",
     fields: [
-      { key: "billedAmount", label: "Billed Amount", mono: true },
-      { key: "allowedAmount", label: "Allowed Amount", mono: true },
-      { key: "paidAmount", label: "Paid Amount", mono: true },
-      { key: "patientResponsibility", label: "Patient Resp.", mono: true },
+      { key: "billedAmount", label: "Billed Amount", mono: true, type: "text" },
+      { key: "allowedAmount", label: "Allowed Amount", mono: true, type: "text" },
+      { key: "paidAmount", label: "Paid Amount", mono: true, type: "text" },
+      { key: "patientResponsibility", label: "Patient Resp.", mono: true, type: "text" },
     ],
   },
   {
     title: "Denial / Adjustment",
     color: "red",
     fields: [
-      { key: "denialCode", label: "Denial Code", mono: true },
-      { key: "denialReason", label: "Denial Reason" },
+      { key: "denialCode", label: "Denial Code", mono: true, type: "text" },
+      { key: "denialReason", label: "Denial Reason", type: "text" },
     ],
   },
   {
     title: "Procedure & Diagnosis Codes",
     color: "teal",
     fields: [
-      { key: "cptCodes", label: "CPT Codes", mono: true },
-      { key: "icd10Codes", label: "ICD-10 Codes", mono: true },
-      { key: "serviceType", label: "Service Type" },
-      { key: "facilityState", label: "Facility State" },
+      { key: "cptCodes", label: "CPT Codes", mono: true, type: "array" },
+      { key: "icd10Codes", label: "ICD-10 Codes", mono: true, type: "array" },
+      { key: "serviceType", label: "Service Type", type: "text" },
+      { key: "facilityState", label: "Facility State", type: "text" },
     ],
   },
 ];
@@ -133,41 +138,137 @@ const COLOR_CLASSES: Record<string, { border: string; bg: string; dot: string; h
   teal:   { border: "border-teal-500/30",   bg: "bg-teal-500/5",   dot: "bg-teal-500",   header: "text-teal-700 dark:text-teal-400" },
 };
 
-function getFieldValue(fields: ExtractedFields, key: string): string | boolean | string[] {
-  return (fields as unknown as Record<string, string | boolean | string[]>)[key] ?? "—";
+function getRawValue(fields: ExtractedFields, key: string): string | boolean | string[] {
+  return (fields as unknown as Record<string, string | boolean | string[]>)[key] ?? "";
 }
 
-function formatFieldValue(value: string | boolean | string[]): string {
+function formatDisplay(value: string | boolean | string[]): string {
   if (Array.isArray(value)) return value.join(", ") || "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   return value || "—";
 }
 
-function FieldRow({
-  label, value, mono = false, highlighted = false,
+// ── Inline-editable field row ─────────────────────────────────────────────────
+function EditableFieldRow({
+  fieldKey, label, mono = false, highlighted = false, type = "text",
+  original, override, onSave, onReset,
 }: {
+  fieldKey: string;
   label: string;
-  value: string | boolean | string[];
   mono?: boolean;
   highlighted?: boolean;
+  type?: string;
+  original: string | boolean | string[];
+  override: string | boolean | string[] | undefined;
+  onSave: (key: string, value: string | boolean | string[]) => void;
+  onReset: (key: string) => void;
 }) {
-  const display = formatFieldValue(value);
-  const copyValue = Array.isArray(value) ? value.join(", ") : String(value);
+  const current = override !== undefined ? override : original;
+  const isModified = override !== undefined;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startEdit = () => {
+    const displayVal = Array.isArray(current) ? current.join(", ") : typeof current === "boolean" ? String(current) : (current as string);
+    setDraft(displayVal);
+    setEditing(true);
+  };
+
+  useEffect(() => {
+    if (editing && inputRef.current) inputRef.current.focus();
+  }, [editing]);
+
+  const commit = () => {
+    if (type === "array") {
+      const arr = draft.split(",").map(s => s.trim()).filter(Boolean);
+      onSave(fieldKey, arr);
+    } else if (type === "boolean") {
+      // boolean handled by switch, not text input
+    } else {
+      onSave(fieldKey, draft);
+    }
+    setEditing(false);
+  };
+
+  const cancel = () => setEditing(false);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") commit();
+    if (e.key === "Escape") cancel();
+  };
+
+  const displayValue = formatDisplay(current);
+  const copyValue = Array.isArray(current) ? current.join(", ") : String(current);
 
   return (
-    <div className={`flex items-start justify-between py-2 border-b border-border/40 last:border-0 gap-4 rounded px-1 transition-colors ${highlighted ? "bg-primary/10" : ""}`}>
-      <span className="text-xs text-muted-foreground shrink-0 w-36">{label}</span>
-      <span className={`text-sm font-medium text-right flex-1 ${mono ? "font-mono" : ""} ${display === "—" ? "text-muted-foreground" : ""}`}>
-        {display}
-      </span>
-      {copyValue && copyValue !== "—" && copyValue !== "false" && (
-        <button
-          onClick={() => { navigator.clipboard.writeText(copyValue); toast.success("Copied!"); }}
-          className="text-muted-foreground hover:text-foreground shrink-0"
-        >
-          <Copy className="h-3 w-3" />
-        </button>
-      )}
+    <div className={`group flex items-start gap-2 py-2 border-b border-border/40 last:border-0 rounded px-1 transition-colors ${highlighted ? "bg-primary/10" : "hover:bg-muted/30"}`}>
+      <span className="text-xs text-muted-foreground shrink-0 w-32 pt-0.5">{label}</span>
+
+      <div className="flex-1 min-w-0">
+        {editing && type !== "boolean" ? (
+          <div className="flex items-center gap-1">
+            <Input
+              ref={inputRef}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className={`h-6 text-xs py-0 px-1.5 ${mono ? "font-mono" : ""}`}
+              placeholder={type === "array" ? "comma-separated values" : ""}
+            />
+            <button onClick={commit} className="text-green-600 hover:text-green-700 shrink-0">
+              <CheckCheck className="h-3.5 w-3.5" />
+            </button>
+            <button onClick={cancel} className="text-muted-foreground hover:text-foreground shrink-0">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : type === "boolean" ? (
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={current as boolean}
+              onCheckedChange={v => onSave(fieldKey, v)}
+              className="h-4 w-7 data-[state=checked]:bg-primary"
+            />
+            <span className="text-xs font-medium">{current ? "Yes" : "No"}</span>
+          </div>
+        ) : (
+          <span
+            className={`text-sm font-medium cursor-text ${mono ? "font-mono" : ""} ${displayValue === "—" ? "text-muted-foreground" : ""} ${isModified ? "text-primary" : ""}`}
+            onClick={startEdit}
+            title="Click to edit"
+          >
+            {displayValue}
+          </span>
+        )}
+      </div>
+
+      {/* Action icons — visible on hover or when modified */}
+      <div className={`flex items-center gap-0.5 shrink-0 ${editing ? "hidden" : "opacity-0 group-hover:opacity-100 transition-opacity"} ${isModified ? "!opacity-100" : ""}`}>
+        {isModified && (
+          <button
+            onClick={() => onReset(fieldKey)}
+            className="text-muted-foreground hover:text-orange-500"
+            title="Reset to OCR value"
+          >
+            <RefreshCw className="h-3 w-3" />
+          </button>
+        )}
+        {type !== "boolean" && (
+          <button onClick={startEdit} className="text-muted-foreground hover:text-foreground" title="Edit">
+            <Pencil className="h-3 w-3" />
+          </button>
+        )}
+        {copyValue && copyValue !== "—" && copyValue !== "false" && (
+          <button
+            onClick={() => { navigator.clipboard.writeText(copyValue); toast.success("Copied!"); }}
+            className="text-muted-foreground hover:text-foreground"
+            title="Copy"
+          >
+            <Copy className="h-3 w-3" />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -187,12 +288,51 @@ export default function DocumentAnalyzer() {
   const [imageZoom, setImageZoom] = useState(100);
   const [highlightedGroup, setHighlightedGroup] = useState<string | null>(null);
 
+  // Inline editing state: key → corrected value
+  const [overrides, setOverrides] = useState<Partial<Record<string, string | boolean | string[]>>>({});
+  const [savedOverrides, setSavedOverrides] = useState<Partial<Record<string, string | boolean | string[]>>>({});
+
+  const modifiedCount = Object.keys(overrides).length;
+  const hasUnsaved = modifiedCount > 0 && JSON.stringify(overrides) !== JSON.stringify(savedOverrides);
+
+  const handleFieldSave = (key: string, value: string | boolean | string[]) => {
+    setOverrides(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handleFieldReset = (key: string) => {
+    setOverrides(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const handleSaveAll = () => {
+    setSavedOverrides({ ...overrides });
+    toast.success(`${modifiedCount} field${modifiedCount !== 1 ? "s" : ""} saved`, {
+      description: "Corrections applied. Use Auto-fill to pre-populate the dispute form.",
+    });
+  };
+
+  const handleResetAll = () => {
+    setOverrides({});
+    setSavedOverrides({});
+    toast.info("All corrections cleared");
+  };
+
+  // Effective fields = OCR result merged with user overrides
+  const effectiveFields = extractedFields
+    ? ({ ...extractedFields, ...overrides } as ExtractedFields)
+    : null;
+
   const analyzeMutation = trpc.docIntelligence.analyze.useMutation({
     onSuccess: (data) => {
       setCurrentStep(4);
       setStepProgress(100);
       if (data.extractedFields) {
         setExtractedFields(data.extractedFields as ExtractedFields);
+        setOverrides({});
+        setSavedOverrides({});
       }
       toast.success("Document analysis complete!", { description: `${data.confidence ?? 0}% confidence` });
     },
@@ -214,6 +354,8 @@ export default function DocumentAnalyzer() {
     }
     setSelectedFile(file);
     setExtractedFields(null);
+    setOverrides({});
+    setSavedOverrides({});
     setCurrentStep(-1);
     setStepProgress(0);
     setHighlightedGroup(null);
@@ -232,7 +374,6 @@ export default function DocumentAnalyzer() {
     if (!selectedFile) return;
     setCurrentStep(0);
     setStepProgress(20);
-
     const reader = new FileReader();
     reader.onload = async (e) => {
       const base64 = (e.target?.result as string).split(",")[1];
@@ -248,27 +389,91 @@ export default function DocumentAnalyzer() {
           base64Data: base64,
           documentType: docType,
         });
-      } catch {
-        // handled by onError
-      }
+      } catch { /* handled by onError */ }
     };
     reader.readAsDataURL(selectedFile);
   }, [selectedFile, docType, analyzeMutation]);
 
   const handleAutoFill = () => {
-    if (!extractedFields) return;
+    if (!effectiveFields) return;
     const params = new URLSearchParams();
-    if (extractedFields.billedAmount) params.set("billedAmount", extractedFields.billedAmount.replace(/[^0-9.]/g, ""));
-    if (extractedFields.serviceType) params.set("serviceType", extractedFields.serviceType);
-    if (extractedFields.facilityState) params.set("facilityState", extractedFields.facilityState);
-    if (extractedFields.cptCodes?.length) params.set("cptCodes", extractedFields.cptCodes.join(","));
-    if (extractedFields.dateOfService) params.set("serviceDate", extractedFields.dateOfService);
+    if (effectiveFields.billedAmount) params.set("billedAmount", effectiveFields.billedAmount.replace(/[^0-9.]/g, ""));
+    if (effectiveFields.serviceType) params.set("serviceType", effectiveFields.serviceType);
+    if (effectiveFields.facilityState) params.set("facilityState", effectiveFields.facilityState);
+    if (effectiveFields.cptCodes?.length) params.set("cptCodes", effectiveFields.cptCodes.join(","));
+    if (effectiveFields.dateOfService) params.set("serviceDate", effectiveFields.dateOfService);
     navigate(`/disputes/new?${params.toString()}`);
     toast.success("Fields pre-filled in New Dispute form");
   };
 
   const isAnalyzing = analyzeMutation.isPending;
   const confidence = extractedFields?.confidence ?? 0;
+
+  // ── Shared field panel renderer ───────────────────────────────────────────
+  const renderFieldGroups = (scrollable = false) => {
+    const content = (
+      <div className="space-y-3 pr-1">
+        {FIELD_GROUPS.map(group => {
+          const colors = COLOR_CLASSES[group.color];
+          const isHighlighted = highlightedGroup === group.title;
+          return (
+            <Card
+              key={group.title}
+              className={`transition-all ${isHighlighted ? `${colors.border} ${colors.bg} shadow-sm` : "hover:border-border/80"}`}
+            >
+              <CardHeader
+                className="pb-1 pt-3 px-4 cursor-pointer"
+                onClick={() => setHighlightedGroup(isHighlighted ? null : group.title)}
+              >
+                <CardTitle className={`text-xs font-semibold flex items-center gap-1.5 ${isHighlighted ? colors.header : ""}`}>
+                  <span className={`h-2 w-2 rounded-full ${colors.dot}`} />
+                  {group.title}
+                  {group.fields.some(f => overrides[f.key] !== undefined) && (
+                    <Badge variant="secondary" className="text-[10px] px-1 py-0 ml-auto">edited</Badge>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-3">
+                {group.fields.map(f => (
+                  <EditableFieldRow
+                    key={f.key}
+                    fieldKey={f.key}
+                    label={f.label}
+                    mono={f.mono}
+                    highlighted={isHighlighted}
+                    type={f.type}
+                    original={getRawValue(extractedFields!, f.key)}
+                    override={overrides[f.key]}
+                    onSave={handleFieldSave}
+                    onReset={handleFieldReset}
+                  />
+                ))}
+              </CardContent>
+            </Card>
+          );
+        })}
+
+        {/* NSA Card */}
+        <Card className={effectiveFields?.nsaApplicable ? "border-primary/30 bg-primary/5" : ""}>
+          <CardContent className="py-3 px-4 flex items-center gap-3">
+            <Info className="h-4 w-4 text-primary shrink-0" />
+            <div>
+              <p className="text-sm font-medium">
+                NSA / No Surprises Act: {effectiveFields?.nsaApplicable ? "Likely Applicable" : "May Not Apply"}
+              </p>
+              {effectiveFields?.notes && (
+                <p className="text-xs text-muted-foreground mt-0.5">{effectiveFields.notes}</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+
+    return scrollable ? (
+      <ScrollArea className="h-[600px] pr-1">{content}</ScrollArea>
+    ) : content;
+  };
 
   return (
     <DashboardLayout>
@@ -281,10 +486,10 @@ export default function DocumentAnalyzer() {
               Document Intelligence
             </h1>
             <p className="text-muted-foreground text-sm mt-1">
-              VLM-powered OCR pipeline — extract structured fields from EOB, RA, CMS-1500, and UB-04 documents
+              VLM-powered OCR pipeline — extract and correct structured fields from EOB, RA, CMS-1500, and UB-04 documents
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {extractedFields && (
               <div className="flex items-center border rounded-lg p-0.5 gap-0.5">
                 <Button
@@ -314,8 +519,8 @@ export default function DocumentAnalyzer() {
           </div>
         </div>
 
-        {/* Main layout: upload controls + content area */}
-        <div className={`grid gap-4 ${extractedFields && viewMode === "side-by-side" ? "grid-cols-1 xl:grid-cols-[320px_1fr]" : "grid-cols-1 lg:grid-cols-[320px_1fr]"}`}>
+        {/* Main grid */}
+        <div className={`grid gap-4 ${extractedFields && viewMode === "side-by-side" ? "grid-cols-1 xl:grid-cols-[300px_1fr]" : "grid-cols-1 lg:grid-cols-[300px_1fr]"}`}>
           {/* Left column: controls */}
           <div className="space-y-3">
             {/* Document Type */}
@@ -359,9 +564,7 @@ export default function DocumentAnalyzer() {
                   <div className="space-y-2">
                     <FileText className="h-8 w-8 mx-auto text-primary" />
                     <p className="font-medium text-sm truncate px-2">{selectedFile.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {(selectedFile.size / 1024).toFixed(1)} KB
-                    </p>
+                    <p className="text-xs text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -371,6 +574,8 @@ export default function DocumentAnalyzer() {
                         setSelectedFile(null);
                         setPreviewUrl(null);
                         setExtractedFields(null);
+                        setOverrides({});
+                        setSavedOverrides({});
                         setCurrentStep(-1);
                         setHighlightedGroup(null);
                       }}
@@ -390,12 +595,7 @@ export default function DocumentAnalyzer() {
             </Card>
 
             {/* Analyze Button */}
-            <Button
-              className="w-full"
-              size="default"
-              disabled={!selectedFile || isAnalyzing}
-              onClick={runAnalysis}
-            >
+            <Button className="w-full" size="default" disabled={!selectedFile || isAnalyzing} onClick={runAnalysis}>
               {isAnalyzing ? (
                 <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Analyzing…</>
               ) : (
@@ -417,13 +617,9 @@ export default function DocumentAnalyzer() {
                     const active = i === currentStep && isAnalyzing;
                     return (
                       <div key={step.id} className={`flex items-center gap-2 text-xs ${done ? "text-foreground" : active ? "text-primary" : "text-muted-foreground"}`}>
-                        {done ? (
-                          <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
-                        ) : active ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                        ) : (
-                          <Icon className="h-3.5 w-3.5 shrink-0 opacity-40" />
-                        )}
+                        {done ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                          : active ? <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                          : <Icon className="h-3.5 w-3.5 shrink-0 opacity-40" />}
                         <span className="font-medium">{step.label}</span>
                       </div>
                     );
@@ -432,17 +628,18 @@ export default function DocumentAnalyzer() {
               </Card>
             )}
 
-            {/* Field group legend (side-by-side mode) */}
+            {/* Field group legend */}
             {extractedFields && viewMode === "side-by-side" && (
               <Card>
                 <CardHeader className="pb-2 pt-3 px-4">
                   <CardTitle className="text-xs text-muted-foreground uppercase tracking-wide">Field Groups</CardTitle>
                 </CardHeader>
                 <CardContent className="px-4 pb-3 space-y-1.5">
-                  <p className="text-xs text-muted-foreground mb-2">Click a group to highlight it in both panels</p>
+                  <p className="text-xs text-muted-foreground mb-2">Click to highlight in both panels</p>
                   {FIELD_GROUPS.map(group => {
                     const colors = COLOR_CLASSES[group.color];
                     const isActive = highlightedGroup === group.title;
+                    const hasEdits = group.fields.some(f => overrides[f.key] !== undefined);
                     return (
                       <button
                         key={group.title}
@@ -451,7 +648,7 @@ export default function DocumentAnalyzer() {
                       >
                         <span className={`h-2 w-2 rounded-full shrink-0 ${colors.dot}`} />
                         <span className={isActive ? colors.header : ""}>{group.title}</span>
-                        <span className="ml-auto text-muted-foreground">{group.fields.length} fields</span>
+                        {hasEdits && <Badge variant="secondary" className="text-[10px] px-1 py-0 ml-auto">edited</Badge>}
                       </button>
                     );
                   })}
@@ -460,27 +657,42 @@ export default function DocumentAnalyzer() {
             )}
           </div>
 
-          {/* Right column: content */}
+          {/* Right column */}
           <div className="min-w-0">
-            {extractedFields ? (
+            {effectiveFields ? (
               <>
-                {/* Confidence Banner */}
-                <Card className={`mb-4 ${confidence >= 80 ? "border-green-500/30 bg-green-500/5" : confidence >= 60 ? "border-yellow-500/30 bg-yellow-500/5" : "border-red-500/30 bg-red-500/5"}`}>
+                {/* Confidence + action banner */}
+                <Card className={`mb-3 ${confidence >= 80 ? "border-green-500/30 bg-green-500/5" : confidence >= 60 ? "border-yellow-500/30 bg-yellow-500/5" : "border-red-500/30 bg-red-500/5"}`}>
                   <CardContent className="py-3 flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2">
-                      {confidence >= 80 ? (
-                        <CheckCircle2 className="h-5 w-5 text-green-500" />
-                      ) : (
-                        <AlertCircle className="h-5 w-5 text-yellow-500" />
-                      )}
+                      {confidence >= 80 ? <CheckCircle2 className="h-5 w-5 text-green-500" /> : <AlertCircle className="h-5 w-5 text-yellow-500" />}
                       <div>
                         <p className="font-semibold text-sm">Extraction Complete</p>
                         <p className="text-xs text-muted-foreground">
-                          {confidence}% confidence · {extractedFields.nsaApplicable ? "NSA Applicable" : "NSA may not apply"}
+                          {confidence}% confidence · {effectiveFields.nsaApplicable ? "NSA Applicable" : "NSA may not apply"}
+                          {modifiedCount > 0 && ` · ${modifiedCount} field${modifiedCount !== 1 ? "s" : ""} corrected`}
                         </p>
                       </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-wrap">
+                      {hasUnsaved && (
+                        <>
+                          <Button variant="default" size="sm" onClick={handleSaveAll} className="gap-1">
+                            <Save className="h-3 w-3" />
+                            Save corrections ({modifiedCount})
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={handleResetAll} className="gap-1 text-muted-foreground">
+                            <RefreshCw className="h-3 w-3" />
+                            Reset all
+                          </Button>
+                        </>
+                      )}
+                      {!hasUnsaved && modifiedCount > 0 && (
+                        <Badge variant="secondary" className="gap-1 text-xs">
+                          <CheckCheck className="h-3 w-3 text-green-500" />
+                          {modifiedCount} corrections saved
+                        </Badge>
+                      )}
                       <Button variant="outline" size="sm" onClick={handleAutoFill}>
                         <ArrowRight className="h-3 w-3 mr-1" />
                         Auto-fill Dispute
@@ -490,9 +702,8 @@ export default function DocumentAnalyzer() {
                 </Card>
 
                 {viewMode === "side-by-side" ? (
-                  /* ── SIDE-BY-SIDE VIEW ── */
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-                    {/* Left panel: Original document */}
+                    {/* Document image panel */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <h3 className="text-sm font-semibold flex items-center gap-1.5">
@@ -514,7 +725,7 @@ export default function DocumentAnalyzer() {
                       <Card className="overflow-hidden">
                         <CardContent className="p-0">
                           {previewUrl && selectedFile?.type.startsWith("image/") ? (
-                            <ScrollArea className="h-[600px]">
+                            <ScrollArea className="h-[580px]">
                               <div className="flex items-start justify-center p-2 bg-muted/30 min-h-full">
                                 <img
                                   src={previewUrl}
@@ -525,7 +736,7 @@ export default function DocumentAnalyzer() {
                               </div>
                             </ScrollArea>
                           ) : selectedFile?.type === "application/pdf" ? (
-                            <div className="h-[600px] flex flex-col items-center justify-center text-muted-foreground bg-muted/20 gap-3">
+                            <div className="h-[580px] flex flex-col items-center justify-center text-muted-foreground bg-muted/20 gap-3">
                               <FileText className="h-16 w-16 opacity-30" />
                               <div className="text-center">
                                 <p className="font-medium text-sm">{selectedFile.name}</p>
@@ -538,7 +749,7 @@ export default function DocumentAnalyzer() {
                               </Badge>
                             </div>
                           ) : (
-                            <div className="h-[600px] flex items-center justify-center text-muted-foreground bg-muted/20">
+                            <div className="h-[580px] flex items-center justify-center text-muted-foreground bg-muted/20">
                               <div className="text-center">
                                 <Upload className="h-12 w-12 mx-auto mb-2 opacity-30" />
                                 <p className="text-sm">No document preview</p>
@@ -548,12 +759,9 @@ export default function DocumentAnalyzer() {
                         </CardContent>
                       </Card>
 
-                      {/* Raw OCR text in side-by-side */}
+                      {/* Raw OCR text */}
                       <Card>
-                        <CardHeader
-                          className="pb-2 pt-3 px-4 cursor-pointer"
-                          onClick={() => setShowRawText(v => !v)}
-                        >
+                        <CardHeader className="pb-2 pt-3 px-4 cursor-pointer" onClick={() => setShowRawText(v => !v)}>
                           <CardTitle className="text-xs flex items-center justify-between">
                             <span className="flex items-center gap-1.5 text-muted-foreground uppercase tracking-wide">
                               <FileText className="h-3.5 w-3.5" />Raw OCR Text
@@ -565,7 +773,7 @@ export default function DocumentAnalyzer() {
                           <CardContent className="px-4 pb-3">
                             <ScrollArea className="h-40">
                               <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-mono leading-relaxed">
-                                {extractedFields.rawText || "No raw text extracted"}
+                                {extractedFields?.rawText || "No raw text extracted"}
                               </pre>
                             </ScrollArea>
                           </CardContent>
@@ -573,65 +781,25 @@ export default function DocumentAnalyzer() {
                       </Card>
                     </div>
 
-                    {/* Right panel: Extracted fields */}
+                    {/* Editable fields panel */}
                     <div className="space-y-2">
                       <h3 className="text-sm font-semibold flex items-center gap-1.5">
                         <Brain className="h-4 w-4 text-muted-foreground" />
                         Extracted Fields
                         <Badge variant="secondary" className="text-xs ml-1">{confidence}% confidence</Badge>
+                        {modifiedCount > 0 && (
+                          <Badge variant="outline" className="text-xs ml-1 gap-1 text-primary border-primary/30">
+                            <Pencil className="h-2.5 w-2.5" />
+                            {modifiedCount} edited
+                          </Badge>
+                        )}
+                        <span className="ml-auto text-xs text-muted-foreground font-normal">Click any value to edit</span>
                       </h3>
-                      <ScrollArea className="h-[600px] pr-1">
-                        <div className="space-y-3 pr-1">
-                          {FIELD_GROUPS.map(group => {
-                            const colors = COLOR_CLASSES[group.color];
-                            const isHighlighted = highlightedGroup === group.title;
-                            return (
-                              <Card
-                                key={group.title}
-                                className={`transition-all cursor-pointer ${isHighlighted ? `${colors.border} ${colors.bg} shadow-sm` : "hover:border-border/80"}`}
-                                onClick={() => setHighlightedGroup(isHighlighted ? null : group.title)}
-                              >
-                                <CardHeader className="pb-1 pt-3 px-4">
-                                  <CardTitle className={`text-xs font-semibold flex items-center gap-1.5 ${isHighlighted ? colors.header : ""}`}>
-                                    <span className={`h-2 w-2 rounded-full ${colors.dot}`} />
-                                    {group.title}
-                                  </CardTitle>
-                                </CardHeader>
-                                <CardContent className="px-4 pb-3">
-                                  {group.fields.map(f => (
-                                    <FieldRow
-                                      key={f.key}
-                                      label={f.label}
-                                      value={getFieldValue(extractedFields, f.key)}
-                                      mono={f.mono}
-                                      highlighted={isHighlighted}
-                                    />
-                                  ))}
-                                </CardContent>
-                              </Card>
-                            );
-                          })}
-
-                          {/* NSA Card */}
-                          <Card className={extractedFields.nsaApplicable ? "border-primary/30 bg-primary/5" : ""}>
-                            <CardContent className="py-3 px-4 flex items-center gap-3">
-                              <Info className="h-4 w-4 text-primary shrink-0" />
-                              <div>
-                                <p className="text-sm font-medium">
-                                  NSA / No Surprises Act: {extractedFields.nsaApplicable ? "Likely Applicable" : "May Not Apply"}
-                                </p>
-                                {extractedFields.notes && (
-                                  <p className="text-xs text-muted-foreground mt-0.5">{extractedFields.notes}</p>
-                                )}
-                              </div>
-                            </CardContent>
-                          </Card>
-                        </div>
-                      </ScrollArea>
+                      {renderFieldGroups(true)}
                     </div>
                   </div>
                 ) : (
-                  /* ── FIELDS ONLY VIEW ── */
+                  /* Fields-only view */
                   <div className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {FIELD_GROUPS.map(group => {
@@ -646,11 +814,16 @@ export default function DocumentAnalyzer() {
                             </CardHeader>
                             <CardContent>
                               {group.fields.map(f => (
-                                <FieldRow
+                                <EditableFieldRow
                                   key={f.key}
+                                  fieldKey={f.key}
                                   label={f.label}
-                                  value={getFieldValue(extractedFields, f.key)}
                                   mono={f.mono}
+                                  type={f.type}
+                                  original={getRawValue(extractedFields!, f.key)}
+                                  override={overrides[f.key]}
+                                  onSave={handleFieldSave}
+                                  onReset={handleFieldReset}
                                 />
                               ))}
                             </CardContent>
@@ -658,21 +831,19 @@ export default function DocumentAnalyzer() {
                         );
                       })}
                     </div>
-
-                    <Card className={extractedFields.nsaApplicable ? "border-primary/30" : ""}>
+                    <Card className={effectiveFields.nsaApplicable ? "border-primary/30" : ""}>
                       <CardContent className="py-3 flex items-center gap-3">
                         <Info className="h-4 w-4 text-primary shrink-0" />
                         <div>
                           <p className="text-sm font-medium">
-                            NSA / No Surprises Act: {extractedFields.nsaApplicable ? "Likely Applicable" : "May Not Apply"}
+                            NSA / No Surprises Act: {effectiveFields.nsaApplicable ? "Likely Applicable" : "May Not Apply"}
                           </p>
-                          {extractedFields.notes && (
-                            <p className="text-xs text-muted-foreground mt-0.5">{extractedFields.notes}</p>
+                          {effectiveFields.notes && (
+                            <p className="text-xs text-muted-foreground mt-0.5">{effectiveFields.notes}</p>
                           )}
                         </div>
                       </CardContent>
                     </Card>
-
                     <Card>
                       <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowRawText(v => !v)}>
                         <CardTitle className="text-sm flex items-center justify-between">
@@ -684,7 +855,7 @@ export default function DocumentAnalyzer() {
                         <CardContent>
                           <ScrollArea className="h-48">
                             <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-mono leading-relaxed">
-                              {extractedFields.rawText || "No raw text extracted"}
+                              {extractedFields?.rawText || "No raw text extracted"}
                             </pre>
                           </ScrollArea>
                         </CardContent>
@@ -694,7 +865,6 @@ export default function DocumentAnalyzer() {
                 )}
               </>
             ) : (
-              /* Empty state */
               <Card className="h-full min-h-96">
                 <CardContent className="h-full flex flex-col items-center justify-center text-center py-16 space-y-4">
                   <div className="rounded-full bg-muted p-6">
@@ -703,13 +873,13 @@ export default function DocumentAnalyzer() {
                   <div>
                     <h3 className="font-semibold text-lg">VLM Document Intelligence</h3>
                     <p className="text-muted-foreground text-sm mt-2 max-w-sm">
-                      Upload an EOB, RA, CMS-1500, or UB-04 document. The Vision Language Model will extract all structured fields for your IDR dispute.
+                      Upload an EOB, RA, CMS-1500, or UB-04 document. The Vision Language Model will extract all structured fields — then you can correct any OCR mistakes inline.
                     </p>
                   </div>
                   <div className="grid grid-cols-3 gap-3 mt-4 text-xs text-muted-foreground">
                     {[
                       { label: "Side-by-Side View", icon: Columns2 },
-                      { label: "25 Structured Fields", icon: CheckCircle2 },
+                      { label: "Inline Field Editing", icon: Pencil },
                       { label: "Auto-fill Dispute", icon: ArrowRight },
                     ].map(item => {
                       const Icon = item.icon;
