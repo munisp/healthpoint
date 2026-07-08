@@ -72,6 +72,7 @@ export default function Dashboard() {
         </div>
         <nav className="flex items-center gap-4">
           <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600 font-medium">Disputes</button>
+          <button onClick={() => navigate("/idr-entities")} className="text-sm text-slate-600 hover:text-blue-600 font-medium">IDR Entities</button>
           <button onClick={() => navigate("/disputes/new")} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
             <Plus size={14} />New Dispute
           </button>

@@ -248,6 +248,9 @@ export const idrEntities = mysqlTable("idr_entities", {
   website: varchar("website", { length: 512 }),
   avgResolutionDays: int("avgResolutionDays"),
   totalCasesHandled: int("totalCasesHandled").default(0),
+  // Capacity management
+  maxConcurrentCases: int("maxConcurrentCases").default(50),
+  currentActiveCases: int("currentActiveCases").default(0),
   isActive: boolean("isActive").default(true),
   createdAt: timestamp("createdAt").defaultNow(),
 });
@@ -278,3 +281,36 @@ export const notifications = mysqlTable(
 );
 
 export type Notification = typeof notifications.$inferSelect;
+
+/**
+ * Draft disputes — auto-saved wizard state before formal submission.
+ * Keyed by userId so each user has one active draft per session.
+ */
+export const disputeDrafts = mysqlTable(
+  "dispute_drafts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    // Wizard step reached
+    currentWizardStep: int("currentWizardStep").default(1).notNull(),
+    // Serialised form data (all fields)
+    formData: json("formData").$type<Record<string, unknown>>().notNull(),
+    // QPA validation cache — last validated billed amount + result
+    lastQpaValidatedAmount: decimal("lastQpaValidatedAmount", { precision: 12, scale: 2 }),
+    qpaValidationResult: json("qpaValidationResult").$type<{
+      qpaEstimate: number;
+      withinQpaRange: boolean;
+      percentageOfQpa: number;
+      recommendation: string;
+      cptBenchmarks: Record<string, number>;
+    } | null>(),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow(),
+  },
+  (t) => ({
+    userIdx: index("drafts_user_idx").on(t.userId),
+  })
+);
+
+export type DisputeDraft = typeof disputeDrafts.$inferSelect;
+export type InsertDisputeDraft = typeof disputeDrafts.$inferInsert;

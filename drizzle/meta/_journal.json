@@ -8,6 +8,13 @@
       "when": 1783473341815,
       "tag": "0000_heavy_alex_power",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1783474610880,
+      "tag": "0001_daffy_brother_voodoo",
+      "breakpoints": true
     }
   ]
 }

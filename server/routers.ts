@@ -8,6 +8,9 @@ import {
   submitOffer, addDocument, listIDREntities, seedIDREntities,
   getDashboardStats, listNotifications, markNotificationRead,
   createNotification,
+  upsertDisputeDraft, getDisputeDraft, deleteDisputeDraft,
+  calculateQPA,
+  getIDREntityCaseload, listAllIDREntityCaseloads,
 } from "./db";
 import { IDR_STEP, DISPUTE_STATUS, SERVICE_TYPE, PARTY_TYPE } from "../drizzle/schema";
 
@@ -259,6 +262,56 @@ export const appRouter = router({
       .query(async ({ input }) => {
         await seedIDREntities(); // Seed on first call
         return listIDREntities(input);
+      }),
+
+    caseload: protectedProcedure
+      .input(z.object({ entityId: z.string() }))
+      .query(async ({ input }) => {
+        await seedIDREntities();
+        const result = await getIDREntityCaseload(input.entityId);
+        if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "IDR entity not found" });
+        return result;
+      }),
+
+    allCaseloads: protectedProcedure
+      .query(async () => {
+        await seedIDREntities();
+        return listAllIDREntityCaseloads();
+      }),
+  }),
+
+  // ─── Draft disputes ───────────────────────────────────────────────────────────
+  drafts: router({
+    get: protectedProcedure.query(async ({ ctx }) => {
+      return getDisputeDraft(ctx.user.id);
+    }),
+
+    save: protectedProcedure
+      .input(z.object({
+        wizardStep: z.number().min(1).max(5),
+        formData: z.record(z.string(), z.unknown()),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        return upsertDisputeDraft(ctx.user.id, input.wizardStep, input.formData);
+      }),
+
+    delete: protectedProcedure.mutation(async ({ ctx }) => {
+      await deleteDisputeDraft(ctx.user.id);
+      return { success: true };
+    }),
+  }),
+
+  // ─── QPA validation ───────────────────────────────────────────────────────────
+  qpa: router({
+    validate: protectedProcedure
+      .input(z.object({
+        billedAmount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+        cptCodes: z.array(z.string()).min(1),
+        facilityState: z.string().length(2),
+      }))
+      .query(async ({ input }) => {
+        const amount = parseFloat(input.billedAmount);
+        return calculateQPA(amount, input.cptCodes, input.facilityState);
       }),
   }),
 

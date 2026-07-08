@@ -5,6 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
+import IDREntityDashboard from "./pages/IDREntityDashboard";
 import Dashboard from "./pages/Dashboard";
 import DisputesList from "./pages/DisputesList";
 import DisputeDetail from "./pages/DisputeDetail";
@@ -18,6 +19,7 @@ function Router() {
       <Route path={"/disputes"} component={DisputesList} />
       <Route path={"/disputes/new"} component={NewDispute} />
       <Route path={"/disputes/:id"} component={DisputeDetail} />
+      <Route path={"/idr-entities"} component={IDREntityDashboard} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>
