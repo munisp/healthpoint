@@ -586,3 +586,105 @@ export const documentAnalyses = pgTable(
 );
 export type DocumentAnalysis = typeof documentAnalyses.$inferSelect;
 export type InsertDocumentAnalysis = typeof documentAnalyses.$inferInsert;
+
+// ─── Dispute Access (ReBAC / Permify-style relation tuples) ──────────────────
+export const authzPermissionEnum = pgEnum("authz_permission", ["read", "write", "admin"]);
+export const disputeAccess = pgTable(
+  "dispute_access",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    permission: authzPermissionEnum().default("read").notNull(),
+    grantedBy: varchar("grantedBy", { length: 64 }).notNull(),
+    grantedAt: timestamp("grantedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("dispute_access_disputeId_idx").on(t.disputeId),
+    index("dispute_access_userId_idx").on(t.userId),
+    uniqueIndex("dispute_access_unique_idx").on(t.disputeId, t.userId),
+  ]
+);
+export type DisputeAccess = typeof disputeAccess.$inferSelect;
+export type InsertDisputeAccess = typeof disputeAccess.$inferInsert;
+
+// ─── Double-Entry Ledger (TigerBeetle-style) ─────────────────────────────────
+export const ledgerAccountTypeEnum = pgEnum("ledger_account_type", [
+  "billed", "allowed", "paid", "determination", "adjustment", "patient_responsibility"
+]);
+export const ledgerAccounts = pgTable(
+  "ledger_accounts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    accountType: ledgerAccountTypeEnum().notNull(),
+    // Balance stored as integer cents to avoid floating-point errors
+    balanceCents: integer("balanceCents").default(0).notNull(),
+    currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("ledger_accounts_disputeId_idx").on(t.disputeId),
+    uniqueIndex("ledger_accounts_unique_idx").on(t.disputeId, t.accountType),
+  ]
+);
+export type LedgerAccount = typeof ledgerAccounts.$inferSelect;
+export type InsertLedgerAccount = typeof ledgerAccounts.$inferInsert;
+
+export const ledgerEntryTypeEnum = pgEnum("ledger_entry_type", [
+  "debit", "credit", "adjustment", "reversal"
+]);
+export const ledgerEntries = pgTable(
+  "ledger_entries",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    debitAccountId: varchar("debitAccountId", { length: 64 }).notNull(),
+    creditAccountId: varchar("creditAccountId", { length: 64 }).notNull(),
+    amountCents: integer("amountCents").notNull(),
+    currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    entryType: ledgerEntryTypeEnum().notNull(),
+    description: text("description").notNull(),
+    referenceId: varchar("referenceId", { length: 64 }), // offer ID, determination ID, etc.
+    referenceType: varchar("referenceType", { length: 64 }), // "offer", "determination", "adjustment"
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("ledger_entries_disputeId_idx").on(t.disputeId),
+    index("ledger_entries_debitAccountId_idx").on(t.debitAccountId),
+    index("ledger_entries_creditAccountId_idx").on(t.creditAccountId),
+    index("ledger_entries_createdAt_idx").on(t.createdAt),
+  ]
+);
+export type LedgerEntry = typeof ledgerEntries.$inferSelect;
+export type InsertLedgerEntry = typeof ledgerEntries.$inferInsert;
+
+// ─── Event Bus (Kafka-style durable event log) ────────────────────────────────
+export const eventStatusEnum = pgEnum("event_status", ["pending", "delivered", "failed", "skipped"]);
+export const eventLog = pgTable(
+  "event_log",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    topic: varchar("topic", { length: 128 }).notNull(),        // e.g. "idr.disputes.state_changes"
+    eventType: varchar("eventType", { length: 128 }).notNull(), // e.g. "dispute.advanced"
+    aggregateId: varchar("aggregateId", { length: 64 }).notNull(), // disputeId
+    aggregateType: varchar("aggregateType", { length: 64 }).notNull(), // "dispute"
+    payload: jsonb("payload").notNull(),
+    metadata: jsonb("metadata"),
+    status: eventStatusEnum().default("pending").notNull(),
+    publishedAt: timestamp("publishedAt"),
+    failureReason: text("failureReason"),
+    retryCount: integer("retryCount").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("event_log_topic_idx").on(t.topic),
+    index("event_log_aggregateId_idx").on(t.aggregateId),
+    index("event_log_status_idx").on(t.status),
+    index("event_log_createdAt_idx").on(t.createdAt),
+  ]
+);
+export type EventLogEntry = typeof eventLog.$inferSelect;
+export type InsertEventLogEntry = typeof eventLog.$inferInsert;
