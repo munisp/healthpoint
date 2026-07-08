@@ -67,3 +67,10 @@
 - [x] Persist CMS drafts via tRPC — save on generate, load on tracker mount, list all drafts
 - [x] AI_SERVICE_URL secret — defaults to http://localhost:8000, configurable via env var
 - [x] AI dispute summary card — IDRAssistantAgent one-click summary on DisputeDetail page with confidence badge, sources, suggested actions, refresh button
+
+## Session 6 — Suggested Next Steps
+- [x] GitHub export — push idr-workflow-demo code to munisp/healthpoint repository (commit c46d761)
+- [x] disputesByMonth tRPC procedure — group disputes by createdAt month for analytics
+- [x] Dashboard analytics chart — Recharts stacked BarChart with 3M/6M/12M toggle, status breakdown (open_negotiation, idr_active, closed, ineligible), empty state
+- [x] Role-based CMS draft visibility — listCMSDrafts accepts adminAll flag; admins get listAllCMSDrafts, users get listCMSDraftsByUser
+- [x] Admin toggle in CMS Tracker — violet "View All Drafts" toggle button visible to admins only; invalidates query on toggle

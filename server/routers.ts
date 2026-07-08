@@ -13,6 +13,7 @@ import {
   calculateQPA,
   getIDREntityCaseload, listAllIDREntityCaseloads,
   saveCMSDraft, getCMSDraftByDispute, listCMSDraftsByUser, updateCMSDraftStatus,
+  getDisputesByMonth, listAllCMSDrafts,
 } from "./db";
 import { generateDisputePDF } from "./pdf-export";
 import { dispatchNotification } from "./notifications";
@@ -108,6 +109,11 @@ export const appRouter = router({
       if (!stats) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to load dashboard stats" });
       return stats;
     }),
+    disputesByMonth: protectedProcedure
+      .input(z.object({ months: z.number().int().min(3).max(24).default(12) }))
+      .query(async ({ input }) => {
+        return getDisputesByMonth(input.months);
+      }),
   }),
 
   // ─── Disputes ───────────────────────────────────────────────────────────────
@@ -636,9 +642,15 @@ export const appRouter = router({
       }),
 
     // List all CMS drafts for the current user (persisted)
-    listCMSDrafts: protectedProcedure.query(async ({ ctx }) => {
-      return listCMSDraftsByUser(ctx.user.id);
-    }),
+    listCMSDrafts: protectedProcedure
+      .input(z.object({ adminAll: z.boolean().optional().default(false) }).optional())
+      .query(async ({ ctx, input }) => {
+        // Admins can request all users' drafts by passing adminAll: true
+        if (input?.adminAll && ctx.user.role === "admin") {
+          return listAllCMSDrafts();
+        }
+        return listCMSDraftsByUser(ctx.user.id);
+      }),
 
     // Get a single CMS draft by dispute ID
     getCMSDraft: protectedProcedure

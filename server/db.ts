@@ -799,3 +799,69 @@ export async function updateCMSDraftStatus(
     })
     .where(and(eq(cmsDrafts.id, draftId), eq(cmsDrafts.createdBy, userId)));
 }
+
+// ─── Analytics helpers ────────────────────────────────────────────────────────
+
+export interface DisputeMonthBucket {
+  month: string;          // "YYYY-MM"
+  total: number;
+  open_negotiation: number;
+  idr_active: number;
+  closed: number;
+  ineligible: number;
+}
+
+export async function getDisputesByMonth(months = 12): Promise<DisputeMonthBucket[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  // Pull all disputes created in the last N months
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - months);
+
+  const rows = await db
+    .select({
+      createdAt: disputes.createdAt,
+      status: disputes.status,
+    })
+    .from(disputes)
+    .where(sql`${disputes.createdAt} >= ${cutoff}`)
+    .orderBy(disputes.createdAt);
+
+  // Group in JS — avoids DB-specific date_trunc syntax differences
+  const buckets: Record<string, DisputeMonthBucket> = {};
+
+  for (const row of rows) {
+    const d = row.createdAt ? new Date(row.createdAt as unknown as string) : new Date();
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    if (!buckets[key]) {
+      buckets[key] = { month: key, total: 0, open_negotiation: 0, idr_active: 0, closed: 0, ineligible: 0 };
+    }
+    buckets[key].total++;
+    const s = row.status as string;
+    if (s === "open_negotiation") buckets[key].open_negotiation++;
+    else if (["idr_initiated", "idr_entity_selection", "eligibility_review", "offer_submission", "under_arbitration"].includes(s)) buckets[key].idr_active++;
+    else if (s === "closed") buckets[key].closed++;
+    else if (s === "ineligible") buckets[key].ineligible++;
+  }
+
+  // Fill in any missing months in the range so the chart has continuous x-axis
+  const result: DisputeMonthBucket[] = [];
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setMonth(d.getMonth() - i);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    result.push(buckets[key] ?? { month: key, total: 0, open_negotiation: 0, idr_active: 0, closed: 0, ineligible: 0 });
+  }
+  return result;
+}
+
+// Admin helper — returns all CMS drafts across all users
+export async function listAllCMSDrafts(): Promise<CMSDraft[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(cmsDrafts)
+    .orderBy(desc(cmsDrafts.updatedAt));
+}
