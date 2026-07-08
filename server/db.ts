@@ -12,6 +12,7 @@ import {
   disputeDrafts, DisputeDraft, InsertDisputeDraft,
   cmsDrafts, CMSDraft, InsertCMSDraft,
   disputeTemplates, DisputeTemplate, InsertDisputeTemplate,
+  userProfiles, UserProfile, InsertUserProfile,
   IDR_STEP, IDRStep, DISPUTE_STATUS, DisputeStatus,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -1033,4 +1034,48 @@ export async function incrementTemplateUsage(id: string): Promise<void> {
   await db.update(disputeTemplates)
     .set({ usageCount: sql`${disputeTemplates.usageCount} + 1`, updatedAt: new Date() })
     .where(eq(disputeTemplates.id, id));
+}
+
+// ─── User Profiles ────────────────────────────────────────────────────────────
+export async function getUserProfile(userId: string): Promise<UserProfile | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(userProfiles).where(eq(userProfiles.id, userId)).limit(1);
+  return rows[0];
+}
+
+export async function upsertUserProfile(profile: InsertUserProfile): Promise<UserProfile | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const now = new Date();
+  await db.insert(userProfiles)
+    .values({ ...profile, updatedAt: now })
+    .onConflictDoUpdate({
+      target: userProfiles.id,
+      set: {
+        orgName: profile.orgName,
+        orgType: profile.orgType,
+        stakeholderRole: profile.stakeholderRole,
+        npi: profile.npi,
+        taxId: profile.taxId,
+        phone: profile.phone,
+        preferredContact: profile.preferredContact,
+        onboardingCompleted: profile.onboardingCompleted,
+        onboardingCompletedAt: profile.onboardingCompletedAt,
+        updatedAt: now,
+      },
+    });
+  const rows = await db.select().from(userProfiles).where(eq(userProfiles.id, profile.id)).limit(1);
+  return rows[0];
+}
+
+export async function markOnboardingComplete(userId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(userProfiles)
+    .values({ id: userId, onboardingCompleted: true, onboardingCompletedAt: new Date() })
+    .onConflictDoUpdate({
+      target: userProfiles.id,
+      set: { onboardingCompleted: true, onboardingCompletedAt: new Date(), updatedAt: new Date() },
+    });
 }

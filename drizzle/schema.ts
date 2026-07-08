@@ -416,3 +416,35 @@ export const disputeTemplates = pgTable(
 );
 export type DisputeTemplate = typeof disputeTemplates.$inferSelect;
 export type InsertDisputeTemplate = typeof disputeTemplates.$inferInsert;
+
+// ─── User Profiles (onboarding data) ─────────────────────────────────────────
+export const stakeholderRoleEnum = pgEnum("stakeholder_role", [
+  "provider",
+  "facility",
+  "payer",
+  "idr_entity",
+  "other",
+]);
+
+export const userProfiles = pgTable(
+  "user_profiles",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(), // same as users.id (FK)
+    orgName: varchar("orgName", { length: 255 }),
+    orgType: varchar("orgType", { length: 128 }),
+    stakeholderRole: stakeholderRoleEnum("stakeholderRole").default("provider"),
+    npi: varchar("npi", { length: 32 }),
+    taxId: varchar("taxId", { length: 32 }),
+    phone: varchar("phone", { length: 32 }),
+    preferredContact: varchar("preferredContact", { length: 64 }),
+    onboardingCompleted: boolean("onboardingCompleted").default(false),
+    onboardingCompletedAt: timestamp("onboardingCompletedAt"),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [
+    index("user_profiles_role_idx").on(t.stakeholderRole),
+  ]
+);
+export type UserProfile = typeof userProfiles.$inferSelect;
+export type InsertUserProfile = typeof userProfiles.$inferInsert;

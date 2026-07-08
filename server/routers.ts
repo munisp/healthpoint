@@ -19,6 +19,7 @@ import {
   listEMRSyncLogs, createEMRSyncLog,
   createDisputeTemplate, listDisputeTemplates, getDisputeTemplateById,
   updateDisputeTemplate, deleteDisputeTemplate, incrementTemplateUsage,
+  getUserProfile, upsertUserProfile, markOnboardingComplete,
 } from "./db";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
@@ -1399,6 +1400,36 @@ export const appRouter = router({
         await incrementTemplateUsage(input.id);
         return template;
       }),
+  }),
+
+  // --- User Profiles (onboarding) ------------------------------------------
+  profiles: router({
+    get: protectedProcedure.query(async ({ ctx }) => {
+      return getUserProfile(ctx.user.id);
+    }),
+    save: protectedProcedure
+      .input(z.object({
+        orgName: z.string().max(255).optional(),
+        orgType: z.string().max(128).optional(),
+        stakeholderRole: z.enum(["provider", "facility", "payer", "idr_entity", "other"]).optional(),
+        npi: z.string().max(32).optional(),
+        taxId: z.string().max(32).optional(),
+        phone: z.string().max(32).optional(),
+        preferredContact: z.string().max(64).optional(),
+        onboardingCompleted: z.boolean().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const profile = await upsertUserProfile({
+          id: ctx.user.id,
+          ...input,
+          onboardingCompletedAt: input.onboardingCompleted ? new Date() : undefined,
+        });
+        return profile;
+      }),
+    completeOnboarding: protectedProcedure.mutation(async ({ ctx }) => {
+      await markOnboardingComplete(ctx.user.id);
+      return { success: true };
+    }),
   }),
 
   // --- Reports & Analytics --------------------------------------------------

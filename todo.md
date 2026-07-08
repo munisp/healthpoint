@@ -150,3 +150,15 @@
 - [x] Audience-specific sign-up CTAs — per-role register links (provider/facility/payer/idr_entity)
 - [x] Regulatory footer links — CMS NSA Hub, 45 CFR § 149.510, § 149.140, HRSA, Open Negotiation Guidance
 - [x] TypeScript: 0 errors | Tests: 17/17 passing
+
+## Session 14 — GitHub Sync, Marketing Site as React Page, user_profiles Table
+
+- [x] GitHub push — all Session 12-13 assets synced to munisp/healthpoint (commit 480f33e, 480f33e)
+- [x] Marketing site as React page — full Home.tsx rewrite: hero, animated stats, 19-step workflow, AI terminal, 4 audience cards, testimonials, 3-tier pricing, NSA guide, lead-capture form, regulatory footer
+- [x] getRegisterUrl signature fixed — (role, redirectTo) parameter order in client/src/const.ts
+- [x] user_profiles DB table — 12 columns (id, orgName, orgType, stakeholderRole, npi, taxId, phone, preferredContact, onboardingCompleted, onboardingCompletedAt, createdAt, updatedAt), 1 index, migration pushed
+- [x] stakeholder_role pgEnum — provider/facility/payer/idr_entity/other
+- [x] getUserProfile / upsertUserProfile / markOnboardingComplete DB helpers in server/db.ts
+- [x] profiles tRPC router — profiles.get, profiles.save, profiles.completeOnboarding procedures
+- [x] Onboarding.tsx wired to trpc.profiles.save and trpc.profiles.completeOnboarding — org data persisted to DB on step 2, onboarding marked complete on finish
+- [x] TypeScript: 0 errors | Tests: 17/17 passing

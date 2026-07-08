@@ -16,7 +16,7 @@ export const getLoginUrl = (redirectTo = "/") =>
   `/api/auth/login?redirectTo=${encodeURIComponent(redirectTo)}`;
 
 /** Redirect the browser to the Keycloak registration page */
-export const getRegisterUrl = (redirectTo = "/", role = "") =>
+export const getRegisterUrl = (role = "", redirectTo = "/") =>
   `/api/auth/register?redirectTo=${encodeURIComponent(redirectTo)}&role=${encodeURIComponent(role)}`;
 
 /** Redirect the browser to Keycloak end-session */
