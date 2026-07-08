@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,13 +8,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
   DollarSign, TrendingUp, TrendingDown, BookOpen, ArrowRightLeft,
-  Plus, RefreshCw, Download, AlertCircle, Loader2
+  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X
 } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
+  LineChart, Line, CartesianGrid, Legend, ReferenceLine
+} from "recharts";
 
 const ACCOUNT_COLORS: Record<string, string> = {
   billed: "#6366f1",
@@ -34,8 +38,77 @@ const ACCOUNT_LABELS: Record<string, string> = {
   patient_responsibility: "Patient Responsibility",
 };
 
+const QUICK_RANGES = [
+  { label: "Last 7 days", days: 7 },
+  { label: "Last 30 days", days: 30 },
+  { label: "Last 90 days", days: 90 },
+  { label: "Last year", days: 365 },
+];
+
 function fmt(dollars: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(dollars);
+}
+
+function toDateStr(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
+
+// Build synthetic trend data from journal entries bucketed by week
+function buildTrendData(
+  history: Array<{ entry: { createdAt: Date | null; amountCents: number; entryType: string }; debitAccountType: string; creditAccountType: string }>,
+  dateFrom: string,
+  dateTo: string
+) {
+  if (history.length === 0) return [];
+
+  const filtered = history.filter(h => {
+    if (!h.entry.createdAt) return false;
+    const d = new Date(h.entry.createdAt);
+    if (dateFrom && d < new Date(dateFrom)) return false;
+    if (dateTo && d > new Date(dateTo + "T23:59:59")) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) return [];
+
+  // Sort by date
+  const sorted = [...filtered].sort((a, b) =>
+    new Date(a.entry.createdAt!).getTime() - new Date(b.entry.createdAt!).getTime()
+  );
+
+  // Bucket by week (ISO week label)
+  const buckets: Map<string, Record<string, number>> = new Map();
+
+  for (const { entry, debitAccountType, creditAccountType } of sorted) {
+    const d = new Date(entry.createdAt!);
+    // Week label: "Jan 1"
+    const label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    if (!buckets.has(label)) {
+      buckets.set(label, {
+        billed: 0, allowed: 0, paid: 0, determination: 0, adjustment: 0, patient_responsibility: 0,
+      });
+    }
+    const bucket = buckets.get(label)!;
+    const amountDollars = entry.amountCents / 100;
+    // Credit side increases the account balance
+    if (creditAccountType in bucket) bucket[creditAccountType] += amountDollars;
+    if (debitAccountType in bucket) bucket[debitAccountType] -= amountDollars;
+  }
+
+  // Convert to cumulative running totals
+  const result: Array<Record<string, number | string>> = [];
+  const running: Record<string, number> = {
+    billed: 0, allowed: 0, paid: 0, determination: 0, adjustment: 0, patient_responsibility: 0,
+  };
+
+  for (const [label, delta] of Array.from(buckets.entries())) {
+    for (const key of Object.keys(running)) {
+      running[key] = Math.max(0, running[key] + (delta[key] ?? 0));
+    }
+    result.push({ date: label, ...running });
+  }
+
+  return result;
 }
 
 export default function FinancialLedger() {
@@ -44,24 +117,25 @@ export default function FinancialLedger() {
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
 
-  const disputesQuery = trpc.disputes.list.useQuery(
-    { limit: 50 },
-    { enabled: true }
+  // Date range filter
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [datePopoverOpen, setDatePopoverOpen] = useState(false);
+
+  // Which accounts to show on trend chart
+  const [visibleAccounts, setVisibleAccounts] = useState<Set<string>>(
+    () => new Set(["billed", "paid", "determination"])
   );
 
+  const disputesQuery = trpc.disputes.list.useQuery({ limit: 50 });
   const balancesQuery = trpc.ledger.balances.useQuery(
-    { disputeId: selectedDisputeId },
-    { enabled: !!selectedDisputeId }
+    { disputeId: selectedDisputeId }, { enabled: !!selectedDisputeId }
   );
-
   const summaryQuery = trpc.ledger.summary.useQuery(
-    { disputeId: selectedDisputeId },
-    { enabled: !!selectedDisputeId }
+    { disputeId: selectedDisputeId }, { enabled: !!selectedDisputeId }
   );
-
   const historyQuery = trpc.ledger.history.useQuery(
-    { disputeId: selectedDisputeId },
-    { enabled: !!selectedDisputeId }
+    { disputeId: selectedDisputeId }, { enabled: !!selectedDisputeId }
   );
 
   const recordPaymentMutation = trpc.ledger.recordPayment.useMutation({
@@ -81,11 +155,52 @@ export default function FinancialLedger() {
   const summary = summaryQuery.data;
   const history = historyQuery.data ?? [];
 
+  // Date-filtered journal entries
+  const filteredHistory = useMemo(() => {
+    if (!dateFrom && !dateTo) return history;
+    return history.filter(({ entry }) => {
+      if (!entry.createdAt) return true;
+      const d = new Date(entry.createdAt);
+      if (dateFrom && d < new Date(dateFrom)) return false;
+      if (dateTo && d > new Date(dateTo + "T23:59:59")) return false;
+      return true;
+    });
+  }, [history, dateFrom, dateTo]);
+
+  const trendData = useMemo(
+    () => buildTrendData(history, dateFrom, dateTo),
+    [history, dateFrom, dateTo]
+  );
+
   const chartData = balances.map(b => ({
     name: ACCOUNT_LABELS[b.accountType] ?? b.accountType,
     amount: b.balanceDollars,
     color: ACCOUNT_COLORS[b.accountType] ?? "#94a3b8",
   }));
+
+  const hasDateFilter = !!(dateFrom || dateTo);
+  const dateRangeLabel = dateFrom && dateTo
+    ? `${new Date(dateFrom).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(dateTo).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+    : dateFrom ? `From ${new Date(dateFrom).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+    : dateTo ? `Until ${new Date(dateTo).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+    : "Date Range";
+
+  function applyQuickRange(days: number) {
+    const to = new Date();
+    const from = new Date(Date.now() - days * 86400000);
+    setDateFrom(toDateStr(from));
+    setDateTo(toDateStr(to));
+    setDatePopoverOpen(false);
+  }
+
+  function toggleAccount(key: string) {
+    setVisibleAccounts(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) { if (next.size > 1) next.delete(key); }
+      else next.add(key);
+      return next;
+    });
+  }
 
   return (
     <DashboardLayout>
@@ -104,46 +219,70 @@ export default function FinancialLedger() {
           <div className="flex gap-2">
             {selectedDisputeId && (
               <>
-                <Button variant="outline" size="sm" onClick={() => {
-                  balancesQuery.refetch();
-                  historyQuery.refetch();
-                }}>
+                {/* Date range filter */}
+                <Popover open={datePopoverOpen} onOpenChange={setDatePopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <Button variant={hasDateFilter ? "default" : "outline"} size="sm" className="gap-1.5">
+                      <CalendarDays className="h-3.5 w-3.5" />
+                      {dateRangeLabel}
+                      {hasDateFilter && (
+                        <span className="ml-1" onClick={e => { e.stopPropagation(); setDateFrom(""); setDateTo(""); }}>
+                          <X className="h-3 w-3" />
+                        </span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-68 p-4" align="end">
+                    <p className="text-sm font-semibold mb-3">Filter by Date</p>
+                    <div className="grid grid-cols-2 gap-1.5 mb-3">
+                      {QUICK_RANGES.map(r => (
+                        <Button key={r.label} variant="outline" size="sm" className="text-xs h-7"
+                          onClick={() => applyQuickRange(r.days)}>
+                          {r.label}
+                        </Button>
+                      ))}
+                    </div>
+                    <Separator className="mb-3" />
+                    <div className="space-y-2">
+                      <div>
+                        <Label className="text-xs text-muted-foreground">From</Label>
+                        <Input type="date" value={dateFrom} max={dateTo || undefined}
+                          onChange={e => setDateFrom(e.target.value)} className="mt-1 h-8 text-xs" />
+                      </div>
+                      <div>
+                        <Label className="text-xs text-muted-foreground">To</Label>
+                        <Input type="date" value={dateTo} min={dateFrom || undefined}
+                          onChange={e => setDateTo(e.target.value)} className="mt-1 h-8 text-xs" />
+                      </div>
+                    </div>
+                    {hasDateFilter && (
+                      <Button variant="ghost" size="sm" className="w-full mt-2 text-xs text-muted-foreground"
+                        onClick={() => { setDateFrom(""); setDateTo(""); }}>
+                        <X className="h-3 w-3 mr-1" /> Clear
+                      </Button>
+                    )}
+                  </PopoverContent>
+                </Popover>
+
+                <Button variant="outline" size="sm" onClick={() => { balancesQuery.refetch(); historyQuery.refetch(); }}>
                   <RefreshCw className="h-4 w-4 mr-1" /> Refresh
                 </Button>
                 <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
                   <DialogTrigger asChild>
-                    <Button size="sm">
-                      <Plus className="h-4 w-4 mr-1" /> Record Payment
-                    </Button>
+                    <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Record Payment</Button>
                   </DialogTrigger>
                   <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Record Payment</DialogTitle>
-                    </DialogHeader>
+                    <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
                     <div className="space-y-4 pt-2">
                       <div>
                         <Label>Payment Amount (USD)</Label>
-                        <Input
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          placeholder="0.00"
-                          value={paymentAmount}
-                          onChange={e => setPaymentAmount(e.target.value)}
-                          className="mt-1"
-                        />
+                        <Input type="number" min="0.01" step="0.01" placeholder="0.00"
+                          value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="mt-1" />
                       </div>
-                      <Button
-                        className="w-full"
+                      <Button className="w-full"
                         disabled={!paymentAmount || parseFloat(paymentAmount) <= 0 || recordPaymentMutation.isPending}
-                        onClick={() => {
-                          recordPaymentMutation.mutate({
-                            disputeId: selectedDisputeId,
-                            amountDollars: parseFloat(paymentAmount),
-                          });
-                        }}
-                      >
-                        {recordPaymentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                        onClick={() => recordPaymentMutation.mutate({ disputeId: selectedDisputeId, amountDollars: parseFloat(paymentAmount) })}>
+                        {recordPaymentMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                         Record Payment
                       </Button>
                     </div>
@@ -176,15 +315,9 @@ export default function FinancialLedger() {
               <div>
                 <Label className="text-sm font-medium">Or enter Dispute ID</Label>
                 <div className="flex gap-2 mt-1">
-                  <Input
-                    placeholder="dispute-id"
-                    value={disputeInput}
-                    onChange={e => setDisputeInput(e.target.value)}
-                    className="w-48"
-                  />
-                  <Button variant="outline" onClick={() => setSelectedDisputeId(disputeInput)}>
-                    Load
-                  </Button>
+                  <Input placeholder="dispute-id" value={disputeInput}
+                    onChange={e => setDisputeInput(e.target.value)} className="w-48" />
+                  <Button variant="outline" onClick={() => setSelectedDisputeId(disputeInput)}>Load</Button>
                 </div>
               </div>
             </div>
@@ -249,15 +382,100 @@ export default function FinancialLedger() {
               </div>
             ) : null}
 
-            {/* Account balances chart + table */}
+            {/* ── Trend Line Chart ── */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4 text-primary" />
+                    Account Balance Trend
+                    {hasDateFilter && (
+                      <Badge variant="secondary" className="text-xs">{dateRangeLabel}</Badge>
+                    )}
+                  </CardTitle>
+                  {/* Account toggles */}
+                  <div className="flex flex-wrap gap-1">
+                    {Object.entries(ACCOUNT_LABELS).map(([key, label]) => (
+                      <button
+                        key={key}
+                        onClick={() => toggleAccount(key)}
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs border transition-all ${
+                          visibleAccounts.has(key)
+                            ? "border-transparent text-white"
+                            : "bg-background text-muted-foreground border-border opacity-50"
+                        }`}
+                        style={visibleAccounts.has(key) ? { backgroundColor: ACCOUNT_COLORS[key] } : {}}
+                      >
+                        {label.split(" ")[0]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {historyQuery.isLoading ? (
+                  <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin" /></div>
+                ) : trendData.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+                    <TrendingUp className="h-8 w-8 mb-2 opacity-20" />
+                    <p className="text-sm">No journal entries in the selected period</p>
+                    {hasDateFilter && (
+                      <button className="text-xs underline mt-1" onClick={() => { setDateFrom(""); setDateTo(""); }}>
+                        Clear date filter
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ height: 280 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={trendData} margin={{ left: 10, right: 10, top: 5, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                        <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                        <YAxis tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 11 }} />
+                        <Tooltip
+                          formatter={(v: number, name: string) => [fmt(v), ACCOUNT_LABELS[name] ?? name]}
+                          contentStyle={{ fontSize: 12 }}
+                        />
+                        <Legend
+                          formatter={(value) => ACCOUNT_LABELS[value] ?? value}
+                          wrapperStyle={{ fontSize: 11 }}
+                        />
+                        {Object.entries(ACCOUNT_COLORS).map(([key, color]) =>
+                          visibleAccounts.has(key) ? (
+                            <Line
+                              key={key}
+                              type="monotone"
+                              dataKey={key}
+                              stroke={color}
+                              strokeWidth={2}
+                              dot={false}
+                              activeDot={{ r: 4 }}
+                            />
+                          ) : null
+                        )}
+                        {summary && summary.billedDollars > 0 && (
+                          <ReferenceLine
+                            y={summary.billedDollars}
+                            stroke={ACCOUNT_COLORS.billed}
+                            strokeDasharray="4 4"
+                            label={{ value: "Billed", position: "insideTopRight", fontSize: 10 }}
+                          />
+                        )}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Account balances bar chart + table */}
             {balancesQuery.isLoading ? (
               <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
             ) : balances.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Bar chart */}
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-base">Account Balances</CardTitle>
+                    <CardTitle className="text-base">Current Account Balances</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div style={{ height: 260 }}>
@@ -276,8 +494,6 @@ export default function FinancialLedger() {
                     </div>
                   </CardContent>
                 </Card>
-
-                {/* Account table */}
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-base">Account Summary</CardTitle>
@@ -287,17 +503,13 @@ export default function FinancialLedger() {
                       {balances.map(b => (
                         <div key={b.accountId} className="flex items-center justify-between py-2 border-b last:border-0">
                           <div className="flex items-center gap-2">
-                            <div
-                              className="w-3 h-3 rounded-full"
-                              style={{ backgroundColor: ACCOUNT_COLORS[b.accountType] ?? "#94a3b8" }}
-                            />
+                            <div className="w-3 h-3 rounded-full"
+                              style={{ backgroundColor: ACCOUNT_COLORS[b.accountType] ?? "#94a3b8" }} />
                             <span className="text-sm font-medium">
                               {ACCOUNT_LABELS[b.accountType] ?? b.accountType}
                             </span>
                           </div>
-                          <span className="font-mono font-semibold text-sm">
-                            {fmt(b.balanceDollars)}
-                          </span>
+                          <span className="font-mono font-semibold text-sm">{fmt(b.balanceDollars)}</span>
                         </div>
                       ))}
                     </div>
@@ -309,26 +521,34 @@ export default function FinancialLedger() {
                 <CardContent className="py-8 text-center text-muted-foreground">
                   <AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-40" />
                   <p>No ledger accounts found for this dispute.</p>
-                  <p className="text-xs mt-1">Ledger accounts are initialized when a dispute is created.</p>
                 </CardContent>
               </Card>
             )}
 
-            {/* Journal entry history */}
+            {/* Journal entry history — date filtered */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
                   <ArrowRightLeft className="h-4 w-4" />
                   Journal Entry History
-                  <Badge variant="secondary">{history.length}</Badge>
+                  <Badge variant="secondary">
+                    {filteredHistory.length}{hasDateFilter && filteredHistory.length !== history.length ? ` of ${history.length}` : ""}
+                  </Badge>
+                  {hasDateFilter && (
+                    <Badge variant="outline" className="text-xs text-muted-foreground">
+                      {dateRangeLabel}
+                    </Badge>
+                  )}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 {historyQuery.isLoading ? (
                   <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin" /></div>
-                ) : history.length === 0 ? (
+                ) : filteredHistory.length === 0 ? (
                   <div className="text-center py-6 text-muted-foreground text-sm">
-                    No journal entries yet. Record a payment to create the first entry.
+                    {hasDateFilter
+                      ? <>No entries in the selected period. <button className="underline" onClick={() => { setDateFrom(""); setDateTo(""); }}>Clear filter</button></>
+                      : "No journal entries yet. Record a payment to create the first entry."}
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
@@ -344,7 +564,7 @@ export default function FinancialLedger() {
                         </tr>
                       </thead>
                       <tbody>
-                        {history.map(({ entry, debitAccountType, creditAccountType }) => (
+                        {filteredHistory.map(({ entry, debitAccountType, creditAccountType }) => (
                           <tr key={entry.id} className="border-b last:border-0 hover:bg-muted/30">
                             <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
                               {entry.createdAt ? new Date(entry.createdAt).toLocaleDateString() : "—"}
@@ -352,19 +572,15 @@ export default function FinancialLedger() {
                             <td className="py-2 pr-4 max-w-xs truncate">{entry.description}</td>
                             <td className="py-2 pr-4">
                               <span className="inline-flex items-center gap-1">
-                                <div
-                                  className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: ACCOUNT_COLORS[debitAccountType] ?? "#94a3b8" }}
-                                />
+                                <div className="w-2 h-2 rounded-full"
+                                  style={{ backgroundColor: ACCOUNT_COLORS[debitAccountType] ?? "#94a3b8" }} />
                                 {ACCOUNT_LABELS[debitAccountType] ?? debitAccountType}
                               </span>
                             </td>
                             <td className="py-2 pr-4">
                               <span className="inline-flex items-center gap-1">
-                                <div
-                                  className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }}
-                                />
+                                <div className="w-2 h-2 rounded-full"
+                                  style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }} />
                                 {ACCOUNT_LABELS[creditAccountType] ?? creditAccountType}
                               </span>
                             </td>

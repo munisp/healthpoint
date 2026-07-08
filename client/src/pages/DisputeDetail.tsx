@@ -14,6 +14,7 @@ import {
   TrendingUp, CheckCircle, XCircle, RefreshCw, Download, Bell,
   Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp
 } from "lucide-react";
+import WorkflowTimeline from "@/components/WorkflowTimeline";
 
 const IDR_STEPS = [
   { key: "STEP_01_OPEN_NEGOTIATION_INITIATED", label: "Open Negotiation Initiated", description: "Party sends open negotiation notice per NSA §2799A-1", days: "Day 0" },
@@ -329,40 +330,11 @@ export default function DisputeDetail() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-4 pt-0">
-                <div className="space-y-1">
-                  {IDR_STEPS.map((step, index) => {
-                    const tStep = timeline.find((t: any) => t.step === step.key);
-                    const isCompleted = tStep?.isCompleted ?? false;
-                    const isCurrent = tStep?.isCurrent ?? false;
-                    return (
-                      <div key={step.key} className={`flex items-start gap-3 p-3 rounded-lg transition-colors ${isCurrent ? "bg-blue-50 border border-blue-200" : isCompleted ? "bg-green-50" : "hover:bg-slate-50"}`}>
-                        <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold mt-0.5 ${
-                          isCompleted ? "bg-green-500 text-white" :
-                          isCurrent ? "bg-blue-600 text-white" :
-                          "bg-slate-200 text-slate-500"
-                        }`}>
-                          {isCompleted ? <CheckCircle2 size={14} /> : index + 1}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className={`text-sm font-medium ${isCurrent ? "text-blue-700" : isCompleted ? "text-green-700" : "text-slate-600"}`}>
-                              {step.label}
-                            </span>
-                            <span className="text-xs text-slate-400 shrink-0">{step.days}</span>
-                          </div>
-                          <p className={`text-xs mt-0.5 ${isCurrent ? "text-blue-600" : isCompleted ? "text-green-600" : "text-slate-400"}`}>
-                            {step.description}
-                          </p>
-                          {tStep?.event && (
-                            <div className="mt-1.5 text-xs text-slate-500 bg-white border border-slate-200 rounded px-2 py-1">
-                              {tStep.event.description} · {tStep.event.createdAt ? new Date(tStep.event.createdAt as unknown as string).toLocaleString() : ""}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <WorkflowTimeline
+                  steps={timeline}
+                  currentStep={dispute.currentStep}
+                  disputeCreatedAt={dispute.createdAt}
+                />
               </CardContent>
             </Card>
 
