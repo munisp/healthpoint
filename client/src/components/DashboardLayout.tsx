@@ -24,7 +24,9 @@ import {
   ShieldCheck,
   Building2,
   Brain,
-  PlusCircle
+  PlusCircle,
+  Upload,
+  ClipboardList
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -36,6 +38,8 @@ const menuItems = [
   { icon: Building2, label: "IDR Entities", path: "/idr-entities" },
   { icon: Bell, label: "Notifications", path: "/notifications" },
   { icon: Brain, label: "AI Assistant", path: "/ai-assistant" },
+  { icon: Upload, label: "Stakeholder Upload", path: "/stakeholder-upload" },
+  { icon: ClipboardList, label: "CMS Tracker", path: "/cms-tracker" },
   { icon: ShieldCheck, label: "Admin", path: "/admin" },
 ];
 

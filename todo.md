@@ -50,8 +50,8 @@
 - [x] Offer negotiation panel on Dispute Detail — Counter-Offer form, offer history timeline, accept/reject actions
 - [x] acceptOffer tRPC procedure — marks offer accepted, advances dispute to STEP_13, creates determination notification
 - [x] TypeScript errors fixed: acceptOffer procedure added to disputes router, err type annotation corrected
-- [ ] Notification delivery — SendGrid email + Twilio SMS wired to notifications table on status changes
-- [ ] Dispute PDF export — server-side NSA IDR summary PDF with full timeline, offers, and determination
+- [x] Notification delivery — server/notifications.ts with email/SMS delivery wired to notifications table
+- [x] Dispute PDF export — server/pdf-export.ts with full timeline, offers, and determination; Export PDF button on DisputeDetail
 - [x] Python AI microservice — LangGraph + LangChain + FastAPI in /ai-service directory
 - [x] DocumentAnalysisAgent — LangGraph graph with extraction, validation, classification nodes
 - [x] CMSSubmissionAgent — LangGraph graph with eligibility check, form pre-fill, narrative generation nodes
@@ -59,5 +59,5 @@
 - [x] FastAPI endpoints: POST /analyze-document, POST /cms-submission, POST /ask-assistant
 - [x] Node.js tRPC ai.* procedures proxy to Python microservice
 - [x] AI Assistant React page (/ai-assistant) with chat UI, document analysis panel, CMS submission generator
-- [ ] Stakeholder upload portal — document drag-and-drop with AI analysis on upload
-- [ ] CMS submission tracker — status board showing submission drafts and eligibility results
+- [x] Stakeholder upload portal — document drag-and-drop with AI analysis on upload
+- [x] CMS submission tracker — status board showing submission drafts and eligibility results
