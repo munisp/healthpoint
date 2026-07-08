@@ -12,6 +12,7 @@ import Dashboard from "./pages/Dashboard";
 import DisputesList from "./pages/DisputesList";
 import DisputeDetail from "./pages/DisputeDetail";
 import NewDispute from "./pages/NewDispute";
+import AIAssistant from "./pages/AIAssistant";
 
 function Router() {
   return (
@@ -24,6 +25,7 @@ function Router() {
       <Route path="/idr-entities" component={IDREntityDashboard} />
       <Route path="/notifications" component={Notifications} />
       <Route path="/admin" component={Admin} />
+      <Route path="/ai-assistant" component={AIAssistant} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>

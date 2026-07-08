@@ -52,4 +52,12 @@
 - [x] TypeScript errors fixed: acceptOffer procedure added to disputes router, err type annotation corrected
 - [ ] Notification delivery — SendGrid email + Twilio SMS wired to notifications table on status changes
 - [ ] Dispute PDF export — server-side NSA IDR summary PDF with full timeline, offers, and determination
-- [ ] Agentic AI layer — document upload agent (extraction, validation, classification) and CMS submission agent (form pre-fill, eligibility check, submission tracking)
+- [x] Python AI microservice — LangGraph + LangChain + FastAPI in /ai-service directory
+- [x] DocumentAnalysisAgent — LangGraph graph with extraction, validation, classification nodes
+- [x] CMSSubmissionAgent — LangGraph graph with eligibility check, form pre-fill, narrative generation nodes
+- [x] IDRAssistantAgent — LangGraph ReAct agent with NSA regulatory tool calling
+- [x] FastAPI endpoints: POST /analyze-document, POST /cms-submission, POST /ask-assistant
+- [x] Node.js tRPC ai.* procedures proxy to Python microservice
+- [x] AI Assistant React page (/ai-assistant) with chat UI, document analysis panel, CMS submission generator
+- [ ] Stakeholder upload portal — document drag-and-drop with AI analysis on upload
+- [ ] CMS submission tracker — status board showing submission drafts and eligibility results

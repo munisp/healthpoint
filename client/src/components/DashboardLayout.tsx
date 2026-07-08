@@ -18,14 +18,25 @@ import {
   LayoutDashboard,
   LogOut,
   PanelLeft,
-  Users
+  Users,
+  Scale,
+  Bell,
+  ShieldCheck,
+  Building2,
+  Brain,
+  PlusCircle
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 
 const menuItems = [
-  { icon: LayoutDashboard, label: "Page 1", path: "/" },
-  { icon: Users, label: "Page 2", path: "/some-path" },
+  { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
+  { icon: Scale, label: "Disputes", path: "/disputes" },
+  { icon: PlusCircle, label: "New Dispute", path: "/disputes/new" },
+  { icon: Building2, label: "IDR Entities", path: "/idr-entities" },
+  { icon: Bell, label: "Notifications", path: "/notifications" },
+  { icon: Brain, label: "AI Assistant", path: "/ai-assistant" },
+  { icon: ShieldCheck, label: "Admin", path: "/admin" },
 ];
 
 const SIDEBAR_WIDTH_KEY = 'sidebar-width';

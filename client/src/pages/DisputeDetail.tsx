@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock,
   DollarSign, FileText, Gavel, LogOut, Scale, Upload, Users,
-  TrendingUp, CheckCircle, XCircle, RefreshCw
+  TrendingUp, CheckCircle, XCircle, RefreshCw, Download, Bell
 } from "lucide-react";
 
 const IDR_STEPS = [
@@ -139,6 +139,19 @@ export default function DisputeDetail() {
     onError: (err) => toast.error(err.message),
   });
 
+  const exportPDFMutation = trpc.disputes.exportPDF.useMutation({
+    onSuccess: (data) => {
+      const bytes = Uint8Array.from(atob(data.base64), c => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: data.contentType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = data.filename; a.click();
+      URL.revokeObjectURL(url);
+      toast.success("PDF exported successfully");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   const acceptOfferMutation = trpc.disputes.acceptOffer.useMutation({
     onSuccess: () => {
       utils.disputes.getTimeline.invalidate();
@@ -237,6 +250,9 @@ export default function DisputeDetail() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            <Button variant="outline" onClick={() => exportPDFMutation.mutate({ disputeId: dispute.id })} disabled={exportPDFMutation.isPending} className="flex items-center gap-2">
+              <Download size={14} />{exportPDFMutation.isPending ? "Generating..." : "Export PDF"}
+            </Button>
             <Button variant="outline" onClick={() => setShowDocModal(true)} className="flex items-center gap-2">
               <Upload size={14} />Attach Evidence
             </Button>

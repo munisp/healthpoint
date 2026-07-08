@@ -13,6 +13,24 @@ import {
   calculateQPA,
   getIDREntityCaseload, listAllIDREntityCaseloads,
 } from "./db";
+import { generateDisputePDF } from "./pdf-export";
+import { dispatchNotification } from "./notifications";
+// AI microservice proxy — delegates to Python LangGraph service
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
+
+async function aiPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${AI_SERVICE_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120_000), // 2-min timeout for LLM calls
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "unknown error");
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `AI service error: ${text}` });
+  }
+  return res.json() as Promise<T>;
+}
 import { IDR_STEP, DISPUTE_STATUS, SERVICE_TYPE, PARTY_TYPE } from "../drizzle/schema";
 
 // Admin-only middleware
@@ -282,6 +300,53 @@ export const appRouter = router({
         }));
         return { timeline, dispute, offers: dispute.offers ?? [] };
       }),
+
+    exportPDF: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .mutation(async ({ input }) => {
+        const dispute = await getDisputeById(input.disputeId);
+        if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        const pdfBuffer = await generateDisputePDF(dispute as any);
+        // Return as base64 so it can be decoded client-side and downloaded
+        return {
+          base64: pdfBuffer.toString("base64"),
+          filename: `IDR-${dispute.referenceNumber}-${new Date().toISOString().slice(0, 10)}.pdf`,
+          contentType: "application/pdf",
+        };
+      }),
+
+    sendNotification: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        recipientEmail: z.string().email().optional(),
+        recipientPhone: z.string().optional(),
+        notificationType: z.enum(["deadline_warning", "step_advanced", "determination_issued", "offer_received", "document_uploaded", "system_alert"]),
+        title: z.string(),
+        message: z.string(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const dispute = await getDisputeById(input.disputeId);
+        if (!dispute) throw new TRPCError({ code: "NOT_FOUND" });
+        // Save to DB
+        await createNotification({
+          disputeId: input.disputeId,
+          userId: ctx.user.id,
+          notificationType: input.notificationType,
+          title: input.title,
+          message: input.message,
+          dueDate: null,
+        });
+        // Dispatch email/SMS
+        const results = await dispatchNotification({
+          type: input.notificationType,
+          recipientEmail: input.recipientEmail,
+          recipientPhone: input.recipientPhone,
+          disputeRef: dispute.referenceNumber,
+          title: input.title,
+          message: input.message,
+        });
+        return { success: true, deliveryResults: results };
+      }),
   }),
 
   // ─── IDR Entities ────────────────────────────────────────────────────────────
@@ -434,6 +499,124 @@ export const appRouter = router({
     stats: adminProcedure.query(async () => {
       return getDashboardStats(undefined);
     }),
+  }),
+
+  // ─── Agentic AI Layer (proxied to Python LangGraph microservice) ──────────────────
+  ai: router({
+    // Health check for the Python AI microservice
+    serviceHealth: publicProcedure.query(async () => {
+      try {
+        const res = await fetch(`${AI_SERVICE_URL}/health`, { signal: AbortSignal.timeout(5000) });
+        const data = await res.json() as Record<string, unknown>;
+        return { available: true, ...data };
+      } catch {
+        return { available: false, reason: "AI service unreachable" };
+      }
+    }),
+
+    // Agent capabilities summary
+    agentInfo: publicProcedure.query(async () => {
+      try {
+        const res = await fetch(`${AI_SERVICE_URL}/agent-info`, { signal: AbortSignal.timeout(5000) });
+        return res.json() as Promise<Record<string, unknown>>;
+      } catch {
+        return { agents: [] };
+      }
+    }),
+
+    // DocumentAnalysisAgent — LangGraph: classify → validate → summarize
+    analyzeDocument: protectedProcedure
+      .input(z.object({
+        documentText: z.string().min(1).max(50000),
+        documentType: z.string().optional(),
+        disputeId: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        let disputeContext: Record<string, unknown> | undefined;
+        if (input.disputeId) {
+          const dispute = await getDisputeById(input.disputeId);
+          if (dispute) {
+            disputeContext = {
+              billedAmount: dispute.billedAmount ?? undefined,
+              qpaAmount: dispute.qpaAmount ?? undefined,
+              serviceType: dispute.serviceType ?? undefined,
+              serviceDate: dispute.serviceDate ? new Date(dispute.serviceDate).toLocaleDateString() : undefined,
+              patientState: dispute.patientState ?? undefined,
+            };
+          }
+        }
+        return aiPost("/analyze-document", {
+          documentText: input.documentText,
+          documentType: input.documentType,
+          disputeContext,
+        });
+      }),
+
+    // CMSSubmissionAgent — LangGraph: check_eligibility → generate_form_fields → generate_narrative
+    generateCMSSubmission: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        additionalContext: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const dispute = await getDisputeById(input.disputeId);
+        if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        return aiPost("/cms-submission", {
+          dispute: {
+            referenceNumber: dispute.referenceNumber,
+            serviceType: dispute.serviceType,
+            serviceDate: dispute.serviceDate,
+            billedAmount: dispute.billedAmount,
+            qpaAmount: dispute.qpaAmount,
+            patientState: dispute.patientState,
+            facilityState: dispute.facilityState,
+            cptCodes: dispute.cptCodes,
+            initiatingPartyName: dispute.initiatingPartyName,
+            initiatingPartyType: dispute.initiatingPartyType,
+            initiatingPartyNpi: dispute.initiatingPartyNpi,
+            respondingPartyName: dispute.respondingPartyName,
+            respondingPartyType: dispute.respondingPartyType,
+            idrEntityName: dispute.idrEntityName,
+            currentStep: dispute.currentStep,
+            status: dispute.status,
+            openNegotiationDeadline: dispute.openNegotiationDeadline,
+            idrInitiationDeadline: dispute.idrInitiationDeadline,
+          },
+          additionalContext: input.additionalContext,
+        });
+      }),
+
+    // IDRAssistantAgent — LangGraph ReAct with NSA regulatory tool calling
+    askAssistant: protectedProcedure
+      .input(z.object({
+        question: z.string().min(1).max(4000),
+        disputeId: z.string().optional(),
+        conversationHistory: z.array(z.object({
+          role: z.enum(["user", "assistant"]),
+          content: z.string(),
+        })).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        let disputeContext: Record<string, unknown> | undefined;
+        if (input.disputeId) {
+          const dispute = await getDisputeById(input.disputeId);
+          if (dispute) {
+            disputeContext = {
+              referenceNumber: dispute.referenceNumber,
+              currentStep: dispute.currentStep,
+              status: dispute.status,
+              serviceType: dispute.serviceType ?? undefined,
+              billedAmount: dispute.billedAmount ?? undefined,
+              qpaAmount: dispute.qpaAmount ?? undefined,
+            };
+          }
+        }
+        return aiPost("/ask-assistant", {
+          question: input.question,
+          disputeContext,
+          conversationHistory: input.conversationHistory,
+        });
+      }),
   }),
 });
 
