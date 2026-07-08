@@ -17,6 +17,8 @@ import {
   createEMRConnection, listEMRConnections, getEMRConnection,
   updateEMRConnectionStatus, deactivateEMRConnection, deleteEMRConnection,
   listEMRSyncLogs, createEMRSyncLog,
+  createDisputeTemplate, listDisputeTemplates, getDisputeTemplateById,
+  updateDisputeTemplate, deleteDisputeTemplate, incrementTemplateUsage,
 } from "./db";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
@@ -48,7 +50,7 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx });
 });
 
-// ─── Zod schemas ──────────────────────────────────────────────────────────────
+// --- Zod schemas --------------------------------------------------------------
 
 const createDisputeSchema = z.object({
   initiatingPartyType: z.enum(PARTY_TYPE),
@@ -97,17 +99,19 @@ export const appRouter = router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: protectedProcedure.mutation(opts => {
       const { ctx } = opts;
+      // Clear the internal session cookie; Keycloak end-session is handled
+      // by redirecting the browser to /api/auth/logout after this mutation.
       ctx.res.clearCookie(COOKIE_NAME, {
         httpOnly: true,
         sameSite: "lax",
         secure: ENV.isProduction,
         path: "/",
       });
-      return { success: true } as const;
+      return { success: true, logoutUrl: "/api/auth/logout" } as const;
     }),
   }),
 
-  // ─── Dashboard ──────────────────────────────────────────────────────────────
+  // --- Dashboard --------------------------------------------------------------
   dashboard: router({
     stats: protectedProcedure.query(async ({ ctx }) => {
       const stats = await getDashboardStats(ctx.user.id);
@@ -151,7 +155,7 @@ export const appRouter = router({
     }),
   }),
 
-  // ─── Disputes ───────────────────────────────────────────────────────────────
+  // --- Disputes ---------------------------------------------------------------
   disputes: router({
     list: protectedProcedure
       .input(z.object({
@@ -447,7 +451,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── IDR Entities ────────────────────────────────────────────────────────────
+  // --- IDR Entities ------------------------------------------------------------
   arbitrators: router({
     list: protectedProcedure
       .input(z.object({
@@ -475,7 +479,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Draft disputes ───────────────────────────────────────────────────────────
+  // --- Draft disputes -----------------------------------------------------------
   drafts: router({
     get: protectedProcedure.query(async ({ ctx }) => {
       return getDisputeDraft(ctx.user.id);
@@ -496,7 +500,7 @@ export const appRouter = router({
     }),
   }),
 
-  // ─── QPA validation ───────────────────────────────────────────────────────────
+  // --- QPA validation -----------------------------------------------------------
   qpa: router({
     validate: protectedProcedure
       .input(z.object({
@@ -510,7 +514,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Notifications ───────────────────────────────────────────────────────────
+  // --- Notifications -----------------------------------------------------------
   notifications: router({
     list: protectedProcedure
       .input(z.object({ unreadOnly: z.boolean().default(false) }))
@@ -533,7 +537,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Document upload ──────────────────────────────────────────────────────────
+  // --- Document upload ----------------------------------------------------------
   documents: router({
     upload: protectedProcedure
       .input(z.object({
@@ -574,7 +578,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Admin ────────────────────────────────────────────────────────────────────
+  // --- Admin --------------------------------------------------------------------
   admin: router({
     allDisputes: adminProcedure
       .input(z.object({
@@ -599,7 +603,7 @@ export const appRouter = router({
     }),
   }),
 
-  // ─── Agentic AI Layer (proxied to Python LangGraph microservice) ──────────────────
+  // --- Agentic AI Layer (proxied to Python LangGraph microservice) ------------------
   ai: router({
     // Health check for the Python AI microservice
     serviceHealth: publicProcedure.query(async () => {
@@ -1015,7 +1019,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── EMR Connections ────────────────────────────────────────────────────────
+  // --- EMR Connections --------------------------------------------------------
   emr: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       const conns = await listEMRConnections(ctx.user.id);
@@ -1219,7 +1223,7 @@ export const appRouter = router({
             }),
     }),
 
-  // ─── State Balance-Billing Laws ───────────────────────────────────────────
+  // --- State Balance-Billing Laws -------------------------------------------
   stateLaws: router({
     list: publicProcedure
       .input(z.object({ state: z.string().optional(), hasProtection: z.boolean().optional() }))
@@ -1272,7 +1276,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Expert Review Workflow ────────────────────────────────────────────────
+  // --- Expert Review Workflow ------------------------------------------------
   expertReview: router({
     request: protectedProcedure
       .input(z.object({ disputeId: z.string(), reason: z.string().min(10), urgency: z.enum(["standard", "urgent", "critical"]) }))
@@ -1305,7 +1309,99 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Reports & Analytics ──────────────────────────────────────────────────
+  // --- Dispute Templates -----------------------------------------------------
+  templates: router({
+    list: protectedProcedure
+      .query(async ({ ctx }) => {
+        return listDisputeTemplates(ctx.user.id);
+      }),
+    getById: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .query(async ({ ctx, input }) => {
+        const template = await getDisputeTemplateById(input.id);
+        if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
+        if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+        return template;
+      }),
+    create: protectedProcedure
+      .input(z.object({
+        name: z.string().min(1).max(255),
+        description: z.string().optional(),
+        serviceType: z.string().optional(),
+        initiatingPartyName: z.string().optional(),
+        initiatingPartyType: z.string().optional(),
+        respondingPartyName: z.string().optional(),
+        respondingPartyType: z.string().optional(),
+        billedAmount: z.string().optional(),
+        qpaAmount: z.string().optional(),
+        dateOfService: z.string().optional(),
+        patientName: z.string().optional(),
+        claimNumber: z.string().optional(),
+        cptCodes: z.array(z.string()).optional(),
+        icdCodes: z.array(z.string()).optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const id = crypto.randomUUID();
+        return createDisputeTemplate({
+          id,
+          createdBy: ctx.user.id,
+          ...input,
+          cptCodes: input.cptCodes ?? [],
+          icdCodes: input.icdCodes ?? [],
+          usageCount: 0,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }),
+    update: protectedProcedure
+      .input(z.object({
+        id: z.string(),
+        name: z.string().min(1).max(255).optional(),
+        description: z.string().optional(),
+        serviceType: z.string().optional(),
+        initiatingPartyName: z.string().optional(),
+        initiatingPartyType: z.string().optional(),
+        respondingPartyName: z.string().optional(),
+        respondingPartyType: z.string().optional(),
+        billedAmount: z.string().optional(),
+        qpaAmount: z.string().optional(),
+        dateOfService: z.string().optional(),
+        patientName: z.string().optional(),
+        claimNumber: z.string().optional(),
+        cptCodes: z.array(z.string()).optional(),
+        icdCodes: z.array(z.string()).optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { id, ...updates } = input;
+        const template = await getDisputeTemplateById(id);
+        if (!template) throw new TRPCError({ code: "NOT_FOUND" });
+        if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+        await updateDisputeTemplate(id, updates);
+        return { success: true };
+      }),
+    delete: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        const template = await getDisputeTemplateById(input.id);
+        if (!template) throw new TRPCError({ code: "NOT_FOUND" });
+        if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+        await deleteDisputeTemplate(input.id);
+        return { success: true };
+      }),
+    use: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        const template = await getDisputeTemplateById(input.id);
+        if (!template) throw new TRPCError({ code: "NOT_FOUND" });
+        if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+        await incrementTemplateUsage(input.id);
+        return template;
+      }),
+  }),
+
+  // --- Reports & Analytics --------------------------------------------------
   reports: router({
     summary: protectedProcedure
       .input(z.object({ startDate: z.string().optional(), endDate: z.string().optional() }))

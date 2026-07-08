@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #FFFFFF;
+        display: flex;
+        font-family: 'Arial Black', 'Helvetica Neue', Arial, sans-serif;
+        overflow: hidden;
+      }
+      .left-panel {
+        width: 520px;
+        min-height: 720px;
+        background: #2563EB;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 52px 48px 48px 52px;
+      }
+      .logo-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .logo-mark {
+        width: 36px;
+        height: 36px;
+        background: #F43F5E;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .logo-text {
+        font-size: 13px;
+        font-weight: 900;
+        color: rgba(255,255,255,0.85);
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+      .main-title {
+        font-size: 48px;
+        font-weight: 900;
+        color: #FFFFFF;
+        line-height: 1.05;
+        letter-spacing: -1px;
+        margin-top: 0;
+      }
+      .main-title span {
+        color: #F43F5E;
+      }
+      .subtitle {
+        font-size: 14px;
+        font-weight: 400;
+        color: rgba(255,255,255,0.75);
+        line-height: 1.6;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        margin-top: 16px;
+      }
+      .stats-row {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .stat-block {
+        background: rgba(255,255,255,0.1);
+        border-left: 4px solid #F43F5E;
+        padding: 12px 16px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .stat-number {
+        font-size: 32px;
+        font-weight: 900;
+        color: #F43F5E;
+        line-height: 1;
+        min-width: 80px;
+      }
+      .stat-label {
+        font-size: 12px;
+        font-weight: 700;
+        color: rgba(255,255,255,0.9);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+      }
+      .bottom-tag {
+        font-size: 11px;
+        color: rgba(255,255,255,0.5);
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+      }
+      .right-panel {
+        flex: 1;
+        min-height: 720px;
+        background: #F8FAFC;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+        overflow: hidden;
+      }
+      .right-image {
+        width: 100%;
+        height: 480px;
+        object-fit: cover;
+        object-position: center;
+        display: block;
+      }
+      .right-bottom {
+        flex: 1;
+        background: #FFFFFF;
+        padding: 28px 40px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        border-top: 4px solid #2563EB;
+      }
+      .tagline {
+        font-size: 18px;
+        font-weight: 900;
+        color: #0F172A;
+        letter-spacing: -0.3px;
+        line-height: 1.3;
+      }
+      .tagline span {
+        color: #2563EB;
+      }
+      .sub-tagline {
+        font-size: 12px;
+        color: #64748B;
+        margin-top: 8px;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        letter-spacing: 0.3px;
+      }
+      .coral-bar {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 8px;
+        height: 100%;
+        background: #F43F5E;
+      }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="left-panel">
+    <div class="logo-row">
+      <div class="logo-mark"><i class="fas fa-shield-alt" style="color:#fff;font-size:16px;"></i></div>
+      <span class="logo-text">HealthPoint IDR</span>
+    </div>
+    <div>
+      <div class="main-title">Winning<br>Every Dollar<br>You <span>Deserve</span></div>
+      <div class="subtitle">The AI-powered NSA/IDR platform that combines regulatory precision, agentic intelligence, and real-time automation to protect provider revenue under the No Surprises Act.</div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-block">
+        <div class="stat-number">94%</div>
+        <div class="stat-label">Faster dispute processing with AI document analysis</div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-number">91%</div>
+        <div class="stat-label">Field accuracy on automated EMR data extraction</div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-number">Zero</div>
+        <div class="stat-label">Missed deadlines with daily automated monitoring</div>
+      </div>
+    </div>
+    <div class="bottom-tag">NSA · IDR · FHIR R4 · LangGraph AI · 2026</div>
+  </div>
+  <div class="right-panel">
+    <img class="right-image" src="/home/ubuntu/upload/search_images/zB5dF79zH3aO.jpeg" alt="AI-powered healthcare platform" />
+    <div class="right-bottom">
+      <div class="tagline">The Most Intelligent <span>NSA/IDR Platform</span><br>on the Market</div>
+      <div class="sub-tagline">Built for providers, payers, and IDR entities — from solo practices to 500-bed health systems</div>
+    </div>
+    <div class="coral-bar"></div>
+  </div>
+</div>
+</body>
+</html>

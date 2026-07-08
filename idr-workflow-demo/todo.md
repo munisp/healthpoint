@@ -120,3 +120,33 @@
 - [x] HaloMD competitive research — identified gaps: state balance-billing law coverage, expert negotiation workflow, comprehensive reports page
 - [x] Implement HaloMD feature gaps — StateBalanceBilling page (/state-laws), ExpertReview workflow (/expert-review), Reports analytics page (/reports)
 - [x] Stakeholder presentation deck — 12-slide deck, manus-slides://xxQZNv0M1oQOef8CVeXeyX
+
+## Session 12 — Bulk Actions, Notification Bell, Templates, Presentation Export, Marketing Site
+
+- [x] Disputes bulk-action toolbar — select multiple disputes, batch advance/export/assign
+- [x] Real-time notification bell — unread count badge, 30s polling, dropdown panel in header
+- [x] Dispute template wizard — save/load dispute templates for repeat filings
+- [x] Presentation PDF export — downloadable PDF of stakeholder deck (The_Most_Intelligent_NSA_IDR_Platform_on_the_Market.pdf)
+- [x] HealthPoint marketing website — separate webdev project at /home/ubuntu/healthpoint-marketing
+- [x] Marketing site: hero section with NSA/IDR value proposition and animated stats
+- [x] Marketing site: audience-targeted features section (providers, facilities, payers, aggregators)
+- [x] Marketing site: NSA/IDR explainer section (how the process works)
+- [x] Marketing site: sign-up / sign-in with Manus OAuth redirect to IDR platform
+- [x] Marketing site: testimonials / social proof section (pricing section)
+- [x] Marketing site: pricing / CTA section
+- [x] Marketing site: footer with regulatory references and links
+
+## Session 13 — Keycloak OIDC, Onboarding Flow, Marketing Site v2
+
+- [x] Keycloak OIDC integration — replace Manus OAuth with Keycloak Authorization Code + PKCE flow
+- [x] server/_core/keycloak.ts — /api/auth/login, /api/auth/register, /api/auth/callback, /api/auth/logout
+- [x] New-user detection in callback — first-time logins redirect to /onboarding with role param
+- [x] Onboarding page (/onboarding) — 4-step wizard: role selection, org details, feature tour, done
+- [x] Role-based redirect after onboarding — providers/facilities → /disputes, IDR entities → /idr-entities
+- [x] client/src/const.ts — getLoginUrl, getRegisterUrl, getLogoutUrl helpers for Keycloak
+- [x] useAuth hook — logout redirects to /api/auth/logout (Keycloak end-session)
+- [x] Marketing site v2 — full 693-line HTML: hero, 19-step grid, AI terminal, audience cards, testimonials, pricing, NSA guide, lead-capture form, regulatory footer
+- [x] Lead-capture form — collects name, email, org, role; redirects to /api/auth/register?role=...
+- [x] Audience-specific sign-up CTAs — per-role register links (provider/facility/payer/idr_entity)
+- [x] Regulatory footer links — CMS NSA Hub, 45 CFR § 149.510, § 149.140, HRSA, Open Negotiation Guidance
+- [x] TypeScript: 0 errors | Tests: 17/17 passing

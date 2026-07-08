@@ -122,7 +122,31 @@ export default function NewDispute() {
   const [, navigate] = useLocation();
   const { user, logout } = useAuth();
   const [currentStep, setCurrentStep] = useState(1);
-  const [form, setForm] = useState<FormData>(INITIAL_FORM);
+  // Pre-fill from template query params (e.g., /disputes/new?serviceType=emergency_medicine&billedAmount=5000)
+  const [form, setForm] = useState<FormData>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const overrides: Partial<FormData> = {};
+    const pick = (key: keyof FormData, param: string) => {
+      const v = params.get(param);
+      if (v) (overrides as Record<string, string>)[key] = v;
+    };
+    pick("serviceType", "serviceType");
+    pick("initiatingPartyName", "initiatingPartyName");
+    pick("initiatingPartyType", "initiatingPartyType");
+    pick("respondingPartyName", "respondingPartyName");
+    pick("respondingPartyType", "respondingPartyType");
+    pick("billedAmount", "billedAmount");
+    pick("notes", "notes");
+    // patientName maps to notes if no dedicated field exists
+    const patientName = params.get("patientName");
+    const claimNumber = params.get("claimNumber");
+    if (patientName || claimNumber) {
+      const extra = [patientName ? `Patient: ${patientName}` : "", claimNumber ? `Claim: ${claimNumber}` : ""].filter(Boolean).join(" | ");
+      if (!overrides.notes) overrides.notes = extra;
+    }
+    const hasTemplate = Object.keys(overrides).length > 0;
+    return { ...INITIAL_FORM, ...overrides, _fromTemplate: hasTemplate } as FormData;
+  });
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

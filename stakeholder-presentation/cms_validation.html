@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #FFFFFF;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      .top-bar {
+        width: 100%;
+        height: 6px;
+        background: #2563EB;
+        display: flex;
+      }
+      .top-bar-accent { width: 200px; height: 6px; background: #F43F5E; margin-left: auto; }
+      .content-area {
+        flex: 1;
+        display: flex;
+      }
+      .left-col {
+        width: 680px;
+        padding: 36px 44px 0 52px;
+        display: flex;
+        flex-direction: column;
+      }
+      .section-label {
+        font-size: 11px;
+        font-weight: 700;
+        color: #F43F5E;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+      }
+      .slide-title {
+        font-size: 34px;
+        font-weight: 900;
+        color: #0F172A;
+        line-height: 1.1;
+        letter-spacing: -0.5px;
+        margin-bottom: 24px;
+      }
+      .slide-title span { color: #2563EB; }
+      .layers-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        flex: 1;
+      }
+      .layer-row {
+        display: flex;
+        align-items: stretch;
+        border-top: 1px solid #E2E8F0;
+      }
+      .layer-row:last-child { border-bottom: 1px solid #E2E8F0; }
+      .layer-num {
+        width: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        font-weight: 900;
+        color: #2563EB;
+        flex-shrink: 0;
+        padding: 14px 0;
+      }
+      .layer-row.coral .layer-num { color: #F43F5E; }
+      .layer-divider {
+        width: 3px;
+        background: #2563EB;
+        flex-shrink: 0;
+        margin: 8px 0;
+      }
+      .layer-row.coral .layer-divider { background: #F43F5E; }
+      .layer-content {
+        flex: 1;
+        padding: 12px 16px;
+      }
+      .layer-name {
+        font-size: 13px;
+        font-weight: 900;
+        color: #0F172A;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+      .layer-desc {
+        font-size: 11px;
+        color: #64748B;
+        margin-top: 3px;
+        line-height: 1.5;
+      }
+      .layer-check {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 4px;
+      }
+      .check-tag {
+        font-size: 10px;
+        font-weight: 700;
+        color: #2563EB;
+        background: #EFF6FF;
+        padding: 2px 7px;
+        letter-spacing: 0.3px;
+      }
+      .layer-row.coral .check-tag { color: #F43F5E; background: #FFF1F2; }
+      .confidence-bar {
+        display: flex;
+        align-items: stretch;
+        margin-top: 16px;
+        margin-bottom: 16px;
+        height: 36px;
+      }
+      .conf-seg {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        font-weight: 700;
+        color: #fff;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+      }
+      .conf-seg.red { background: #F43F5E; flex: 2; }
+      .conf-seg.amber { background: #F59E0B; flex: 2; }
+      .conf-seg.green { background: #10B981; flex: 3; }
+      .conf-labels {
+        display: flex;
+        font-size: 9px;
+        color: #94A3B8;
+        margin-top: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .conf-labels span:first-child { flex: 2; }
+      .conf-labels span:nth-child(2) { flex: 2; }
+      .conf-labels span:last-child { flex: 3; }
+      .right-col {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: #F8FAFC;
+        border-left: 1px solid #E2E8F0;
+      }
+      .right-image {
+        width: 100%;
+        height: 340px;
+        object-fit: cover;
+        object-position: top center;
+        display: block;
+      }
+      .stat-panel {
+        flex: 1;
+        padding: 24px 28px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 16px;
+      }
+      .big-stat {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+      }
+      .big-num-before {
+        font-size: 52px;
+        font-weight: 900;
+        color: #F43F5E;
+        line-height: 1;
+        letter-spacing: -2px;
+      }
+      .big-arrow {
+        font-size: 28px;
+        color: #CBD5E1;
+        font-weight: 900;
+      }
+      .big-num-after {
+        font-size: 52px;
+        font-weight: 900;
+        color: #10B981;
+        line-height: 1;
+        letter-spacing: -2px;
+      }
+      .stat-label {
+        font-size: 12px;
+        font-weight: 700;
+        color: #0F172A;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        line-height: 1.4;
+      }
+      .stat-sub {
+        font-size: 11px;
+        color: #64748B;
+        margin-top: 2px;
+        line-height: 1.5;
+      }
+      .divider-line {
+        height: 1px;
+        background: #E2E8F0;
+      }
+      .auto-fix-note {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        background: #EFF6FF;
+        padding: 12px 14px;
+      }
+      .auto-fix-icon {
+        width: 28px;
+        height: 28px;
+        background: #2563EB;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .auto-fix-icon i { color: #fff; font-size: 12px; }
+      .auto-fix-text { flex: 1; }
+      .auto-fix-title {
+        font-size: 11px;
+        font-weight: 900;
+        color: #0F172A;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+      .auto-fix-desc {
+        font-size: 10px;
+        color: #64748B;
+        margin-top: 2px;
+        line-height: 1.4;
+      }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="top-bar"><div class="top-bar-accent"></div></div>
+  <div class="content-area">
+    <div class="left-col">
+      <div class="section-label">CMS Submission Quality</div>
+      <div class="slide-title">5 Layers of AI Validation —<br><span>No Bad Submission Reaches CMS</span></div>
+      <div class="layers-stack">
+        <div class="layer-row">
+          <div class="layer-num">1</div>
+          <div class="layer-divider"></div>
+          <div class="layer-content">
+            <div class="layer-name">Schema Validation</div>
+            <div class="layer-desc">All 16 required CMS fields present, correct types, ISO date formats, no blank or malformed values</div>
+            <div class="layer-check"><span class="check-tag">16 Fields Checked</span><span class="check-tag">Type Enforcement</span></div>
+          </div>
+        </div>
+        <div class="layer-row coral">
+          <div class="layer-num">2</div>
+          <div class="layer-divider"></div>
+          <div class="layer-content">
+            <div class="layer-name">Regulatory Compliance</div>
+            <div class="layer-desc">NSA-eligible service type, 30-day negotiation window (§ 149.510(b)(1)), 4-day IDR initiation (§ 149.510(b)(2))</div>
+            <div class="layer-check"><span class="check-tag">45 CFR Verified</span><span class="check-tag">Statutory Deadlines</span></div>
+          </div>
+        </div>
+        <div class="layer-row">
+          <div class="layer-num">3</div>
+          <div class="layer-divider"></div>
+          <div class="layer-content">
+            <div class="layer-name">Document Completeness</div>
+            <div class="layer-desc">Required attachments per service type — air ambulance requires transport record, medical necessity, remittance advice, EOB</div>
+            <div class="layer-check"><span class="check-tag">Per Service Type</span><span class="check-tag">Attachment Checklist</span></div>
+          </div>
+        </div>
+        <div class="layer-row coral">
+          <div class="layer-num">4</div>
+          <div class="layer-divider"></div>
+          <div class="layer-content">
+            <div class="layer-name">Cross-Field Coherence</div>
+            <div class="layer-desc">Offer ≤ billed amount + 10%, QPA positive, service date precedes negotiation, initiating ≠ responding party</div>
+            <div class="layer-check"><span class="check-tag">Logic Checks</span><span class="check-tag">Financial Validation</span></div>
+          </div>
+        </div>
+        <div class="layer-row">
+          <div class="layer-num">5</div>
+          <div class="layer-divider"></div>
+          <div class="layer-content">
+            <div class="layer-name">AI Confidence Scoring</div>
+            <div class="layer-desc">Overall submission score 0–100. Below 70 blocks submission. 70–89 shows warning. 90+ cleared for CMS portal</div>
+            <div class="confidence-bar">
+              <div class="conf-seg red">Block &lt;70</div>
+              <div class="conf-seg amber">Warn 70–89</div>
+              <div class="conf-seg green">Clear 90+</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="right-col">
+      <img class="right-image" src="/home/ubuntu/upload/search_images/SLR26G9jwGQx.jpg" alt="NSA compliance infographic" />
+      <div class="stat-panel">
+        <div>
+          <div class="big-stat">
+            <div class="big-num-before">78%</div>
+            <div class="big-arrow">→</div>
+            <div class="big-num-after">&lt;12%</div>
+          </div>
+          <div class="stat-label">First-Attempt CMS Rejection Rate</div>
+          <div class="stat-sub">Industry average vs. platform-validated submissions</div>
+        </div>
+        <div class="divider-line"></div>
+        <div class="auto-fix-note">
+          <div class="auto-fix-icon"><i class="fas fa-magic"></i></div>
+          <div class="auto-fix-text">
+            <div class="auto-fix-title">AI Auto-Fix Button</div>
+            <div class="auto-fix-desc">When validation fails, the AI generates a remediation plan and can automatically patch the most common errors with a single click — no manual correction needed</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

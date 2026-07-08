@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #0F172A;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      .header-area {
+        padding: 44px 52px 0 52px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+      }
+      .section-label {
+        font-size: 11px;
+        font-weight: 700;
+        color: #F43F5E;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+      }
+      .slide-title {
+        font-size: 38px;
+        font-weight: 900;
+        color: #FFFFFF;
+        line-height: 1.1;
+        letter-spacing: -0.5px;
+      }
+      .slide-title span { color: #2563EB; }
+      .title-col { max-width: 560px; }
+      .kpi-row {
+        display: flex;
+        gap: 0;
+        margin-top: 0;
+      }
+      .kpi-item {
+        text-align: right;
+        padding-left: 32px;
+        border-left: 2px solid #334155;
+      }
+      .kpi-item:first-child { border-left: none; padding-left: 0; }
+      .kpi-num {
+        font-size: 28px;
+        font-weight: 900;
+        color: #2563EB;
+        line-height: 1;
+      }
+      .kpi-label {
+        font-size: 10px;
+        color: #94A3B8;
+        margin-top: 3px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .workflow-area {
+        flex: 1;
+        padding: 28px 52px 36px 52px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .phase-label {
+        font-size: 10px;
+        font-weight: 700;
+        color: #64748B;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        margin-bottom: 6px;
+      }
+      .phase-row {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .steps-row {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .step-box {
+        background: #1E293B;
+        border-top: 3px solid #2563EB;
+        padding: 8px 10px;
+        flex: 1;
+        min-width: 0;
+      }
+      .step-box.coral { border-top-color: #F43F5E; }
+      .step-box.dim { border-top-color: #334155; opacity: 0.6; }
+      .step-num {
+        font-size: 10px;
+        font-weight: 900;
+        color: #2563EB;
+        letter-spacing: 0.5px;
+      }
+      .step-box.coral .step-num { color: #F43F5E; }
+      .step-box.dim .step-num { color: #64748B; }
+      .step-name {
+        font-size: 10px;
+        font-weight: 700;
+        color: #E2E8F0;
+        margin-top: 3px;
+        line-height: 1.3;
+      }
+      .arrow {
+        color: #334155;
+        font-size: 14px;
+        flex-shrink: 0;
+      }
+      .features-row {
+        display: flex;
+        gap: 0;
+        border-top: 1px solid #1E293B;
+        margin-top: 4px;
+      }
+      .feature-item {
+        flex: 1;
+        padding: 14px 16px;
+        border-right: 1px solid #1E293B;
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+      }
+      .feature-item:last-child { border-right: none; }
+      .feature-icon {
+        width: 28px;
+        height: 28px;
+        background: #2563EB;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .feature-icon.coral { background: #F43F5E; }
+      .feature-icon i { color: #fff; font-size: 12px; }
+      .feature-text { flex: 1; }
+      .feature-title {
+        font-size: 11px;
+        font-weight: 700;
+        color: #FFFFFF;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+      .feature-desc {
+        font-size: 10px;
+        color: #94A3B8;
+        margin-top: 2px;
+        line-height: 1.4;
+      }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="header-area">
+    <div class="title-col">
+      <div class="section-label">Platform Overview</div>
+      <div class="slide-title">One System for the<br><span>Entire IDR Lifecycle</span></div>
+    </div>
+    <div class="kpi-row">
+      <div class="kpi-item">
+        <div class="kpi-num">19</div>
+        <div class="kpi-label">Steps Automated</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-num">100%</div>
+        <div class="kpi-label">Deadline Coverage</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-num">4</div>
+        <div class="kpi-label">Stakeholder Roles</div>
+      </div>
+    </div>
+  </div>
+  <div class="workflow-area">
+    <div class="phase-row">
+      <div class="phase-label">Phase 1 — Open Negotiation &nbsp;|&nbsp; Phase 2 — IDR Initiation &nbsp;|&nbsp; Phase 3 — IDR Process &nbsp;|&nbsp; Phase 4 — Determination &nbsp;|&nbsp; Phase 5 — Closure</div>
+      <div class="steps-row">
+        <div class="step-box"><div class="step-num">01</div><div class="step-name">Claim Received</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">02</div><div class="step-name">Open Negotiation Notice</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">03</div><div class="step-name">30-Day Negotiation Window</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box coral"><div class="step-num">04</div><div class="step-name">Negotiation Outcome</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box coral"><div class="step-num">05</div><div class="step-name">IDR Initiation (4-day window)</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">06</div><div class="step-name">Eligibility Check</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">07</div><div class="step-name">IDR Entity Selection</div></div>
+      </div>
+    </div>
+    <div class="phase-row">
+      <div class="steps-row">
+        <div class="step-box"><div class="step-num">08</div><div class="step-name">Arbitrator Assignment</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box coral"><div class="step-num">09</div><div class="step-name">Offer Submission (10-day)</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">10</div><div class="step-name">Counter-Offer Exchange</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">11</div><div class="step-name">Document Submission</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">12</div><div class="step-name">Additional Info Request</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box coral"><div class="step-num">13</div><div class="step-name">Determination Issued (30-day)</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">14</div><div class="step-name">Payment Obligation</div></div>
+      </div>
+    </div>
+    <div class="phase-row">
+      <div class="steps-row">
+        <div class="step-box"><div class="step-num">15</div><div class="step-name">Appeal Review</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">16</div><div class="step-name">Payment Processing</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">17</div><div class="step-name">Compliance Verification</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">18</div><div class="step-name">Audit Trail Finalised</div></div>
+        <div class="arrow"><i class="fas fa-chevron-right"></i></div>
+        <div class="step-box"><div class="step-num">19</div><div class="step-name">Dispute Closed</div></div>
+        <div style="flex:3;"></div>
+      </div>
+    </div>
+    <div class="features-row">
+      <div class="feature-item">
+        <div class="feature-icon"><i class="fas fa-bell"></i></div>
+        <div class="feature-text">
+          <div class="feature-title">Real-Time Deadline Alerts</div>
+          <div class="feature-desc">Warning at 5 days, overdue alert at breach — automated daily heartbeat</div>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon coral"><i class="fas fa-shield-alt"></i></div>
+        <div class="feature-text">
+          <div class="feature-title">Full Audit Trail</div>
+          <div class="feature-desc">Every action timestamped and user-attributed — court-ready documentation</div>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon"><i class="fas fa-users"></i></div>
+        <div class="feature-text">
+          <div class="feature-title">Role-Based Access</div>
+          <div class="feature-desc">Provider, payer, IDR entity, and admin roles — each with tailored views</div>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon coral"><i class="fas fa-cloud"></i></div>
+        <div class="feature-text">
+          <div class="feature-title">Cloud-Native, Zero Maintenance</div>
+          <div class="feature-desc">Auto-scaling infrastructure — no servers, no maintenance windows, no IT project</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

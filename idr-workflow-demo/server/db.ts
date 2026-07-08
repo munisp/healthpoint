@@ -11,6 +11,7 @@ import {
   notifications, Notification,
   disputeDrafts, DisputeDraft, InsertDisputeDraft,
   cmsDrafts, CMSDraft, InsertCMSDraft,
+  disputeTemplates, DisputeTemplate, InsertDisputeTemplate,
   IDR_STEP, IDRStep, DISPUTE_STATUS, DisputeStatus,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -986,4 +987,50 @@ export async function listEMRSyncLogs(connectionId: string, limit = 50) {
     .where(eq(emrSyncLogs.connectionId, connectionId))
     .orderBy(desc(emrSyncLogs.createdAt))
     .limit(limit);
+}
+
+// ── Dispute Templates ─────────────────────────────────────────────────────────
+export async function createDisputeTemplate(template: InsertDisputeTemplate): Promise<DisputeTemplate> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(disputeTemplates).values(template);
+  const result = await db.select().from(disputeTemplates).where(eq(disputeTemplates.id, template.id!)).limit(1);
+  return result[0];
+}
+
+export async function listDisputeTemplates(userId: string): Promise<DisputeTemplate[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(disputeTemplates)
+    .where(eq(disputeTemplates.createdBy, userId))
+    .orderBy(desc(disputeTemplates.updatedAt));
+}
+
+export async function getDisputeTemplateById(id: string): Promise<DisputeTemplate | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(disputeTemplates).where(eq(disputeTemplates.id, id)).limit(1);
+  return result[0];
+}
+
+export async function updateDisputeTemplate(id: string, updates: Partial<InsertDisputeTemplate>): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(disputeTemplates).set({ ...updates, updatedAt: new Date() }).where(eq(disputeTemplates.id, id));
+}
+
+export async function deleteDisputeTemplate(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(disputeTemplates).where(eq(disputeTemplates.id, id));
+}
+
+export async function incrementTemplateUsage(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(disputeTemplates)
+    .set({ usageCount: sql`${disputeTemplates.usageCount} + 1`, updatedAt: new Date() })
+    .where(eq(disputeTemplates.id, id));
 }

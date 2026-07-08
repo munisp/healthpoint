@@ -1,0 +1,348 @@
+name: ML Model Registry — Register & Promote
+
+# ---------------------------------------------------------------------------
+# Triggers
+# ---------------------------------------------------------------------------
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ai-ml-dl-implementation/**"
+      - "scripts/register_models.py"
+      - "scripts/promote_models.py"
+      - ".github/workflows/model-registry.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "ai-ml-dl-implementation/**"
+      - "scripts/register_models.py"
+  schedule:
+    # Weekly retraining every Sunday at 02:00 UTC
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Target MLflow stage (Staging | Production)"
+        required: false
+        default: "Staging"
+      force_retrain:
+        description: "Force model retraining even if models exist"
+        required: false
+        default: "false"
+
+# ---------------------------------------------------------------------------
+# Shared environment
+# ---------------------------------------------------------------------------
+env:
+  PYTHON_VERSION: "3.11"
+  MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI || 'http://localhost:5000' }}
+  MLFLOW_S3_ENDPOINT_URL: ${{ secrets.MLFLOW_S3_ENDPOINT_URL || 'http://localhost:9000' }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY || 'minioadmin' }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY || 'minioadmin' }}
+  AWS_DEFAULT_REGION: us-east-1
+
+# ---------------------------------------------------------------------------
+# Jobs
+# ---------------------------------------------------------------------------
+jobs:
+
+  # ── 1. Lint & syntax check ─────────────────────────────────────────────
+  lint:
+    name: Syntax & Lint Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install lint dependencies
+        run: pip install flake8 pyflakes
+
+      - name: Check syntax of ML files
+        run: |
+          python -m py_compile ai-ml-dl-implementation/production_ready_models.py
+          python -m py_compile backend/core-services/predictive-analytics-service/puf_enhanced_analytics.py
+          python -m py_compile scripts/register_models.py
+          python -m py_compile scripts/promote_models.py
+          echo "All files pass syntax check ✓"
+
+      - name: Flake8 (errors only, ignore line length)
+        run: |
+          flake8 ai-ml-dl-implementation/production_ready_models.py \
+                 backend/core-services/predictive-analytics-service/puf_enhanced_analytics.py \
+                 scripts/register_models.py \
+                 scripts/promote_models.py \
+                 --select=E9,F4,F8 --max-line-length=120
+
+  # ── 2. Unit tests (no live MLflow required) ────────────────────────────
+  unit-tests:
+    name: Unit Tests (mocked MLflow)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            mlflow>=2.10 \
+            scikit-learn>=1.4 \
+            torch>=2.2 \
+            pandas>=2.0 \
+            numpy>=1.26 \
+            joblib \
+            boto3 \
+            pyyaml \
+            pytest \
+            pytest-cov
+
+      - name: Run unit tests (offline — MLflow mocked)
+        run: |
+          pytest tests/test_model_registry.py \
+            -v \
+            --tb=short \
+            -k "not Live" \
+            --cov=ai-ml-dl-implementation \
+            --cov=backend/core-services/predictive-analytics-service \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ── 3. Register models (runs on main branch push or schedule) ─────────
+  register-models:
+    name: Register Models → Staging
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: |
+      github.event_name == 'push' && github.ref == 'refs/heads/main' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    environment: mlflow-staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            mlflow>=2.10 \
+            scikit-learn>=1.4 \
+            torch>=2.2 \
+            pandas>=2.0 \
+            numpy>=1.26 \
+            joblib \
+            boto3
+
+      - name: Wait for MLflow server
+        run: |
+          echo "Waiting for MLflow at $MLFLOW_TRACKING_URI …"
+          for i in $(seq 1 12); do
+            if curl -sf "$MLFLOW_TRACKING_URI/health" > /dev/null 2>&1; then
+              echo "MLflow is up ✓"
+              break
+            fi
+            echo "  attempt $i/12 — retrying in 5s"
+            sleep 5
+          done
+          curl -sf "$MLFLOW_TRACKING_URI/health" || (echo "MLflow unreachable" && exit 1)
+
+      - name: Register all models → Staging
+        run: |
+          python scripts/register_models.py \
+            --stage Staging \
+            --force ${{ github.event.inputs.force_retrain || 'false' }}
+
+      - name: Validate Staging registrations
+        run: |
+          python - <<'PYEOF'
+          import mlflow, os, sys
+          from mlflow.tracking import MlflowClient
+
+          uri = os.environ["MLFLOW_TRACKING_URI"]
+          client = MlflowClient(tracking_uri=uri)
+
+          expected = [
+              "isolation_forest", "random_forest", "gradient_boosting", "svm_classifier",
+              "fraud_dnn", "idr_model",
+              "puf_outcome_prediction", "puf_payment_prediction", "puf_payment_scaler",
+              "gcn_model", "gat_model",
+          ]
+
+          missing = []
+          for name in expected:
+              versions = client.search_model_versions(f"name='{name}'")
+              staging = [v for v in versions if v.current_stage == "Staging"]
+              if not staging:
+                  missing.append(name)
+                  print(f"  MISSING Staging version: {name}")
+              else:
+                  print(f"  OK  {name}  (v{staging[0].version})")
+
+          if missing:
+              print(f"\nFAILED: {len(missing)} models not in Staging: {missing}")
+              sys.exit(1)
+          print(f"\nAll {len(expected)} models validated in Staging ✓")
+          PYEOF
+
+      - name: Upload registration log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registration-log
+          path: "*.log"
+
+  # ── 4. Promote Staging → Production (main branch merges only) ─────────
+  promote-models:
+    name: Promote Models → Production
+    runs-on: ubuntu-latest
+    needs: register-models
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: mlflow-production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install mlflow>=2.10 boto3
+
+      - name: Promote Staging → Production
+        run: |
+          python scripts/promote_models.py \
+            --from-stage Staging \
+            --to-stage Production
+
+      - name: Validate Production registrations
+        run: |
+          python - <<'PYEOF'
+          import mlflow, os, sys
+          from mlflow.tracking import MlflowClient
+
+          uri = os.environ["MLFLOW_TRACKING_URI"]
+          client = MlflowClient(tracking_uri=uri)
+
+          expected = [
+              "isolation_forest", "random_forest", "gradient_boosting", "svm_classifier",
+              "fraud_dnn", "idr_model",
+              "puf_outcome_prediction", "puf_payment_prediction", "puf_payment_scaler",
+              "gcn_model", "gat_model",
+          ]
+
+          missing = []
+          for name in expected:
+              versions = client.search_model_versions(f"name='{name}'")
+              prod = [v for v in versions if v.current_stage == "Production"]
+              if not prod:
+                  missing.append(name)
+                  print(f"  MISSING Production version: {name}")
+              else:
+                  print(f"  OK  {name}  (v{prod[0].version})")
+
+          if missing:
+              print(f"\nFAILED: {len(missing)} models not in Production: {missing}")
+              sys.exit(1)
+          print(f"\nAll {len(expected)} models validated in Production ✓")
+          PYEOF
+
+  # ── 5. Integration smoke test (Production models load correctly) ───────
+  integration-smoke-test:
+    name: Integration Smoke Test
+    runs-on: ubuntu-latest
+    needs: promote-models
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: mlflow-production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            mlflow>=2.10 \
+            scikit-learn>=1.4 \
+            torch>=2.2 \
+            pandas>=2.0 \
+            numpy>=1.26 \
+            joblib \
+            boto3 \
+            pytest
+
+      - name: Run live integration tests
+        run: |
+          pytest tests/test_model_registry.py \
+            -v \
+            --tb=short \
+            -k "Live" \
+            -x
+
+      - name: Smoke test ProductionInferenceEngine
+        run: |
+          python - <<'PYEOF'
+          import sys, tempfile, numpy as np
+          sys.path.insert(0, "ai-ml-dl-implementation")
+          from production_ready_models import ProductionInferenceEngine
+
+          with tempfile.TemporaryDirectory() as tmpdir:
+              engine = ProductionInferenceEngine(model_dir=tmpdir, stage="Production")
+
+          loaded = list(engine.models.keys())
+          print(f"Models loaded from Production registry: {loaded}")
+
+          if not loaded:
+              print("WARN: No models loaded — registry may be empty on first run")
+          else:
+              # Quick inference check on random_forest if available
+              if "random_forest" in engine.models:
+                  X = np.random.rand(5, 50)
+                  preds = engine.models["random_forest"].predict(X)
+                  assert len(preds) == 5, f"Expected 5 predictions, got {len(preds)}"
+                  print(f"random_forest inference OK: {preds}")
+
+          print("Smoke test passed ✓")
+          PYEOF
+
+  # ── 6. Notify on failure ───────────────────────────────────────────────
+  notify-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, register-models, promote-models, integration-smoke-test]
+    if: failure()
+    steps:
+      - name: Post failure summary
+        run: |
+          echo "::error::ML Model Registry pipeline failed."
+          echo "Check the failed job above for details."
+          echo "Common causes:"
+          echo "  - MLflow server unreachable (check MLFLOW_TRACKING_URI secret)"
+          echo "  - MinIO/S3 credentials incorrect (check MINIO_ACCESS_KEY / MINIO_SECRET_KEY)"
+          echo "  - Model training failed (check register-models logs)"
+          echo "  - Syntax error introduced in a model file"

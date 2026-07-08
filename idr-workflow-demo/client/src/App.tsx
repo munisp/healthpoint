@@ -5,6 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
+import Onboarding from "./pages/Onboarding";
 import IDREntityDashboard from "@/pages/IDREntityDashboard";
 import Notifications from "@/pages/Notifications";
 import Admin from "@/pages/Admin";
@@ -20,11 +21,13 @@ import EMROnboarding from "./pages/EMROnboarding";
 import StateBalanceBilling from "./pages/StateBalanceBilling";
 import ExpertReview from "./pages/ExpertReview";
 import Reports from "./pages/Reports";
+import DisputeTemplates from "./pages/DisputeTemplates";
 
 function Router() {
   return (
     <Switch>
       <Route path={"/"} component={Home} />
+      <Route path={"/onboarding"} component={Onboarding} />
       <Route path={"/dashboard"} component={Dashboard} />
       <Route path={"/disputes"} component={DisputesList} />
       <Route path={"/disputes/new"} component={NewDispute} />
@@ -40,6 +43,10 @@ function Router() {
       <Route path="/state-laws" component={StateBalanceBilling} />
       <Route path="/expert-review" component={ExpertReview} />
       <Route path="/reports" component={Reports} />
+      <Route path="/templates" component={() => {
+        const DashboardLayout = require("./components/DashboardLayout").default;
+        return <DashboardLayout><DisputeTemplates /></DashboardLayout>;
+      }} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>

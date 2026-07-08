@@ -1,17 +1,19 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { APP_LOGO, APP_TITLE, getLoginUrl } from "@/const";
 import {
   AlertTriangle, Bell, ChevronLeft, ChevronRight,
-  FileText, Gavel, LogOut, Plus, Scale, Search, X, SlidersHorizontal, Download
+  FileText, Gavel, LogOut, Plus, Scale, Search, X, SlidersHorizontal, Download,
+  ArrowRight, UserCheck, CheckSquare, Square, Trash2
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useEffect, useRef } from "react";
+import { toast } from "sonner";
 
 const DISPUTE_STATUSES = [
   { value: "all", label: "All Disputes" },
@@ -69,6 +71,11 @@ export default function DisputesList() {
   const [page, setPage] = useState(1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Bulk selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkAdvancing, setBulkAdvancing] = useState(false);
+  const [bulkExporting, setBulkExporting] = useState(false);
+
   // Debounced live search — fires 350ms after the user stops typing
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -78,6 +85,11 @@ export default function DisputesList() {
     }, 350);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [searchInput]);
+
+  // Clear selection when page/filters change
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [page, statusFilter, serviceTypeFilter, search]);
 
   const [csvExporting, setCsvExporting] = useState<boolean>(false);
   const hasActiveFilters = statusFilter !== "all" || serviceTypeFilter !== "all" || search;
@@ -90,6 +102,9 @@ export default function DisputesList() {
     },
     { enabled: false } // only fetch on demand
   );
+
+  const advanceStepMutation = trpc.disputes.advance.useMutation();
+  const utils = trpc.useUtils();
 
   const handleExportCSV = async () => {
     setCsvExporting(true);
@@ -145,6 +160,118 @@ export default function DisputesList() {
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
+  // Selection helpers
+  const allPageIds = items.map((d: any) => d.id as string);
+  const allSelected = allPageIds.length > 0 && allPageIds.every(id => selectedIds.has(id));
+  const someSelected = allPageIds.some(id => selectedIds.has(id));
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        allPageIds.forEach(id => next.delete(id));
+        return next;
+      });
+    } else {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        allPageIds.forEach(id => next.add(id));
+        return next;
+      });
+    }
+  };
+
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Step progression map: given current step, what's the next step and status
+  const STEP_PROGRESSION: Record<string, { newStep: string; newStatus: string; description: string }> = {
+    "STEP_01_OPEN_NEGOTIATION_INITIATED": { newStep: "STEP_02_OPEN_NEGOTIATION_PERIOD", newStatus: "open_negotiation", description: "Open negotiation period started" },
+    "STEP_02_OPEN_NEGOTIATION_PERIOD": { newStep: "STEP_03_OPEN_NEGOTIATION_FAILED", newStatus: "open_negotiation", description: "Open negotiation period ended" },
+    "STEP_03_OPEN_NEGOTIATION_FAILED": { newStep: "STEP_04_IDR_INITIATED", newStatus: "idr_initiated", description: "IDR process initiated" },
+    "STEP_04_IDR_INITIATED": { newStep: "STEP_05_IDR_NOTICE_SENT", newStatus: "idr_initiated", description: "IDR notice sent to parties" },
+    "STEP_05_IDR_NOTICE_SENT": { newStep: "STEP_06_IDR_ENTITY_SELECTION", newStatus: "idr_entity_selection", description: "IDR entity selection started" },
+    "STEP_06_IDR_ENTITY_SELECTION": { newStep: "STEP_07_IDR_ENTITY_SELECTED", newStatus: "idr_entity_selection", description: "IDR entity selected" },
+    "STEP_07_IDR_ENTITY_SELECTED": { newStep: "STEP_08_ELIGIBILITY_REVIEW", newStatus: "eligibility_review", description: "Eligibility review started" },
+    "STEP_08_ELIGIBILITY_REVIEW": { newStep: "STEP_09_OFFER_SUBMISSION", newStatus: "offer_submission", description: "Offer submission period started" },
+    "STEP_09_OFFER_SUBMISSION": { newStep: "STEP_10_QPA_DISCLOSURE", newStatus: "offer_submission", description: "QPA disclosed" },
+    "STEP_10_QPA_DISCLOSURE": { newStep: "STEP_11_ADDITIONAL_INFORMATION", newStatus: "offer_submission", description: "Additional information submitted" },
+    "STEP_11_ADDITIONAL_INFORMATION": { newStep: "STEP_12_ARBITRATION_REVIEW", newStatus: "under_arbitration", description: "Arbitration review started" },
+    "STEP_12_ARBITRATION_REVIEW": { newStep: "STEP_13_DETERMINATION_ISSUED", newStatus: "determination_issued", description: "Determination issued" },
+    "STEP_13_DETERMINATION_ISSUED": { newStep: "STEP_14_PAYMENT_DETERMINATION", newStatus: "payment_pending", description: "Payment determination made" },
+    "STEP_14_PAYMENT_DETERMINATION": { newStep: "STEP_15_PAYMENT_MADE", newStatus: "payment_pending", description: "Payment made" },
+    "STEP_15_PAYMENT_MADE": { newStep: "STEP_16_ADMINISTRATIVE_FEE_PAID", newStatus: "payment_pending", description: "Administrative fee paid" },
+    "STEP_16_ADMINISTRATIVE_FEE_PAID": { newStep: "STEP_17_DISPUTE_CLOSED", newStatus: "closed", description: "Dispute closed" },
+  };
+
+  const handleBulkAdvance = async () => {
+    if (selectedIds.size === 0) return;
+    setBulkAdvancing(true);
+    let successCount = 0;
+    let failCount = 0;
+    for (const id of Array.from(selectedIds)) {
+      const dispute = items.find((d: any) => d.id === id);
+      if (!dispute) { failCount++; continue; }
+      const progression = STEP_PROGRESSION[dispute.currentStep as string];
+      if (!progression) { failCount++; continue; }
+      try {
+        await advanceStepMutation.mutateAsync({
+          disputeId: id,
+          newStep: progression.newStep as any,
+          newStatus: progression.newStatus as any,
+          description: progression.description,
+        });
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    await utils.disputes.list.invalidate();
+    setBulkAdvancing(false);
+    setSelectedIds(new Set());
+    if (failCount === 0) {
+      toast.success(`Advanced ${successCount} dispute${successCount !== 1 ? "s" : ""} to next step`);
+    } else {
+      toast.warning(`Advanced ${successCount}, failed ${failCount} (already at final step)`);
+    }
+  };
+
+  const handleBulkExportSelected = () => {
+    if (selectedIds.size === 0) return;
+    setBulkExporting(true);
+    const selectedItems = items.filter((d: any) => selectedIds.has(d.id));
+    const headers = ["Reference #", "Initiating Party", "Responding Party", "Service Type", "Billed Amount", "QPA", "Status", "Step", "Created"];
+    const rows = selectedItems.map((d: any) => [
+      d.referenceNumber,
+      d.initiatingPartyName,
+      d.respondingPartyName ?? "",
+      d.serviceType?.replace(/_/g, " ") ?? "",
+      d.billedAmount,
+      d.qpaAmount ?? "",
+      d.status?.replace(/_/g, " ") ?? "",
+      d.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ") ?? "",
+      new Date(d.createdAt).toLocaleDateString(),
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `selected-disputes-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setBulkExporting(false);
+    toast.success(`Exported ${selectedIds.size} dispute${selectedIds.size !== 1 ? "s" : ""}`);
+  };
+
+  const handleDeselectAll = () => setSelectedIds(new Set());
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
@@ -161,6 +288,55 @@ export default function DisputesList() {
           <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
         </nav>
       </header>
+
+      {/* Bulk-action sticky toolbar — appears when items are selected */}
+      {selectedIds.size > 0 && (
+        <div className="sticky top-14 z-20 bg-blue-600 text-white px-6 py-2.5 flex items-center gap-3 shadow-md border-b border-blue-700">
+          <div className="flex items-center gap-2 flex-1">
+            <CheckSquare size={16} className="text-blue-200" />
+            <span className="text-sm font-semibold">
+              {selectedIds.size} dispute{selectedIds.size !== 1 ? "s" : ""} selected
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              className="bg-white/15 hover:bg-white/25 text-white border-white/30 border text-xs h-7"
+              onClick={handleBulkAdvance}
+              disabled={bulkAdvancing}
+            >
+              <ArrowRight size={13} className="mr-1.5" />
+              {bulkAdvancing ? "Advancing..." : "Advance Step"}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="bg-white/15 hover:bg-white/25 text-white border-white/30 border text-xs h-7"
+              onClick={handleBulkExportSelected}
+              disabled={bulkExporting}
+            >
+              <Download size={13} className="mr-1.5" />
+              Export Selected
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="bg-white/15 hover:bg-white/25 text-white border-white/30 border text-xs h-7"
+              onClick={() => navigate("/idr-entities")}
+            >
+              <UserCheck size={13} className="mr-1.5" />
+              Assign to Entity
+            </Button>
+            <button
+              onClick={handleDeselectAll}
+              className="ml-2 text-blue-200 hover:text-white text-xs flex items-center gap-1"
+            >
+              <X size={13} />Deselect All
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center justify-between">
@@ -287,34 +463,62 @@ export default function DisputesList() {
                 <table className="w-full">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
+                      <th className="px-4 py-3 w-10">
+                        <Checkbox
+                          checked={allSelected}
+                          onCheckedChange={toggleSelectAll}
+                          aria-label="Select all on this page"
+                          className="border-slate-300"
+                        />
+                      </th>
                       {["Reference #", "Initiating Party", "Responding Party", "Service Type", "Billed Amount", "QPA", "Status", "Step", "Created", ""].map(h => (
                         <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map((d: any) => (
-                      <tr key={d.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer" onClick={() => navigate(`/disputes/${d.id}`)}>
-                        <td className="px-4 py-3 text-sm font-mono font-semibold text-blue-600">{d.referenceNumber}</td>
-                        <td className="px-4 py-3 text-sm text-slate-700 max-w-[140px] truncate">{d.initiatingPartyName}</td>
-                        <td className="px-4 py-3 text-sm text-slate-600 max-w-[140px] truncate">{d.respondingPartyName ?? <span className="text-slate-400">TBD</span>}</td>
-                        <td className="px-4 py-3 text-sm text-slate-600 capitalize">{d.serviceType?.replace(/_/g, " ")}</td>
-                        <td className="px-4 py-3 text-sm font-semibold text-slate-800">${Number(d.billedAmount).toLocaleString()}</td>
-                        <td className="px-4 py-3 text-sm text-slate-600">{d.qpaAmount ? `$${Number(d.qpaAmount).toLocaleString()}` : <span className="text-slate-400">—</span>}</td>
-                        <td className="px-4 py-3">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status] ?? "bg-slate-100 text-slate-600"}`}>
-                            {d.status?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-xs text-slate-500 max-w-[120px] truncate">
-                          {d.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ").toLowerCase()}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-slate-500">{new Date(d.createdAt).toLocaleDateString()}</td>
-                        <td className="px-4 py-3">
-                          <span className="text-sm text-blue-600 font-medium hover:text-blue-700">View →</span>
-                        </td>
-                      </tr>
-                    ))}
+                    {items.map((d: any) => {
+                      const isSelected = selectedIds.has(d.id);
+                      return (
+                        <tr
+                          key={d.id}
+                          className={`border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer transition-colors ${isSelected ? "bg-blue-50 hover:bg-blue-50" : ""}`}
+                          onClick={(e) => {
+                            // Don't navigate if clicking checkbox
+                            const target = e.target as HTMLElement;
+                            if (target.closest('[role="checkbox"]') || target.tagName === 'INPUT') return;
+                            navigate(`/disputes/${d.id}`);
+                          }}
+                        >
+                          <td className="px-4 py-3 w-10" onClick={e => e.stopPropagation()}>
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={() => toggleSelectOne(d.id)}
+                              aria-label={`Select dispute ${d.referenceNumber}`}
+                              className="border-slate-300"
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-sm font-mono font-semibold text-blue-600">{d.referenceNumber}</td>
+                          <td className="px-4 py-3 text-sm text-slate-700 max-w-[140px] truncate">{d.initiatingPartyName}</td>
+                          <td className="px-4 py-3 text-sm text-slate-600 max-w-[140px] truncate">{d.respondingPartyName ?? <span className="text-slate-400">TBD</span>}</td>
+                          <td className="px-4 py-3 text-sm text-slate-600 capitalize">{d.serviceType?.replace(/_/g, " ")}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-slate-800">${Number(d.billedAmount).toLocaleString()}</td>
+                          <td className="px-4 py-3 text-sm text-slate-600">{d.qpaAmount ? `$${Number(d.qpaAmount).toLocaleString()}` : <span className="text-slate-400">—</span>}</td>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status] ?? "bg-slate-100 text-slate-600"}`}>
+                              {d.status?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-500 max-w-[120px] truncate">
+                            {d.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ").toLowerCase()}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-slate-500">{new Date(d.createdAt).toLocaleDateString()}</td>
+                          <td className="px-4 py-3">
+                            <span className="text-sm text-blue-600 font-medium hover:text-blue-700">View →</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #0F172A;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      .top-bar { width: 100%; height: 6px; background: #2563EB; display: flex; }
+      .top-bar-accent { width: 200px; height: 6px; background: #F43F5E; margin-left: auto; }
+      .main-area {
+        flex: 1;
+        display: flex;
+        gap: 0;
+      }
+      /* LEFT COLUMN */
+      .left-col {
+        width: 360px;
+        padding: 36px 32px 0 44px;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        border-right: 1px solid #1E293B;
+      }
+      .section-label {
+        font-size: 11px;
+        font-weight: 700;
+        color: #F43F5E;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+      }
+      .slide-title {
+        font-size: 30px;
+        font-weight: 900;
+        color: #FFFFFF;
+        line-height: 1.1;
+        letter-spacing: -0.5px;
+      }
+      .slide-title span { color: #2563EB; }
+      .slide-sub {
+        font-size: 12px;
+        color: #64748B;
+        margin-top: 12px;
+        line-height: 1.6;
+      }
+      .dashboard-img {
+        width: 100%;
+        height: 220px;
+        object-fit: cover;
+        object-position: top center;
+        display: block;
+        margin-top: 20px;
+        border-top: 3px solid #2563EB;
+      }
+      .left-stats {
+        display: flex;
+        gap: 0;
+        margin-top: 16px;
+        border-top: 1px solid #1E293B;
+        padding-top: 16px;
+      }
+      .l-stat {
+        flex: 1;
+        border-right: 1px solid #1E293B;
+        padding-right: 12px;
+        margin-right: 12px;
+      }
+      .l-stat:last-child { border-right: none; margin-right: 0; padding-right: 0; }
+      .l-num {
+        font-size: 24px;
+        font-weight: 900;
+        color: #2563EB;
+        line-height: 1;
+      }
+      .l-num.coral { color: #F43F5E; }
+      .l-lbl {
+        font-size: 9px;
+        color: #64748B;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 3px;
+        line-height: 1.3;
+      }
+      /* RIGHT COLUMN — Comparison table */
+      .right-col {
+        flex: 1;
+        padding: 32px 44px 0 32px;
+        display: flex;
+        flex-direction: column;
+      }
+      .table-header {
+        display: grid;
+        grid-template-columns: 1fr 120px 120px 100px;
+        gap: 0;
+        margin-bottom: 0;
+        border-bottom: 2px solid #1E293B;
+        padding-bottom: 10px;
+      }
+      .th-feature {
+        font-size: 10px;
+        font-weight: 700;
+        color: #475569;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+      }
+      .th-platform {
+        font-size: 11px;
+        font-weight: 900;
+        color: #FFFFFF;
+        background: #2563EB;
+        text-align: center;
+        padding: 6px 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .th-halomd {
+        font-size: 11px;
+        font-weight: 700;
+        color: #94A3B8;
+        text-align: center;
+        padding: 6px 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        background: #1E293B;
+      }
+      .th-manual {
+        font-size: 11px;
+        font-weight: 700;
+        color: #64748B;
+        text-align: center;
+        padding: 6px 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        background: #1E293B;
+      }
+      .table-body {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+      }
+      .table-row {
+        display: grid;
+        grid-template-columns: 1fr 120px 120px 100px;
+        gap: 0;
+        border-bottom: 1px solid #1E293B;
+        align-items: center;
+      }
+      .table-row.alt { background: #111827; }
+      .row-feature {
+        padding: 9px 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .feat-name {
+        font-size: 12px;
+        font-weight: 700;
+        color: #E2E8F0;
+      }
+      .feat-sub {
+        font-size: 10px;
+        color: #475569;
+        line-height: 1.3;
+      }
+      .row-cell {
+        text-align: center;
+        padding: 9px 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .row-cell.platform-col { background: rgba(37,99,235,0.08); }
+      .check { font-size: 16px; color: #10B981; font-weight: 900; }
+      .check-partial { font-size: 14px; color: #F59E0B; font-weight: 900; }
+      .cross { font-size: 14px; color: #F43F5E; font-weight: 900; }
+      .cell-note {
+        font-size: 9px;
+        color: #64748B;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        margin-top: 1px;
+      }
+      .cell-note.green { color: #10B981; }
+      .cell-note.amber { color: #F59E0B; }
+      /* Bottom banner */
+      .bottom-banner {
+        background: #2563EB;
+        display: flex;
+        gap: 0;
+        padding: 0;
+        margin-top: 16px;
+      }
+      .banner-item {
+        flex: 1;
+        padding: 12px 20px;
+        border-right: 1px solid rgba(255,255,255,0.15);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .banner-item:last-child { border-right: none; }
+      .banner-icon {
+        width: 28px;
+        height: 28px;
+        background: rgba(255,255,255,0.15);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .banner-icon i { color: #fff; font-size: 12px; }
+      .banner-text { }
+      .banner-title {
+        font-size: 11px;
+        font-weight: 900;
+        color: #FFFFFF;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+      .banner-sub {
+        font-size: 10px;
+        color: rgba(255,255,255,0.65);
+        margin-top: 1px;
+      }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="top-bar"><div class="top-bar-accent"></div></div>
+  <div class="main-area">
+    <!-- LEFT -->
+    <div class="left-col">
+      <div class="section-label">Competitive Analysis</div>
+      <div class="slide-title">Why This Platform<br>Beats Every<br><span>Alternative</span></div>
+      <div class="slide-sub">HaloMD is the closest competitor. Here is a direct, feature-by-feature comparison against both HaloMD and the manual process most providers still use today.</div>
+      <img class="dashboard-img" src="/home/ubuntu/upload/search_images/t0JuCz10312o.png" alt="Platform dashboard" width="284" height="220" />
+      <div class="left-stats">
+        <div class="l-stat">
+          <div class="l-num">11</div>
+          <div class="l-lbl">Exclusive Features</div>
+        </div>
+        <div class="l-stat">
+          <div class="l-num coral">3</div>
+          <div class="l-lbl">AI Agents</div>
+        </div>
+        <div class="l-stat">
+          <div class="l-num">50</div>
+          <div class="l-lbl">States Covered</div>
+        </div>
+      </div>
+    </div>
+    <!-- RIGHT: Comparison Table -->
+    <div class="right-col">
+      <div class="table-header">
+        <div class="th-feature">Feature</div>
+        <div class="th-platform">This Platform</div>
+        <div class="th-halomd">HaloMD</div>
+        <div class="th-manual">Manual</div>
+      </div>
+      <div class="table-body">
+        <div class="table-row">
+          <div class="row-feature">
+            <div class="feat-name">19-Step IDR Workflow</div>
+            <div class="feat-sub">Full NSA lifecycle management</div>
+          </div>
+          <div class="row-cell platform-col"><span class="check">✓</span><span class="cell-note green">Full 19 Steps</span></div>
+          <div class="row-cell"><span class="check-partial">~</span><span class="cell-note amber">Partial</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+        </div>
+        <div class="table-row alt">
+          <div class="row-feature">
+            <div class="feat-name">Agentic AI (3 Agents)</div>
+            <div class="feat-sub">Document, CMS, IDR Assistant — LangGraph</div>
+          </div>
+          <div class="row-cell platform-col"><span class="check">✓</span><span class="cell-note green">Open-Source AI</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+        </div>
+        <div class="table-row">
+          <div class="row-feature">
+            <div class="feat-name">5-Layer CMS Validation</div>
+            <div class="feat-sub">Schema → Regulatory → Docs → Coherence → Score</div>
+          </div>
+          <div class="row-cell platform-col"><span class="check">✓</span><span class="cell-note green">Auto-Fix Included</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+        </div>
+        <div class="table-row alt">
+          <div class="row-feature">
+            <div class="feat-name">FHIR R4 EMR Integration</div>
+            <div class="feat-sub">Epic, Cerner, Meditech, Allscripts, eCW, Athena</div>
+          </div>
+          <div class="row-cell platform-col"><span class="check">✓</span><span class="cell-note green">AI Field Mapping</span></div>
+          <div class="row-cell"><span class="check-partial">~</span><span class="cell-note amber">Limited</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+        </div>
+        <div class="table-row">
+          <div class="row-feature">
+            <div class="feat-name">50-State Balance Billing Laws</div>
+            <div class="feat-sub">AI compliance brief per jurisdiction</div>
+          </div>
+          <div class="row-cell platform-col"><span class="check">✓</span><span class="cell-note green">All 50 States</span></div>
+          <div class="row-cell"><span class="check-partial">~</span><span class="cell-note amber">Select States</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+        </div>
+        <div class="table-row alt">
+          <div class="row-feature">
+            <div class="feat-name">Expert Review Panel</div>
+            <div class="feat-sub">MD, ERISA Attorney, Health Economist, CHC</div>
+          </div>
+          <div class="row-cell platform-col"><span class="check">✓</span><span class="cell-note green">AI-Recommended</span></div>
+          <div class="row-cell"><span class="check">✓</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+        </div>
+        <div class="table-row">
+          <div class="row-feature">
+            <div class="feat-name">Weekly AI Digest Email</div>
+            <div class="feat-sub">Automated Monday morning summary for admins</div>
+          </div>
+          <div class="row-cell platform-col"><span class="check">✓</span><span class="cell-note green">LangGraph Agent</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+        </div>
+        <div class="table-row alt">
+          <div class="row-feature">
+            <div class="feat-name">Dispute Outcome Analytics</div>
+            <div class="feat-sub">Win/loss ratio by service type, avg determination</div>
+          </div>
+          <div class="row-cell platform-col"><span class="check">✓</span><span class="cell-note green">Real-Time Charts</span></div>
+          <div class="row-cell"><span class="check-partial">~</span><span class="cell-note amber">Basic Reporting</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+        </div>
+        <div class="table-row">
+          <div class="row-feature">
+            <div class="feat-name">EMR Sync History &amp; Audit Trail</div>
+            <div class="feat-sub">Per-connection logs, confidence scores, FHIR tags</div>
+          </div>
+          <div class="row-cell platform-col"><span class="check">✓</span><span class="cell-note green">Full Audit Log</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+          <div class="row-cell"><span class="cross">✗</span></div>
+        </div>
+      </div>
+      <div class="bottom-banner">
+        <div class="banner-item">
+          <div class="banner-icon"><i class="fas fa-robot"></i></div>
+          <div class="banner-text">
+            <div class="banner-title">Only Platform with Agentic AI</div>
+            <div class="banner-sub">3 open-source LangGraph agents — no black box</div>
+          </div>
+        </div>
+        <div class="banner-item">
+          <div class="banner-icon"><i class="fas fa-check-double"></i></div>
+          <div class="banner-text">
+            <div class="banner-title">Lowest CMS Rejection Rate</div>
+            <div class="banner-sub">5-layer validation + auto-fix → &lt;12% rejection</div>
+          </div>
+        </div>
+        <div class="banner-item">
+          <div class="banner-icon"><i class="fas fa-plug"></i></div>
+          <div class="banner-text">
+            <div class="banner-title">Deepest EMR Integration</div>
+            <div class="banner-sub">FHIR R4, AI field mapping, 1–2 day setup</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
