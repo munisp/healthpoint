@@ -74,3 +74,9 @@
 - [x] Dashboard analytics chart — Recharts stacked BarChart with 3M/6M/12M toggle, status breakdown (open_negotiation, idr_active, closed, ineligible), empty state
 - [x] Role-based CMS draft visibility — listCMSDrafts accepts adminAll flag; admins get listAllCMSDrafts, users get listCMSDraftsByUser
 - [x] Admin toggle in CMS Tracker — violet "View All Drafts" toggle button visible to admins only; invalidates query on toggle
+
+## Session 7 — Suggested Next Steps + Agentic AI Value Analysis
+- [x] Dispute search and filter bar — debounced live search, service type select, collapsible status tabs, active filter chips, clear-all button
+- [x] Due Soon KPI card — getDashboardStats extended with dueSoon count (7-day window), amber pulse ring KPI card on Dashboard
+- [x] Scheduled deadline-check heartbeat — POST /api/scheduled/deadline-check handler, idempotent, scans all open disputes, warning + overdue notifications, mounted in index.ts
+- [x] Agentic AI value analysis document — docs/agentic-ai-value-analysis.md: 7-section analysis, before/after tables, 94%/88%/99% improvement metrics, equity impact, 6 citations

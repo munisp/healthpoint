@@ -121,6 +121,7 @@ export const appRouter = router({
     list: protectedProcedure
       .input(z.object({
         status: z.enum(DISPUTE_STATUS).optional(),
+        serviceType: z.enum(["emergency_medicine", "anesthesiology", "pathology", "radiology", "neonatology", "assistant_surgeon", "hospitalist", "intensivist", "air_ambulance", "ground_ambulance", "other"]).optional(),
         search: z.string().optional(),
         limit: z.number().min(1).max(100).default(20),
         offset: z.number().min(0).default(0),

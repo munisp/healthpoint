@@ -62,12 +62,13 @@ export default function Dashboard() {
   );
 
   const kpis = [
-    { title: "Total Disputes", value: stats?.total ?? 0, icon: FileText, color: "bg-blue-500", change: null },
-    { title: "Open Negotiation", value: stats?.openNegotiation ?? 0, icon: Clock, color: "bg-amber-500", change: null },
-    { title: "In IDR Process", value: stats?.inIDR ?? 0, icon: Gavel, color: "bg-purple-500", change: null },
-    { title: "Closed This Month", value: stats?.closedThisMonth ?? 0, icon: CheckCircle2, color: "bg-green-500", change: null },
-    { title: "Overdue", value: stats?.overdue ?? 0, icon: AlertTriangle, color: "bg-red-500", change: null },
-    { title: "Unread Alerts", value: stats?.unreadNotifications ?? 0, icon: Bell, color: "bg-indigo-500", change: null },
+    { title: "Total Disputes", value: stats?.total ?? 0, icon: FileText, color: "bg-blue-500", urgent: false },
+    { title: "Open Negotiation", value: stats?.openNegotiation ?? 0, icon: Clock, color: "bg-amber-500", urgent: false },
+    { title: "In IDR Process", value: stats?.inIDR ?? 0, icon: Gavel, color: "bg-purple-500", urgent: false },
+    { title: "Closed This Month", value: stats?.closedThisMonth ?? 0, icon: CheckCircle2, color: "bg-green-500", urgent: false },
+    { title: "Due in 5 Days", value: stats?.dueSoon ?? 0, icon: AlertTriangle, color: "bg-amber-500", urgent: (stats?.dueSoon ?? 0) > 0 },
+    { title: "Overdue", value: stats?.overdue ?? 0, icon: AlertTriangle, color: "bg-red-500", urgent: (stats?.overdue ?? 0) > 0 },
+    { title: "Unread Alerts", value: stats?.unreadNotifications ?? 0, icon: Bell, color: "bg-indigo-500", urgent: false },
   ];
 
   return (
@@ -125,14 +126,22 @@ export default function Dashboard() {
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
             {kpis.map(kpi => (
-              <Card key={kpi.title} className="border-slate-200 hover:shadow-md transition-shadow">
+              <Card key={kpi.title}
+                className={`border-slate-200 hover:shadow-md transition-shadow ${
+                  kpi.urgent && kpi.value > 0 ? "ring-2 ring-amber-400 ring-offset-1" : ""
+                }`}>
                 <CardContent className="p-5">
-                  <div className={`p-2.5 rounded-lg ${kpi.color} w-fit mb-3`}>
+                  <div className={`p-2.5 rounded-lg ${kpi.color} w-fit mb-3 relative`}>
                     <kpi.icon size={18} className="text-white" />
+                    {kpi.urgent && kpi.value > 0 && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-400 rounded-full animate-pulse" />
+                    )}
                   </div>
-                  <div className="text-2xl font-bold text-slate-800 mb-0.5">{kpi.value.toLocaleString()}</div>
+                  <div className={`text-2xl font-bold mb-0.5 ${
+                    kpi.urgent && kpi.value > 0 ? "text-amber-600" : "text-slate-800"
+                  }`}>{kpi.value.toLocaleString()}</div>
                   <div className="text-xs font-medium text-slate-500">{kpi.title}</div>
                 </CardContent>
               </Card>

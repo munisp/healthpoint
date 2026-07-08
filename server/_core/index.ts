@@ -7,6 +7,7 @@ import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { deadlineCheckHandler } from "../scheduled/deadlineCheck";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -35,6 +36,8 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
+  // Scheduled heartbeat endpoints — must be mounted BEFORE tRPC fallthrough
+  app.post("/api/scheduled/deadline-check", deadlineCheckHandler);
   // tRPC API
   app.use(
     "/api/trpc",

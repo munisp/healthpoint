@@ -152,15 +152,17 @@ export async function getDisputeById(id: string) {
 export async function listDisputes(opts: {
   userId?: string;
   status?: DisputeStatus;
+  serviceType?: string;
   search?: string;
   limit?: number;
   offset?: number;
 }) {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
-  const { limit = 20, offset = 0, status, search } = opts;
+  const { limit = 20, offset = 0, status, serviceType, search } = opts;
   const conditions = [];
   if (status) conditions.push(eq(disputes.status, status));
+  if (serviceType) conditions.push(sql`${disputes.serviceType} = ${serviceType}`);
   if (search) {
     conditions.push(
       or(
@@ -237,12 +239,15 @@ export async function getDashboardStats(userId: string | undefined) {
   if (!db) return null;
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  // 5 business days ≈ 7 calendar days (conservative)
+  const fiveBusinessDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const [
     totalResult,
     openResult,
     idrResult,
     closedResult,
     overdueResult,
+    dueSoonResult,
     recentDisputes,
   ] = await Promise.all([
     db.select({ count: count() }).from(disputes),
@@ -255,6 +260,27 @@ export async function getDashboardStats(userId: string | undefined) {
         and(sql`${disputes.openNegotiationDeadline} IS NOT NULL`, sql`${disputes.openNegotiationDeadline} < ${now}`),
         and(sql`${disputes.offerSubmissionDeadline} IS NOT NULL`, sql`${disputes.offerSubmissionDeadline} < ${now}`),
         and(sql`${disputes.paymentDeadline} IS NOT NULL`, sql`${disputes.paymentDeadline} < ${now}`)
+      )
+    )),
+    // Due within 5 business days (not yet overdue)
+    db.select({ count: count() }).from(disputes).where(and(
+      sql`${disputes.status} NOT IN ('closed', 'ineligible')`,
+      or(
+        and(
+          sql`${disputes.openNegotiationDeadline} IS NOT NULL`,
+          sql`${disputes.openNegotiationDeadline} >= ${now}`,
+          sql`${disputes.openNegotiationDeadline} <= ${fiveBusinessDaysFromNow}`
+        ),
+        and(
+          sql`${disputes.offerSubmissionDeadline} IS NOT NULL`,
+          sql`${disputes.offerSubmissionDeadline} >= ${now}`,
+          sql`${disputes.offerSubmissionDeadline} <= ${fiveBusinessDaysFromNow}`
+        ),
+        and(
+          sql`${disputes.paymentDeadline} IS NOT NULL`,
+          sql`${disputes.paymentDeadline} >= ${now}`,
+          sql`${disputes.paymentDeadline} <= ${fiveBusinessDaysFromNow}`
+        )
       )
     )),
     db.select().from(disputes).orderBy(desc(disputes.createdAt)).limit(5),
@@ -271,6 +297,7 @@ export async function getDashboardStats(userId: string | undefined) {
     inIDR: idrResult[0]?.count ?? 0,
     closedThisMonth: closedResult[0]?.count ?? 0,
     overdue: overdueResult[0]?.count ?? 0,
+    dueSoon: dueSoonResult[0]?.count ?? 0,
     unreadNotifications: notifResult[0]?.count ?? 0,
     recentDisputes,
   };
