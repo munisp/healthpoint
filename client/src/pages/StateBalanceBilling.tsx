@@ -149,8 +149,15 @@ export default function StateBalanceBilling() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedState, setSelectedState] = useState<string | null>(null);
   const [aiAnalysis, setAIAnalysis] = useState<string | null>(null);
+  const [aiSources, setAISources] = useState<string[]>([]);
   const [aiLoading, setAILoading] = useState(false);
   const utils = trpc.useUtils();
+
+  // Pre-fetch compliance data when a state is selected
+  const complianceQuery = trpc.stateLaws.checkCompliance.useQuery(
+    { disputeId: "preview", state: selectedState ?? "" },
+    { enabled: !!selectedState, staleTime: 5 * 60 * 1000 }
+  );
 
   const askAssistant = trpc.ai.askAssistant.useMutation({
     onSuccess: (result: any) => {
@@ -170,8 +177,15 @@ export default function StateBalanceBilling() {
   const handleAIAnalysis = (stateCode: string) => {
     const law = STATE_LAWS[stateCode];
     if (!law) return;
+    // Use cached compliance query result if available
+    if (complianceQuery.data?.answer) {
+      setAIAnalysis(complianceQuery.data.answer);
+      setAISources(complianceQuery.data.sources ?? []);
+      return;
+    }
     setAILoading(true);
     setAIAnalysis(null);
+    setAISources([]);
     askAssistant.mutate({
       question: `Provide a concise compliance analysis for a healthcare provider operating in ${law.state}: How does ${law.hasLaw ? law.lawName : "the NSA"} interact with the federal No Surprises Act? What are the key compliance obligations, and what are the most common pitfalls providers face in this state?`,
       conversationHistory: [],

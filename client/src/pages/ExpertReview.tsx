@@ -92,8 +92,28 @@ export default function ExpertReview() {
     onError: () => setAILoading(false),
   });
 
+  // Wire expertReview.request — persists request to DB + creates notification
+  const requestReviewMutation = trpc.expertReview.request.useMutation({
+    onSuccess: (data) => {
+      setSubmitted(true);
+      toast.success(`Expert review submitted. Estimated response: ${data.estimatedResponse}`);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Wire expertReview.getAnalysis — AI-powered dispute analysis pre-fetched when dispute selected
+  const analysisQuery = trpc.expertReview.getAnalysis.useQuery(
+    { disputeId: selectedDispute },
+    { enabled: !!selectedDispute && selectedDispute.length > 0, staleTime: 5 * 60 * 1000 }
+  );
+
   const handleGetRecommendation = () => {
     if (!selectedDispute) { toast.error("Select a dispute first"); return; }
+    // Use pre-fetched analysis if available
+    if (analysisQuery.data?.analysis) {
+      setAIRecommendation(analysisQuery.data.analysis);
+      return;
+    }
     const dispute = disputes?.items?.find((d: any) => d.id === selectedDispute);
     if (!dispute) return;
     setAILoading(true);
@@ -110,8 +130,12 @@ export default function ExpertReview() {
       toast.error("Please select both a dispute and an expert");
       return;
     }
-    setSubmitted(true);
-    toast.success("Expert review request submitted successfully");
+    // Persist to DB via tRPC
+    requestReviewMutation.mutate({
+      disputeId: selectedDispute,
+      reason: notes.trim() || `Expert review requested — expert: ${selectedExpert}`,
+      urgency: "standard",
+    });
   };
 
   if (!isAuthenticated) return null;
@@ -288,7 +312,7 @@ export default function ExpertReview() {
                   <Button
                     className="w-full bg-indigo-600 hover:bg-indigo-700 text-white"
                     onClick={handleSubmit}
-                    disabled={!selectedExpert || !selectedDispute}
+                    disabled={!selectedExpert || !selectedDispute || requestReviewMutation.isPending}
                   >
                     <UserCheck size={14} className="mr-1.5" />
                     Submit Expert Review Request

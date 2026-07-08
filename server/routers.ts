@@ -1515,18 +1515,51 @@ export const appRouter = router({
   reports: router({
     summary: protectedProcedure
       .input(z.object({ startDate: z.string().optional(), endDate: z.string().optional() }))
-      .query(async ({ ctx }) => {
+      .query(async ({ ctx, input }) => {
         const db = await getDb();
-        if (!db) return { totalDisputes: 0, totalAmount: 0, avgDetermination: 0, winRate: 0, avgDaysToClose: 0, byServiceType: [], byMonth: [], topArbitrators: [] };
+        if (!db) return { totalDisputes: 0, totalAmount: 0, avgDetermination: 0, winRate: 0, avgDaysToClose: 0, byServiceType: [], byMonth: [], financialByServiceType: [], topArbitrators: [] };
         const { disputes } = await import("../drizzle/schema");
-        const allDisputes = await db.select().from(disputes).where(eq(disputes.createdBy, ctx.user.id));
-        const closed = allDisputes.filter(d => d.status === "closed");
+        let query = db.select().from(disputes).where(eq(disputes.createdBy, ctx.user.id));
+        const allDisputes = await query;
+        // Apply date filter
+        const startMs = input.startDate ? new Date(input.startDate).getTime() : 0;
+        const filtered = startMs > 0 ? allDisputes.filter(d => (d.createdAt?.getTime() ?? 0) >= startMs) : allDisputes;
+        const closed = filtered.filter(d => d.status === "closed");
         const won = closed.filter((d: typeof allDisputes[0]) => Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0));
-        const totalAmount = allDisputes.reduce((s, d) => s + Number(d.billedAmount ?? 0), 0);
+        const totalAmount = filtered.reduce((s, d) => s + Number(d.billedAmount ?? 0), 0);
         const avgDetermination = closed.length ? closed.reduce((s: number, d: typeof allDisputes[0]) => s + Number(d.determinationAmount ?? 0), 0) / closed.length : 0;
         const avgDaysToClose = closed.length ? closed.reduce((s: number, d: typeof allDisputes[0]) => { const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); return s + ms / 86400000; }, 0) / closed.length : 0;
-        const byServiceType = Object.entries(allDisputes.reduce((acc: Record<string, number>, d: typeof allDisputes[0]) => { const k = d.serviceType ?? "unknown"; acc[k] = (acc[k] ?? 0) + 1; return acc; }, {} as Record<string, number>)).map(([type, count]) => ({ type, count }));
-        return { totalDisputes: allDisputes.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth: [], topArbitrators: [] };
+        // byServiceType: count per type
+        const byServiceType = Object.entries(filtered.reduce((acc: Record<string, number>, d: typeof allDisputes[0]) => { const k = d.serviceType ?? "unknown"; acc[k] = (acc[k] ?? 0) + 1; return acc; }, {} as Record<string, number>)).map(([type, count]) => ({ type, count }));
+        // financialByServiceType: avg billed/qpa/determination per service type
+        const finMap: Record<string, { billed: number[]; qpa: number[]; det: number[] }> = {};
+        for (const d of filtered) {
+          const k = d.serviceType ?? "unknown";
+          if (!finMap[k]) finMap[k] = { billed: [], qpa: [], det: [] };
+          finMap[k].billed.push(Number(d.billedAmount ?? 0));
+          finMap[k].qpa.push(Number(d.qpaAmount ?? 0));
+          finMap[k].det.push(Number(d.determinationAmount ?? 0));
+        }
+        const financialByServiceType = Object.entries(finMap).map(([serviceType, vals]) => ({
+          serviceType: serviceType.replace(/_/g, " "),
+          avgBilled: vals.billed.length ? Math.round(vals.billed.reduce((a, b) => a + b, 0) / vals.billed.length) : 0,
+          avgQPA: vals.qpa.length ? Math.round(vals.qpa.reduce((a, b) => a + b, 0) / vals.qpa.length) : 0,
+          avgDetermination: vals.det.filter(v => v > 0).length ? Math.round(vals.det.filter(v => v > 0).reduce((a, b) => a + b, 0) / vals.det.filter(v => v > 0).length) : 0,
+        }));
+        // byMonth: group by month label
+        const monthMap: Record<string, { open_negotiation: number; idr_active: number; closed: number; ineligible: number }> = {};
+        const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        for (const d of filtered) {
+          const dt = d.createdAt ?? new Date();
+          const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`;
+          if (!monthMap[key]) monthMap[key] = { open_negotiation: 0, idr_active: 0, closed: 0, ineligible: 0 };
+          if (d.status === "closed") monthMap[key].closed++;
+          else if (d.status === "ineligible") monthMap[key].ineligible++;
+          else if (["idr_initiated","entity_selected","offer_submitted","determination_issued"].includes(d.status ?? "")) monthMap[key].idr_active++;
+          else monthMap[key].open_negotiation++;
+        }
+        const byMonth = Object.entries(monthMap).map(([month, counts]) => ({ month: month.split(" ")[0], ...counts }));
+        return { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [] };
       }),
   }),
 });
