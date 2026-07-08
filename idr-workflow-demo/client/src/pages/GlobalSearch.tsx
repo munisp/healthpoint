@@ -12,10 +12,36 @@ import { Separator } from "@/components/ui/separator";
 import {
   Search, FileText, Scale, Activity, Clock, ChevronRight,
   Loader2, AlertCircle, Zap, CalendarDays, X, SlidersHorizontal,
-  LayoutGrid, List
+  LayoutGrid, List, Bookmark, BookmarkCheck, Trash2, FolderOpen
 } from "lucide-react";
+import { toast } from "sonner";
 
 type EntityType = "dispute" | "document" | "audit";
+
+interface SavedSearch {
+  id: string;
+  name: string;
+  query: string;
+  categories: EntityType[];
+  dateFrom: string;
+  dateTo: string;
+  savedAt: string;
+}
+
+const SAVED_SEARCHES_KEY = "healthpoint:saved-searches";
+
+function loadSavedSearches(): SavedSearch[] {
+  try {
+    const raw = localStorage.getItem(SAVED_SEARCHES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSavedSearches(searches: SavedSearch[]) {
+  localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(searches));
+}
 
 const ENTITY_META: Record<EntityType, { label: string; icon: React.ReactNode; color: string; bgColor: string }> = {
   dispute: {
@@ -60,6 +86,20 @@ function highlightText(text: string, query: string): React.ReactNode {
   );
 }
 
+function describeSearch(s: SavedSearch): string {
+  const parts: string[] = [];
+  if (s.query) parts.push(`"${s.query}"`);
+  if (s.categories.length < 3) parts.push(s.categories.map(c => ENTITY_META[c].label).join(", "));
+  if (s.dateFrom || s.dateTo) {
+    const from = s.dateFrom ? new Date(s.dateFrom).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+    const to = s.dateTo ? new Date(s.dateTo).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+    if (from && to) parts.push(`${from}–${to}`);
+    else if (from) parts.push(`from ${from}`);
+    else if (to) parts.push(`until ${to}`);
+  }
+  return parts.join(" · ") || "All results";
+}
+
 export default function GlobalSearch() {
   const [, navigate] = useLocation();
   const [query, setQuery] = useState("");
@@ -79,6 +119,12 @@ export default function GlobalSearch() {
   // View mode
   const [groupByCategory, setGroupByCategory] = useState(false);
 
+  // Save search state
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>(() => loadSavedSearches());
+  const [savePopoverOpen, setSavePopoverOpen] = useState(false);
+  const [savedSearchesOpen, setSavedSearchesOpen] = useState(false);
+  const [saveName, setSaveName] = useState("");
+
   const handleQueryChange = useCallback((val: string) => {
     setQuery(val);
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -90,7 +136,7 @@ export default function GlobalSearch() {
     setActiveCategories(prev => {
       const next = new Set<EntityType>(prev);
       if (next.has(cat)) {
-        if (next.size === 1) return prev; // keep at least one
+        if (next.size === 1) return prev;
         next.delete(cat);
       } else {
         next.add(cat);
@@ -111,6 +157,63 @@ export default function GlobalSearch() {
     setDateFrom("");
     setDateTo("");
   }
+
+  // ── Save Search ──────────────────────────────────────────────────────────
+
+  const currentSearchKey = JSON.stringify({
+    query: debouncedQuery,
+    categories: Array.from(activeCategories).sort(),
+    dateFrom,
+    dateTo,
+  });
+
+  const isCurrentSearchSaved = savedSearches.some(s =>
+    JSON.stringify({
+      query: s.query,
+      categories: [...s.categories].sort(),
+      dateFrom: s.dateFrom,
+      dateTo: s.dateTo,
+    }) === currentSearchKey
+  );
+
+  function saveSearch() {
+    const name = saveName.trim() || `Search ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+    const newSearch: SavedSearch = {
+      id: Date.now().toString(),
+      name,
+      query: debouncedQuery,
+      categories: Array.from(activeCategories),
+      dateFrom,
+      dateTo,
+      savedAt: new Date().toISOString(),
+    };
+    const updated = [newSearch, ...savedSearches].slice(0, 20); // cap at 20
+    setSavedSearches(updated);
+    persistSavedSearches(updated);
+    setSavePopoverOpen(false);
+    setSaveName("");
+    toast.success(`Search saved as "${name}"`);
+  }
+
+  function loadSearch(s: SavedSearch) {
+    setQuery(s.query);
+    setDebouncedQuery(s.query);
+    setActiveCategories(new Set<EntityType>(s.categories));
+    setDateFrom(s.dateFrom);
+    setDateTo(s.dateTo);
+    setSavedSearchesOpen(false);
+    toast.info(`Loaded "${s.name}"`);
+  }
+
+  function deleteSearch(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    const updated = savedSearches.filter(s => s.id !== id);
+    setSavedSearches(updated);
+    persistSavedSearches(updated);
+    toast.success("Saved search removed");
+  }
+
+  // ── Query ────────────────────────────────────────────────────────────────
 
   const entityTypes = useMemo(() => Array.from(activeCategories), [activeCategories]);
 
@@ -133,7 +236,7 @@ export default function GlobalSearch() {
         (item.serviceDate as string) ??
         (item.uploadedAt as string) ??
         null;
-      if (!rawDate) return true; // can't filter, keep
+      if (!rawDate) return true;
       const d = new Date(rawDate);
       if (dateFrom && d < new Date(dateFrom)) return false;
       if (dateTo && d > new Date(dateTo + "T23:59:59")) return false;
@@ -141,7 +244,6 @@ export default function GlobalSearch() {
     });
   }, [allHits, dateFrom, dateTo]);
 
-  // Group by category
   const grouped = useMemo(() => {
     const map: Partial<Record<EntityType, typeof hits>> = {};
     for (const hit of hits) {
@@ -152,6 +254,7 @@ export default function GlobalSearch() {
   }, [hits]);
 
   const hasDateFilter = !!(dateFrom || dateTo);
+  const hasActiveFilters = hasDateFilter || debouncedQuery.trim().length >= 2;
   const filteredCount = hits.length;
   const totalBeforeDate = allHits.length;
 
@@ -246,14 +349,67 @@ export default function GlobalSearch() {
     <DashboardLayout>
       <div className="p-6 space-y-5 max-w-4xl mx-auto">
         {/* Header */}
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Search className="h-6 w-6 text-primary" />
-            Global Search
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Full-text search across disputes, documents, and audit log
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <Search className="h-6 w-6 text-primary" />
+              Global Search
+            </h1>
+            <p className="text-muted-foreground text-sm mt-1">
+              Full-text search across disputes, documents, and audit log
+            </p>
+          </div>
+
+          {/* Saved Searches panel button */}
+          <Popover open={savedSearchesOpen} onOpenChange={setSavedSearchesOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5 shrink-0">
+                <FolderOpen className="h-4 w-4" />
+                Saved Searches
+                {savedSearches.length > 0 && (
+                  <Badge variant="secondary" className="text-xs ml-0.5">{savedSearches.length}</Badge>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-80 p-0" align="end">
+              <div className="flex items-center justify-between px-4 py-3 border-b">
+                <p className="text-sm font-semibold">Saved Searches</p>
+                <span className="text-xs text-muted-foreground">{savedSearches.length} / 20</span>
+              </div>
+              {savedSearches.length === 0 ? (
+                <div className="py-8 text-center text-muted-foreground text-sm px-4">
+                  <Bookmark className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                  No saved searches yet. Run a search and click "Save Search" to bookmark it.
+                </div>
+              ) : (
+                <div className="max-h-80 overflow-y-auto">
+                  {savedSearches.map(s => (
+                    <div
+                      key={s.id}
+                      className="flex items-start gap-2 px-4 py-3 hover:bg-muted/50 cursor-pointer border-b last:border-0 group"
+                      onClick={() => loadSearch(s)}
+                    >
+                      <BookmarkCheck className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{s.name}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5 truncate">{describeSearch(s)}</div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">
+                          {new Date(s.savedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        </div>
+                      </div>
+                      <button
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0 mt-0.5"
+                        onClick={e => deleteSearch(s.id, e)}
+                        title="Remove saved search"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
         </div>
 
         {/* Search bar */}
@@ -334,96 +490,97 @@ export default function GlobalSearch() {
             </PopoverTrigger>
             <PopoverContent className="w-72 p-4" align="start">
               <p className="text-sm font-semibold mb-3">Filter by Date</p>
-
-              {/* Quick ranges */}
               <div className="grid grid-cols-2 gap-1.5 mb-4">
                 {QUICK_RANGES.map(r => (
-                  <Button
-                    key={r.label}
-                    variant="outline"
-                    size="sm"
-                    className="text-xs h-7"
-                    onClick={() => applyQuickRange(r.days)}
-                  >
+                  <Button key={r.label} variant="outline" size="sm" className="text-xs h-7" onClick={() => applyQuickRange(r.days)}>
                     {r.label}
                   </Button>
                 ))}
               </div>
-
               <Separator className="mb-3" />
-
-              {/* Custom range */}
               <div className="space-y-2">
                 <div>
                   <Label className="text-xs text-muted-foreground">From</Label>
-                  <Input
-                    type="date"
-                    value={dateFrom}
-                    max={dateTo || undefined}
-                    onChange={e => setDateFrom(e.target.value)}
-                    className="mt-1 h-8 text-xs"
-                  />
+                  <Input type="date" value={dateFrom} max={dateTo || undefined} onChange={e => setDateFrom(e.target.value)} className="mt-1 h-8 text-xs" />
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">To</Label>
-                  <Input
-                    type="date"
-                    value={dateTo}
-                    min={dateFrom || undefined}
-                    onChange={e => setDateTo(e.target.value)}
-                    className="mt-1 h-8 text-xs"
-                  />
+                  <Input type="date" value={dateTo} min={dateFrom || undefined} onChange={e => setDateTo(e.target.value)} className="mt-1 h-8 text-xs" />
                 </div>
               </div>
-
               {hasDateFilter && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full mt-3 text-xs text-muted-foreground"
-                  onClick={clearDateRange}
-                >
+                <Button variant="ghost" className="w-full mt-3 text-xs text-muted-foreground" onClick={clearDateRange}>
                   <X className="h-3 w-3 mr-1" /> Clear date filter
                 </Button>
               )}
             </PopoverContent>
           </Popover>
 
+          {/* Save Search button */}
+          {hasActiveFilters && (
+            <Popover open={savePopoverOpen} onOpenChange={setSavePopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant={isCurrentSearchSaved ? "secondary" : "outline"}
+                  size="sm"
+                  className="gap-1.5 h-8 text-xs"
+                  title={isCurrentSearchSaved ? "This search is already saved" : "Save this search"}
+                >
+                  {isCurrentSearchSaved
+                    ? <BookmarkCheck className="h-3.5 w-3.5 text-primary" />
+                    : <Bookmark className="h-3.5 w-3.5" />}
+                  {isCurrentSearchSaved ? "Saved" : "Save Search"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-72 p-4" align="start">
+                <p className="text-sm font-semibold mb-1">Save this search</p>
+                <p className="text-xs text-muted-foreground mb-3">{describeSearch({
+                  id: "", name: "", query: debouncedQuery,
+                  categories: Array.from(activeCategories),
+                  dateFrom, dateTo, savedAt: "",
+                })}</p>
+                <Label className="text-xs text-muted-foreground">Name (optional)</Label>
+                <Input
+                  className="mt-1 h-8 text-xs"
+                  placeholder={`Search ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`}
+                  value={saveName}
+                  onChange={e => setSaveName(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") saveSearch(); }}
+                  autoFocus
+                />
+                <div className="flex gap-2 mt-3">
+                  <Button size="sm" className="flex-1 text-xs" onClick={saveSearch}>
+                    <Bookmark className="h-3 w-3 mr-1" /> Save
+                  </Button>
+                  <Button size="sm" variant="outline" className="text-xs" onClick={() => setSavePopoverOpen(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
+
           {/* View toggle */}
           <div className="ml-auto flex items-center gap-1 border rounded-md p-0.5">
-            <Button
-              variant={groupByCategory ? "ghost" : "secondary"}
-              size="sm"
-              className="h-6 w-6 p-0"
-              onClick={() => setGroupByCategory(false)}
-              title="Flat list"
-            >
+            <Button variant={groupByCategory ? "ghost" : "secondary"} size="sm" className="h-6 w-6 p-0" onClick={() => setGroupByCategory(false)} title="Flat list">
               <List className="h-3 w-3" />
             </Button>
-            <Button
-              variant={groupByCategory ? "secondary" : "ghost"}
-              size="sm"
-              className="h-6 w-6 p-0"
-              onClick={() => setGroupByCategory(true)}
-              title="Group by category"
-            >
+            <Button variant={groupByCategory ? "secondary" : "ghost"} size="sm" className="h-6 w-6 p-0" onClick={() => setGroupByCategory(true)} title="Group by category">
               <LayoutGrid className="h-3 w-3" />
             </Button>
           </div>
         </div>
 
         {/* Active filter chips */}
-        {(hasDateFilter) && (
+        {hasDateFilter && (
           <div className="flex flex-wrap gap-2">
-            {hasDateFilter && (
-              <span className="flex items-center gap-1 text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">
-                <CalendarDays className="h-3 w-3" />
-                {dateRangeLabel}
-                <button onClick={clearDateRange} className="ml-0.5 hover:opacity-70">
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            )}
+            <span className="flex items-center gap-1 text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">
+              <CalendarDays className="h-3 w-3" />
+              {dateRangeLabel}
+              <button onClick={clearDateRange} className="ml-0.5 hover:opacity-70">
+                <X className="h-3 w-3" />
+              </button>
+            </span>
           </div>
         )}
 
@@ -433,6 +590,26 @@ export default function GlobalSearch() {
             <Zap className="h-12 w-12 mb-3 opacity-20" />
             <p className="font-medium">Type at least 2 characters to search</p>
             <p className="text-sm mt-1">Searches across reference numbers, patient names, payers, CPT codes, and more</p>
+            {savedSearches.length > 0 && (
+              <div className="mt-6 w-full max-w-sm">
+                <p className="text-xs font-medium text-center mb-2 text-muted-foreground">Quick access — recent saved searches</p>
+                <div className="space-y-1.5">
+                  {savedSearches.slice(0, 4).map(s => (
+                    <button
+                      key={s.id}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg border hover:border-primary/50 hover:bg-muted/50 transition-colors text-left"
+                      onClick={() => loadSearch(s)}
+                    >
+                      <BookmarkCheck className="h-3.5 w-3.5 text-primary shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium truncate">{s.name}</div>
+                        <div className="text-[10px] text-muted-foreground truncate">{describeSearch(s)}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         ) : searchQuery.isLoading ? (
           <div className="flex justify-center py-12">
@@ -470,7 +647,6 @@ export default function GlobalSearch() {
                   {" "}in {took}ms
                 </span>
               </div>
-              {/* Per-category counts */}
               <div className="flex items-center gap-2">
                 {(Object.entries(grouped) as [EntityType, typeof hits][]).map(([cat, catHits]) => (
                   <span key={cat} className={`text-xs px-2 py-0.5 rounded-full ${ENTITY_META[cat].bgColor} ${ENTITY_META[cat].color}`}>

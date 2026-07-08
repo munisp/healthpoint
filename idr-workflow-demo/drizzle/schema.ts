@@ -688,3 +688,24 @@ export const eventLog = pgTable(
 );
 export type EventLogEntry = typeof eventLog.$inferSelect;
 export type InsertEventLogEntry = typeof eventLog.$inferInsert;
+
+// ─── Workflow Step Notes ──────────────────────────────────────────────────────
+export const stepNotes = pgTable(
+  "step_notes",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    stepId: varchar("stepId", { length: 64 }).notNull(),       // e.g. "STEP_09_OFFER_SUBMISSION"
+    authorId: varchar("authorId", { length: 64 }).notNull(),
+    authorName: text("authorName"),
+    note: text("note").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("step_notes_disputeId_idx").on(t.disputeId),
+    index("step_notes_stepId_idx").on(t.stepId),
+  ]
+);
+export type StepNote = typeof stepNotes.$inferSelect;
+export type InsertStepNote = typeof stepNotes.$inferInsert;

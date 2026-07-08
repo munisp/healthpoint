@@ -13,7 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
   DollarSign, TrendingUp, TrendingDown, BookOpen, ArrowRightLeft,
-  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X
+  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -193,6 +193,29 @@ export default function FinancialLedger() {
     setDatePopoverOpen(false);
   }
 
+  function exportCSV() {
+    if (filteredHistory.length === 0) return;
+    const headers = ["Date", "Description", "Debit Account", "Credit Account", "Amount (USD)", "Type"];
+    const rows = filteredHistory.map(({ entry, debitAccountType, creditAccountType }) => [
+      entry.createdAt ? new Date(entry.createdAt).toLocaleDateString() : "",
+      `"${(entry.description ?? "").replace(/"/g, '""')}"`,
+      ACCOUNT_LABELS[debitAccountType] ?? debitAccountType,
+      ACCOUNT_LABELS[creditAccountType] ?? creditAccountType,
+      (entry.amountCents / 100).toFixed(2),
+      entry.entryType,
+    ]);
+    const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const rangeLabel = dateFrom && dateTo ? `_${dateFrom}_to_${dateTo}` : dateFrom ? `_from_${dateFrom}` : dateTo ? `_until_${dateTo}` : "";
+    a.download = `ledger_${selectedDisputeId}${rangeLabel}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${filteredHistory.length} journal entr${filteredHistory.length !== 1 ? "ies" : "y"} to CSV`);
+  }
+
   function toggleAccount(key: string) {
     setVisibleAccounts(prev => {
       const next = new Set(prev);
@@ -264,6 +287,16 @@ export default function FinancialLedger() {
                   </PopoverContent>
                 </Popover>
 
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={exportCSV}
+                  disabled={filteredHistory.length === 0}
+                  title={filteredHistory.length === 0 ? "No entries to export" : `Export ${filteredHistory.length} entr${filteredHistory.length !== 1 ? "ies" : "y"} to CSV`}
+                >
+                  <Download className="h-4 w-4 mr-1" />
+                  Export CSV{filteredHistory.length > 0 ? ` (${filteredHistory.length})` : ""}
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => { balancesQuery.refetch(); historyQuery.refetch(); }}>
                   <RefreshCw className="h-4 w-4 mr-1" /> Refresh
                 </Button>

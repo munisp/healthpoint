@@ -333,6 +333,7 @@ export default function DisputeDetail() {
                 <WorkflowTimeline
                   steps={timeline}
                   currentStep={dispute.currentStep}
+                  disputeId={dispute.id}
                   disputeCreatedAt={dispute.createdAt}
                 />
               </CardContent>

@@ -37,9 +37,9 @@ import { search, generateLakehouseExport, invalidateSearchIndex } from "./search
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { stepNotes, users } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
-import { users } from "../drizzle/schema";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
 
@@ -1995,6 +1995,63 @@ Based on NSA IDR historical data and legal precedent, provide:
           ctx.user.id,
           input.notes
         );
+      }),
+
+    // ── Step Notes ────────────────────────────────────────────────────────────
+    addNote: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        stepId: z.string(),
+        note: z.string().min(1).max(2000),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Database unavailable' });
+        const [inserted] = await db.insert(stepNotes).values({
+          disputeId: input.disputeId,
+          stepId: input.stepId,
+          authorId: ctx.user.id,
+          authorName: ctx.user.name ?? ctx.user.email ?? 'Unknown',
+          note: input.note,
+        }).returning();
+        return inserted;
+      }),
+
+    getNotes: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        stepId: z.string().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
+        const db = await getDb();
+        if (!db) return [];
+        const conditions = input.stepId
+          ? and(eq(stepNotes.disputeId, input.disputeId), eq(stepNotes.stepId, input.stepId))
+          : eq(stepNotes.disputeId, input.disputeId);
+        const notes = await db
+          .select()
+          .from(stepNotes)
+          .where(conditions)
+          .orderBy(stepNotes.createdAt);
+        return notes;
+      }),
+
+    deleteNote: protectedProcedure
+      .input(z.object({ noteId: z.string(), disputeId: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Database unavailable' });
+        // Only allow deleting own notes (or admin)
+        const [note] = await db.select().from(stepNotes).where(eq(stepNotes.id, input.noteId)).limit(1);
+        if (!note) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (note.authorId !== ctx.user.id && ctx.user.role !== 'admin') {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only delete your own notes' });
+        }
+        await db.delete(stepNotes).where(eq(stepNotes.id, input.noteId));
+        return { success: true };
       }),
   }),
 
