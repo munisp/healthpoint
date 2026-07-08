@@ -26,7 +26,8 @@ import {
   Brain,
   PlusCircle,
   Upload,
-  ClipboardList
+  ClipboardList,
+  Database,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -40,6 +41,7 @@ const menuItems = [
   { icon: Brain, label: "AI Assistant", path: "/ai-assistant" },
   { icon: Upload, label: "Stakeholder Upload", path: "/stakeholder-upload" },
   { icon: ClipboardList, label: "CMS Tracker", path: "/cms-tracker" },
+  { icon: Database, label: "EMR Connections", path: "/emr-connections" },
   { icon: ShieldCheck, label: "Admin", path: "/admin" },
 ];
 

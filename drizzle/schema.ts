@@ -312,3 +312,41 @@ export const cmsDrafts = pgTable(
 );
 export type CMSDraft = typeof cmsDrafts.$inferSelect;
 export type InsertCMSDraft = typeof cmsDrafts.$inferInsert;
+
+// ─── EMR Connections ─────────────────────────────────────────────────────────
+export const emrStatusEnum = pgEnum("emr_status", ["active", "inactive", "error", "testing"]);
+
+export const emrConnections = pgTable(
+  "emr_connections",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    name: varchar("name", { length: 255 }).notNull(),
+    emrSystem: varchar("emrSystem", { length: 64 }).notNull(),   // epic, cerner, meditech, etc.
+    authType: varchar("authType", { length: 32 }).notNull(),     // oauth2, apikey, bearer
+    baseUrl: text("baseUrl").notNull(),
+    fhirVersion: varchar("fhirVersion", { length: 8 }).default("R4"),
+    // Credentials stored as encrypted JSON (never returned to client)
+    credentialsEncrypted: text("credentialsEncrypted"),
+    // Field mappings: IDR field → FHIR path
+    fieldMappings: jsonb("fieldMappings").$type<Record<string, string>>().notNull(),
+    // Status & health
+    status: emrStatusEnum("status").default("inactive").notNull(),
+    lastTestAt: timestamp("lastTestAt"),
+    lastTestSuccess: boolean("lastTestSuccess"),
+    lastTestMessage: text("lastTestMessage"),
+    aiConfidenceScore: numeric("aiConfidenceScore", { precision: 4, scale: 3 }),
+    resourcesFound: jsonb("resourcesFound").$type<string[]>(),
+    // Ownership
+    createdBy: varchar("createdBy", { length: 64 }).notNull(),
+    // Timestamps
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [
+    index("emr_connections_user_idx").on(t.createdBy),
+    index("emr_connections_status_idx").on(t.status),
+    index("emr_connections_system_idx").on(t.emrSystem),
+  ]
+);
+export type EMRConnection = typeof emrConnections.$inferSelect;
+export type InsertEMRConnection = typeof emrConnections.$inferInsert;

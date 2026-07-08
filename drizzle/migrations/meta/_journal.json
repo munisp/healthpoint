@@ -15,6 +15,13 @@
       "when": 1783507773909,
       "tag": "0001_gray_shen",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783510839380,
+      "tag": "0002_tense_mantis",
+      "breakpoints": true
     }
   ]
 }

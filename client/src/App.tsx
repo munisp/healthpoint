@@ -15,6 +15,8 @@ import NewDispute from "./pages/NewDispute";
 import AIAssistant from "./pages/AIAssistant";
 import StakeholderUpload from "./pages/StakeholderUpload";
 import CMSSubmissionTracker from "./pages/CMSSubmissionTracker";
+import EMRConnections from "./pages/EMRConnections";
+import EMROnboarding from "./pages/EMROnboarding";
 
 function Router() {
   return (
@@ -30,6 +32,8 @@ function Router() {
       <Route path="/ai-assistant" component={AIAssistant} />
       <Route path="/stakeholder-upload" component={StakeholderUpload} />
       <Route path="/cms-tracker" component={CMSSubmissionTracker} />
+      <Route path="/emr-connections" component={EMRConnections} />
+      <Route path="/emr-onboarding" component={EMROnboarding} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>
