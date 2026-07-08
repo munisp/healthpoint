@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #FFFFFF;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      .top-bar { width: 100%; height: 6px; background: #F43F5E; display: flex; }
+      .top-bar-accent { width: 200px; height: 6px; background: #2563EB; }
+      .main-area { flex: 1; display: flex; }
+      .left-col {
+        width: 380px;
+        background: #F8FAFC;
+        padding: 44px 40px 36px 52px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border-right: 1px solid #E2E8F0;
+      }
+      .section-label {
+        font-size: 11px;
+        font-weight: 700;
+        color: #F43F5E;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        margin-bottom: 12px;
+      }
+      .slide-title {
+        font-size: 36px;
+        font-weight: 900;
+        color: #0F172A;
+        line-height: 1.1;
+        letter-spacing: -0.5px;
+      }
+      .slide-title span { color: #2563EB; }
+      .slide-subtitle {
+        font-size: 13px;
+        color: #64748B;
+        margin-top: 14px;
+        line-height: 1.6;
+      }
+      .left-image {
+        width: 100%;
+        height: 220px;
+        object-fit: cover;
+        object-position: center top;
+        display: block;
+        margin-top: 20px;
+      }
+      .stack-badge {
+        background: #0F172A;
+        padding: 12px 16px;
+        margin-top: 16px;
+      }
+      .stack-label {
+        font-size: 10px;
+        font-weight: 700;
+        color: #64748B;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+      }
+      .stack-items {
+        display: flex;
+        gap: 8px;
+        margin-top: 6px;
+        flex-wrap: wrap;
+      }
+      .stack-tag {
+        font-size: 10px;
+        font-weight: 700;
+        color: #FFFFFF;
+        background: #2563EB;
+        padding: 3px 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .stack-tag.coral { background: #F43F5E; }
+      .right-col {
+        flex: 1;
+        padding: 44px 52px 36px 40px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .agents-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 16px;
+        flex: 1;
+      }
+      .agent-block {
+        border-top: 4px solid #2563EB;
+        padding-top: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .agent-block.coral { border-top-color: #F43F5E; }
+      .agent-block.dark { border-top-color: #0F172A; }
+      .agent-icon-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .agent-icon {
+        width: 36px;
+        height: 36px;
+        background: #2563EB;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .agent-block.coral .agent-icon { background: #F43F5E; }
+      .agent-block.dark .agent-icon { background: #0F172A; }
+      .agent-icon i { color: #fff; font-size: 16px; }
+      .agent-name {
+        font-size: 12px;
+        font-weight: 900;
+        color: #0F172A;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        line-height: 1.3;
+      }
+      .agent-metric {
+        font-size: 44px;
+        font-weight: 900;
+        color: #2563EB;
+        line-height: 1;
+        letter-spacing: -1px;
+      }
+      .agent-block.coral .agent-metric { color: #F43F5E; }
+      .agent-block.dark .agent-metric { color: #0F172A; }
+      .agent-metric-label {
+        font-size: 11px;
+        font-weight: 700;
+        color: #0F172A;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        margin-top: 2px;
+      }
+      .agent-desc {
+        font-size: 12px;
+        color: #475569;
+        line-height: 1.55;
+        flex: 1;
+      }
+      .agent-before-after {
+        background: #F8FAFC;
+        border-left: 3px solid #E2E8F0;
+        padding: 8px 12px;
+        margin-top: 4px;
+      }
+      .agent-block.coral .agent-before-after { border-left-color: #F43F5E; }
+      .agent-block.dark .agent-before-after { border-left-color: #0F172A; }
+      .ba-row { display: flex; gap: 6px; align-items: baseline; }
+      .ba-label { font-size: 10px; font-weight: 700; color: #94A3B8; text-transform: uppercase; width: 36px; flex-shrink: 0; }
+      .ba-val { font-size: 11px; color: #0F172A; font-weight: 600; }
+      .ba-val.strike { text-decoration: line-through; color: #94A3B8; font-weight: 400; }
+      .bottom-bar {
+        background: #0F172A;
+        padding: 12px 0;
+        display: flex;
+        gap: 0;
+      }
+      .bottom-stat {
+        flex: 1;
+        text-align: center;
+        border-right: 1px solid #1E293B;
+      }
+      .bottom-stat:last-child { border-right: none; }
+      .bottom-num {
+        font-size: 22px;
+        font-weight: 900;
+        color: #2563EB;
+        line-height: 1;
+      }
+      .bottom-num.coral { color: #F43F5E; }
+      .bottom-label {
+        font-size: 10px;
+        color: #94A3B8;
+        margin-top: 3px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="top-bar"><div class="top-bar-accent"></div></div>
+  <div class="main-area">
+    <div class="left-col">
+      <div>
+        <div class="section-label">Agentic AI</div>
+        <div class="slide-title">Three <span>AI Agents</span><br>Working 24/7<br>For You</div>
+        <div class="slide-subtitle">Built on open-source LangGraph and LangChain — the same technology stack used by leading AI research labs. No proprietary black box.</div>
+      </div>
+      <img class="left-image" src="/home/ubuntu/upload/search_images/wuiOvCFvDEOw.jpg" alt="NSA compliance AI" />
+      <div class="stack-badge">
+        <div class="stack-label">Open-Source AI Stack</div>
+        <div class="stack-items">
+          <span class="stack-tag">LangGraph</span>
+          <span class="stack-tag coral">LangChain</span>
+          <span class="stack-tag">FastAPI</span>
+          <span class="stack-tag coral">FHIR R4</span>
+        </div>
+      </div>
+    </div>
+    <div class="right-col">
+      <div class="agents-grid">
+        <div class="agent-block">
+          <div class="agent-icon-row">
+            <div class="agent-icon"><i class="fas fa-file-medical"></i></div>
+            <div class="agent-name">Document<br>Analysis Agent</div>
+          </div>
+          <div>
+            <div class="agent-metric">94%</div>
+            <div class="agent-metric-label">Faster Processing</div>
+          </div>
+          <div class="agent-desc">Reads any uploaded document — EOB, remittance advice, medical record, CMS form — extracts all fields, validates against NSA eligibility rules, and flags issues automatically.</div>
+          <div class="agent-before-after">
+            <div class="ba-row"><span class="ba-label">Before</span><span class="ba-val strike">75 min per document, manual</span></div>
+            <div class="ba-row" style="margin-top:4px;"><span class="ba-label">After</span><span class="ba-val">Under 60 seconds, 91% accuracy</span></div>
+          </div>
+        </div>
+        <div class="agent-block coral">
+          <div class="agent-icon-row">
+            <div class="agent-icon"><i class="fas fa-check-double"></i></div>
+            <div class="agent-name">CMS Submission<br>Agent</div>
+          </div>
+          <div>
+            <div class="agent-metric">78%→12%</div>
+            <div class="agent-metric-label">Rejection Rate Drop</div>
+          </div>
+          <div class="agent-desc">Runs a 5-layer validation before any submission reaches CMS: schema check, regulatory compliance, document completeness, cross-field coherence, and confidence scoring.</div>
+          <div class="agent-before-after">
+            <div class="ba-row"><span class="ba-label">Before</span><span class="ba-val strike">78% first-attempt rejection rate</span></div>
+            <div class="ba-row" style="margin-top:4px;"><span class="ba-label">After</span><span class="ba-val">Under 12% with auto-fix</span></div>
+          </div>
+        </div>
+        <div class="agent-block dark">
+          <div class="agent-icon-row">
+            <div class="agent-icon"><i class="fas fa-robot"></i></div>
+            <div class="agent-name">IDR Assistant<br>Agent</div>
+          </div>
+          <div>
+            <div class="agent-metric">&lt;10s</div>
+            <div class="agent-metric-label">Regulatory Q&amp;A Response</div>
+          </div>
+          <div class="agent-desc">A conversational AI expert available 24/7. Answers regulatory questions, summarises disputes in plain English, recommends negotiation strategies, cites specific CFR sections.</div>
+          <div class="agent-before-after">
+            <div class="ba-row"><span class="ba-label">Before</span><span class="ba-val strike">$350–$800 per outside counsel call</span></div>
+            <div class="ba-row" style="margin-top:4px;"><span class="ba-label">After</span><span class="ba-val">Under 10 seconds, included</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="bottom-bar">
+    <div class="bottom-stat"><div class="bottom-num">4.2 hrs</div><div class="bottom-label">Staff time saved per dispute</div></div>
+    <div class="bottom-stat"><div class="bottom-num coral">$180K</div><div class="bottom-label">Annual labour savings (mid-size provider)</div></div>
+    <div class="bottom-stat"><div class="bottom-num">3 agents</div><div class="bottom-label">Running 24/7 on open-source AI</div></div>
+    <div class="bottom-stat"><div class="bottom-num coral">Zero</div><div class="bottom-label">Proprietary black-box dependencies</div></div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,160 @@
+{
+  "project_info": {
+    "title": "Winning Every Dollar You Deserve",
+    "created": 1783513999.782,
+    "last_updated": 1783514265.757,
+    "total_slides": 14
+  },
+  "slides": [
+    {
+      "id": "title",
+      "state": "edited",
+      "pageNum": 1
+    },
+    {
+      "id": "problem",
+      "state": "edited",
+      "pageNum": 2
+    },
+    {
+      "id": "platform_overview",
+      "state": "edited",
+      "pageNum": 3
+    },
+    {
+      "id": "agentic_ai",
+      "state": "edited",
+      "pageNum": 4
+    },
+    {
+      "id": "emr_integration",
+      "state": "edited",
+      "pageNum": 5
+    },
+    {
+      "id": "cms_validation",
+      "state": "edited",
+      "pageNum": 6
+    },
+    {
+      "id": "state_laws",
+      "state": "edited",
+      "pageNum": 7
+    },
+    {
+      "id": "expert_review",
+      "state": "edited",
+      "pageNum": 8
+    },
+    {
+      "id": "reports",
+      "state": "edited",
+      "pageNum": 9
+    },
+    {
+      "id": "competitive",
+      "state": "edited",
+      "pageNum": 10
+    },
+    {
+      "id": "equity",
+      "state": "edited",
+      "pageNum": 11
+    },
+    {
+      "id": "onboarding",
+      "state": "edited",
+      "pageNum": 12
+    },
+    {
+      "id": "roadmap",
+      "state": "edited",
+      "pageNum": 13
+    },
+    {
+      "id": "cta",
+      "state": "edited",
+      "pageNum": 14
+    }
+  ],
+  "outline": [
+    {
+      "id": "title",
+      "title": "Winning Every Dollar You Deserve",
+      "summary": "Hero title slide: AI-powered NSA/IDR platform tagline, three headline statistics (94% faster, 91% accuracy, zero missed deadlines), bold cobalt/coral color blocking.",
+      "image_plan": "/home/ubuntu/upload/search_images/zB5dF79zH3aO.jpeg - Image 1 shows a healthcare professional interacting with a digital interface displaying various medical and financial icons, which aligns with the AI-powered platform for healthcare revenue."
+    },
+    {
+      "id": "problem",
+      "title": "The Problem — Billions at Stake",
+      "summary": "The NSA created a $40B compliance challenge. 78% CMS rejection rate, 75-90 min per dispute, $4,200-$38,000 per unresolved claim. Providers are losing recoverable revenue every day.",
+      "image_plan": "/home/ubuntu/upload/search_images/CLNBs8ODHrj2.png - Image 2 directly references the 'No Surprises Act Implementation' and discusses the challenges, which is highly relevant to the problem statement of the slide."
+    },
+    {
+      "id": "platform_overview",
+      "title": "One System for the Entire IDR Lifecycle",
+      "summary": "All 19 NSA IDR steps automated in a single workflow. Real-time deadline tracking, full audit trail, role-based access for providers, payers, IDR entities, and admins."
+    },
+    {
+      "id": "agentic_ai",
+      "title": "Three AI Agents Working 24/7",
+      "summary": "DocumentAnalysisAgent (94% faster), CMSSubmissionAgent (5-layer validation, 78%→12% rejection rate), IDRAssistantAgent (regulatory Q&A in <10 seconds vs $350-$800/inquiry).",
+      "image_plan": "/home/ubuntu/upload/search_images/wuiOvCFvDEOw.jpg - Image 4 depicts a healthcare professional interacting with a digital interface that has a diagram about 'Challenges for Healthcare Stakeholders' and 'The Role of Data Analytics in NSA Compliance', which relates to the AI agents and their role in solving problems."
+    },
+    {
+      "id": "emr_integration",
+      "title": "Connected to Your EMR — Disputes Pre-Populated",
+      "summary": "FHIR R4 integration with Epic, Cerner, Meditech and more. AI auto-populates 12 dispute fields. 2-4 week integration reduced to 1-2 days. Full sync history and audit trail."
+    },
+    {
+      "id": "cms_validation",
+      "title": "Bulletproof CMS Submissions — 5 Layers of AI",
+      "summary": "Schema validation, regulatory compliance, document completeness, cross-field coherence, confidence scoring. First-attempt rejection rate drops from 78% to under 12%.",
+      "image_plan": "/home/ubuntu/upload/search_images/SLR26G9jwGQx.jpg - Image 3 is an infographic titled 'EASILY COMPLYING WITH THE NO SURPRISES ACT', which directly relates to the 5-layer AI validation for CMS submissions and ensuring compliance."
+    },
+    {
+      "id": "state_laws",
+      "title": "State Balance Billing Laws — Dual-Track Compliance",
+      "summary": "All 50 states covered. NSA governs 61% of insured Americans (ERISA); state laws govern the remaining 39%. AI generates state-specific compliance briefs on demand."
+    },
+    {
+      "id": "expert_review",
+      "title": "Expert Review Panel — Human Expertise When It Matters",
+      "summary": "Curated panel of certified NSA/IDR specialists: physicians, ERISA attorneys, health economists, compliance professionals. AI recommends the right expert. 90% success rate."
+    },
+    {
+      "id": "reports",
+      "title": "Reports & Analytics — Decisions Backed by Data",
+      "summary": "7 live KPI cards, dispute volume chart (3M/6M/12M), outcome analytics (win/loss by service type), CSV/PDF export. Real-time intelligence for CFOs and revenue cycle directors.",
+      "image_plan": "/home/ubuntu/upload/search_images/jHdfM15DWZ6M.webp - Image 8 displays multiple dashboards and charts with financial data, which directly supports the 'Reports & Analytics' section and the idea of data-driven decisions."
+    },
+    {
+      "id": "competitive",
+      "title": "Why This Platform Beats Every Alternative",
+      "summary": "Feature comparison vs HaloMD and manual processes: agentic AI, 5-layer CMS validation, FHIR EMR integration, 50-state law coverage, expert panel, sync history, weekly AI digest.",
+      "image_plan": "/home/ubuntu/upload/search_images/t0JuCz10312o.png - Image 6 shows a modern, clean dashboard interface with various data points and charts, representing a comprehensive platform with multiple capabilities, suitable for a competitive advantage slide."
+    },
+    {
+      "id": "equity",
+      "title": "Levelling the Playing Field for All Providers",
+      "summary": "Small providers now have the same compliance power as large health systems. Rural hospitals, solo practices, and critical access facilities benefit most from AI automation."
+    },
+    {
+      "id": "onboarding",
+      "title": "Live in 48 Hours — Not Months",
+      "summary": "5-step EMR Onboarding Wizard. AI-assisted field mapping. Stakeholder Upload Portal. Role-based access pre-configured. Cloud-native, no software to install.",
+      "image_plan": "/home/ubuntu/upload/search_images/U7R88e9QDXvr.webp - Image 7 shows a dashboard with 'Appointments this week' and 'Cancellations/No-shows' along with a bar chart, which can represent quick implementation and onboarding, and the system being live and operational."
+    },
+    {
+      "id": "roadmap",
+      "title": "The Road Ahead — Getting Smarter Every Day",
+      "summary": "Predictive outcome modelling, automated QPA benchmarking, multi-jurisdiction batch filing, real-time payer intelligence, mobile application."
+    },
+    {
+      "id": "cta",
+      "title": "Every Day Without This Platform Is Revenue Lost",
+      "summary": "$180,000-$420,000 in recoverable revenue per provider annually. 48-hour implementation. Three next steps: schedule demo, connect EMR, file first dispute.",
+      "image_plan": "/home/ubuntu/upload/search_images/5cnYP7iOQCxg.jpg - Image 5 shows a laptop displaying a 'Financial report' and a stethoscope, which directly relates to revenue, financial impact, and the call to action to recover lost revenue."
+    }
+  ]
+}

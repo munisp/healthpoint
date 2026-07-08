@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #FFFFFF;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      .top-bar {
+        width: 100%;
+        height: 6px;
+        background: #F43F5E;
+        display: flex;
+      }
+      .top-bar-accent { width: 200px; height: 6px; background: #2563EB; }
+      .main-content {
+        flex: 1;
+        display: flex;
+        gap: 0;
+      }
+      .left-col {
+        width: 500px;
+        padding: 40px 44px 32px 52px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border-right: 1px solid #E2E8F0;
+      }
+      .section-label {
+        font-size: 11px;
+        font-weight: 700;
+        color: #2563EB;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+      }
+      .slide-title {
+        font-size: 34px;
+        font-weight: 900;
+        color: #0F172A;
+        line-height: 1.1;
+        letter-spacing: -0.5px;
+      }
+      .slide-title span { color: #F43F5E; }
+      .split-visual {
+        display: flex;
+        gap: 0;
+        margin-top: 8px;
+        height: 90px;
+      }
+      .split-block {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+      }
+      .split-block.erisa {
+        background: #2563EB;
+        width: 61%;
+        padding: 0 16px;
+      }
+      .split-block.state {
+        background: #F43F5E;
+        flex: 1;
+        padding: 0 12px;
+      }
+      .split-pct {
+        font-size: 36px;
+        font-weight: 900;
+        color: #FFFFFF;
+        line-height: 1;
+      }
+      .split-label {
+        font-size: 10px;
+        font-weight: 700;
+        color: rgba(255,255,255,0.85);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 4px;
+        text-align: center;
+        line-height: 1.3;
+      }
+      .split-desc {
+        display: flex;
+        gap: 0;
+        margin-top: 0;
+      }
+      .split-desc-item {
+        flex: 1;
+        padding: 10px 12px;
+        background: #F8FAFC;
+        border-top: 2px solid #E2E8F0;
+      }
+      .split-desc-item.erisa-desc { border-top-color: #2563EB; }
+      .split-desc-item.state-desc { border-top-color: #F43F5E; }
+      .split-desc-text {
+        font-size: 11px;
+        color: #475569;
+        line-height: 1.5;
+      }
+      .split-desc-text strong { color: #0F172A; }
+      .ai-callout {
+        background: #0F172A;
+        padding: 14px 18px;
+        margin-top: 8px;
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+      }
+      .ai-icon {
+        width: 32px;
+        height: 32px;
+        background: #2563EB;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        margin-top: 2px;
+      }
+      .ai-icon i { color: #fff; font-size: 14px; }
+      .ai-text {
+        font-size: 12px;
+        color: #E2E8F0;
+        line-height: 1.6;
+      }
+      .ai-text strong { color: #F43F5E; }
+      .right-col {
+        flex: 1;
+        padding: 36px 40px 32px 36px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .right-header {
+        font-size: 11px;
+        font-weight: 700;
+        color: #64748B;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-bottom: 4px;
+      }
+      .states-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        flex: 1;
+      }
+      .state-item {
+        border-top: 3px solid #2563EB;
+        padding-top: 10px;
+        background: #F8FAFC;
+        padding-left: 14px;
+        padding-right: 14px;
+      }
+      .state-item.coral { border-top-color: #F43F5E; }
+      .state-name {
+        font-size: 14px;
+        font-weight: 900;
+        color: #0F172A;
+        line-height: 1;
+      }
+      .state-law {
+        font-size: 10px;
+        font-weight: 700;
+        color: #2563EB;
+        margin-top: 3px;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+      .state-item.coral .state-law { color: #F43F5E; }
+      .state-scope {
+        font-size: 10px;
+        color: #64748B;
+        margin-top: 4px;
+        line-height: 1.4;
+      }
+      .state-tags {
+        display: flex;
+        gap: 4px;
+        margin-top: 6px;
+        flex-wrap: wrap;
+      }
+      .state-tag {
+        font-size: 9px;
+        font-weight: 700;
+        color: #FFFFFF;
+        background: #2563EB;
+        padding: 2px 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+      .state-item.coral .state-tag { background: #F43F5E; }
+      .bottom-note {
+        font-size: 11px;
+        color: #64748B;
+        border-top: 1px solid #E2E8F0;
+        padding-top: 10px;
+        line-height: 1.5;
+      }
+      .bottom-note strong { color: #0F172A; }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="top-bar"><div class="top-bar-accent"></div></div>
+  <div class="main-content">
+    <div class="left-col">
+      <div>
+        <div class="section-label">Compliance Coverage</div>
+        <div class="slide-title">State Balance Billing Laws —<br><span>Dual-Track</span> Compliance</div>
+      </div>
+      <div>
+        <div class="split-visual">
+          <div class="split-block erisa">
+            <div class="split-pct">61%</div>
+            <div class="split-label">Self-Funded ERISA Plans<br>Governed by NSA</div>
+          </div>
+          <div class="split-block state">
+            <div class="split-pct">39%</div>
+            <div class="split-label">State-Regulated Plans<br>Governed by State Law</div>
+          </div>
+        </div>
+        <div class="split-desc">
+          <div class="split-desc-item erisa-desc">
+            <div class="split-desc-text"><strong>NSA / Federal IDR:</strong> Applies to self-funded employer plans. CMS portal submission. 30-day negotiation + 4-day IDR initiation window.</div>
+          </div>
+          <div class="split-desc-item state-desc">
+            <div class="split-desc-text"><strong>State IDR Process:</strong> Applies to fully-insured plans. Different timelines, thresholds, and arbitration bodies per state.</div>
+          </div>
+        </div>
+      </div>
+      <div class="ai-callout">
+        <div class="ai-icon"><i class="fas fa-robot"></i></div>
+        <div class="ai-text">The platform automatically identifies which framework applies to each dispute and generates an <strong>AI compliance brief</strong> on demand — citing the specific statute, effective date, and most common pitfalls for that state.</div>
+      </div>
+    </div>
+    <div class="right-col">
+      <div class="right-header">Strong-Protection States — Platform Coverage</div>
+      <div class="states-grid">
+        <div class="state-item">
+          <div class="state-name">California</div>
+          <div class="state-law">AB 72 — Health & Safety Code § 1300.71.4</div>
+          <div class="state-scope">Independent Dispute Resolution Organisation (IDRO) process. 30-day negotiation, 30-day arbitration. Applies to all fully-insured state-regulated plans.</div>
+          <div class="state-tags"><span class="state-tag">IDRO Process</span><span class="state-tag">Strong Protection</span></div>
+        </div>
+        <div class="state-item coral">
+          <div class="state-name">New York</div>
+          <div class="state-law">Financial Services Law § 603-a</div>
+          <div class="state-scope">Independent dispute resolution with 30-day IDR window. Applies to emergency and non-emergency out-of-network services. Arbitrator selects from submitted offers.</div>
+          <div class="state-tags"><span class="state-tag">Baseball Arbitration</span><span class="state-tag">Emergency + Non-Emergency</span></div>
+        </div>
+        <div class="state-item coral">
+          <div class="state-name">Texas</div>
+          <div class="state-law">HB 1941 — Insurance Code Ch. 1467</div>
+          <div class="state-scope">Mediation and arbitration for out-of-network claims. Facility-based providers and emergency care. Separate process from federal NSA for state-regulated plans.</div>
+          <div class="state-tags"><span class="state-tag">Mediation First</span><span class="state-tag">Facility-Based</span></div>
+        </div>
+        <div class="state-item">
+          <div class="state-name">Illinois</div>
+          <div class="state-law">Surprise Billing Protection Act (2021)</div>
+          <div class="state-scope">Mirrors NSA structure for state-regulated plans. 30-day open negotiation, independent arbitration. Applies to emergency and inadvertent out-of-network care.</div>
+          <div class="state-tags"><span class="state-tag">NSA-Aligned</span><span class="state-tag">Emergency + Inadvertent</span></div>
+        </div>
+        <div class="state-item">
+          <div class="state-name">Florida</div>
+          <div class="state-law">HB 221 — Florida Statutes § 627.64194</div>
+          <div class="state-scope">Arbitration for emergency services and non-emergency facility-based care. Applies to state-regulated HMO and PPO plans. 60-day negotiation window.</div>
+          <div class="state-tags"><span class="state-tag">60-Day Window</span><span class="state-tag">HMO + PPO</span></div>
+        </div>
+        <div class="state-item coral">
+          <div class="state-name">Colorado</div>
+          <div class="state-law">HB 21-1198 — C.R.S. § 10-16-704.3</div>
+          <div class="state-scope">Independent dispute resolution for out-of-network emergency and non-emergency services. Division of Insurance oversees arbitration. Strong patient protections.</div>
+          <div class="state-tags"><span class="state-tag">DOI Oversight</span><span class="state-tag">All OON Services</span></div>
+        </div>
+      </div>
+      <div class="bottom-note"><strong>All 50 states covered</strong> in the platform's State Balance Billing Law reference — with law name, effective date, scope, IDR process, and NSA interaction for each jurisdiction.</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
