@@ -9,6 +9,11 @@ import {
   Gavel, LogOut, Plus, Scale, TrendingUp
 } from "lucide-react";
 import { useLocation } from "wouter";
+import { useState } from "react";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer,
+} from "recharts";
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
@@ -31,7 +36,12 @@ function StatusBadge({ status }: { status: string }) {
 export default function Dashboard() {
   const [, navigate] = useLocation();
   const { user, isAuthenticated, logout, loading: authLoading } = useAuth();
+  const [chartMonths, setChartMonths] = useState(12);
   const { data: stats, isLoading } = trpc.dashboard.stats.useQuery(undefined, { enabled: isAuthenticated });
+  const { data: chartData, isLoading: chartLoading } = trpc.dashboard.disputesByMonth.useQuery(
+    { months: chartMonths },
+    { enabled: isAuthenticated }
+  );
   const { data: notifications } = trpc.notifications.list.useQuery({ unreadOnly: true }, { enabled: isAuthenticated });
   const markReadMutation = trpc.notifications.markAllRead.useMutation();
   const utils = trpc.useUtils();
@@ -52,12 +62,13 @@ export default function Dashboard() {
   );
 
   const kpis = [
-    { title: "Total Disputes", value: stats?.total ?? 0, icon: FileText, color: "bg-blue-500", change: null },
-    { title: "Open Negotiation", value: stats?.openNegotiation ?? 0, icon: Clock, color: "bg-amber-500", change: null },
-    { title: "In IDR Process", value: stats?.inIDR ?? 0, icon: Gavel, color: "bg-purple-500", change: null },
-    { title: "Closed This Month", value: stats?.closedThisMonth ?? 0, icon: CheckCircle2, color: "bg-green-500", change: null },
-    { title: "Overdue", value: stats?.overdue ?? 0, icon: AlertTriangle, color: "bg-red-500", change: null },
-    { title: "Unread Alerts", value: stats?.unreadNotifications ?? 0, icon: Bell, color: "bg-indigo-500", change: null },
+    { title: "Total Disputes", value: stats?.total ?? 0, icon: FileText, color: "bg-blue-500", urgent: false },
+    { title: "Open Negotiation", value: stats?.openNegotiation ?? 0, icon: Clock, color: "bg-amber-500", urgent: false },
+    { title: "In IDR Process", value: stats?.inIDR ?? 0, icon: Gavel, color: "bg-purple-500", urgent: false },
+    { title: "Closed This Month", value: stats?.closedThisMonth ?? 0, icon: CheckCircle2, color: "bg-green-500", urgent: false },
+    { title: "Due in 5 Days", value: stats?.dueSoon ?? 0, icon: AlertTriangle, color: "bg-amber-500", urgent: (stats?.dueSoon ?? 0) > 0 },
+    { title: "Overdue", value: stats?.overdue ?? 0, icon: AlertTriangle, color: "bg-red-500", urgent: (stats?.overdue ?? 0) > 0 },
+    { title: "Unread Alerts", value: stats?.unreadNotifications ?? 0, icon: Bell, color: "bg-indigo-500", urgent: false },
   ];
 
   return (
@@ -115,20 +126,91 @@ export default function Dashboard() {
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
             {kpis.map(kpi => (
-              <Card key={kpi.title} className="border-slate-200 hover:shadow-md transition-shadow">
+              <Card key={kpi.title}
+                className={`border-slate-200 hover:shadow-md transition-shadow ${
+                  kpi.urgent && kpi.value > 0 ? "ring-2 ring-amber-400 ring-offset-1" : ""
+                }`}>
                 <CardContent className="p-5">
-                  <div className={`p-2.5 rounded-lg ${kpi.color} w-fit mb-3`}>
+                  <div className={`p-2.5 rounded-lg ${kpi.color} w-fit mb-3 relative`}>
                     <kpi.icon size={18} className="text-white" />
+                    {kpi.urgent && kpi.value > 0 && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-400 rounded-full animate-pulse" />
+                    )}
                   </div>
-                  <div className="text-2xl font-bold text-slate-800 mb-0.5">{kpi.value.toLocaleString()}</div>
+                  <div className={`text-2xl font-bold mb-0.5 ${
+                    kpi.urgent && kpi.value > 0 ? "text-amber-600" : "text-slate-800"
+                  }`}>{kpi.value.toLocaleString()}</div>
                   <div className="text-xs font-medium text-slate-500">{kpi.title}</div>
                 </CardContent>
               </Card>
             ))}
           </div>
         )}
+
+        {/* Dispute Volume Analytics Chart */}
+        <Card className="border-slate-200">
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-base font-semibold text-slate-800 flex items-center gap-2">
+              <TrendingUp size={16} className="text-blue-500" />Dispute Volume by Month
+            </CardTitle>
+            <div className="flex items-center gap-1">
+              {[3, 6, 12].map(m => (
+                <button
+                  key={m}
+                  onClick={() => setChartMonths(m)}
+                  className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
+                    chartMonths === m
+                      ? "bg-blue-600 text-white"
+                      : "text-slate-500 hover:bg-slate-100"
+                  }`}
+                >
+                  {m}M
+                </button>
+              ))}
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {chartLoading ? (
+              <div className="h-56 flex items-center justify-center">
+                <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+              </div>
+            ) : !chartData || chartData.every(b => b.total === 0) ? (
+              <div className="h-56 flex flex-col items-center justify-center text-slate-400">
+                <Scale size={32} className="mb-2 opacity-30" />
+                <p className="text-sm">No dispute data yet — initiate your first dispute to see trends</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <XAxis
+                    dataKey="month"
+                    tick={{ fontSize: 11, fill: "#94a3b8" }}
+                    tickFormatter={v => {
+                      const [y, m] = v.split("-");
+                      return new Date(Number(y), Number(m) - 1).toLocaleString("default", { month: "short", year: "2-digit" });
+                    }}
+                  />
+                  <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
+                    labelFormatter={v => {
+                      const [y, m] = (v as string).split("-");
+                      return new Date(Number(y), Number(m) - 1).toLocaleString("default", { month: "long", year: "numeric" });
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="open_negotiation" name="Open Negotiation" stackId="a" fill="#3b82f6" radius={[0,0,0,0]} />
+                  <Bar dataKey="idr_active" name="IDR Active" stackId="a" fill="#8b5cf6" radius={[0,0,0,0]} />
+                  <Bar dataKey="closed" name="Closed" stackId="a" fill="#22c55e" radius={[0,0,0,0]} />
+                  <Bar dataKey="ineligible" name="Ineligible" stackId="a" fill="#94a3b8" radius={[4,4,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Recent Disputes */}

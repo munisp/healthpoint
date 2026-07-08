@@ -69,8 +69,22 @@
 - [x] AI dispute summary card — IDRAssistantAgent one-click summary on DisputeDetail page with confidence badge, sources, suggested actions, refresh button
 
 ## Session 6 — Suggested Next Steps
-- [ ] GitHub export — push idr-workflow-demo code to munisp/healthpoint repository
-- [ ] disputesByMonth tRPC procedure — group disputes by createdAt month for analytics
-- [ ] Dashboard analytics chart — Recharts BarChart showing dispute volume by month + status breakdown
-- [ ] Role-based CMS draft visibility — admins see all users' drafts, users see only their own
-- [ ] Admin toggle in CMS Tracker — "View All Drafts" button visible to admins only
+- [x] GitHub export — push idr-workflow-demo code to munisp/healthpoint repository (commit c46d761)
+- [x] disputesByMonth tRPC procedure — group disputes by createdAt month for analytics
+- [x] Dashboard analytics chart — Recharts stacked BarChart with 3M/6M/12M toggle, status breakdown (open_negotiation, idr_active, closed, ineligible), empty state
+- [x] Role-based CMS draft visibility — listCMSDrafts accepts adminAll flag; admins get listAllCMSDrafts, users get listCMSDraftsByUser
+- [x] Admin toggle in CMS Tracker — violet "View All Drafts" toggle button visible to admins only; invalidates query on toggle
+
+## Session 7 — Suggested Next Steps + Agentic AI Value Analysis
+- [x] Dispute search and filter bar — debounced live search, service type select, collapsible status tabs, active filter chips, clear-all button
+- [x] Due Soon KPI card — getDashboardStats extended with dueSoon count (7-day window), amber pulse ring KPI card on Dashboard
+- [x] Scheduled deadline-check heartbeat — POST /api/scheduled/deadline-check handler, idempotent, scans all open disputes, warning + overdue notifications, mounted in index.ts
+- [x] Agentic AI value analysis document — docs/agentic-ai-value-analysis.md: 7-section analysis, before/after tables, 94%/88%/99% improvement metrics, equity impact, 6 citations
+
+## Session 8 — Heartbeat Crons, CSV Export, Weekly Digest, GitHub Push
+- [x] Register daily deadline-check heartbeat cron — task_uid: eSu5Yu9ZEaCiN7EWNZr29f, runs 08:00 UTC daily
+- [x] disputes.exportCSV tRPC procedure — exports up to 10,000 rows with all 21 fields, respects status/serviceType/search filters
+- [x] CSV download button on DisputesList — Export CSV (N) button in page header, client-side Blob download
+- [x] Weekly AI digest heartbeat handler at /api/scheduled/weekly-digest — IDRAssistantAgent summary, idempotent per admin per week, fallback summary if AI unavailable
+- [x] Register weekly digest heartbeat cron — task_uid: ZDznRd9mLrf54uBzvgJ8BD, runs 09:00 UTC every Monday, next: 2026-07-13
+- [ ] Push latest code to munisp/healthpoint GitHub repository

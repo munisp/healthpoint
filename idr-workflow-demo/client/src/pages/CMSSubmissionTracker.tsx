@@ -50,20 +50,24 @@ interface CMSDraft {
 }
 
 export default function CMSSubmissionTracker() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+  const isAdmin = (user as any)?.role === "admin";
   const utils = trpc.useUtils();
   const [drafts, setDrafts] = useState<CMSDraft[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const [generatingId, setGeneratingId] = useState<string | null>(null);
   const [additionalContext, setAdditionalContext] = useState("");
   const [showContextFor, setShowContextFor] = useState<string | null>(null);
+  const [adminViewAll, setAdminViewAll] = useState(false);
 
   const { data: disputesData, isLoading: disputesLoading } = trpc.disputes.list.useQuery({ limit: 100, offset: 0 });
 
   // Load persisted drafts from the database on mount
-  const { data: persistedDrafts, isLoading: draftsLoading } = trpc.ai.listCMSDrafts.useQuery(undefined, {
-    enabled: isAuthenticated,
-  });
+  // Admins can toggle to see all users' drafts
+  const { data: persistedDrafts, isLoading: draftsLoading } = trpc.ai.listCMSDrafts.useQuery(
+    { adminAll: isAdmin && adminViewAll },
+    { enabled: isAuthenticated }
+  );
 
   // Update draft status mutation
   const updateStatusMutation = trpc.ai.updateDraftStatus.useMutation({
@@ -184,13 +188,25 @@ export default function CMSSubmissionTracker() {
             </p>
           </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => window.open("https://nsa-idr.cms.gov", "_blank")}
-        >
-          <ExternalLink size={14} className="mr-2" />CMS IDR Portal
-        </Button>
+        <div className="flex items-center gap-2">
+          {isAdmin && (
+            <Button
+              variant={adminViewAll ? "default" : "outline"}
+              size="sm"
+              onClick={() => { setAdminViewAll(v => !v); utils.ai.listCMSDrafts.invalidate(); }}
+              className={adminViewAll ? "bg-violet-600 hover:bg-violet-700" : "border-violet-300 text-violet-700 hover:bg-violet-50"}
+            >
+              {adminViewAll ? "Showing All Drafts" : "View All Drafts"}
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => window.open("https://nsa-idr.cms.gov", "_blank")}
+          >
+            <ExternalLink size={14} className="mr-2" />CMS IDR Portal
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
