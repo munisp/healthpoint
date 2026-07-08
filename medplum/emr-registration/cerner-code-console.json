@@ -1,0 +1,54 @@
+{
+  "_comment": "Cerner Code Console Registration Configuration for HealthPoint NSA/IDR Platform",
+  "_instructions": [
+    "1. Go to https://code.cerner.com/developer/smart-on-fhir/apps and click 'Begin Registration'",
+    "2. Fill in the fields below exactly as specified",
+    "3. For SANDBOX: use https://fhir-myrecord.cerner.com/r4/{tenant_id}",
+    "4. For PRODUCTION: submit for Cerner review after sandbox validation",
+    "5. Replace all REPLACE_WITH_* placeholders after registration"
+  ],
+  "app_name": "HealthPoint NSA/IDR Dispute Resolution",
+  "app_type": "Provider",
+  "default_fhir_context": "provider",
+  "authorized_users": "Providers and Revenue Cycle staff",
+
+  "oauth2_configuration": {
+    "grant_types": ["authorization_code"],
+    "response_types": ["code"],
+    "token_endpoint_auth_method": "client_secret_basic",
+    "redirect_uris": [
+      "https://fhir.healthpoint.io/smart/callback/cerner",
+      "https://app.healthpoint.io/auth/cerner/callback"
+    ],
+    "scopes_requested": [
+      "launch",
+      "launch/patient",
+      "openid",
+      "fhirUser",
+      "patient/Patient.read",
+      "patient/Coverage.read",
+      "patient/Encounter.read",
+      "patient/Condition.read",
+      "patient/Procedure.read",
+      "patient/Observation.read",
+      "user/Patient.read",
+      "user/Coverage.read",
+      "offline_access"
+    ]
+  },
+
+  "fhir_r4_endpoints": {
+    "sandbox": "https://fhir-myrecord.cerner.com/r4/ec2458f2-1e24-41c8-b71b-0e701af7583d",
+    "production": "REPLACE_WITH_CUSTOMER_CERNER_FHIR_ENDPOINT"
+  },
+
+  "client_credentials": {
+    "sandbox_client_id": "REPLACE_WITH_CERNER_SANDBOX_CLIENT_ID",
+    "sandbox_client_secret": "REPLACE_WITH_CERNER_SANDBOX_CLIENT_SECRET",
+    "production_client_id": "REPLACE_WITH_CERNER_PRODUCTION_CLIENT_ID",
+    "production_client_secret": "REPLACE_WITH_CERNER_PRODUCTION_CLIENT_SECRET"
+  },
+
+  "smart_launch_url": "https://app.healthpoint.io/smart/launch",
+  "smart_redirect_url": "https://fhir.healthpoint.io/smart/callback/cerner"
+}
