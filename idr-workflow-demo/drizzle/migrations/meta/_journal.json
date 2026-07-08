@@ -22,6 +22,13 @@
       "when": 1783510839380,
       "tag": "0002_tense_mantis",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783512369549,
+      "tag": "0003_bizarre_emma_frost",
+      "breakpoints": true
     }
   ]
 }

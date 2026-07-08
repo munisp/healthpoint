@@ -100,4 +100,15 @@
 - [x] tRPC emr.* procedures — list/get/test/create/deactivate/delete
 - [x] EMR Connections nav item in DashboardLayout sidebar
 - [x] Strategic document: docs/agentic-ai-emr-integration.md — 6 agentic AI opportunities, before/after tables, 5-phase roadmap, 6 citations
-- [ ] Push all code to munisp/healthpoint GitHub
+- [x] Push all code to munisp/healthpoint GitHub — commit 777b25e, 15 files, 3740 insertions
+
+## Session 10 — AI Auto-Fix, EMR Data Pull, Sync History Modal
+- [x] Python /auto-fix-cms-submission endpoint — LangGraph agent applies remediations to draft fields
+- [x] tRPC ai.autoFixCMSSubmission procedure — proxy to Python, returns patched submission fields
+- [x] CMS Tracker: Auto-Fix button — violet Auto-Fix button, patches formFields in state, shows applied count badge and green success card
+- [x] Python /extract-emr-data endpoint — simulates FHIR R4 data pull, maps to NSA IDR fields
+- [x] tRPC ai.pullDisputeData procedure — calls Python /extract-emr-data, returns pre-filled dispute fields with confidence scores
+- [x] Pull from EMR panel on NewDispute wizard — teal collapsible panel, EMR selector, patient/claim ID inputs, auto-populates 12 form fields, field confidence chips, FHIR resource tags
+- [x] emr_sync_logs DB table — pgTable (16 cols, 2 indexes), migration pushed, listEMRSyncLogs + createEMRSyncLog helpers
+- [x] tRPC emr.syncHistory procedure — protected, owner/admin-gated, up to 200 rows
+- [x] EMR Connections: Sync History modal — Dialog with 4 summary metrics, expandable log rows, confidence chips, FHIR resource badges, warning list, trigger type badge, refresh button

@@ -201,6 +201,50 @@ export default function NewDispute() {
     }
   );
 
+  // ─── EMR Data Pull ─────────────────────────────────────────────────────────
+  const { data: emrConnections } = trpc.emr.list.useQuery();
+  const [showEMRPull, setShowEMRPull] = useState(false);
+  const [emrPullResult, setEMRPullResult] = useState<{
+    success: boolean;
+    fieldsExtracted: number;
+    fieldConfidence: Record<string, number>;
+    extractedData: Record<string, unknown>;
+    fhirResources: string[];
+    summary: string;
+    warnings: string[];
+  } | null>(null);
+  const [selectedEMRId, setSelectedEMRId] = useState("");
+  const [emrPatientId, setEMRPatientId] = useState("");
+  const [emrClaimId, setEMRClaimId] = useState("");
+
+  const emrPullMutation = trpc.ai.pullDisputeData.useMutation({
+    onSuccess: (result) => {
+      setEMRPullResult(result);
+      if (result.success && result.fieldsExtracted > 0) {
+        const d = result.extractedData as Record<string, string>;
+        // Map extracted fields into the form
+        if (d.initiating_party_name) update("initiatingPartyName", String(d.initiating_party_name));
+        if (d.initiating_party_type) update("initiatingPartyType", String(d.initiating_party_type));
+        if (d.responding_party_name) update("respondingPartyName", String(d.responding_party_name));
+        if (d.responding_party_type) update("respondingPartyType", String(d.responding_party_type));
+        if (d.service_type) update("serviceType", String(d.service_type));
+        if (d.service_date) update("serviceDate", String(d.service_date));
+        if (d.patient_state) update("patientState", String(d.patient_state));
+        if (d.facility_state) update("facilityState", String(d.facility_state));
+        if (d.billed_amount) update("billedAmount", String(d.billed_amount));
+        if (d.cpt_codes) update("cptCodes", String(d.cpt_codes));
+        if (d.icd10_codes) update("icd10Codes", String(d.icd10_codes));
+        if (d.initiating_party_npi) update("initiatingPartyNpi", String(d.initiating_party_npi));
+        toast.success(`${result.fieldsExtracted} fields populated from ${result.emrSystem} EMR.`);
+      } else {
+        toast.warning(result.summary);
+      }
+    },
+    onError: (err) => toast.error(`EMR pull failed: ${err.message}`),
+  });
+
+  const activeEMRConnections = (emrConnections ?? []).filter((c: any) => c.status === "active");
+
   // ─── Submit ─────────────────────────────────────────────────────────────────
   const createMutation = trpc.disputes.create.useMutation({
     onSuccess: async (dispute) => {
@@ -394,6 +438,128 @@ export default function NewDispute() {
             </Badge>
           )}
         </div>
+
+        {/* EMR Pull Panel */}
+        {activeEMRConnections.length > 0 && (
+          <div className="mb-6">
+            {!showEMRPull ? (
+              <button
+                onClick={() => setShowEMRPull(true)}
+                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 border-dashed border-teal-300 bg-teal-50 hover:bg-teal-100 transition-colors text-sm text-teal-700 font-medium"
+              >
+                <span className="flex items-center gap-2">
+                  <span className="text-lg">🏥</span>
+                  Pull Dispute Data from Connected EMR
+                  <Badge variant="outline" className="text-xs border-teal-300 text-teal-700">
+                    {activeEMRConnections.length} active
+                  </Badge>
+                </span>
+                <span className="text-teal-500">▾ Show</span>
+              </button>
+            ) : (
+              <div className="rounded-xl border border-teal-200 bg-teal-50 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-teal-800">🏥 Pull Dispute Data from EMR</span>
+                  <button onClick={() => setShowEMRPull(false)} className="text-xs text-teal-500 hover:text-teal-700">× Close</button>
+                </div>
+                <p className="text-xs text-teal-700">Select a connected EMR system and provide a patient or claim identifier. The AI extraction agent will populate all available dispute fields automatically via FHIR R4.</p>
+                <div className="grid grid-cols-1 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">EMR System *</label>
+                    <select
+                      value={selectedEMRId}
+                      onChange={e => setSelectedEMRId(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    >
+                      <option value="">Select EMR connection…</option>
+                      {activeEMRConnections.map((c: any) => (
+                        <option key={c.id} value={c.id}>{c.systemName} ({c.emrSystem})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Patient ID (optional)</label>
+                      <Input
+                        value={emrPatientId}
+                        onChange={e => setEMRPatientId(e.target.value)}
+                        placeholder="e.g., PT-12345"
+                        className="text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Claim ID (optional)</label>
+                      <Input
+                        value={emrClaimId}
+                        onChange={e => setEMRClaimId(e.target.value)}
+                        placeholder="e.g., CLM-98765"
+                        className="text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  disabled={!selectedEMRId || emrPullMutation.isPending}
+                  onClick={() => {
+                    const conn = activeEMRConnections.find((c: any) => c.id === selectedEMRId);
+                    if (!conn) return;
+                    emrPullMutation.mutate({
+                      connectionId: selectedEMRId,
+                      emrSystem: (conn as any).emrSystem,
+                      patientId: emrPatientId || undefined,
+                      claimId: emrClaimId || undefined,
+                      dateOfService: form.serviceDate || undefined,
+                    });
+                  }}
+                  className="bg-teal-600 hover:bg-teal-700 text-white"
+                >
+                  {emrPullMutation.isPending
+                    ? <><span className="animate-spin mr-1.5">⧗</span>Extracting from EMR…</>
+                    : <>⚡ Extract & Populate Fields</>}
+                </Button>
+                {emrPullResult && (
+                  <div className={`rounded-lg border p-3 text-xs space-y-1.5 ${
+                    emrPullResult.success && emrPullResult.fieldsExtracted > 0
+                      ? "border-green-200 bg-green-50"
+                      : "border-amber-200 bg-amber-50"
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      <span className={`font-semibold ${
+                        emrPullResult.success && emrPullResult.fieldsExtracted > 0 ? "text-green-700" : "text-amber-700"
+                      }`}>
+                        {emrPullResult.success && emrPullResult.fieldsExtracted > 0
+                          ? `✓ ${emrPullResult.fieldsExtracted} fields extracted`
+                          : "⚠ Extraction incomplete"}
+                      </span>
+                      {emrPullResult.fhirResources.length > 0 && (
+                        <span className="text-slate-500">via {emrPullResult.fhirResources.join(", ")}</span>
+                      )}
+                    </div>
+                    <p className="text-slate-600">{emrPullResult.summary}</p>
+                    {Object.keys(emrPullResult.fieldConfidence).length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {Object.entries(emrPullResult.fieldConfidence).map(([field, conf]) => (
+                          <span key={field} className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                            conf >= 0.9 ? "bg-green-100 text-green-700" :
+                            conf >= 0.7 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"
+                          }`}>
+                            {field}: {Math.round(conf * 100)}%
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {emrPullResult.warnings.length > 0 && (
+                      <ul className="text-amber-700 space-y-0.5">
+                        {emrPullResult.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Step indicator */}
         <div className="flex items-center gap-2 mb-8">

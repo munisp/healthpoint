@@ -350,3 +350,36 @@ export const emrConnections = pgTable(
 );
 export type EMRConnection = typeof emrConnections.$inferSelect;
 export type InsertEMRConnection = typeof emrConnections.$inferInsert;
+
+// ─── EMR Sync Logs ────────────────────────────────────────────────────────────────────────────────
+export const emrSyncTriggerEnum = pgEnum("emr_sync_trigger", ["manual", "dispute_pull", "heartbeat", "test"]);
+export const emrSyncStatusEnum = pgEnum("emr_sync_status", ["success", "partial", "failed", "timeout"]);
+
+export const emrSyncLogs = pgTable(
+  "emr_sync_logs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    connectionId: varchar("connectionId", { length: 64 }).notNull(),
+    triggeredBy: varchar("triggeredBy", { length: 64 }),
+    triggerType: emrSyncTriggerEnum("triggerType").default("manual").notNull(),
+    status: emrSyncStatusEnum("status").default("success").notNull(),
+    fieldsExtracted: integer("fieldsExtracted").default(0),
+    fhirResourcesAccessed: jsonb("fhirResourcesAccessed").$type<string[]>(),
+    patientId: varchar("patientId", { length: 128 }),
+    claimId: varchar("claimId", { length: 128 }),
+    disputeId: varchar("disputeId", { length: 64 }),
+    durationMs: integer("durationMs"),
+    errorMessage: text("errorMessage"),
+    warnings: jsonb("warnings").$type<string[]>(),
+    fieldConfidence: jsonb("fieldConfidence").$type<Record<string, number>>(),
+    summary: text("summary"),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("emr_sync_logs_conn_idx").on(t.connectionId),
+    index("emr_sync_logs_created_idx").on(t.createdAt),
+  ]
+);
+
+export type EMRSyncLog = typeof emrSyncLogs.$inferSelect;
+export type InsertEMRSyncLog = typeof emrSyncLogs.$inferInsert;
