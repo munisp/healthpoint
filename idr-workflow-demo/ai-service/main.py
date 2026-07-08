@@ -27,6 +27,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
 from agents import get_doc_agent, get_cms_agent, get_assistant_agent
+from cms_validator import validate_cms_submission
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -393,6 +394,49 @@ async def ask_assistant(request: AskAssistantRequest):
     except Exception as e:
         logger.error(f"[IDRAssistantAgent] Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Assistant query failed: {str(e)}")
+
+
+# ─── CMS Validation Endpoint ─────────────────────────────────────────────────
+
+class CMSValidationRequest(BaseModel):
+    submission: dict
+
+@app.post("/validate-cms-submission")
+async def validate_cms_submission_endpoint(request: CMSValidationRequest):
+    """
+    5-layer bulletproof CMS IDR submission validation pipeline.
+    Layers: schema → regulatory → documents → coherence → ai_confidence
+    Returns status: approved | needs_review | rejected
+    """
+    start = time.time()
+    logger.info("[CMSValidator] Running 5-layer validation pipeline")
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: validate_cms_submission(request.submission)
+        )
+        elapsed = round(time.time() - start, 2)
+        blocking = [i for i in result["issues"] if i["severity"] == "blocking"]
+        warnings = [i for i in result["issues"] if i["severity"] == "warning"]
+        logger.info(
+            f"[CMSValidator] Done in {elapsed}s — status={result['status']} "
+            f"blocking={len(blocking)} warnings={len(warnings)} "
+            f"confidence={result['confidence_score']:.2f}"
+        )
+        return {
+            "success": True,
+            "processingTimeSeconds": elapsed,
+            "status": result["status"],
+            "confidence_score": result["confidence_score"],
+            "summary": result["summary"],
+            "issues": result["issues"],
+            "layer_results": result["layer_results"],
+            "remediation_plan": result["remediation_plan"],
+            "blocking_count": len(blocking),
+            "warning_count": len(warnings),
+        }
+    except Exception as e:
+        logger.error(f"[CMSValidator] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"CMS validation failed: {str(e)}")
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

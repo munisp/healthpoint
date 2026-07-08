@@ -59,6 +59,16 @@ export default function CMSSubmissionTracker() {
   const [additionalContext, setAdditionalContext] = useState("");
   const [showContextFor, setShowContextFor] = useState<string | null>(null);
   const [adminViewAll, setAdminViewAll] = useState(false);
+  const [validationResult, setValidationResult] = useState<{
+    status: "approved" | "needs_review" | "rejected";
+    confidence_score: number;
+    blocking_count: number;
+    warning_count: number;
+    issues: Array<{ layer: string; severity: string; field: string | null; code: string; message: string; remediation: string }>;
+    remediation_plan: string[];
+    summary: string;
+  } | null>(null);
+  const [validatingId, setValidatingId] = useState<string | null>(null);
 
   const { data: disputesData, isLoading: disputesLoading } = trpc.disputes.list.useQuery({ limit: 100, offset: 0 });
 
@@ -148,8 +158,54 @@ export default function CMSSubmissionTracker() {
 
   const generateDraft = (disputeId: string) => {
     setGeneratingId(disputeId);
+    setValidationResult(null);
     cmsMutation.mutate({ disputeId, additionalContext: additionalContext || undefined });
     setAdditionalContext("");
+  };
+
+  const validateMutation = trpc.ai.validateCMSSubmission.useMutation({
+    onSuccess: (result) => {
+      setValidationResult(result);
+      setValidatingId(null);
+      if (result.blocking_count > 0) {
+        toast.error(`Validation found ${result.blocking_count} blocking issue${result.blocking_count > 1 ? "s" : ""}. Fix before submitting.`);
+      } else if (result.status === "approved") {
+        toast.success("Validation passed — submission is ready for CMS.");
+      } else {
+        toast.warning(`Validation complete — ${result.warning_count} warning${result.warning_count !== 1 ? "s" : ""}. Review before submitting.`);
+      }
+    },
+    onError: (err) => {
+      setValidatingId(null);
+      toast.error(`Validation failed: ${err.message}`);
+    },
+  });
+
+  const runValidation = (draft: CMSDraft) => {
+    setValidatingId(draft.disputeId);
+    const ff = draft.draft.formFields;
+    validateMutation.mutate({
+      submission: {
+        initiating_party_name: ff.initiatingParty ?? ff.initiating_party_name ?? "",
+        initiating_party_type: ff.initiatingPartyType ?? ff.initiating_party_type ?? "provider",
+        responding_party_name: ff.respondingParty ?? ff.responding_party_name ?? "",
+        responding_party_type: ff.respondingPartyType ?? ff.responding_party_type ?? "payer",
+        service_type: (draft.serviceType ?? "emergency_medicine").toLowerCase().replace(/ /g, "_"),
+        service_date: ff.serviceDate ?? ff.service_date ?? new Date().toISOString().split("T")[0],
+        patient_state: ff.patientState ?? ff.patient_state ?? "NY",
+        facility_state: ff.facilityState ?? ff.facility_state ?? "NY",
+        billed_amount: parseFloat(String(ff.billedAmount ?? draft.billedAmount ?? "0").replace(/[^0-9.]/g, "")) || 0,
+        qpa_amount: parseFloat(String(ff.qpaAmount ?? ff.qpa_amount ?? "0").replace(/[^0-9.]/g, "")) || 0,
+        initiating_offer: parseFloat(String(ff.initiatingOffer ?? ff.initiating_offer ?? "0").replace(/[^0-9.]/g, "")) || 0,
+        open_negotiation_start: ff.openNegotiationStart ?? ff.open_negotiation_start ?? new Date(Date.now() - 35 * 86400000).toISOString().split("T")[0],
+        open_negotiation_end: ff.openNegotiationEnd ?? ff.open_negotiation_end ?? new Date(Date.now() - 5 * 86400000).toISOString().split("T")[0],
+        idr_initiation_date: ff.idrInitiationDate ?? ff.idr_initiation_date ?? new Date().toISOString().split("T")[0],
+        attached_documents: draft.draft.attachmentChecklist.filter(a => a.status === "required" || a.status === "attached").map(a => a.item),
+        submission_narrative: draft.draft.submissionNarrative ?? "",
+        qpa_methodology: ff.qpaMethodology ?? ff.qpa_methodology,
+        idr_entity_name: ff.idrEntityName ?? ff.idr_entity_name,
+      },
+    });
   };
 
   const copyToClipboard = (text: string) => {
@@ -489,6 +545,48 @@ export default function CMSSubmissionTracker() {
                         </li>
                       ))}
                     </ol>
+                    {/* Validation Report */}
+                    {validationResult && selectedDraft.disputeId === selectedDraftId && (
+                      <div className={`rounded-md border p-3 text-xs space-y-2 ${
+                        validationResult.blocking_count > 0
+                          ? "border-red-300 bg-red-50 dark:bg-red-950/20"
+                          : validationResult.status === "approved"
+                          ? "border-green-300 bg-green-50 dark:bg-green-950/20"
+                          : "border-amber-300 bg-amber-50 dark:bg-amber-950/20"
+                      }`}>
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold">
+                            {validationResult.blocking_count > 0 ? "🔴 Validation Failed" :
+                             validationResult.status === "approved" ? "🟢 Validation Passed" : "🟡 Needs Review"}
+                          </span>
+                          <span className="text-muted-foreground">
+                            Confidence: {Math.round(validationResult.confidence_score * 100)}%
+                          </span>
+                        </div>
+                        <p className="text-muted-foreground">{validationResult.summary}</p>
+                        {validationResult.issues.length > 0 && (
+                          <ul className="space-y-1">
+                            {validationResult.issues.map((issue, i) => (
+                              <li key={i} className={`flex gap-1.5 ${
+                                issue.severity === "blocking" ? "text-red-700 dark:text-red-300" :
+                                issue.severity === "warning" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"
+                              }`}>
+                                <span className="shrink-0">{issue.severity === "blocking" ? "✗" : "⚠"}</span>
+                                <span><strong>[{issue.layer}]</strong> {issue.message}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {validationResult.blocking_count > 0 && validationResult.remediation_plan.length > 0 && (
+                          <div>
+                            <p className="font-medium text-red-700 dark:text-red-300 mb-1">Remediation steps:</p>
+                            <ol className="list-decimal list-inside space-y-0.5 text-red-700 dark:text-red-300">
+                              {validationResult.remediation_plan.map((step, i) => <li key={i}>{step}</li>)}
+                            </ol>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div className="flex gap-2">
                       <Button
                         variant="outline"
@@ -498,12 +596,27 @@ export default function CMSSubmissionTracker() {
                       >
                         <ExternalLink size={12} className="mr-2" />CMS IDR Portal
                       </Button>
+                      {/* Validate before submit */}
+                      {selectedDraft.status === "draft" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 border-violet-300 text-violet-700 hover:bg-violet-50"
+                          disabled={validatingId === selectedDraft.disputeId}
+                          onClick={() => runValidation(selectedDraft)}
+                        >
+                          {validatingId === selectedDraft.disputeId
+                            ? <><Loader2 size={12} className="mr-1 animate-spin" />Validating…</>
+                            : <>✓ Validate</>}
+                        </Button>
+                      )}
                       {selectedDraft.dbId && selectedDraft.status === "draft" && (
                         <Button
                           variant="outline"
                           size="sm"
                           className="flex-1 border-blue-300 text-blue-700 hover:bg-blue-50"
-                          disabled={updateStatusMutation.isPending}
+                          disabled={updateStatusMutation.isPending || (validationResult !== null && validationResult.blocking_count > 0)}
+                          title={validationResult && validationResult.blocking_count > 0 ? `${validationResult.blocking_count} blocking issue(s) must be resolved before submitting` : ""}
                           onClick={() => updateStatusMutation.mutate({ draftId: selectedDraft.dbId!, status: "submitted" })}
                         >
                           Mark Submitted

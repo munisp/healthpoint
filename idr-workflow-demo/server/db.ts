@@ -892,3 +892,78 @@ export async function listAllCMSDrafts(): Promise<CMSDraft[]> {
     .from(cmsDrafts)
     .orderBy(desc(cmsDrafts.updatedAt));
 }
+
+
+// ─── EMR Connection helpers ───────────────────────────────────────────────────
+import {
+  emrConnections, EMRConnection, InsertEMRConnection,
+} from "../drizzle/schema";
+
+export async function createEMRConnection(data: InsertEMRConnection): Promise<EMRConnection> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(emrConnections).values(data).returning();
+  return row;
+}
+
+export async function listEMRConnections(userId: string): Promise<EMRConnection[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(emrConnections)
+    .where(eq(emrConnections.createdBy, userId))
+    .orderBy(desc(emrConnections.createdAt));
+}
+
+export async function getEMRConnection(id: string): Promise<EMRConnection | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db
+    .select()
+    .from(emrConnections)
+    .where(eq(emrConnections.id, id))
+    .limit(1);
+  return row;
+}
+
+export async function updateEMRConnectionStatus(
+  id: string,
+  status: "active" | "inactive" | "error" | "testing",
+  testResult?: {
+    success: boolean;
+    message: string;
+    confidence?: number;
+    resourcesFound?: string[];
+  }
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(emrConnections)
+    .set({
+      status,
+      lastTestAt: new Date(),
+      lastTestSuccess: testResult?.success ?? null,
+      lastTestMessage: testResult?.message ?? null,
+      aiConfidenceScore: testResult?.confidence?.toString() ?? null,
+      resourcesFound: testResult?.resourcesFound ?? null,
+      updatedAt: new Date(),
+    })
+    .where(eq(emrConnections.id, id));
+}
+
+export async function deactivateEMRConnection(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(emrConnections)
+    .set({ status: "inactive", updatedAt: new Date() })
+    .where(eq(emrConnections.id, id));
+}
+
+export async function deleteEMRConnection(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(emrConnections).where(eq(emrConnections.id, id));
+}

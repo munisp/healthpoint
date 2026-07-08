@@ -87,4 +87,17 @@
 - [x] CSV download button on DisputesList — Export CSV (N) button in page header, client-side Blob download
 - [x] Weekly AI digest heartbeat handler at /api/scheduled/weekly-digest — IDRAssistantAgent summary, idempotent per admin per week, fallback summary if AI unavailable
 - [x] Register weekly digest heartbeat cron — task_uid: ZDznRd9mLrf54uBzvgJ8BD, runs 09:00 UTC every Monday, next: 2026-07-13
-- [ ] Push latest code to munisp/healthpoint GitHub repository
+- [x] Push latest code to munisp/healthpoint GitHub repository — commit 0a09c72, 30 files, 2294 insertions
+
+## Session 9 — Bulletproof CMS Validation, EMR Onboarding, Agentic AI for EMR
+- [x] Bulletproof CMS validation pipeline — 5-layer LangGraph guard in ai-service/cms_validator.py
+- [x] validateCMSSubmission FastAPI endpoint — POST /validate-cms-submission
+- [x] tRPC ai.validateCMSSubmission procedure — proxy to Python /validate-cms-submission, graceful fallback if AI unavailable
+- [x] CMS Submission Tracker: validation gate UI — ✓ Validate button, inline report (red/amber/green), blocking issues disable Mark Submitted, remediation steps shown
+- [x] emr_connections DB table — schema, migration, DB helpers (create/list/get/update/deactivate/delete)
+- [x] EMR Onboarding wizard page (/emr-onboarding) — 5-step wizard: system select, credentials, field mapping, AI test, activate
+- [x] EMR Connections management page (/emr-connections) — list, status badges, confidence scores, deactivate/delete
+- [x] tRPC emr.* procedures — list/get/test/create/deactivate/delete
+- [x] EMR Connections nav item in DashboardLayout sidebar
+- [x] Strategic document: docs/agentic-ai-emr-integration.md — 6 agentic AI opportunities, before/after tables, 5-phase roadmap, 6 citations
+- [ ] Push all code to munisp/healthpoint GitHub
