@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
 import { trpc } from "@/lib/trpc";
@@ -12,7 +12,8 @@ import { Separator } from "@/components/ui/separator";
 import {
   Search, FileText, Scale, Activity, Clock, ChevronRight,
   Loader2, AlertCircle, Zap, CalendarDays, X, SlidersHorizontal,
-  LayoutGrid, List, Bookmark, BookmarkCheck, Trash2, FolderOpen
+  LayoutGrid, List, Bookmark, BookmarkCheck, Trash2, FolderOpen,
+  History, RotateCcw
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -29,6 +30,29 @@ interface SavedSearch {
 }
 
 const SAVED_SEARCHES_KEY = "healthpoint:saved-searches";
+const RECENT_SEARCHES_KEY = "healthpoint:recent-searches";
+const MAX_RECENT = 5;
+
+interface RecentSearch {
+  query: string;
+  categories: EntityType[];
+  dateFrom: string;
+  dateTo: string;
+  searchedAt: string;
+}
+
+function loadRecentSearches(): RecentSearch[] {
+  try {
+    const raw = localStorage.getItem(RECENT_SEARCHES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentSearches(searches: RecentSearch[]) {
+  localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(searches));
+}
 
 function loadSavedSearches(): SavedSearch[] {
   try {
@@ -118,6 +142,10 @@ export default function GlobalSearch() {
 
   // View mode
   const [groupByCategory, setGroupByCategory] = useState(false);
+
+  // Recent searches — auto-tracked (last 5)
+  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>(() => loadRecentSearches());
+  const lastTrackedRef = useRef("");
 
   // Save search state
   const [savedSearches, setSavedSearches] = useState<SavedSearch[]>(() => loadSavedSearches());
@@ -213,9 +241,49 @@ export default function GlobalSearch() {
     toast.success("Saved search removed");
   }
 
-  // ── Query ────────────────────────────────────────────────────────────────
+  // ── Recent search auto-tracking ───────────────────────────────────────────
 
   const entityTypes = useMemo(() => Array.from(activeCategories), [activeCategories]);
+
+  // Track searches automatically when results arrive
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!searchQuery.data || debouncedQuery.trim().length < 2) return;
+    const key = JSON.stringify({ q: debouncedQuery, cats: Array.from(activeCategories).sort(), df: dateFrom, dt: dateTo });
+    if (lastTrackedRef.current === key) return;
+    lastTrackedRef.current = key;
+    const entry: RecentSearch = {
+      query: debouncedQuery,
+      categories: Array.from(activeCategories),
+      dateFrom,
+      dateTo,
+      searchedAt: new Date().toISOString(),
+    };
+    setRecentSearches(prev => {
+      const deduped = prev.filter(r =>
+        !(r.query === entry.query &&
+          JSON.stringify([...r.categories].sort()) === JSON.stringify([...entry.categories].sort()) &&
+          r.dateFrom === entry.dateFrom && r.dateTo === entry.dateTo)
+      );
+      const updated = [entry, ...deduped].slice(0, MAX_RECENT);
+      persistRecentSearches(updated);
+      return updated;
+    });
+  });
+
+  function loadRecentSearch(r: RecentSearch) {
+    setQuery(r.query);
+    setDebouncedQuery(r.query);
+    setActiveCategories(new Set<EntityType>(r.categories));
+    setDateFrom(r.dateFrom);
+    setDateTo(r.dateTo);
+  }
+
+  function clearRecentSearches() {
+    setRecentSearches([]);
+    persistRecentSearches([]);
+    toast.success("Recent searches cleared");
+  }
 
   const searchQuery = trpc.search.query.useQuery(
     { q: debouncedQuery, entityTypes, limit: 50 },
@@ -586,25 +654,77 @@ export default function GlobalSearch() {
 
         {/* Results */}
         {debouncedQuery.trim().length < 2 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+          <div className="flex flex-col items-center py-10 text-muted-foreground">
             <Zap className="h-12 w-12 mb-3 opacity-20" />
             <p className="font-medium">Type at least 2 characters to search</p>
             <p className="text-sm mt-1">Searches across reference numbers, patient names, payers, CPT codes, and more</p>
-            {savedSearches.length > 0 && (
-              <div className="mt-6 w-full max-w-sm">
-                <p className="text-xs font-medium text-center mb-2 text-muted-foreground">Quick access — recent saved searches</p>
+
+            {/* Recent Searches */}
+            {recentSearches.length > 0 && (
+              <div className="mt-8 w-full max-w-md">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold flex items-center gap-1.5 text-foreground">
+                    <History className="h-3.5 w-3.5" />
+                    Recent Searches
+                  </p>
+                  <button
+                    className="text-[10px] text-muted-foreground hover:text-destructive flex items-center gap-1"
+                    onClick={clearRecentSearches}
+                  >
+                    <RotateCcw className="h-3 w-3" /> Clear all
+                  </button>
+                </div>
                 <div className="space-y-1.5">
-                  {savedSearches.slice(0, 4).map(s => (
+                  {recentSearches.map((r, i) => (
+                    <button
+                      key={i}
+                      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg border hover:border-primary/50 hover:bg-muted/50 transition-colors text-left group"
+                      onClick={() => loadRecentSearch(r)}
+                    >
+                      <History className="h-3.5 w-3.5 text-muted-foreground shrink-0 group-hover:text-primary" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-foreground truncate">{r.query}</div>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {r.categories.length < 3 && r.categories.map(c => (
+                            <span key={c} className={`text-[10px] px-1.5 py-0.5 rounded-full ${ENTITY_META[c].bgColor} ${ENTITY_META[c].color}`}>
+                              {ENTITY_META[c].label}
+                            </span>
+                          ))}
+                          {(r.dateFrom || r.dateTo) && (
+                            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                              <CalendarDays className="h-2.5 w-2.5" />
+                              {r.dateFrom && new Date(r.dateFrom).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                              {r.dateFrom && r.dateTo && " – "}
+                              {r.dateTo && new Date(r.dateTo).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-muted-foreground shrink-0">
+                        {new Date(r.searchedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Saved Searches quick chips */}
+            {savedSearches.length > 0 && (
+              <div className="mt-6 w-full max-w-md">
+                <p className="text-xs font-semibold flex items-center gap-1.5 mb-2 text-foreground">
+                  <BookmarkCheck className="h-3.5 w-3.5 text-primary" />
+                  Saved Searches
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {savedSearches.slice(0, 6).map(s => (
                     <button
                       key={s.id}
-                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg border hover:border-primary/50 hover:bg-muted/50 transition-colors text-left"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs hover:border-primary/50 hover:bg-muted/50 transition-colors"
                       onClick={() => loadSearch(s)}
                     >
-                      <BookmarkCheck className="h-3.5 w-3.5 text-primary shrink-0" />
-                      <div className="min-w-0">
-                        <div className="text-xs font-medium truncate">{s.name}</div>
-                        <div className="text-[10px] text-muted-foreground truncate">{describeSearch(s)}</div>
-                      </div>
+                      <Bookmark className="h-3 w-3 text-primary" />
+                      {s.name}
                     </button>
                   ))}
                 </div>
