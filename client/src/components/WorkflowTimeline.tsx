@@ -143,6 +143,8 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
   const [pendingAttachments, setPendingAttachments] = useState<NoteAttachment[]>([]);
   const [uploadingFile, setUploadingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Image preview modal
+  const [previewImage, setPreviewImage] = useState<{ url: string; name: string } | null>(null);
   const utils = trpc.useUtils();
 
   const notesQuery = trpc.workflow.getNotes.useQuery(
@@ -297,22 +299,33 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
                         return atts.length > 0 ? (
                           <div className="mt-1.5 flex flex-wrap gap-1.5">
                             {atts.map((att) => (
-                              <a
-                                key={att.key}
-                                href={att.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border bg-white dark:bg-background hover:border-primary/50 hover:text-primary transition-colors max-w-[180px] group/att"
-                                title={`${att.name} (${formatBytes(att.size)})`}
-                              >
-                                {isImage(att.mimeType) ? (
+                              isImage(att.mimeType) ? (
+                                /* Image attachment — show thumbnail + click to preview */
+                                <button
+                                  key={att.key}
+                                  className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border bg-white dark:bg-background hover:border-primary/50 hover:text-primary transition-colors max-w-[180px] group/att"
+                                  title={`Preview ${att.name}`}
+                                  onClick={() => setPreviewImage({ url: att.url, name: att.name })}
+                                >
                                   <ImageIcon className="h-3 w-3 shrink-0 text-blue-500" />
-                                ) : (
+                                  <span className="truncate">{att.name}</span>
+                                  <span className="text-[9px] text-muted-foreground opacity-0 group-hover/att:opacity-100 shrink-0">preview</span>
+                                </button>
+                              ) : (
+                                /* Non-image attachment — open in new tab */
+                                <a
+                                  key={att.key}
+                                  href={att.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border bg-white dark:bg-background hover:border-primary/50 hover:text-primary transition-colors max-w-[180px] group/att"
+                                  title={`${att.name} (${formatBytes(att.size)})`}
+                                >
                                   <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                )}
-                                <span className="truncate">{att.name}</span>
-                                <Download className="h-2.5 w-2.5 shrink-0 opacity-0 group-hover/att:opacity-100" />
-                              </a>
+                                  <span className="truncate">{att.name}</span>
+                                  <Download className="h-2.5 w-2.5 shrink-0 opacity-0 group-hover/att:opacity-100" />
+                                </a>
+                              )
                             ))}
                           </div>
                         ) : null;
@@ -462,6 +475,63 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
         <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
           <StickyNote className="h-3 w-3" />
           {notes.length} note{notes.length !== 1 ? "s" : ""}
+        </div>
+      )}
+
+      {/* Image Preview Modal */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onClick={() => setPreviewImage(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Preview: ${previewImage.name}`}
+        >
+          <div
+            className="relative max-w-[90vw] max-h-[90vh] bg-background rounded-lg shadow-2xl overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-4 py-2.5 border-b bg-muted/40">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="h-4 w-4 text-blue-500" />
+                <span className="text-sm font-medium truncate max-w-[320px]">{previewImage.name}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <a
+                  href={previewImage.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary px-2 py-1 rounded border hover:border-primary/50 transition-colors"
+                  title="Open original"
+                  onClick={e => e.stopPropagation()}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Open original
+                </a>
+                <button
+                  className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setPreviewImage(null)}
+                  title="Close preview"
+                  aria-label="Close image preview"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            {/* Image */}
+            <div className="overflow-auto max-h-[80vh] flex items-center justify-center p-2 bg-muted/20">
+              <img
+                src={previewImage.url}
+                alt={previewImage.name}
+                className="max-w-full max-h-[75vh] object-contain rounded"
+                onError={e => {
+                  (e.target as HTMLImageElement).src = "";
+                  (e.target as HTMLImageElement).alt = "Image failed to load";
+                }}
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -13,7 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
   DollarSign, TrendingUp, TrendingDown, BookOpen, ArrowRightLeft,
-  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download, Layers, List
+  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download, Layers, List, ChevronDown
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -129,6 +129,24 @@ export default function FinancialLedger() {
 
   // Group by account toggle
   const [groupByAccount, setGroupByAccount] = useState(false);
+  // Per-group expansion state: accountKey -> boolean (true = expanded)
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  function toggleGroup(key: string) {
+    setExpandedGroups(prev => ({ ...prev, [key]: !(prev[key] ?? true) }));
+  }
+
+  function expandAll(keys: string[]) {
+    const next: Record<string, boolean> = {};
+    keys.forEach(k => { next[k] = true; });
+    setExpandedGroups(next);
+  }
+
+  function collapseAll(keys: string[]) {
+    const next: Record<string, boolean> = {};
+    keys.forEach(k => { next[k] = false; });
+    setExpandedGroups(next);
+  }
 
   const disputesQuery = trpc.disputes.list.useQuery({ limit: 50 });
   const balancesQuery = trpc.ledger.balances.useQuery(
@@ -577,19 +595,56 @@ export default function FinancialLedger() {
                       </Badge>
                     )}
                   </CardTitle>
-                  {/* Group by Account toggle */}
-                  <button
-                    className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border transition-colors shrink-0 ${
-                      groupByAccount
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "text-muted-foreground border-border hover:border-primary/50 hover:text-foreground"
-                    }`}
-                    onClick={() => setGroupByAccount(g => !g)}
-                    title={groupByAccount ? "Switch to flat list" : "Group by account"}
-                  >
-                    {groupByAccount ? <List className="h-3.5 w-3.5" /> : <Layers className="h-3.5 w-3.5" />}
-                    {groupByAccount ? "Flat list" : "Group by account"}
-                  </button>
+                  {/* Group by Account toggle + Expand/Collapse All */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {groupByAccount && (() => {
+                      const keys = Array.from(
+                        new Set(filteredHistory.map(r => r.debitAccountType))
+                      );
+                      const allExpanded = keys.every(k => expandedGroups[k] !== false);
+                      const allCollapsed = keys.every(k => expandedGroups[k] === false);
+                      return (
+                        <>
+                          <button
+                            className={`text-xs px-2 py-1 rounded border transition-colors ${
+                              allExpanded
+                                ? "text-muted-foreground/50 border-border/50 cursor-default"
+                                : "text-muted-foreground border-border hover:border-primary/50 hover:text-primary"
+                            }`}
+                            onClick={() => expandAll(keys)}
+                            disabled={allExpanded}
+                            title="Expand all account groups"
+                          >
+                            Expand All
+                          </button>
+                          <button
+                            className={`text-xs px-2 py-1 rounded border transition-colors ${
+                              allCollapsed
+                                ? "text-muted-foreground/50 border-border/50 cursor-default"
+                                : "text-muted-foreground border-border hover:border-primary/50 hover:text-primary"
+                            }`}
+                            onClick={() => collapseAll(keys)}
+                            disabled={allCollapsed}
+                            title="Collapse all account groups"
+                          >
+                            Collapse All
+                          </button>
+                        </>
+                      );
+                    })()}
+                    <button
+                      className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border transition-colors ${
+                        groupByAccount
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "text-muted-foreground border-border hover:border-primary/50 hover:text-foreground"
+                      }`}
+                      onClick={() => setGroupByAccount(g => !g)}
+                      title={groupByAccount ? "Switch to flat list" : "Group by account"}
+                    >
+                      {groupByAccount ? <List className="h-3.5 w-3.5" /> : <Layers className="h-3.5 w-3.5" />}
+                      {groupByAccount ? "Flat list" : "Group by account"}
+                    </button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
@@ -617,11 +672,18 @@ export default function FinancialLedger() {
                         const groupCredits = rows.filter(r => r.entry.entryType === "credit").reduce((s, r) => s + r.entry.amountCents, 0);
                         const groupNet = groupCredits - groupDebits;
                         const color = ACCOUNT_COLORS[accountKey] ?? "#94a3b8";
+        const isExpanded = expandedGroups[accountKey] !== false; // default open
                         return (
                           <div key={accountKey} className="border rounded-lg overflow-hidden">
-                            {/* Group header */}
-                            <div className="flex items-center justify-between px-3 py-2 bg-muted/40 border-b">
+                            {/* Group header — click to expand/collapse */}
+                            <button
+                              className="w-full flex items-center justify-between px-3 py-2 bg-muted/40 border-b hover:bg-muted/60 transition-colors text-left"
+                              onClick={() => toggleGroup(accountKey)}
+                            >
                               <div className="flex items-center gap-2">
+                                <ChevronDown
+                                  className={`h-3.5 w-3.5 text-muted-foreground transition-transform shrink-0 ${isExpanded ? "" : "-rotate-90"}`}
+                                />
                                 <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: color }} />
                                 <span className="text-sm font-semibold">{ACCOUNT_LABELS[accountKey] ?? accountKey}</span>
                                 <Badge variant="secondary" className="text-[10px]">{rows.length} entr{rows.length !== 1 ? "ies" : "y"}</Badge>
@@ -635,32 +697,34 @@ export default function FinancialLedger() {
                                 )}
                                 <span className="text-muted-foreground">Net: <span className={`font-mono font-semibold ${groupNet >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>{groupNet >= 0 ? "+" : ""}{fmt(groupNet / 100)}</span></span>
                               </div>
-                            </div>
-                            {/* Group rows */}
-                            <table className="w-full text-sm">
-                              <tbody>
-                                {rows.map(({ entry, debitAccountType, creditAccountType }) => (
-                                  <tr key={entry.id} className="border-b last:border-0 hover:bg-muted/20">
-                                    <td className="py-2 px-3 text-muted-foreground whitespace-nowrap w-28">
-                                      {entry.createdAt ? new Date(entry.createdAt).toLocaleDateString() : "—"}
-                                    </td>
-                                    <td className="py-2 pr-3 max-w-xs truncate">{entry.description}</td>
-                                    <td className="py-2 pr-3 text-xs text-muted-foreground">
-                                      <span className="inline-flex items-center gap-1">
-                                        <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }} />
-                                        → {ACCOUNT_LABELS[creditAccountType] ?? creditAccountType}
-                                      </span>
-                                    </td>
-                                    <td className="py-2 text-right font-mono font-medium pr-3">{fmt(entry.amountCents / 100)}</td>
-                                    <td className="py-2 pl-2 pr-3">
-                                      <Badge variant={entry.entryType === "credit" ? "default" : "secondary"} className="text-xs">
-                                        {entry.entryType}
-                                      </Badge>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                            </button>
+                            {/* Group rows — only shown when expanded */}
+                            {isExpanded && (
+                              <table className="w-full text-sm">
+                                <tbody>
+                                  {rows.map(({ entry, debitAccountType: _da, creditAccountType }) => (
+                                    <tr key={entry.id} className="border-b last:border-0 hover:bg-muted/20">
+                                      <td className="py-2 px-3 text-muted-foreground whitespace-nowrap w-28">
+                                        {entry.createdAt ? new Date(entry.createdAt).toLocaleDateString() : "—"}
+                                      </td>
+                                      <td className="py-2 pr-3 max-w-xs truncate">{entry.description}</td>
+                                      <td className="py-2 pr-3 text-xs text-muted-foreground">
+                                        <span className="inline-flex items-center gap-1">
+                                          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }} />
+                                          → {ACCOUNT_LABELS[creditAccountType] ?? creditAccountType}
+                                        </span>
+                                      </td>
+                                      <td className="py-2 text-right font-mono font-medium pr-3">{fmt(entry.amountCents / 100)}</td>
+                                      <td className="py-2 pl-2 pr-3">
+                                        <Badge variant={entry.entryType === "credit" ? "default" : "secondary"} className="text-xs">
+                                          {entry.entryType}
+                                        </Badge>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
                           </div>
                         );
                       });

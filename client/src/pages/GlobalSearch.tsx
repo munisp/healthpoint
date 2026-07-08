@@ -675,12 +675,14 @@ export default function GlobalSearch() {
                   <p className="text-xs font-semibold flex items-center gap-1.5 text-foreground">
                     <History className="h-3.5 w-3.5" />
                     Recent Searches
+                    <span className="text-[10px] font-normal text-muted-foreground">({recentSearches.length})</span>
                   </p>
                   <button
-                    className="text-[10px] text-muted-foreground hover:text-destructive flex items-center gap-1"
+                    className="text-[10px] text-muted-foreground hover:text-destructive flex items-center gap-1 px-2 py-1 rounded border border-transparent hover:border-destructive/30 hover:bg-destructive/5 transition-colors"
                     onClick={clearRecentSearches}
+                    title="Clear all recent searches"
                   >
-                    <RotateCcw className="h-3 w-3" /> Clear all
+                    <Trash2 className="h-3 w-3" /> Clear all
                   </button>
                 </div>
                 <div className="space-y-1.5">
