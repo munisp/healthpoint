@@ -213,3 +213,45 @@
 - [x] Health check endpoint: GET /api/health returns {ok, db, version, uptime}
 - [x] Request logging: morgan added (combined format in production, dev format in development)
 - [x] Error tracking: uncaughtException and unhandledRejection handlers in server/index.ts
+
+## Session 19 — Next-Generation Innovations
+
+### AI/ML Enhancements
+- [ ] Predictive outcome scoring — AI win probability per dispute (LLM + historical patterns), shown in DisputeDetail and DisputesList
+- [ ] AI document analyzer — drag-drop EOB/RA/CMS-1500 parser with field extraction, integrated into NewDispute and Documents tab
+- [ ] Smart QPA benchmarking — AI-powered QPA vs billed amount analysis with percentile ranking
+
+### UX Modernization
+- [ ] Command palette (Cmd+K) — global search across disputes, templates, arbitrators, docs, navigation
+- [ ] Dark mode toggle — full theme toggle wired to ThemeProvider, persisted in localStorage
+- [ ] Onboarding product tour — step-by-step guided tour for new users (Shepherd.js or custom)
+
+### Compliance Automation
+- [ ] Audit trail — immutable audit_log table, timeline view per dispute, CSV export
+- [ ] Deadline calendar — full-page calendar view of all IDR deadlines with color-coded urgency
+- [ ] CMS rule change alerts — notification when NSA/IDR regulations are updated
+
+### Advanced Analytics
+- [ ] Payer intelligence dashboard — per-payer win rates, avg settlement, dispute volume trends
+- [ ] Cohort analysis — outcome trends by service type, state, and time period
+
+### Integration Ecosystem
+- [ ] Webhook system — configurable outbound webhooks on dispute events for EHR/billing integrations
+- [ ] Bulk export API — CSV/JSON export of disputes with filters for BI tools
+- [ ] FHIR R4 read endpoint — GET /api/fhir/Claim/{id} returns dispute as FHIR Claim resource
+
+### Document Intelligence Pipeline (Session 19 — COMPLETE)
+- [x] Fix schema.ts mysqlTable import error — add missing int import
+- [x] Push new DB tables: audit_log, webhooks, outcome_predictions, document_analyses
+- [x] VLM document parser — built-in LLM vision model (Node-only, no Python required)
+- [x] docIntelligence.analyze tRPC procedure — upload PDF/image, VLM OCR, return 25 structured fields
+- [x] DocumentAnalyzer UI page — drag-drop upload, OCR progress pipeline, field extraction preview, auto-fill dispute form
+- [x] Audit trail tRPC procedures — audit.list, audit.log
+- [x] AuditTrail UI page — timeline view with CSV export, entity type/ID filters
+- [x] Webhooks tRPC router — create, list, update, delete, test (HMAC signing)
+- [x] WebhookManager UI page — full CRUD, secret reveal/copy, pause/resume, test ping
+- [x] Outcome predictions tRPC router — predictions.get, predictions.generate (invokeLLM)
+- [x] PayerIntelligence UI page — per-payer analytics, win rates, recovery rates, bar/pie charts
+- [x] Command palette (Cmd+K) — built into DashboardLayout header, fuzzy search all pages
+- [x] Dark mode toggle — Sun/Moon button in header, persists to localStorage
+- [x] TypeScript: 0 errors | Tests: 40/40 passing

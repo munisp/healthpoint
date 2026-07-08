@@ -50,6 +50,13 @@
       "when": 1783519471694,
       "tag": "0006_bent_shinko_yamashiro",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783526274844,
+      "tag": "0007_keen_paper_doll",
+      "breakpoints": true
     }
   ]
 }

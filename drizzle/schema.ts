@@ -490,3 +490,99 @@ export const marketingLeads = pgTable(
 );
 export type MarketingLead = typeof marketingLeads.$inferSelect;
 export type InsertMarketingLead = typeof marketingLeads.$inferInsert;
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    action: varchar("action", { length: 128 }).notNull(),
+    entityType: varchar("entityType", { length: 64 }).notNull(),
+    entityId: varchar("entityId", { length: 64 }),
+    oldValue: text("oldValue"),
+    newValue: text("newValue"),
+    ipAddress: varchar("ipAddress", { length: 64 }),
+    userAgent: text("userAgent"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("audit_log_userId_idx").on(t.userId),
+    index("audit_log_entityType_entityId_idx").on(t.entityType, t.entityId),
+    index("audit_log_createdAt_idx").on(t.createdAt),
+  ]
+);
+export type AuditLogEntry = typeof auditLog.$inferSelect;
+export type InsertAuditLogEntry = typeof auditLog.$inferInsert;
+// ─── Webhooks ─────────────────────────────────────────────────────────────────
+export const webhookStatusEnum = pgEnum("webhook_status", ["active", "paused", "failed"]);
+export const webhooks = pgTable(
+  "webhooks",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    name: varchar("name", { length: 128 }).notNull(),
+    url: text("url").notNull(),
+    secret: varchar("secret", { length: 128 }).notNull(),
+    events: text("events").notNull(),
+    status: webhookStatusEnum().default("active").notNull(),
+    lastTriggeredAt: timestamp("lastTriggeredAt"),
+    failureCount: integer("failureCount").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("webhooks_userId_idx").on(t.userId),
+    index("webhooks_status_idx").on(t.status),
+  ]
+);
+export type Webhook = typeof webhooks.$inferSelect;
+export type InsertWebhook = typeof webhooks.$inferInsert;
+// ─── Outcome Predictions ──────────────────────────────────────────────────────
+export const outcomePredictions = pgTable(
+  "outcome_predictions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    winProbability: integer("winProbability").notNull(),
+    confidenceScore: integer("confidenceScore").notNull(),
+    keyFactors: text("keyFactors").notNull(),
+    recommendation: text("recommendation").notNull(),
+    modelVersion: varchar("modelVersion", { length: 32 }).default("v1").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("outcome_predictions_disputeId_idx").on(t.disputeId),
+  ]
+);
+export type OutcomePrediction = typeof outcomePredictions.$inferSelect;
+export type InsertOutcomePrediction = typeof outcomePredictions.$inferInsert;
+// ─── Document Analysis ────────────────────────────────────────────────────────
+export const documentAnalysisStatusEnum = pgEnum("doc_analysis_status", ["pending", "processing", "completed", "failed"]);
+export const documentAnalyses = pgTable(
+  "document_analyses",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    fileName: varchar("fileName", { length: 256 }).notNull(),
+    fileType: varchar("fileType", { length: 64 }).notNull(),
+    s3Key: varchar("s3Key", { length: 512 }),
+    status: documentAnalysisStatusEnum().default("pending").notNull(),
+    ocrText: text("ocrText"),
+    extractedFields: jsonb("extractedFields"),
+    confidence: integer("confidence").default(0),
+    processingTimeMs: integer("processingTimeMs"),
+    errorMessage: text("errorMessage"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("doc_analyses_disputeId_idx").on(t.disputeId),
+    index("doc_analyses_userId_idx").on(t.userId),
+    index("doc_analyses_status_idx").on(t.status),
+  ]
+);
+export type DocumentAnalysis = typeof documentAnalyses.$inferSelect;
+export type InsertDocumentAnalysis = typeof documentAnalyses.$inferInsert;

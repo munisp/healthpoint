@@ -21,8 +21,14 @@ import {
   updateDisputeTemplate, deleteDisputeTemplate, incrementTemplateUsage,
   getUserProfile, upsertUserProfile, markOnboardingComplete,
   createMarketingLead, listMarketingLeads, updateLeadStatus, getLeadByEmail,
+  createAuditEntry, listAuditEntries,
+  createWebhook, listWebhooks, updateWebhook, deleteWebhook,
+  upsertOutcomePrediction, getOutcomePrediction,
+  createDocumentAnalysis, updateDocumentAnalysis, getDocumentAnalysis, listDocumentAnalyses,
 } from "./db";
 import { sendNewLeadNotification } from "./email";
+import { invokeLLM } from "./_core/llm";
+import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
 import { eq } from "drizzle-orm";
@@ -1609,6 +1615,331 @@ export const appRouter = router({
           avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a, b) => a + b, 0) / stepDayMap[step].length) : 0,
         }));
         return { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
+      }),
+  }),
+
+  // ─── Audit Trail ─────────────────────────────────────────────────────────────
+  audit: router({
+    list: protectedProcedure
+      .input(z.object({
+        entityId: z.string().optional(),
+        entityType: z.string().optional(),
+        limit: z.number().int().min(1).max(500).default(100),
+        offset: z.number().int().min(0).default(0),
+      }))
+      .query(async ({ ctx, input }) => {
+        return listAuditEntries({ ...input, userId: ctx.user.role === 'admin' ? undefined : ctx.user.id });
+      }),
+    log: protectedProcedure
+      .input(z.object({
+        action: z.string(),
+        entityType: z.string(),
+        entityId: z.string().optional(),
+        oldValue: z.string().optional(),
+        newValue: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        return createAuditEntry({
+          userId: ctx.user.id,
+          action: input.action,
+          entityType: input.entityType,
+          entityId: input.entityId ?? null,
+          oldValue: input.oldValue ?? null,
+          newValue: input.newValue ?? null,
+          ipAddress: null,
+          userAgent: null,
+        });
+      }),
+  }),
+
+  // ─── Webhooks ─────────────────────────────────────────────────────────────────
+  webhooks: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      return listWebhooks(ctx.user.id);
+    }),
+    create: protectedProcedure
+      .input(z.object({
+        name: z.string().min(1).max(128),
+        url: z.string().url(),
+        events: z.array(z.string()).min(1),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const secret = `whsec_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+        return createWebhook({
+          userId: ctx.user.id,
+          name: input.name,
+          url: input.url,
+          secret,
+          events: JSON.stringify(input.events),
+          status: 'active',
+          lastTriggeredAt: null,
+          failureCount: 0,
+        });
+      }),
+    update: protectedProcedure
+      .input(z.object({
+        id: z.string(),
+        name: z.string().min(1).max(128).optional(),
+        url: z.string().url().optional(),
+        events: z.array(z.string()).optional(),
+        status: z.enum(['active', 'paused', 'failed']).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { id, events, ...rest } = input;
+        await updateWebhook(id, { ...rest, events: events ? JSON.stringify(events) : undefined });
+        return { success: true };
+      }),
+    delete: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        await deleteWebhook(input.id);
+        return { success: true };
+      }),
+    test: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        // Fire a test ping to the webhook URL
+        const hooks = await listWebhooks(ctx.user.id);
+        const hook = hooks.find(h => h.id === input.id);
+        if (!hook) throw new TRPCError({ code: 'NOT_FOUND', message: 'Webhook not found' });
+        try {
+          const payload = JSON.stringify({ event: 'test.ping', timestamp: new Date().toISOString(), source: 'HealthPoint IDR' });
+          const res = await fetch(hook.url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-HealthPoint-Event': 'test.ping' },
+            body: payload,
+            signal: AbortSignal.timeout(5000),
+          });
+          await updateWebhook(input.id, { lastTriggeredAt: new Date(), failureCount: res.ok ? 0 : hook.failureCount + 1 });
+          return { success: res.ok, statusCode: res.status };
+        } catch (err) {
+          await updateWebhook(input.id, { failureCount: hook.failureCount + 1, status: 'failed' });
+          return { success: false, statusCode: 0 };
+        }
+      }),
+  }),
+
+  // ─── Outcome Predictions ──────────────────────────────────────────────────────
+  predictions: router({
+    get: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ input }) => {
+        return getOutcomePrediction(input.disputeId);
+      }),
+    generate: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        billedAmount: z.number(),
+        qpaAmount: z.number(),
+        serviceType: z.string(),
+        patientState: z.string(),
+        currentStep: z.string(),
+        cptCodes: z.array(z.string()).optional(),
+        payerName: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const prompt = `You are an NSA/IDR dispute outcome prediction expert. Analyze this IDR dispute and predict the outcome.
+
+Dispute Details:
+- Billed Amount: $${input.billedAmount}
+- QPA (Qualifying Payment Amount): $${input.qpaAmount}
+- Service Type: ${input.serviceType}
+- Patient State: ${input.patientState}
+- Current IDR Step: ${input.currentStep}
+- CPT Codes: ${(input.cptCodes ?? []).join(', ') || 'Not specified'}
+- Payer: ${input.payerName ?? 'Unknown'}
+
+Based on NSA IDR historical data and legal precedent, provide:
+1. Win probability (0-100) for the initiating party
+2. Confidence score (0-100) in this prediction
+3. Top 3-5 key factors influencing the outcome
+4. A brief strategic recommendation`;
+
+        const response = await invokeLLM({
+          messages: [{ role: 'user', content: prompt }],
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'outcome_prediction',
+              strict: true,
+              schema: {
+                type: 'object',
+                properties: {
+                  winProbability: { type: 'integer', description: '0-100 win probability for initiating party' },
+                  confidenceScore: { type: 'integer', description: '0-100 confidence in prediction' },
+                  keyFactors: { type: 'array', items: { type: 'string' }, description: 'Key factors influencing outcome' },
+                  recommendation: { type: 'string', description: 'Strategic recommendation' },
+                },
+                required: ['winProbability', 'confidenceScore', 'keyFactors', 'recommendation'],
+                additionalProperties: false,
+              },
+            },
+          },
+        });
+
+        const content = response.choices[0].message.content;
+        const parsed = typeof content === 'string' ? JSON.parse(content) : content;
+        return upsertOutcomePrediction({
+          disputeId: input.disputeId,
+          winProbability: Math.max(0, Math.min(100, parsed.winProbability)),
+          confidenceScore: Math.max(0, Math.min(100, parsed.confidenceScore)),
+          keyFactors: JSON.stringify(parsed.keyFactors),
+          recommendation: parsed.recommendation,
+          modelVersion: 'v2',
+        });
+      }),
+  }),
+
+  // ─── Document Intelligence (VLM-based OCR) ────────────────────────────────────
+  docIntelligence: router({
+    analyze: protectedProcedure
+      .input(z.object({
+        fileName: z.string(),
+        fileType: z.string(),
+        base64Data: z.string(), // base64-encoded image or PDF page
+        disputeId: z.string().optional(),
+        documentType: z.enum(['eob', 'ra', 'cms1500', 'ub04', 'appeal', 'other']).default('other'),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const startTime = Date.now();
+        // Create a pending analysis record
+        const analysis = await createDocumentAnalysis({
+          disputeId: input.disputeId ?? null,
+          userId: ctx.user.id,
+          fileName: input.fileName,
+          fileType: input.fileType,
+          s3Key: null,
+          status: 'processing',
+          ocrText: null,
+          extractedFields: null,
+          confidence: 0,
+          processingTimeMs: null,
+          errorMessage: null,
+        });
+
+        try {
+          // Upload to S3 for storage
+          let s3Key: string | null = null;
+          try {
+            const buffer = Buffer.from(input.base64Data, 'base64');
+            const result = await storagePut(`doc-analysis/${analysis.id}/${input.fileName}`, buffer, input.fileType);
+            s3Key = result.key;
+          } catch (e) {
+            // S3 optional — continue without it
+          }
+
+          // VLM-based document analysis using built-in LLM vision
+          const docTypeLabels: Record<string, string> = {
+            eob: 'Explanation of Benefits (EOB)',
+            ra: 'Remittance Advice (RA)',
+            cms1500: 'CMS-1500 Claim Form',
+            ub04: 'UB-04 Facility Claim Form',
+            appeal: 'Appeal Letter',
+            other: 'Medical/Insurance Document',
+          };
+
+          const systemPrompt = `You are a medical billing and insurance document analysis expert specializing in NSA/IDR disputes. Extract structured data from the provided ${docTypeLabels[input.documentType]} document image with high accuracy.`;
+
+          const userPrompt = `Analyze this ${docTypeLabels[input.documentType]} document and extract all relevant fields for an NSA IDR dispute. Return structured JSON with the extracted information.`;
+
+          const imageUrl = `data:${input.fileType};base64,${input.base64Data}`;
+
+          const vlmResponse = await invokeLLM({
+            messages: [
+              { role: 'system', content: systemPrompt },
+              {
+                role: 'user',
+                content: [
+                  { type: 'image_url', image_url: { url: imageUrl, detail: 'high' } },
+                  { type: 'text', text: userPrompt },
+                ],
+              },
+            ],
+            response_format: {
+              type: 'json_schema',
+              json_schema: {
+                name: 'document_extraction',
+                strict: true,
+                schema: {
+                  type: 'object',
+                  properties: {
+                    patientName: { type: 'string', description: 'Patient full name' },
+                    patientDOB: { type: 'string', description: 'Patient date of birth (YYYY-MM-DD or empty)' },
+                    patientId: { type: 'string', description: 'Patient ID or member ID' },
+                    providerName: { type: 'string', description: 'Provider or facility name' },
+                    providerNPI: { type: 'string', description: 'Provider NPI number' },
+                    payerName: { type: 'string', description: 'Insurance company / payer name' },
+                    payerId: { type: 'string', description: 'Payer ID' },
+                    claimNumber: { type: 'string', description: 'Claim number or reference' },
+                    dateOfService: { type: 'string', description: 'Date of service (YYYY-MM-DD or range)' },
+                    billedAmount: { type: 'string', description: 'Total billed amount in dollars' },
+                    allowedAmount: { type: 'string', description: 'Allowed/approved amount in dollars' },
+                    paidAmount: { type: 'string', description: 'Amount paid by insurer' },
+                    patientResponsibility: { type: 'string', description: 'Patient responsibility amount' },
+                    denialReason: { type: 'string', description: 'Reason for denial or adjustment' },
+                    denialCode: { type: 'string', description: 'Denial or remark code (e.g., CO-45, PR-1)' },
+                    cptCodes: { type: 'array', items: { type: 'string' }, description: 'CPT/procedure codes' },
+                    icd10Codes: { type: 'array', items: { type: 'string' }, description: 'ICD-10 diagnosis codes' },
+                    serviceType: { type: 'string', description: 'Type of service (e.g., Emergency, Radiology)' },
+                    facilityState: { type: 'string', description: 'State where service was rendered (2-letter code)' },
+                    isOutOfNetwork: { type: 'boolean', description: 'Whether the provider is out-of-network' },
+                    nsaApplicable: { type: 'boolean', description: 'Whether NSA/No Surprises Act likely applies' },
+                    rawText: { type: 'string', description: 'Full OCR text extracted from the document' },
+                    confidence: { type: 'integer', description: 'Extraction confidence 0-100' },
+                    notes: { type: 'string', description: 'Any additional notes or observations' },
+                  },
+                  required: ['patientName','patientDOB','patientId','providerName','providerNPI','payerName','payerId','claimNumber','dateOfService','billedAmount','allowedAmount','paidAmount','patientResponsibility','denialReason','denialCode','cptCodes','icd10Codes','serviceType','facilityState','isOutOfNetwork','nsaApplicable','rawText','confidence','notes'],
+                  additionalProperties: false,
+                },
+              },
+            },
+          });
+
+          const content = vlmResponse.choices[0].message.content;
+          const extracted = typeof content === 'string' ? JSON.parse(content) : content;
+          const processingTimeMs = Date.now() - startTime;
+
+          await updateDocumentAnalysis(analysis.id, {
+            status: 'completed',
+            ocrText: extracted.rawText ?? '',
+            extractedFields: extracted,
+            confidence: extracted.confidence ?? 80,
+            processingTimeMs,
+            s3Key,
+          });
+
+          return { ...analysis, status: 'completed' as const, extractedFields: extracted, ocrText: extracted.rawText ?? '', confidence: extracted.confidence ?? 80, processingTimeMs };
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+          await updateDocumentAnalysis(analysis.id, { status: 'failed', errorMessage });
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Document analysis failed: ${errorMessage}` });
+        }
+      }),
+
+    list: protectedProcedure
+      .input(z.object({
+        disputeId: z.string().optional(),
+        limit: z.number().int().min(1).max(100).default(20),
+      }))
+      .query(async ({ ctx, input }) => {
+        return listDocumentAnalyses({ userId: ctx.user.id, disputeId: input.disputeId, limit: input.limit });
+      }),
+
+    get: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .query(async ({ input }) => {
+        const analysis = await getDocumentAnalysis(input.id);
+        if (!analysis) throw new TRPCError({ code: 'NOT_FOUND', message: 'Analysis not found' });
+        return analysis;
+      }),
+
+    getDownloadUrl: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .query(async ({ input }) => {
+        const analysis = await getDocumentAnalysis(input.id);
+        if (!analysis?.s3Key) throw new TRPCError({ code: 'NOT_FOUND', message: 'No file stored' });
+        const { url } = await storageGet(analysis.s3Key, 300);
+        return { url };
       }),
   }),
 });

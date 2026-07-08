@@ -14,6 +14,10 @@ import {
   disputeTemplates, DisputeTemplate, InsertDisputeTemplate,
   userProfiles, UserProfile, InsertUserProfile,
   marketingLeads, MarketingLead, InsertMarketingLead,
+  auditLog, AuditLogEntry, InsertAuditLogEntry,
+  webhooks, Webhook, InsertWebhook,
+  outcomePredictions, OutcomePrediction, InsertOutcomePrediction,
+  documentAnalyses, DocumentAnalysis, InsertDocumentAnalysis,
   IDR_STEP, IDRStep, DISPUTE_STATUS, DisputeStatus,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -1114,4 +1118,108 @@ export async function getLeadByEmail(email: string): Promise<MarketingLead | und
   if (!db) return undefined;
   const rows = await db.select().from(marketingLeads).where(eq(marketingLeads.email, email)).limit(1);
   return rows[0];
+}
+
+// ─── Audit Log Helpers ────────────────────────────────────────────────────────
+export async function createAuditEntry(entry: Omit<InsertAuditLogEntry, "id">): Promise<AuditLogEntry> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const id = `audit_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  await db.insert(auditLog).values({ ...entry, id });
+  const rows = await db.select().from(auditLog).where(eq(auditLog.id, id)).limit(1);
+  return rows[0];
+}
+export async function listAuditEntries(opts: {
+  entityId?: string;
+  entityType?: string;
+  userId?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<AuditLogEntry[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = [];
+  if (opts.entityId) conditions.push(eq(auditLog.entityId, opts.entityId));
+  if (opts.entityType) conditions.push(eq(auditLog.entityType, opts.entityType));
+  if (opts.userId) conditions.push(eq(auditLog.userId, opts.userId));
+  let q = db.select().from(auditLog).$dynamic();
+  if (conditions.length > 0) q = q.where(and(...conditions));
+  return q.orderBy(desc(auditLog.createdAt)).limit(opts.limit ?? 100).offset(opts.offset ?? 0);
+}
+
+// ─── Webhooks Helpers ─────────────────────────────────────────────────────────
+export async function createWebhook(webhook: Omit<InsertWebhook, "id">): Promise<Webhook> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const id = `wh_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  await db.insert(webhooks).values({ ...webhook, id });
+  const rows = await db.select().from(webhooks).where(eq(webhooks.id, id)).limit(1);
+  return rows[0];
+}
+export async function listWebhooks(userId: string): Promise<Webhook[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(webhooks).where(eq(webhooks.userId, userId)).orderBy(desc(webhooks.createdAt));
+}
+export async function updateWebhook(id: string, data: Partial<InsertWebhook>): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(webhooks).set({ ...data, updatedAt: new Date() }).where(eq(webhooks.id, id));
+}
+export async function deleteWebhook(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(webhooks).where(eq(webhooks.id, id));
+}
+
+// ─── Outcome Predictions Helpers ──────────────────────────────────────────────
+export async function upsertOutcomePrediction(pred: Omit<InsertOutcomePrediction, "id"> & { disputeId: string }): Promise<OutcomePrediction> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  // Delete existing prediction for this dispute
+  await db.delete(outcomePredictions).where(eq(outcomePredictions.disputeId, pred.disputeId));
+  const id = `pred_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  await db.insert(outcomePredictions).values({ ...pred, id });
+  const rows = await db.select().from(outcomePredictions).where(eq(outcomePredictions.id, id)).limit(1);
+  return rows[0];
+}
+export async function getOutcomePrediction(disputeId: string): Promise<OutcomePrediction | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(outcomePredictions)
+    .where(eq(outcomePredictions.disputeId, disputeId))
+    .orderBy(desc(outcomePredictions.createdAt))
+    .limit(1);
+  return rows[0];
+}
+
+// ─── Document Analysis Helpers ────────────────────────────────────────────────
+export async function createDocumentAnalysis(analysis: Omit<InsertDocumentAnalysis, "id">): Promise<DocumentAnalysis> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const id = `docai_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  await db.insert(documentAnalyses).values({ ...analysis, id });
+  const rows = await db.select().from(documentAnalyses).where(eq(documentAnalyses.id, id)).limit(1);
+  return rows[0];
+}
+export async function updateDocumentAnalysis(id: string, data: Partial<InsertDocumentAnalysis>): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(documentAnalyses).set({ ...data, updatedAt: new Date() }).where(eq(documentAnalyses.id, id));
+}
+export async function getDocumentAnalysis(id: string): Promise<DocumentAnalysis | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(documentAnalyses).where(eq(documentAnalyses.id, id)).limit(1);
+  return rows[0];
+}
+export async function listDocumentAnalyses(opts: { userId?: string; disputeId?: string; limit?: number }): Promise<DocumentAnalysis[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = [];
+  if (opts.userId) conditions.push(eq(documentAnalyses.userId, opts.userId));
+  if (opts.disputeId) conditions.push(eq(documentAnalyses.disputeId, opts.disputeId));
+  let q = db.select().from(documentAnalyses).$dynamic();
+  if (conditions.length > 0) q = q.where(and(...conditions));
+  return q.orderBy(desc(documentAnalyses.createdAt)).limit(opts.limit ?? 50);
 }
