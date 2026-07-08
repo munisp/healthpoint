@@ -182,17 +182,15 @@ export default function Home() {
   const timeSaved = useCounter(18, 1200, statsRef.inView);
   const states = useCounter(50, 1000, statsRef.inView);
 
+  const submitLeadMutation = trpc.leads.submit.useMutation();
   useEffect(() => {
     if (!loading && isAuthenticated) navigate("/dashboard");
   }, [isAuthenticated, loading, navigate]);
-
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
     </div>
   );
-
-  const submitLeadMutation = trpc.leads.submit.useMutation();
 
   const handleLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
