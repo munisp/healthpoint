@@ -16,3 +16,53 @@ routes:
             input.identity.roles[_] == "admin"
           }
 
+
+  # ── EMR Onboarding Service ────────────────────────────────────────────────
+  - uri: /api/v1/emr/onboarding/vendors
+    upstream:
+      nodes:
+        "emr-onboarding:8030": 1
+      type: roundrobin
+    plugins:
+      # Public endpoint — no auth required to browse vendors
+      response-rewrite:
+        headers:
+          Cache-Control: "public, max-age=300"
+
+  - uri: /api/v1/emr/onboarding/*
+    upstream:
+      nodes:
+        "emr-onboarding:8030": 1
+      type: roundrobin
+    plugins:
+      jwt-auth: {}
+      opentelemetry:
+        sampler:
+          name: always_on
+      request-id: {}
+      limit-req:
+        rate: 10
+        burst: 20
+        key: consumer_name
+        rejected_code: 429
+
+  - uri: /api/v1/emr/tenants*
+    upstream:
+      nodes:
+        "emr-onboarding:8030": 1
+      type: roundrobin
+    plugins:
+      jwt-auth: {}
+      opa:
+        policy: |
+          package http
+          default allow = false
+          allow {
+            input.identity.roles[_] == "admin"
+          }
+          allow {
+            input.identity.roles[_] == "integration_manager"
+          }
+      opentelemetry:
+        sampler:
+          name: always_on
