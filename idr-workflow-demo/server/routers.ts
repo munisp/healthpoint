@@ -2003,6 +2003,13 @@ Based on NSA IDR historical data and legal precedent, provide:
         disputeId: z.string(),
         stepId: z.string(),
         note: z.string().min(1).max(2000),
+        attachments: z.array(z.object({
+          key: z.string(),
+          url: z.string(),
+          name: z.string(),
+          size: z.number(),
+          mimeType: z.string(),
+        })).optional().default([]),
       }))
       .mutation(async ({ ctx, input }) => {
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
@@ -2014,8 +2021,25 @@ Based on NSA IDR historical data and legal precedent, provide:
           authorId: ctx.user.id,
           authorName: ctx.user.name ?? ctx.user.email ?? 'Unknown',
           note: input.note,
+          attachments: JSON.stringify(input.attachments),
         }).returning();
         return inserted;
+      }),
+
+    uploadNoteAttachment: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        fileName: z.string().max(255),
+        mimeType: z.string().max(128),
+        fileBase64: z.string().max(10 * 1024 * 1024), // 10 MB base64 limit
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
+        const ext = input.fileName.split('.').pop() ?? 'bin';
+        const key = `note-attachments/${input.disputeId}/${ctx.user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+        const buffer = Buffer.from(input.fileBase64, 'base64');
+        const { url } = await storagePut(key, buffer, input.mimeType);
+        return { key, url, name: input.fileName, size: buffer.byteLength, mimeType: input.mimeType };
       }),
 
     getNotes: protectedProcedure
@@ -2059,6 +2083,13 @@ Based on NSA IDR historical data and legal precedent, provide:
         noteId: z.string(),
         disputeId: z.string(),
         note: z.string().min(1).max(2000),
+        attachments: z.array(z.object({
+          key: z.string(),
+          url: z.string(),
+          name: z.string(),
+          size: z.number(),
+          mimeType: z.string(),
+        })).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
@@ -2072,7 +2103,13 @@ Based on NSA IDR historical data and legal precedent, provide:
         }
         const [updated] = await db
           .update(stepNotes)
-          .set({ note: input.note, updatedAt: new Date() })
+          .set({
+            note: input.note,
+            updatedAt: new Date(),
+            ...(input.attachments !== undefined
+              ? { attachments: JSON.stringify(input.attachments) }
+              : {}),
+          })
           .where(eq(stepNotes.id, input.noteId))
           .returning();
         return updated;

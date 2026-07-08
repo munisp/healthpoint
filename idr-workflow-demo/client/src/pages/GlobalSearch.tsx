@@ -285,6 +285,15 @@ export default function GlobalSearch() {
     toast.success("Recent searches cleared");
   }
 
+  function deleteRecentSearch(index: number, e: React.MouseEvent) {
+    e.stopPropagation(); // prevent triggering loadRecentSearch
+    setRecentSearches(prev => {
+      const updated = prev.filter((_, i) => i !== index);
+      persistRecentSearches(updated);
+      return updated;
+    });
+  }
+
   const searchQuery = trpc.search.query.useQuery(
     { q: debouncedQuery, entityTypes, limit: 50 },
     { enabled: debouncedQuery.trim().length >= 2 }
@@ -676,34 +685,44 @@ export default function GlobalSearch() {
                 </div>
                 <div className="space-y-1.5">
                   {recentSearches.map((r, i) => (
-                    <button
-                      key={i}
-                      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg border hover:border-primary/50 hover:bg-muted/50 transition-colors text-left group"
-                      onClick={() => loadRecentSearch(r)}
-                    >
-                      <History className="h-3.5 w-3.5 text-muted-foreground shrink-0 group-hover:text-primary" />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-foreground truncate">{r.query}</div>
-                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                          {r.categories.length < 3 && r.categories.map(c => (
-                            <span key={c} className={`text-[10px] px-1.5 py-0.5 rounded-full ${ENTITY_META[c].bgColor} ${ENTITY_META[c].color}`}>
-                              {ENTITY_META[c].label}
-                            </span>
-                          ))}
-                          {(r.dateFrom || r.dateTo) && (
-                            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-                              <CalendarDays className="h-2.5 w-2.5" />
-                              {r.dateFrom && new Date(r.dateFrom).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                              {r.dateFrom && r.dateTo && " – "}
-                              {r.dateTo && new Date(r.dateTo).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                            </span>
-                          )}
+                    <div key={i} className="relative group/chip">
+                      <button
+                        className="w-full flex items-center gap-3 px-3 py-2 rounded-lg border hover:border-primary/50 hover:bg-muted/50 transition-colors text-left group pr-8"
+                        onClick={() => loadRecentSearch(r)}
+                      >
+                        <History className="h-3.5 w-3.5 text-muted-foreground shrink-0 group-hover:text-primary" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-foreground truncate">{r.query}</div>
+                          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                            {r.categories.length < 3 && r.categories.map(c => (
+                              <span key={c} className={`text-[10px] px-1.5 py-0.5 rounded-full ${ENTITY_META[c].bgColor} ${ENTITY_META[c].color}`}>
+                                {ENTITY_META[c].label}
+                              </span>
+                            ))}
+                            {(r.dateFrom || r.dateTo) && (
+                              <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                                <CalendarDays className="h-2.5 w-2.5" />
+                                {r.dateFrom && new Date(r.dateFrom).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                                {r.dateFrom && r.dateTo && " – "}
+                                {r.dateTo && new Date(r.dateTo).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      <span className="text-[10px] text-muted-foreground shrink-0">
-                        {new Date(r.searchedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
-                      </span>
-                    </button>
+                        <span className="text-[10px] text-muted-foreground shrink-0">
+                          {new Date(r.searchedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                        </span>
+                      </button>
+                      {/* Per-chip delete button */}
+                      <button
+                        className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover/chip:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 hover:text-destructive text-muted-foreground"
+                        onClick={(e) => deleteRecentSearch(i, e)}
+                        title="Remove this search"
+                        aria-label={`Remove "${r.query}" from recent searches`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,7 +8,8 @@ import { toast } from "sonner";
 import {
   CheckCircle2, Circle, Clock, AlertTriangle, Scale,
   ChevronRight, CalendarDays, Hourglass, Flag, Zap,
-  StickyNote, Plus, Trash2, Loader2, X, MessageSquarePlus, Pencil, Check
+  StickyNote, Plus, Trash2, Loader2, X, MessageSquarePlus, Pencil, Check,
+  Paperclip, FileText, Image as ImageIcon, Download
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -109,10 +110,28 @@ function deadlineStatus(stepStartDate: Date, statutoryDays: number): { daysLeft:
 
 // ── Step Notes sub-component ───────────────────────────────────────────────
 
+interface NoteAttachment {
+  key: string;
+  url: string;
+  name: string;
+  size: number;
+  mimeType: string;
+}
+
 interface StepNotesProps {
   disputeId: string;
   stepId: string;
   isCurrent: boolean;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isImage(mimeType: string): boolean {
+  return mimeType.startsWith("image/");
 }
 
 function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
@@ -120,6 +139,10 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
   const [showForm, setShowForm] = useState(false);
   // Per-note edit state: noteId -> draft text (undefined = not editing)
   const [editingNotes, setEditingNotes] = useState<Record<string, string>>({});
+  // Pending attachments for the new note form
+  const [pendingAttachments, setPendingAttachments] = useState<NoteAttachment[]>([]);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
 
   const notesQuery = trpc.workflow.getNotes.useQuery(
@@ -132,10 +155,48 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
       toast.success("Note added to step");
       setNoteText("");
       setShowForm(false);
+      setPendingAttachments([]);
       utils.workflow.getNotes.invalidate({ disputeId, stepId });
     },
     onError: (err) => toast.error(err.message),
   });
+
+  const uploadAttachmentMutation = trpc.workflow.uploadNoteAttachment.useMutation({
+    onSuccess: (att) => {
+      setPendingAttachments(prev => [...prev, att]);
+      toast.success(`Attached: ${att.name}`);
+    },
+    onError: (err) => toast.error(`Upload failed: ${err.message}`),
+  });
+
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("File must be under 10 MB");
+      return;
+    }
+    setUploadingFile(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1];
+        uploadAttachmentMutation.mutate({
+          disputeId,
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          fileBase64: base64,
+        });
+        setUploadingFile(false);
+      };
+      reader.onerror = () => { toast.error("Failed to read file"); setUploadingFile(false); };
+      reader.readAsDataURL(file);
+    } catch {
+      setUploadingFile(false);
+    }
+    // Reset input so same file can be re-selected
+    e.target.value = "";
+  }
 
   const deleteNoteMutation = trpc.workflow.deleteNote.useMutation({
     onSuccess: () => {
@@ -166,6 +227,10 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
     const draft = editingNotes[noteId]?.trim();
     if (!draft) return;
     updateNoteMutation.mutate({ noteId, disputeId, note: draft });
+  }
+
+  function removeAttachment(key: string) {
+    setPendingAttachments(prev => prev.filter(a => a.key !== key));
   }
 
   const notes = notesQuery.data ?? [];
@@ -225,6 +290,33 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
                     <StickyNote className="h-3.5 w-3.5 text-yellow-600 mt-0.5 shrink-0" />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs leading-relaxed text-foreground/80 whitespace-pre-wrap">{note.note}</p>
+                      {/* Attachments display */}
+                      {(() => {
+                        let atts: NoteAttachment[] = [];
+                        try { atts = JSON.parse(note.attachments || "[]"); } catch { atts = []; }
+                        return atts.length > 0 ? (
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {atts.map((att) => (
+                              <a
+                                key={att.key}
+                                href={att.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border bg-white dark:bg-background hover:border-primary/50 hover:text-primary transition-colors max-w-[180px] group/att"
+                                title={`${att.name} (${formatBytes(att.size)})`}
+                              >
+                                {isImage(att.mimeType) ? (
+                                  <ImageIcon className="h-3 w-3 shrink-0 text-blue-500" />
+                                ) : (
+                                  <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                )}
+                                <span className="truncate">{att.name}</span>
+                                <Download className="h-2.5 w-2.5 shrink-0 opacity-0 group-hover/att:opacity-100" />
+                              </a>
+                            ))}
+                          </div>
+                        ) : null;
+                      })()}
                       <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
                         <span>{note.authorName ?? note.authorId}</span>
                         <span>·</span>
@@ -272,14 +364,63 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
             autoFocus
             maxLength={2000}
           />
+          {/* Pending attachments preview */}
+          {pendingAttachments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {pendingAttachments.map(att => (
+                <div
+                  key={att.key}
+                  className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border bg-muted/50 max-w-[180px] group/patt"
+                >
+                  {isImage(att.mimeType) ? (
+                    <ImageIcon className="h-3 w-3 shrink-0 text-blue-500" />
+                  ) : (
+                    <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="truncate flex-1">{att.name}</span>
+                  <span className="text-muted-foreground shrink-0">{formatBytes(att.size)}</span>
+                  <button
+                    className="ml-0.5 opacity-0 group-hover/patt:opacity-100 hover:text-destructive"
+                    onClick={() => removeAttachment(att.key)}
+                    title="Remove attachment"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls"
+            onChange={handleFileSelect}
+          />
           <div className="flex items-center justify-between">
-            <span className="text-[10px] text-muted-foreground">{noteText.length}/2000</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground">{noteText.length}/2000</span>
+              <button
+                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-primary transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingFile || uploadAttachmentMutation.isPending}
+                title="Attach a file or image"
+              >
+                {uploadingFile || uploadAttachmentMutation.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Paperclip className="h-3 w-3" />
+                )}
+                Attach file
+              </button>
+            </div>
             <div className="flex gap-1.5">
               <Button
                 size="sm"
                 variant="ghost"
                 className="h-7 text-xs"
-                onClick={() => { setShowForm(false); setNoteText(""); }}
+                onClick={() => { setShowForm(false); setNoteText(""); setPendingAttachments([]); }}
               >
                 <X className="h-3 w-3 mr-1" /> Cancel
               </Button>
@@ -287,7 +428,7 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
                 size="sm"
                 className="h-7 text-xs"
                 disabled={!noteText.trim() || addNoteMutation.isPending}
-                onClick={() => addNoteMutation.mutate({ disputeId, stepId, note: noteText.trim() })}
+                onClick={() => addNoteMutation.mutate({ disputeId, stepId, note: noteText.trim(), attachments: pendingAttachments })}
               >
                 {addNoteMutation.isPending ? (
                   <Loader2 className="h-3 w-3 animate-spin mr-1" />

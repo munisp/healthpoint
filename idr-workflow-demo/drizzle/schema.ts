@@ -699,6 +699,8 @@ export const stepNotes = pgTable(
     authorId: varchar("authorId", { length: 64 }).notNull(),
     authorName: text("authorName"),
     note: text("note").notNull(),
+    // JSON array of { key, url, name, size, mimeType } objects stored as text
+    attachments: text("attachments").default("[]").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   },
