@@ -12,7 +12,7 @@ import { useLocation } from "wouter";
 import { useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer,
+  ResponsiveContainer, PieChart, Pie, Cell,
 } from "recharts";
 
 function StatusBadge({ status }: { status: string }) {
@@ -42,6 +42,7 @@ export default function Dashboard() {
     { months: chartMonths },
     { enabled: isAuthenticated }
   );
+  const { data: outcomeData } = trpc.dashboard.outcomeAnalytics.useQuery(undefined, { enabled: isAuthenticated });
   const { data: notifications } = trpc.notifications.list.useQuery({ unreadOnly: true }, { enabled: isAuthenticated });
   const markReadMutation = trpc.notifications.markAllRead.useMutation();
   const utils = trpc.useUtils();
@@ -211,6 +212,64 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
+
+        {/* Outcome Analytics Row */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Win Rate by Service Type */}
+          <Card className="border-slate-200">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-base font-semibold text-slate-800">Win Rate by Service Type</CardTitle>
+              <Badge variant="secondary" className="text-xs">
+                Overall: {outcomeData?.overallWinRate != null ? `${Math.round(outcomeData.overallWinRate * 100)}%` : "—"}
+              </Badge>
+            </CardHeader>
+            <CardContent>
+              {!outcomeData?.byServiceType?.length ? (
+                <div className="h-48 flex flex-col items-center justify-center text-slate-400">
+                  <Gavel size={28} className="mb-2 opacity-30" />
+                  <p className="text-sm">No determination data yet</p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={outcomeData.byServiceType} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="serviceType" tick={{ fontSize: 10 }} tickFormatter={v => v.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()).slice(0, 12)} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
+                    <Tooltip formatter={(v: number) => `${Math.round(v * 100)}%`} />
+                    <Bar dataKey="winRate" name="Win Rate" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Average Determination Amount by Service Type */}
+          <Card className="border-slate-200">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-base font-semibold text-slate-800">Avg. Determination Amount</CardTitle>
+              <span className="text-xs text-muted-foreground">by service type</span>
+            </CardHeader>
+            <CardContent>
+              {!outcomeData?.byServiceType?.length ? (
+                <div className="h-48 flex flex-col items-center justify-center text-slate-400">
+                  <Scale size={28} className="mb-2 opacity-30" />
+                  <p className="text-sm">No determination data yet</p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={outcomeData.byServiceType} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="serviceType" tick={{ fontSize: 10 }} tickFormatter={v => v.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()).slice(0, 12)} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
+                    <Tooltip formatter={(v: number) => `$${Number(v).toLocaleString()}`} />
+                    <Bar dataKey="avgDeterminationAmount" name="Avg. Determination" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="avgBilledAmount" name="Avg. Billed" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+        </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Recent Disputes */}

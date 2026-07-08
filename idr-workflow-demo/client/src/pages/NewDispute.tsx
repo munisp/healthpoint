@@ -204,6 +204,16 @@ export default function NewDispute() {
   // ─── EMR Data Pull ─────────────────────────────────────────────────────────
   const { data: emrConnections } = trpc.emr.list.useQuery();
   const [showEMRPull, setShowEMRPull] = useState(false);
+  const [patientSearchQuery, setPatientSearchQuery] = useState("");
+  const [patientSuggestions, setPatientSuggestions] = useState<{ id: string; name: string; dob: string; mrn: string }[]>([]);
+  const [showPatientDropdown, setShowPatientDropdown] = useState(false);
+  const patientSearchMutation = trpc.ai.searchPatients.useMutation({
+    onSuccess: (results) => {
+      setPatientSuggestions(results);
+      setShowPatientDropdown(results.length > 0);
+    },
+  });
+
   const [emrPullResult, setEMRPullResult] = useState<{
     success: boolean;
     fieldsExtracted: number;
@@ -478,14 +488,44 @@ export default function NewDispute() {
                     </select>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Patient ID (optional)</label>
+                    <div className="relative">
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Patient ID or Name</label>
                       <Input
-                        value={emrPatientId}
-                        onChange={e => setEMRPatientId(e.target.value)}
-                        placeholder="e.g., PT-12345"
+                        value={patientSearchQuery || emrPatientId}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setPatientSearchQuery(val);
+                          setEMRPatientId(val);
+                          if (val.length >= 2 && selectedEMRId) {
+                            const conn = activeEMRConnections.find((c: any) => c.id === selectedEMRId);
+                            if (conn) patientSearchMutation.mutate({ connectionId: selectedEMRId, emrSystem: (conn as any).emrSystem, query: val });
+                          } else {
+                            setShowPatientDropdown(false);
+                          }
+                        }}
+                        onBlur={() => setTimeout(() => setShowPatientDropdown(false), 200)}
+                        placeholder="Search by name or ID…"
                         className="text-sm"
                       />
+                      {showPatientDropdown && patientSuggestions.length > 0 && (
+                        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                          {patientSuggestions.map(p => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              className="w-full text-left px-3 py-2 hover:bg-teal-50 text-xs border-b border-slate-100 last:border-0"
+                              onClick={() => {
+                                setEMRPatientId(p.id);
+                                setPatientSearchQuery(`${p.name} (${p.id})`);
+                                setShowPatientDropdown(false);
+                              }}
+                            >
+                              <div className="font-medium text-slate-800">{p.name}</div>
+                              <div className="text-slate-500">ID: {p.id} · DOB: {p.dob} · MRN: {p.mrn}</div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-600 mb-1">Claim ID (optional)</label>
