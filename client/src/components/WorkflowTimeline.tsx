@@ -1,9 +1,14 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 import {
   CheckCircle2, Circle, Clock, AlertTriangle, Scale,
-  ChevronRight, CalendarDays, Hourglass, Flag, Zap
+  ChevronRight, CalendarDays, Hourglass, Flag, Zap,
+  StickyNote, Plus, Trash2, Loader2, X, MessageSquarePlus
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -25,12 +30,13 @@ interface IDRStepDef {
   description: string;
   days: string;
   phase: "negotiation" | "idr_filing" | "entity_selection" | "arbitration" | "payment" | "appeal";
-  statutoryDays?: number; // business days from step start
+  statutoryDays?: number;
 }
 
 interface WorkflowTimelineProps {
   steps: TimelineStep[];
   currentStep: string;
+  disputeId?: string;           // required for note functionality
   disputeCreatedAt?: string | Date | null;
   compact?: boolean;
 }
@@ -101,14 +107,153 @@ function deadlineStatus(stepStartDate: Date, statutoryDays: number): { daysLeft:
   };
 }
 
-// ── Component ──────────────────────────────────────────────────────────────
+// ── Step Notes sub-component ───────────────────────────────────────────────
 
-export default function WorkflowTimeline({ steps, currentStep, disputeCreatedAt, compact = false }: WorkflowTimelineProps) {
+interface StepNotesProps {
+  disputeId: string;
+  stepId: string;
+  isCurrent: boolean;
+}
+
+function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
+  const [noteText, setNoteText] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const utils = trpc.useUtils();
+
+  const notesQuery = trpc.workflow.getNotes.useQuery(
+    { disputeId, stepId },
+    { enabled: !!disputeId }
+  );
+
+  const addNoteMutation = trpc.workflow.addNote.useMutation({
+    onSuccess: () => {
+      toast.success("Note added to step");
+      setNoteText("");
+      setShowForm(false);
+      utils.workflow.getNotes.invalidate({ disputeId, stepId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const deleteNoteMutation = trpc.workflow.deleteNote.useMutation({
+    onSuccess: () => {
+      toast.success("Note removed");
+      utils.workflow.getNotes.invalidate({ disputeId, stepId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const notes = notesQuery.data ?? [];
+
+  return (
+    <div className="mt-2 space-y-2">
+      {/* Existing notes */}
+      {notes.length > 0 && (
+        <div className="space-y-1.5">
+          {notes.map(note => (
+            <div
+              key={note.id}
+              className="flex items-start gap-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded px-2.5 py-2 group"
+            >
+              <StickyNote className="h-3.5 w-3.5 text-yellow-600 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs leading-relaxed text-foreground/80">{note.note}</p>
+                <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
+                  <span>{note.authorName ?? note.authorId}</span>
+                  <span>·</span>
+                  <span>{formatDateTime(note.createdAt)}</span>
+                </div>
+              </div>
+              <button
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
+                onClick={() => deleteNoteMutation.mutate({ noteId: note.id, disputeId })}
+                disabled={deleteNoteMutation.isPending}
+                title="Delete note"
+              >
+                {deleteNoteMutation.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3 w-3" />
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add note form */}
+      {showForm ? (
+        <div className="space-y-1.5">
+          <Textarea
+            placeholder="Add a note about this step — context, decisions, blockers, next actions..."
+            value={noteText}
+            onChange={e => setNoteText(e.target.value)}
+            className="text-xs min-h-[72px] resize-none"
+            autoFocus
+            maxLength={2000}
+          />
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-muted-foreground">{noteText.length}/2000</span>
+            <div className="flex gap-1.5">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs"
+                onClick={() => { setShowForm(false); setNoteText(""); }}
+              >
+                <X className="h-3 w-3 mr-1" /> Cancel
+              </Button>
+              <Button
+                size="sm"
+                className="h-7 text-xs"
+                disabled={!noteText.trim() || addNoteMutation.isPending}
+                onClick={() => addNoteMutation.mutate({ disputeId, stepId, note: noteText.trim() })}
+              >
+                {addNoteMutation.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                ) : (
+                  <Plus className="h-3 w-3 mr-1" />
+                )}
+                Save Note
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        isCurrent && (
+          <button
+            className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-primary transition-colors py-0.5"
+            onClick={() => setShowForm(true)}
+          >
+            <MessageSquarePlus className="h-3.5 w-3.5" />
+            Add note to this step
+            {notes.length > 0 && (
+              <span className="bg-yellow-100 text-yellow-700 rounded-full px-1.5 py-0.5 text-[10px] font-medium">
+                {notes.length}
+              </span>
+            )}
+          </button>
+        )
+      )}
+
+      {/* Note count for non-current steps */}
+      {!isCurrent && notes.length > 0 && (
+        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+          <StickyNote className="h-3 w-3" />
+          {notes.length} note{notes.length !== 1 ? "s" : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main Component ─────────────────────────────────────────────────────────
+
+export default function WorkflowTimeline({ steps, currentStep, disputeId, disputeCreatedAt, compact = false }: WorkflowTimelineProps) {
   const currentStepIndex = IDR_STEP_DEFS.findIndex(s => s.key === currentStep);
   const completedCount = steps.filter(s => s.isCompleted).length;
   const progressPct = Math.round((completedCount / IDR_STEP_DEFS.length) * 100);
 
-  // Group steps by phase
   const phaseGroups = useMemo(() => {
     const groups: { phase: IDRStepDef["phase"]; steps: IDRStepDef[] }[] = [];
     let lastPhase: IDRStepDef["phase"] | null = null;
@@ -123,7 +268,6 @@ export default function WorkflowTimeline({ steps, currentStep, disputeCreatedAt,
     return groups;
   }, []);
 
-  // Find the date the current step started (for deadline calculation)
   const currentStepEvent = steps.find(s => s.isCurrent)?.event;
   const currentStepStartDate = currentStepEvent?.createdAt ? new Date(currentStepEvent.createdAt) : null;
   const currentStepDef = IDR_STEP_DEFS.find(s => s.key === currentStep);
@@ -150,7 +294,6 @@ export default function WorkflowTimeline({ steps, currentStep, disputeCreatedAt,
           </div>
         </div>
 
-        {/* Current step deadline badge */}
         {currentStepStartDate && currentStepDef?.statutoryDays != null && (
           (() => {
             const { daysLeft, status } = deadlineStatus(currentStepStartDate, currentStepDef.statutoryDays);
@@ -179,7 +322,6 @@ export default function WorkflowTimeline({ steps, currentStep, disputeCreatedAt,
           const phaseStepKeys = phaseSteps.map(s => s.key);
           const phaseCompleted = phaseStepKeys.every(k => steps.find(s => s.step === k)?.isCompleted);
           const phaseActive = phaseStepKeys.some(k => steps.find(s => s.step === k)?.isCurrent);
-          const phaseStarted = phaseStepKeys.some(k => steps.find(s => s.step === k)?.isCompleted || steps.find(s => s.step === k)?.isCurrent);
 
           return (
             <div key={phase} className={`rounded-lg border overflow-hidden ${
@@ -216,15 +358,12 @@ export default function WorkflowTimeline({ steps, currentStep, disputeCreatedAt,
 
               {/* Steps in phase */}
               <div className="relative">
-                {/* Vertical connector line */}
                 <div className="absolute left-[22px] top-4 bottom-4 w-px bg-border" />
-
                 <div className="space-y-0">
                   {phaseSteps.map((def, idx) => {
                     const tStep = steps.find(s => s.step === def.key);
                     const isCompleted = tStep?.isCompleted ?? false;
                     const isCurrent = tStep?.isCurrent ?? false;
-                    const isPending = !isCompleted && !isCurrent;
                     const stepNumber = IDR_STEP_DEFS.findIndex(s => s.key === def.key) + 1;
                     const eventDate = tStep?.event?.createdAt;
                     const isLast = idx === phaseSteps.length - 1;
@@ -304,6 +443,15 @@ export default function WorkflowTimeline({ steps, currentStep, disputeCreatedAt,
                             <div className="mt-1.5 text-xs text-muted-foreground bg-white/80 dark:bg-black/20 border border-border/50 rounded px-2 py-1 leading-relaxed">
                               {tStep.event.description}
                             </div>
+                          )}
+
+                          {/* Step Notes — shown on current step always, on others when disputeId provided */}
+                          {disputeId && (isCurrent || isCompleted) && !compact && (
+                            <StepNotesPanel
+                              disputeId={disputeId}
+                              stepId={def.key}
+                              isCurrent={isCurrent}
+                            />
                           )}
                         </div>
                       </div>

@@ -292,3 +292,10 @@
 - [ ] Add global search tRPC procedure (search.query)
 - [ ] Add Lakehouse export tRPC procedure (lakehouse.export) — generates NDJSON snapshots of all tables
 - [ ] Add DataExport UI page — schedule and download Lakehouse-ready exports
+
+### Session 24 — Targeted UI Enhancements
+- [ ] GlobalSearch: Save Search button — persist query + category filters + date range to localStorage, load saved searches panel
+- [ ] FinancialLedger: Export to CSV button — download filtered journal entries matching active date range
+- [ ] WorkflowTimeline: Add Note button on active step — inline note form, persist to DB via tRPC, display notes under step
+- [ ] DB: step_notes table for workflow step notes
+- [ ] tRPC: workflow.addNote, workflow.getNotes procedures
