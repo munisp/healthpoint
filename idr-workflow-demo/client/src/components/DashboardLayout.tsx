@@ -40,8 +40,15 @@ import {
   BarChart2,
   BookTemplate,
   UserRoundSearch,
+  ScanLine,
+  Moon,
+  Sun,
+  Command,
+  Activity,
+  Webhook,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
+import { useTheme } from "../contexts/ThemeContext";
 import { useLocation } from "wouter";
 
 const menuItems = [
@@ -60,6 +67,10 @@ const menuItems = [
   { icon: BookTemplate, label: "Templates", path: "/templates" },
   { icon: ShieldCheck, label: "Admin", path: "/admin" },
   { icon: UserRoundSearch, label: "Leads CRM", path: "/admin/leads" },
+  { icon: ScanLine, label: "Doc Analyzer", path: "/doc-analyzer" },
+  { icon: Activity, label: "Audit Trail", path: "/audit-trail" },
+  { icon: Building2, label: "Payer Intel", path: "/payer-intelligence" },
+  { icon: Webhook, label: "Webhooks", path: "/webhooks" },
 ];
 
 const SIDEBAR_WIDTH_KEY = 'sidebar-width';
@@ -238,8 +249,10 @@ function DashboardLayoutContent({
       </div>
 
       <SidebarInset>
-        {/* Top bar with notification bell */}
+        {/* Top bar with notification bell + dark mode + command palette */}
         <div className="h-14 border-b flex items-center justify-end px-6 gap-3 bg-background">
+          <CommandPaletteButton />
+          <DarkModeToggle />
           <Popover open={notifOpen} onOpenChange={setNotifOpen}>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="icon" className="relative h-9 w-9">
@@ -340,5 +353,115 @@ function SidebarToggleButton() {
     >
       <PanelLeft className="h-4 w-4" />
     </Button>
+  );
+}
+
+function DarkModeToggle() {
+  const { theme, toggleTheme, switchable } = useTheme();
+  if (!switchable || !toggleTheme) return null;
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-9 w-9"
+      onClick={toggleTheme}
+      title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+    >
+      {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+    </Button>
+  );
+}
+
+function CommandPaletteButton() {
+  const [, setLocation] = useLocation();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const COMMANDS = [
+    { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
+    { label: 'New Dispute', path: '/disputes/new', icon: PlusCircle },
+    { label: 'Disputes List', path: '/disputes', icon: Scale },
+    { label: 'AI Assistant', path: '/ai-assistant', icon: Brain },
+    { label: 'Document Analyzer', path: '/doc-analyzer', icon: ScanLine },
+    { label: 'Reports', path: '/reports', icon: BarChart2 },
+    { label: 'Expert Review', path: '/expert-review', icon: UserCheck },
+    { label: 'CMS Tracker', path: '/cms-tracker', icon: ClipboardList },
+    { label: 'EMR Connections', path: '/emr-connections', icon: Database },
+    { label: 'State Laws', path: '/state-laws', icon: BookOpen },
+    { label: 'Templates', path: '/templates', icon: BookTemplate },
+    { label: 'Admin', path: '/admin', icon: ShieldCheck },
+    { label: 'Leads CRM', path: '/admin/leads', icon: UserRoundSearch },
+  ];
+
+  const filtered = query
+    ? COMMANDS.filter(c => c.label.toLowerCase().includes(query.toLowerCase()))
+    : COMMANDS;
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setOpen(v => !v);
+      }
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-8 gap-2 text-muted-foreground text-xs hidden md:flex"
+        onClick={() => setOpen(true)}
+      >
+        <Command className="h-3 w-3" />
+        <span>Search</span>
+        <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-100">
+          ⌘K
+        </kbd>
+      </Button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center pt-24" onClick={() => setOpen(false)}>
+          <div className="absolute inset-0 bg-black/40" />
+          <div
+            className="relative w-full max-w-lg bg-background border rounded-xl shadow-2xl overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 px-4 py-3 border-b">
+              <Command className="h-4 w-4 text-muted-foreground shrink-0" />
+              <input
+                autoFocus
+                className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                placeholder="Search pages and actions…"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+              />
+              <kbd className="text-xs text-muted-foreground">ESC</kbd>
+            </div>
+            <div className="py-2 max-h-80 overflow-y-auto">
+              {filtered.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-8">No results</p>
+              )}
+              {filtered.map(cmd => {
+                const Icon = cmd.icon;
+                return (
+                  <button
+                    key={cmd.path}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-accent/60 transition-colors text-left"
+                    onClick={() => { setLocation(cmd.path); setOpen(false); setQuery(''); }}
+                  >
+                    <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+                    {cmd.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

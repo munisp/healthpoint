@@ -23,6 +23,10 @@ import ExpertReview from "./pages/ExpertReview";
 import Reports from "./pages/Reports";
 import DisputeTemplates from "./pages/DisputeTemplates";
 import LeadsManager from "./pages/LeadsManager";
+import DocumentAnalyzer from "./pages/DocumentAnalyzer";
+import AuditTrail from "./pages/AuditTrail";
+import PayerIntelligence from "./pages/PayerIntelligence";
+import WebhookManager from "./pages/WebhookManager";
 
 function Router() {
   return (
@@ -45,6 +49,10 @@ function Router() {
       <Route path="/state-laws" component={StateBalanceBilling} />
       <Route path="/expert-review" component={ExpertReview} />
       <Route path="/reports" component={Reports} />
+      <Route path="/doc-analyzer" component={DocumentAnalyzer} />
+      <Route path="/audit-trail" component={AuditTrail} />
+      <Route path="/payer-intelligence" component={PayerIntelligence} />
+      <Route path="/webhooks" component={WebhookManager} />
       <Route path="/templates" component={() => {
         const DashboardLayout = require("./components/DashboardLayout").default;
         return <DashboardLayout><DisputeTemplates /></DashboardLayout>;
@@ -58,7 +66,7 @@ function Router() {
 function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="light">
+      <ThemeProvider defaultTheme="light" switchable>
         <TooltipProvider>
           <Toaster />
           <Router />
