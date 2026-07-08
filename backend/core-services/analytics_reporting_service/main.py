@@ -549,31 +549,48 @@ class AnalyticsManager:
             }
 
     async def _get_general_analytics(self, query: AnalyticsQuery) -> Dict[str, Any]:
-        """Get general analytics data"""
-        # Return sample data for demonstration
-        sample_data = []
+        """Get general analytics — time-bucketed event counts from audit_events table."""
         start_date = query.time_range.get('start', datetime.utcnow() - timedelta(days=30))
         end_date = query.time_range.get('end', datetime.utcnow())
-        
-        current_date = start_date
-        while current_date <= end_date:
-            sample_data.append({
-                'period': current_date.isoformat(),
-                'value': np.random.randint(100, 1000),
-                'category': np.random.choice(['A', 'B', 'C'])
-            })
-            
-            if query.granularity == TimeGranularity.DAY:
-                current_date += timedelta(days=1)
-            elif query.granularity == TimeGranularity.WEEK:
-                current_date += timedelta(weeks=1)
-            elif query.granularity == TimeGranularity.MONTH:
-                current_date += timedelta(days=30)
-        
+
+        # Map TimeGranularity to PostgreSQL date_trunc unit
+        trunc_map = {
+            TimeGranularity.HOUR: 'hour',
+            TimeGranularity.DAY: 'day',
+            TimeGranularity.WEEK: 'week',
+            TimeGranularity.MONTH: 'month',
+            TimeGranularity.QUARTER: 'quarter',
+            TimeGranularity.YEAR: 'year',
+        }
+        trunc_unit = trunc_map.get(query.granularity, 'day')
+
+        async with db_manager.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    date_trunc($1, created_at) AS period,
+                    COALESCE(event_type, 'unknown') AS category,
+                    COUNT(*) AS value
+                FROM audit_events
+                WHERE tenant_id = $2
+                  AND created_at BETWEEN $3 AND $4
+                GROUP BY 1, 2
+                ORDER BY 1
+                """,
+                trunc_unit, query.tenant_id, start_date, end_date,
+            )
+
         return {
             'query_name': query.query_name,
-            'data': sample_data,
-            'executed_at': datetime.utcnow().isoformat()
+            'data': [
+                {
+                    'period': row['period'].isoformat(),
+                    'category': row['category'],
+                    'value': int(row['value']),
+                }
+                for row in rows
+            ],
+            'executed_at': datetime.utcnow().isoformat(),
         }
 
     async def create_dashboard(self, dashboard: Dashboard) -> str:

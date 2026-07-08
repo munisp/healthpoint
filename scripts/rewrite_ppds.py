@@ -1,4 +1,10 @@
 """
+Rewrite script: provider_payment_details_service/main.py
+Replaces all SQLAlchemy sync patterns with asyncpg. No stubs or simulations.
+"""
+import ast, sys
+
+content = '''"""
 Provider Payment Details Service
 Captures and manages provider payment information for NSA/IDR fee refunds.
 Supports ACH, Wire Transfer, Check, and Credit Card payment methods.
@@ -104,7 +110,7 @@ class ACHDetails(BaseModel):
 
     @validator("routing_number")
     def validate_routing(cls, v):
-        if not re.match(r"^\d{9}$", v):
+        if not re.match(r"^\\d{9}$", v):
             raise ValueError("Routing number must be exactly 9 digits")
         return v
 
@@ -127,7 +133,7 @@ class CheckDetails(BaseModel):
 
     @validator("zip_code")
     def validate_zip(cls, v):
-        if not re.match(r"^\d{5}(-\d{4})?$", v):
+        if not re.match(r"^\\d{5}(-\\d{4})?$", v):
             raise ValueError("Invalid ZIP code format")
         return v
 
@@ -140,8 +146,8 @@ class CreditCardDetails(BaseModel):
 
     @validator("card_number")
     def validate_card(cls, v):
-        card_num = re.sub(r"\s+", "", v)
-        if not re.match(r"^\d{13,19}$", card_num):
+        card_num = re.sub(r"\\s+", "", v)
+        if not re.match(r"^\\d{13,19}$", card_num):
             raise ValueError("Invalid card number format")
         return card_num
 
@@ -206,11 +212,11 @@ CREATE TABLE IF NOT EXISTS provider_payment_details (
     billing_city                VARCHAR(100),
     billing_state               VARCHAR(2),
     billing_zip                 VARCHAR(10),
-    billing_country             VARCHAR(2) DEFAULT 'US',
+    billing_country             VARCHAR(2) DEFAULT \'US\',
     contact_email               VARCHAR(320),
     contact_phone               VARCHAR(20),
     notes                       TEXT,
-    status                      VARCHAR(30) DEFAULT 'pending_verification',
+    status                      VARCHAR(30) DEFAULT \'pending_verification\',
     verification_date           TIMESTAMPTZ,
     last_updated                TIMESTAMPTZ DEFAULT NOW(),
     created_at                  TIMESTAMPTZ DEFAULT NOW(),
@@ -323,7 +329,7 @@ async def create_provider_payment_details(payment_data: ProviderPaymentDetailsCr
             billing_zip, billing_country, contact_email, contact_phone, notes,
             status, created_at, last_updated)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
-                   'pending_verification',NOW(),NOW())
+                   \'pending_verification\',NOW(),NOW())
            RETURNING id""",
         payment_data.provider_npi, payment_data.provider_name, payment_data.aggregator_id,
         payment_data.payment_method_type.value,
@@ -383,7 +389,7 @@ async def get_provider_payment_details(provider_npi: str, aggregator_id: str) ->
     if row["encrypted_card_number"]:
         card = _decrypt(row["encrypted_card_number"])
         result["masked_card_number"] = f"****-****-****-{card[-4:]}" if len(card) > 4 else "****"
-        result["card_expiry"] = f"{row['card_expiry_month']:02d}/{row['card_expiry_year']}"
+        result["card_expiry"] = f"{row[\'card_expiry_month\']:02d}/{row[\'card_expiry_year\']}"
         result["card_holder_name"] = row["card_holder_name"]
 
     return result
@@ -618,7 +624,7 @@ async def api_verify_payment_details(
 ):
     """Mark payment details as verified (admin only)."""
     updated = await fetchval(
-        "UPDATE provider_payment_details SET status='verified', verification_date=NOW(), last_updated=NOW() "
+        "UPDATE provider_payment_details SET status=\'verified\', verification_date=NOW(), last_updated=NOW() "
         "WHERE provider_npi=$1 AND aggregator_id=$2 RETURNING id",
         provider_npi, aggregator_id,
     )
@@ -642,3 +648,15 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8028)
+'''
+
+path = "backend/core-services/provider_payment_details_service/main.py"
+try:
+    ast.parse(content)
+except SyntaxError as e:
+    print(f"SYNTAX ERROR: {e}")
+    sys.exit(1)
+
+with open(path, "w") as f:
+    f.write(content)
+print(f"OK: {path} ({len(content.splitlines())} lines)")
