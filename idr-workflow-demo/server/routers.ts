@@ -22,6 +22,7 @@ import {
   getUserProfile, upsertUserProfile, markOnboardingComplete,
   createMarketingLead, listMarketingLeads, updateLeadStatus, getLeadByEmail,
 } from "./db";
+import { sendNewLeadNotification } from "./email";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
 import { eq } from "drizzle-orm";
@@ -1434,6 +1435,24 @@ export const appRouter = router({
           source: input.source ?? "landing_page",
           status: "new",
         });
+        // Fire-and-forget email notification — non-blocking
+        if (lead) {
+          sendNewLeadNotification({
+            id: lead.id,
+            firstName: input.firstName,
+            lastName: input.lastName,
+            email: input.email,
+            orgName: input.orgName,
+            orgType: input.orgType,
+            stakeholderRole: input.stakeholderRole,
+            phone: input.phone,
+            message: input.message,
+            source: input.source ?? "landing_page",
+            utmSource: input.utmSource,
+            utmMedium: input.utmMedium,
+            utmCampaign: input.utmCampaign,
+          }).catch(console.error);
+        }
         return { id: lead?.id ?? "", isNew: true };
       }),
 

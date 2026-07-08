@@ -11,6 +11,12 @@ const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(
 
 export default defineConfig({
   plugins,
+  define: {
+    // Provide defaults so the app works even without .env overrides
+    'import.meta.env.VITE_APP_TITLE': JSON.stringify(
+      process.env.VITE_APP_TITLE ?? 'HealthPoint'
+    ),
+  },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
