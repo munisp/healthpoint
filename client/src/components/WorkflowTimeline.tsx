@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import {
   CheckCircle2, Circle, Clock, AlertTriangle, Scale,
   ChevronRight, CalendarDays, Hourglass, Flag, Zap,
-  StickyNote, Plus, Trash2, Loader2, X, MessageSquarePlus
+  StickyNote, Plus, Trash2, Loader2, X, MessageSquarePlus, Pencil, Check
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -118,6 +118,8 @@ interface StepNotesProps {
 function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
   const [noteText, setNoteText] = useState("");
   const [showForm, setShowForm] = useState(false);
+  // Per-note edit state: noteId -> draft text (undefined = not editing)
+  const [editingNotes, setEditingNotes] = useState<Record<string, string>>({});
   const utils = trpc.useUtils();
 
   const notesQuery = trpc.workflow.getNotes.useQuery(
@@ -143,6 +145,29 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
     onError: (err) => toast.error(err.message),
   });
 
+  const updateNoteMutation = trpc.workflow.updateNote.useMutation({
+    onSuccess: (updated) => {
+      toast.success("Note updated");
+      setEditingNotes(prev => { const n = { ...prev }; delete n[updated.id]; return n; });
+      utils.workflow.getNotes.invalidate({ disputeId, stepId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  function startEditing(noteId: string, currentText: string) {
+    setEditingNotes(prev => ({ ...prev, [noteId]: currentText }));
+  }
+
+  function cancelEditing(noteId: string) {
+    setEditingNotes(prev => { const n = { ...prev }; delete n[noteId]; return n; });
+  }
+
+  function saveEdit(noteId: string) {
+    const draft = editingNotes[noteId]?.trim();
+    if (!draft) return;
+    updateNoteMutation.mutate({ noteId, disputeId, note: draft });
+  }
+
   const notes = notesQuery.data ?? [];
 
   return (
@@ -150,34 +175,89 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
       {/* Existing notes */}
       {notes.length > 0 && (
         <div className="space-y-1.5">
-          {notes.map(note => (
-            <div
-              key={note.id}
-              className="flex items-start gap-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded px-2.5 py-2 group"
-            >
-              <StickyNote className="h-3.5 w-3.5 text-yellow-600 mt-0.5 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-xs leading-relaxed text-foreground/80">{note.note}</p>
-                <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
-                  <span>{note.authorName ?? note.authorId}</span>
-                  <span>·</span>
-                  <span>{formatDateTime(note.createdAt)}</span>
-                </div>
-              </div>
-              <button
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
-                onClick={() => deleteNoteMutation.mutate({ noteId: note.id, disputeId })}
-                disabled={deleteNoteMutation.isPending}
-                title="Delete note"
+          {notes.map(note => {
+            const isEditing = note.id in editingNotes;
+            const draft = editingNotes[note.id] ?? "";
+            return (
+              <div
+                key={note.id}
+                className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded px-2.5 py-2 group"
               >
-                {deleteNoteMutation.isPending ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
+                {isEditing ? (
+                  /* ── Edit mode ── */
+                  <div className="space-y-1.5">
+                    <Textarea
+                      value={draft}
+                      onChange={e => setEditingNotes(prev => ({ ...prev, [note.id]: e.target.value }))}
+                      className="text-xs min-h-[64px] resize-none bg-white dark:bg-yellow-950"
+                      autoFocus
+                      maxLength={2000}
+                      onKeyDown={e => {
+                        if (e.key === "Escape") cancelEditing(note.id);
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveEdit(note.id);
+                      }}
+                    />
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-muted-foreground">{draft.length}/2000 · ⌘Enter to save</span>
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm" variant="ghost" className="h-6 text-xs px-2"
+                          onClick={() => cancelEditing(note.id)}
+                        >
+                          <X className="h-3 w-3 mr-1" /> Cancel
+                        </Button>
+                        <Button
+                          size="sm" className="h-6 text-xs px-2"
+                          disabled={!draft.trim() || draft === note.note || updateNoteMutation.isPending}
+                          onClick={() => saveEdit(note.id)}
+                        >
+                          {updateNoteMutation.isPending
+                            ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                            : <Check className="h-3 w-3 mr-1" />}
+                          Save
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
                 ) : (
-                  <Trash2 className="h-3 w-3" />
+                  /* ── Read mode ── */
+                  <div className="flex items-start gap-2">
+                    <StickyNote className="h-3.5 w-3.5 text-yellow-600 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs leading-relaxed text-foreground/80 whitespace-pre-wrap">{note.note}</p>
+                      <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
+                        <span>{note.authorName ?? note.authorId}</span>
+                        <span>·</span>
+                        <span>{formatDateTime(note.createdAt)}</span>
+                        {note.updatedAt && note.updatedAt !== note.createdAt && (
+                          <span className="italic">(edited {formatDateTime(note.updatedAt)})</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                      <button
+                        className="text-muted-foreground hover:text-primary p-0.5 rounded"
+                        onClick={() => startEditing(note.id, note.note)}
+                        title="Edit note"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        className="text-muted-foreground hover:text-destructive p-0.5 rounded"
+                        onClick={() => deleteNoteMutation.mutate({ noteId: note.id, disputeId })}
+                        disabled={deleteNoteMutation.isPending}
+                        title="Delete note"
+                      >
+                        {deleteNoteMutation.isPending
+                          ? <Loader2 className="h-3 w-3 animate-spin" />
+                          : <Trash2 className="h-3 w-3" />}
+                      </button>
+                    </div>
+                  </div>
                 )}
-              </button>
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       )}
 

@@ -628,6 +628,42 @@ export default function FinancialLedger() {
                           </tr>
                         ))}
                       </tbody>
+                      {/* Summary totals row */}
+                      {(() => {
+                        const totalDebits = filteredHistory
+                          .filter(({ entry }) => entry.entryType === "debit")
+                          .reduce((sum, { entry }) => sum + entry.amountCents, 0);
+                        const totalCredits = filteredHistory
+                          .filter(({ entry }) => entry.entryType === "credit")
+                          .reduce((sum, { entry }) => sum + entry.amountCents, 0);
+                        const net = totalCredits - totalDebits;
+                        return (
+                          <tfoot>
+                            <tr className="border-t-2 border-border bg-muted/30 font-semibold text-sm">
+                              <td className="py-2.5 pr-4 text-muted-foreground text-xs" colSpan={2}>
+                                {filteredHistory.length} entr{filteredHistory.length !== 1 ? "ies" : "y"}
+                                {hasDateFilter && ` · ${dateRangeLabel}`}
+                              </td>
+                              <td className="py-2.5 pr-4" colSpan={2}>
+                                <div className="flex items-center gap-4 text-xs">
+                                  <span className="text-muted-foreground">Debits:</span>
+                                  <span className="font-mono text-red-600 dark:text-red-400">{fmt(totalDebits / 100)}</span>
+                                  <span className="text-muted-foreground">Credits:</span>
+                                  <span className="font-mono text-green-600 dark:text-green-400">{fmt(totalCredits / 100)}</span>
+                                </div>
+                              </td>
+                              <td className="py-2.5 text-right font-mono">
+                                <span className={net >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
+                                  {net >= 0 ? "+" : ""}{fmt(net / 100)}
+                                </span>
+                              </td>
+                              <td className="py-2.5 pl-4">
+                                <span className="text-[10px] text-muted-foreground">Net</span>
+                              </td>
+                            </tr>
+                          </tfoot>
+                        );
+                      })()}
                     </table>
                   </div>
                 )}

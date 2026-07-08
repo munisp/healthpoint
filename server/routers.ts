@@ -2053,6 +2053,30 @@ Based on NSA IDR historical data and legal precedent, provide:
         await db.delete(stepNotes).where(eq(stepNotes.id, input.noteId));
         return { success: true };
       }),
+
+    updateNote: protectedProcedure
+      .input(z.object({
+        noteId: z.string(),
+        disputeId: z.string(),
+        note: z.string().min(1).max(2000),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Database unavailable' });
+        // Only allow editing own notes (admins can edit any)
+        const [existing] = await db.select().from(stepNotes).where(eq(stepNotes.id, input.noteId)).limit(1);
+        if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (existing.authorId !== ctx.user.id && ctx.user.role !== 'admin') {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only edit your own notes' });
+        }
+        const [updated] = await db
+          .update(stepNotes)
+          .set({ note: input.note, updatedAt: new Date() })
+          .where(eq(stepNotes.id, input.noteId))
+          .returning();
+        return updated;
+      }),
   }),
 
   // ── Financial Ledger ───────────────────────────────────────────────────────
