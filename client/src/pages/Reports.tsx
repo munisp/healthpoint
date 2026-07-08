@@ -250,7 +250,7 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={320}>
-                <LineChart data={MOCK_OUTCOME_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <LineChart data={reportSummary?.outcomeByMonth?.length ? reportSummary.outcomeByMonth.map((r: { month: string; won: number; lost: number; pending: number }) => ({ month: r.month, winRate: (r.won + r.lost) > 0 ? r.won / (r.won + r.lost) : 0, determinationRate: (r.won + r.lost + r.pending) > 0 ? (r.won + r.lost) / (r.won + r.lost + r.pending) : 0, appealRate: 0 })) : MOCK_OUTCOME_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
@@ -272,7 +272,7 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={MOCK_TIMELINE_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <BarChart data={reportSummary?.avgDaysByStep?.length ? reportSummary.avgDaysByStep.map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 })) : MOCK_TIMELINE_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="step" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
@@ -283,7 +283,7 @@ export default function Reports() {
                 </BarChart>
               </ResponsiveContainer>
               <div className="mt-4 grid grid-cols-3 md:grid-cols-6 gap-3">
-                {MOCK_TIMELINE_DATA.map(row => (
+                {(reportSummary?.avgDaysByStep?.length ? reportSummary.avgDaysByStep.map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 })) : MOCK_TIMELINE_DATA).map(row => (
                   <div key={row.step} className="text-center">
                     <div className={`text-sm font-bold ${row.onTime >= 0.95 ? "text-green-600" : row.onTime >= 0.85 ? "text-amber-600" : "text-red-600"}`}>
                       {Math.round(row.onTime * 100)}%

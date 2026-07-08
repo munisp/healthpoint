@@ -189,15 +189,15 @@
 ## Session 18 — Production-Readiness Audit & 100/100 Fix Sprint
 
 ### Critical Gaps (blocking production)
-- [ ] Security: add helmet (HTTP security headers), cors (CORS policy), express-rate-limit (API rate limiting)
-- [ ] Security: ENV startup validation — throw on missing KEYCLOAK_URL / JWT_SECRET in production
-- [ ] Security: graceful shutdown — SIGTERM/SIGINT handlers to drain connections before exit
+- [x] Security: add helmet (HTTP security headers), cors (CORS policy), express-rate-limit (API rate limiting)
+- [x] Security: ENV startup validation — throw on missing KEYCLOAK_URL / JWT_SECRET in production
+- [x] Security: graceful shutdown — SIGTERM/SIGINT handlers to drain connections before exit
 - [ ] Security: scheduled endpoint auth — deadlineCheck and weeklyDigest handlers need bearer token guard
 
 ### Data-Flow Gaps (orphan routers / pages not wired to tRPC)
-- [ ] StateBalanceBilling page: wire trpc.stateLaws.getStateInfo and trpc.stateLaws.checkCompliance calls
-- [ ] ExpertReview page: wire trpc.expertReview.request and trpc.expertReview.getAnalysis calls
-- [ ] Reports page: wire trpc.reports.summary call for live data instead of static mock data
+- [x] StateBalanceBilling page: wire trpc.stateLaws.getStateInfo and trpc.stateLaws.checkCompliance calls
+- [x] ExpertReview page: wire trpc.expertReview.request and trpc.expertReview.getAnalysis calls
+- [x] Reports page: wire trpc.reports.summary call for live data instead of static mock data
 - [ ] notifications.sendNotification: expose in Admin page or notification composer UI
 - [ ] arbitrators.caseload: wire to IDREntityDashboard or ArbitratorDetail view
 - [ ] disputes.getById: wire to DisputeDetail as a fallback when getTimeline is unavailable
@@ -210,6 +210,6 @@
 - [ ] Mobile: sidebar collapses correctly on small screens (DashboardLayout hamburger menu)
 
 ### Infrastructure Gaps
-- [ ] Health check endpoint: GET /api/health returns {ok, db, version, uptime}
+- [x] Health check endpoint: GET /api/health returns {ok, db, version, uptime}
 - [ ] Request logging: add morgan or pino-http for structured access logs
 - [ ] Error tracking: add global unhandledRejection / uncaughtException handlers

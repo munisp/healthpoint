@@ -27,6 +27,7 @@ import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
 import { eq } from "drizzle-orm";
 import { dispatchNotification } from "./notifications";
+import { users } from "../drizzle/schema";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
 
@@ -537,6 +538,26 @@ export const appRouter = router({
         const notifs = await listNotifications(ctx.user.id, true);
         await Promise.all(notifs.map(n => markNotificationRead(n.id)));
         return { count: notifs.length };
+      }),
+    sendNotification: protectedProcedure
+      .input(z.object({
+        userId: z.string().optional(), // omit to broadcast to all users
+        type: z.enum(["deadline_warning","step_completed","offer_received","determination_issued","document_uploaded","system"]),
+        message: z.string().min(1).max(500),
+        disputeId: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+        if (input.userId) {
+          await createNotification({ userId: input.userId, type: input.type, message: input.message, disputeId: input.disputeId ?? undefined } as any);
+          return { sent: 1 };
+        }
+        // Broadcast: get all users from DB and send to each
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const allUsers = await db.select({ id: users.id }).from(users);
+        await Promise.all(allUsers.map(u => createNotification({ userId: u.id, type: input.type, message: input.message, disputeId: input.disputeId ?? undefined } as any)));
+        return { sent: allUsers.length };
       }),
   }),
 
@@ -1559,7 +1580,35 @@ export const appRouter = router({
           else monthMap[key].open_negotiation++;
         }
         const byMonth = Object.entries(monthMap).map(([month, counts]) => ({ month: month.split(" ")[0], ...counts }));
-        return { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [] };
+        // outcomeByMonth: win/loss/pending per month for outcome trend chart
+        const outcomeMap: Record<string, { month: string; won: number; lost: number; pending: number }> = {};
+        for (const d of filtered) {
+          const dt = d.createdAt ?? new Date();
+          const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`;
+          const label = MONTHS[dt.getMonth()];
+          if (!outcomeMap[key]) outcomeMap[key] = { month: label, won: 0, lost: 0, pending: 0 };
+          if (d.status === "closed") {
+            if (Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0)) outcomeMap[key].won++;
+            else outcomeMap[key].lost++;
+          } else {
+            outcomeMap[key].pending++;
+          }
+        }
+        const outcomeByMonth = Object.values(outcomeMap);
+        // avgDaysByStep: average days spent at each IDR step
+        const IDR_STEPS = ["STEP_1","STEP_2","STEP_3","STEP_4","STEP_5","STEP_6","STEP_7","STEP_8","STEP_9","STEP_10","STEP_11","STEP_12","STEP_13","STEP_14","STEP_15","STEP_16","STEP_17","STEP_18","STEP_19"] as const;
+        const stepDayMap: Record<string, number[]> = {};
+        for (const d of filtered) {
+          const step = d.currentStep ?? "STEP_1";
+          if (!stepDayMap[step]) stepDayMap[step] = [];
+          const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now());
+          stepDayMap[step].push(ms / 86400000);
+        }
+        const avgDaysByStep = IDR_STEPS.slice(0, 10).map(step => ({
+          step: step.replace("STEP_", "Step "),
+          avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a, b) => a + b, 0) / stepDayMap[step].length) : 0,
+        }));
+        return { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
       }),
   }),
 });
