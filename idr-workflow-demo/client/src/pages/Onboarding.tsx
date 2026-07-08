@@ -14,6 +14,7 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -129,8 +130,8 @@ export default function Onboarding() {
     }
   }, [loading, isAuthenticated]);
 
-  // Profile update will be wired once updateProfile procedure is added to the router
-  const updateProfileMutation = null;
+  const saveProfileMutation = trpc.profiles.save.useMutation();
+  const completeOnboardingMutation = trpc.profiles.completeOnboarding.useMutation();
 
   const handleSaveOrg = async () => {
     if (!orgName.trim()) {
@@ -138,12 +139,26 @@ export default function Onboarding() {
       return;
     }
     setSaving(true);
-    // If updateProfile procedure exists, call it; otherwise just advance
-    // Advance to feature tour; updateProfile procedure can be wired later
-    setTimeout(() => { setSaving(false); setStep(2); }, 400);
+    try {
+      await saveProfileMutation.mutateAsync({
+        orgName: orgName.trim(),
+        orgType: orgType || undefined,
+        stakeholderRole: (role as "provider" | "facility" | "payer" | "idr_entity" | "other") || "provider",
+      });
+      setStep(2);
+    } catch {
+      toast.error("Failed to save profile. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleFinish = () => {
+  const handleFinish = async () => {
+    try {
+      await completeOnboardingMutation.mutateAsync();
+    } catch {
+      // non-blocking — proceed even if the mutation fails
+    }
     const config = ROLE_CONFIG[role];
     navigate(config?.redirectTo || "/");
   };

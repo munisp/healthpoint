@@ -36,6 +36,13 @@
       "when": 1783515442798,
       "tag": "0004_charming_rocket_raccoon",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783518731899,
+      "tag": "0005_thin_the_watchers",
+      "breakpoints": true
     }
   ]
 }
