@@ -11,7 +11,8 @@ import { toast } from "sonner";
 import {
   AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock,
   DollarSign, FileText, Gavel, LogOut, Scale, Upload, Users,
-  TrendingUp, CheckCircle, XCircle, RefreshCw, Download, Bell
+  TrendingUp, CheckCircle, XCircle, RefreshCw, Download, Bell,
+  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp
 } from "lucide-react";
 
 const IDR_STEPS = [
@@ -101,6 +102,17 @@ export default function DisputeDetail() {
   const [selectedArbitratorId, setSelectedArbitratorId] = useState("");
   const [selectedArbitratorName, setSelectedArbitratorName] = useState("");
 
+  // AI Summary state
+  const [aiSummary, setAiSummary] = useState<{
+    answer: string;
+    sources?: string[];
+    suggestedActions?: string[];
+    confidence?: string;
+    toolsUsed?: string[];
+    processingTimeSeconds?: number;
+  } | null>(null);
+  const [showAiSummary, setShowAiSummary] = useState(false);
+
   // Advance state
   const [advanceDescription, setAdvanceDescription] = useState("");
   const [determinationBasis, setDeterminationBasis] = useState("");
@@ -166,6 +178,22 @@ export default function DisputeDetail() {
     onSuccess: () => { utils.disputes.getTimeline.invalidate(); setShowArbitratorModal(false); toast.success("IDR entity selected"); },
     onError: (err) => toast.error(err.message),
   });
+
+  const aiSummaryMutation = trpc.ai.askAssistant.useMutation({
+    onSuccess: (data) => {
+      setAiSummary(data as any);
+      setShowAiSummary(true);
+    },
+    onError: (err) => toast.error(`AI summary failed: ${err.message}`),
+  });
+
+  const handleAISummary = () => {
+    if (!dispute) return;
+    aiSummaryMutation.mutate({
+      question: `Provide a concise plain-English summary of this NSA IDR dispute. Include: (1) the current step and what it means, (2) outstanding deadlines, (3) the recommended next action the initiating party should take, and (4) any regulatory risks or compliance concerns.`,
+      disputeId: dispute.id,
+    });
+  };
 
   const uploadDocMutation = trpc.documents.upload.useMutation({
     onSuccess: () => {
@@ -250,6 +278,9 @@ export default function DisputeDetail() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            <Button variant="outline" onClick={handleAISummary} disabled={aiSummaryMutation.isPending} className="flex items-center gap-2 border-violet-300 text-violet-700 hover:bg-violet-50">
+              <Brain size={14} />{aiSummaryMutation.isPending ? "Analysing..." : "AI Summary"}
+            </Button>
             <Button variant="outline" onClick={() => exportPDFMutation.mutate({ disputeId: dispute.id })} disabled={exportPDFMutation.isPending} className="flex items-center gap-2">
               <Download size={14} />{exportPDFMutation.isPending ? "Generating..." : "Export PDF"}
             </Button>
@@ -469,6 +500,78 @@ export default function DisputeDetail() {
                       <div className="font-medium text-slate-700">{dispute.idrEntityName}</div>
                     </div>
                   </>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* AI Dispute Summary Card */}
+            <Card className={`border-violet-200 bg-violet-50 transition-all duration-300 ${showAiSummary ? "" : "opacity-80"}`}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold text-violet-800 flex items-center justify-between">
+                  <span className="flex items-center gap-2"><Brain size={14} className="text-violet-600" />AI Dispute Summary</span>
+                  <div className="flex items-center gap-2">
+                    {aiSummary && (
+                      <button onClick={() => setShowAiSummary(v => !v)} className="text-violet-500 hover:text-violet-700">
+                        {showAiSummary ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      </button>
+                    )}
+                  </div>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {aiSummaryMutation.isPending && (
+                  <div className="flex items-center gap-2 py-4 justify-center">
+                    <div className="animate-spin w-5 h-5 border-2 border-violet-500 border-t-transparent rounded-full" />
+                    <span className="text-xs text-violet-600">IDR Assistant analysing dispute...</span>
+                  </div>
+                )}
+                {!aiSummaryMutation.isPending && !aiSummary && (
+                  <div className="text-center py-4">
+                    <Sparkles size={24} className="text-violet-300 mx-auto mb-2" />
+                    <p className="text-xs text-violet-500 mb-3">Get an AI-generated plain-English summary of the current dispute status, deadlines, and recommended next action.</p>
+                    <Button size="sm" variant="outline" onClick={handleAISummary} className="border-violet-300 text-violet-700 hover:bg-violet-100 text-xs">
+                      <Brain size={12} className="mr-1" />Generate Summary
+                    </Button>
+                  </div>
+                )}
+                {aiSummary && showAiSummary && (
+                  <div className="space-y-3">
+                    <p className="text-xs text-violet-900 leading-relaxed whitespace-pre-wrap">{aiSummary.answer}</p>
+                    {aiSummary.suggestedActions && aiSummary.suggestedActions.length > 0 && (
+                      <div>
+                        <div className="text-xs font-semibold text-violet-700 mb-1 flex items-center gap-1"><CheckCircle size={11} />Suggested Actions</div>
+                        <ul className="space-y-1">
+                          {aiSummary.suggestedActions.map((action, i) => (
+                            <li key={i} className="text-xs text-violet-800 flex items-start gap-1.5">
+                              <span className="text-violet-400 shrink-0 mt-0.5">›</span>{action}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {aiSummary.sources && aiSummary.sources.length > 0 && (
+                      <div>
+                        <div className="text-xs font-semibold text-violet-700 mb-1">Regulatory Sources</div>
+                        <div className="flex flex-wrap gap-1">
+                          {aiSummary.sources.map((src, i) => (
+                            <span key={i} className="text-xs bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded">{src}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between pt-1 border-t border-violet-200">
+                      {aiSummary.confidence && (
+                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                          aiSummary.confidence === "high" ? "bg-green-100 text-green-700" :
+                          aiSummary.confidence === "medium" ? "bg-amber-100 text-amber-700" :
+                          "bg-red-100 text-red-700"
+                        }`}>{aiSummary.confidence} confidence</span>
+                      )}
+                      <button onClick={handleAISummary} disabled={aiSummaryMutation.isPending} className="text-xs text-violet-500 hover:text-violet-700 flex items-center gap-1">
+                        <RefreshCw size={10} />Refresh
+                      </button>
+                    </div>
+                  </div>
                 )}
               </CardContent>
             </Card>

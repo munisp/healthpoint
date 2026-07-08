@@ -270,3 +270,45 @@ export const disputeDrafts = pgTable("dispute_drafts", {
 });
 export type DisputeDraft = typeof disputeDrafts.$inferSelect;
 export type InsertDisputeDraft = typeof disputeDrafts.$inferInsert;
+
+// ─── CMS Submission Drafts ────────────────────────────────────────────────────
+export const cmsDraftStatusEnum = pgEnum("cms_draft_status", ["draft", "submitted", "determined", "withdrawn"]);
+
+export const cmsDrafts = pgTable(
+  "cms_drafts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    createdBy: varchar("createdBy", { length: 64 }).notNull(),
+    status: cmsDraftStatusEnum("status").default("draft").notNull(),
+    // Eligibility result
+    isEligible: boolean("isEligible").notNull(),
+    eligibilityReason: text("eligibilityReason").notNull(),
+    missingRequirements: jsonb("missingRequirements").$type<string[]>().notNull(),
+    warnings: jsonb("warnings").$type<string[]>().notNull(),
+    estimatedDeadline: varchar("estimatedDeadline", { length: 64 }),
+    regulatoryBasis: jsonb("regulatoryBasis").$type<string[]>(),
+    // Draft content
+    formFields: jsonb("formFields").$type<Record<string, string>>().notNull(),
+    attachmentChecklist: jsonb("attachmentChecklist").$type<Array<{ item: string; status: string; required?: boolean }>>().notNull(),
+    submissionNarrative: text("submissionNarrative").notNull(),
+    draftRegulatoryBasis: jsonb("draftRegulatoryBasis").$type<string[]>(),
+    estimatedOutcome: text("estimatedOutcome").notNull(),
+    nextSteps: jsonb("nextSteps").$type<string[]>().notNull(),
+    // Agent metadata
+    additionalContext: text("additionalContext"),
+    processingTimeSeconds: numeric("processingTimeSeconds", { precision: 6, scale: 2 }),
+    agentTrace: jsonb("agentTrace").$type<string[]>(),
+    // Timestamps
+    submittedAt: timestamp("submittedAt"),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [
+    index("cms_drafts_dispute_idx").on(t.disputeId),
+    index("cms_drafts_user_idx").on(t.createdBy),
+    index("cms_drafts_status_idx").on(t.status),
+  ]
+);
+export type CMSDraft = typeof cmsDrafts.$inferSelect;
+export type InsertCMSDraft = typeof cmsDrafts.$inferInsert;

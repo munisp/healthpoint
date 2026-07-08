@@ -12,6 +12,7 @@ import {
   upsertDisputeDraft, getDisputeDraft, deleteDisputeDraft,
   calculateQPA,
   getIDREntityCaseload, listAllIDREntityCaseloads,
+  saveCMSDraft, getCMSDraftByDispute, listCMSDraftsByUser, updateCMSDraftStatus,
 } from "./db";
 import { generateDisputePDF } from "./pdf-export";
 import { dispatchNotification } from "./notifications";
@@ -558,10 +559,31 @@ export const appRouter = router({
         disputeId: z.string(),
         additionalContext: z.string().optional(),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         const dispute = await getDisputeById(input.disputeId);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
-        return aiPost("/cms-submission", {
+
+        const startTime = Date.now();
+        const result = await aiPost<{
+          eligibility: {
+            isEligible: boolean;
+            eligibilityReason: string;
+            missingRequirements: string[];
+            warnings: string[];
+            estimatedDeadline: string | null;
+            regulatoryBasis?: string[];
+          };
+          draft: {
+            formFields: Record<string, string>;
+            attachmentChecklist: Array<{ item: string; status: string; required?: boolean }>;
+            submissionNarrative: string;
+            regulatoryBasis: string[];
+            estimatedOutcome: string;
+            nextSteps: string[];
+          };
+          processingTimeSeconds?: number;
+          agentTrace?: string[];
+        }>("/cms-submission", {
           dispute: {
             referenceNumber: dispute.referenceNumber,
             serviceType: dispute.serviceType,
@@ -584,6 +606,56 @@ export const appRouter = router({
           },
           additionalContext: input.additionalContext,
         });
+
+        // Persist the draft to the database
+        const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
+        const { nanoid } = await import("nanoid");
+        await saveCMSDraft({
+          id: nanoid(),
+          disputeId: input.disputeId,
+          createdBy: ctx.user.id,
+          status: "draft",
+          isEligible: result.eligibility.isEligible,
+          eligibilityReason: result.eligibility.eligibilityReason,
+          missingRequirements: result.eligibility.missingRequirements,
+          warnings: result.eligibility.warnings,
+          estimatedDeadline: result.eligibility.estimatedDeadline ?? null,
+          regulatoryBasis: result.eligibility.regulatoryBasis ?? [],
+          formFields: result.draft.formFields,
+          attachmentChecklist: result.draft.attachmentChecklist,
+          submissionNarrative: result.draft.submissionNarrative,
+          draftRegulatoryBasis: result.draft.regulatoryBasis,
+          estimatedOutcome: result.draft.estimatedOutcome,
+          nextSteps: result.draft.nextSteps,
+          additionalContext: input.additionalContext ?? null,
+          processingTimeSeconds: processingTime,
+          agentTrace: result.agentTrace ?? [],
+        });
+
+        return { ...result, processingTimeSeconds: parseFloat(processingTime) };
+      }),
+
+    // List all CMS drafts for the current user (persisted)
+    listCMSDrafts: protectedProcedure.query(async ({ ctx }) => {
+      return listCMSDraftsByUser(ctx.user.id);
+    }),
+
+    // Get a single CMS draft by dispute ID
+    getCMSDraft: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ input, ctx }) => {
+        return getCMSDraftByDispute(input.disputeId, ctx.user.id);
+      }),
+
+    // Update the status of a CMS draft (draft → submitted → determined)
+    updateDraftStatus: protectedProcedure
+      .input(z.object({
+        draftId: z.string(),
+        status: z.enum(["draft", "submitted", "determined", "withdrawn"]),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        await updateCMSDraftStatus(input.draftId, input.status, ctx.user.id);
+        return { success: true };
       }),
 
     // IDRAssistantAgent — LangGraph ReAct with NSA regulatory tool calling

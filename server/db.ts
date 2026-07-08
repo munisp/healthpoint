@@ -10,6 +10,7 @@ import {
   idrEntities, IDREntity,
   notifications, Notification,
   disputeDrafts, DisputeDraft, InsertDisputeDraft,
+  cmsDrafts, CMSDraft, InsertCMSDraft,
   IDR_STEP, IDRStep, DISPUTE_STATUS, DisputeStatus,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -729,4 +730,72 @@ export async function listAllIDREntityCaseloads(): Promise<IDREntityCaseload[]> 
   const allEntities = await db.select().from(idrEntities).where(eq(idrEntities.isActive, true));
   const results = await Promise.all(allEntities.map(e => getIDREntityCaseload(e.id)));
   return results.filter((r): r is IDREntityCaseload => r !== null);
+}
+
+// ─── CMS Draft helpers ───────────────────────────────────────────────────────────────────
+
+export async function saveCMSDraft(draft: InsertCMSDraft): Promise<CMSDraft> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Upsert: if a draft already exists for this dispute+user, replace it
+  const existing = await db
+    .select({ id: cmsDrafts.id })
+    .from(cmsDrafts)
+    .where(and(eq(cmsDrafts.disputeId, draft.disputeId), eq(cmsDrafts.createdBy, draft.createdBy)))
+    .limit(1);
+
+  if (existing.length > 0) {
+    await db
+      .update(cmsDrafts)
+      .set({
+        ...draft,
+        updatedAt: new Date(),
+      })
+      .where(eq(cmsDrafts.id, existing[0].id));
+    const updated = await db.select().from(cmsDrafts).where(eq(cmsDrafts.id, existing[0].id)).limit(1);
+    return updated[0];
+  }
+
+  await db.insert(cmsDrafts).values(draft);
+  const inserted = await db.select().from(cmsDrafts).where(eq(cmsDrafts.id, draft.id)).limit(1);
+  return inserted[0];
+}
+
+export async function getCMSDraftByDispute(disputeId: string, userId: string): Promise<CMSDraft | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db
+    .select()
+    .from(cmsDrafts)
+    .where(and(eq(cmsDrafts.disputeId, disputeId), eq(cmsDrafts.createdBy, userId)))
+    .limit(1);
+  return result[0];
+}
+
+export async function listCMSDraftsByUser(userId: string): Promise<CMSDraft[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(cmsDrafts)
+    .where(eq(cmsDrafts.createdBy, userId))
+    .orderBy(desc(cmsDrafts.updatedAt));
+}
+
+export async function updateCMSDraftStatus(
+  draftId: string,
+  status: "draft" | "submitted" | "determined" | "withdrawn",
+  userId: string
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(cmsDrafts)
+    .set({
+      status,
+      submittedAt: status === "submitted" ? new Date() : undefined,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(cmsDrafts.id, draftId), eq(cmsDrafts.createdBy, userId)));
 }

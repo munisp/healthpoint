@@ -6,7 +6,7 @@
  * track the state of each submission.
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,8 @@ interface CMSDraft {
   serviceType: string;
   billedAmount: string;
   generatedAt: Date;
+  status?: "draft" | "submitted" | "determined" | "withdrawn";
+  dbId?: string;
   eligibility: {
     isEligible: boolean;
     eligibilityReason: string;
@@ -49,6 +51,7 @@ interface CMSDraft {
 
 export default function CMSSubmissionTracker() {
   const { isAuthenticated } = useAuth();
+  const utils = trpc.useUtils();
   const [drafts, setDrafts] = useState<CMSDraft[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const [generatingId, setGeneratingId] = useState<string | null>(null);
@@ -56,6 +59,59 @@ export default function CMSSubmissionTracker() {
   const [showContextFor, setShowContextFor] = useState<string | null>(null);
 
   const { data: disputesData, isLoading: disputesLoading } = trpc.disputes.list.useQuery({ limit: 100, offset: 0 });
+
+  // Load persisted drafts from the database on mount
+  const { data: persistedDrafts, isLoading: draftsLoading } = trpc.ai.listCMSDrafts.useQuery(undefined, {
+    enabled: isAuthenticated,
+  });
+
+  // Update draft status mutation
+  const updateStatusMutation = trpc.ai.updateDraftStatus.useMutation({
+    onSuccess: () => {
+      utils.ai.listCMSDrafts.invalidate();
+      toast.success("Draft status updated");
+    },
+    onError: (err) => toast.error(`Status update failed: ${err.message}`),
+  });
+
+  // Merge persisted drafts with local state on load
+  useEffect(() => {
+    if (!persistedDrafts || !disputesData?.items) return;
+    const merged: CMSDraft[] = persistedDrafts.map((pd: any) => {
+      const dispute = (disputesData.items as any[]).find((d: any) => d.id === pd.disputeId);
+      return {
+        disputeId: pd.disputeId,
+        disputeRef: dispute?.referenceNumber ?? pd.disputeId,
+        serviceType: dispute?.serviceType ?? "Unknown",
+        billedAmount: dispute?.billedAmount ?? "N/A",
+        generatedAt: pd.updatedAt ? new Date(pd.updatedAt) : new Date(pd.createdAt),
+        status: pd.status,
+        dbId: pd.id,
+        eligibility: {
+          isEligible: pd.isEligible,
+          eligibilityReason: pd.eligibilityReason,
+          missingRequirements: pd.missingRequirements ?? [],
+          warnings: pd.warnings ?? [],
+          estimatedDeadline: pd.estimatedDeadline ?? null,
+          regulatoryBasis: pd.regulatoryBasis ?? [],
+        },
+        draft: {
+          formFields: pd.formFields ?? {},
+          attachmentChecklist: pd.attachmentChecklist ?? [],
+          submissionNarrative: pd.submissionNarrative ?? "",
+          regulatoryBasis: pd.draftRegulatoryBasis ?? [],
+          estimatedOutcome: pd.estimatedOutcome ?? "",
+          nextSteps: pd.nextSteps ?? [],
+        },
+        processingTimeSeconds: pd.processingTimeSeconds ? parseFloat(pd.processingTimeSeconds) : undefined,
+      } as CMSDraft;
+    });
+    setDrafts(merged);
+    if (merged.length > 0 && !selectedDraftId) {
+      setSelectedDraftId(merged[0].disputeId);
+    }
+  }, [persistedDrafts, disputesData]);
+
   const cmsMutation = trpc.ai.generateCMSSubmission.useMutation({
     onSuccess: (data: any, variables) => {
       const dispute = (disputesData?.items || []).find((d: any) => d.id === variables.disputeId) as any;
@@ -65,6 +121,7 @@ export default function CMSSubmissionTracker() {
         serviceType: dispute?.serviceType ?? "Unknown",
         billedAmount: dispute?.billedAmount ?? "N/A",
         generatedAt: new Date(),
+        status: "draft",
         eligibility: data.eligibility,
         draft: data.draft,
         processingTimeSeconds: data.processingTimeSeconds,
@@ -76,7 +133,8 @@ export default function CMSSubmissionTracker() {
       setSelectedDraftId(variables.disputeId);
       setGeneratingId(null);
       setShowContextFor(null);
-      toast.success(`CMS draft generated for ${newDraft.disputeRef}`);
+      utils.ai.listCMSDrafts.invalidate(); // refresh persisted list
+      toast.success(`CMS draft generated and saved for ${newDraft.disputeRef}`);
     },
     onError: (err) => {
       setGeneratingId(null);
@@ -282,6 +340,16 @@ export default function CMSSubmissionTracker() {
                         <Badge variant="outline" className={`text-xs ${selectedDraft.eligibility.isEligible ? "text-green-600 border-green-300 bg-green-50" : "text-red-600 border-red-300 bg-red-50"}`}>
                           {selectedDraft.eligibility.isEligible ? "IDR Eligible" : "Eligibility Issues"}
                         </Badge>
+                        {selectedDraft.status && (
+                          <Badge variant="outline" className={`text-xs ${
+                            selectedDraft.status === "submitted" ? "text-blue-600 border-blue-300 bg-blue-50" :
+                            selectedDraft.status === "determined" ? "text-teal-600 border-teal-300 bg-teal-50" :
+                            selectedDraft.status === "withdrawn" ? "text-gray-500 border-gray-300" :
+                            "text-amber-600 border-amber-300 bg-amber-50"
+                          }`}>
+                            {selectedDraft.status}
+                          </Badge>
+                        )}
                         {(selectedDraft.eligibility.regulatoryBasis || []).slice(0, 2).map((r) => (
                           <Badge key={r} variant="secondary" className="text-xs">{r}</Badge>
                         ))}
@@ -405,14 +473,38 @@ export default function CMSSubmissionTracker() {
                         </li>
                       ))}
                     </ol>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full"
-                      onClick={() => window.open("https://nsa-idr.cms.gov", "_blank")}
-                    >
-                      <ExternalLink size={12} className="mr-2" />Submit on CMS IDR Portal
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => window.open("https://nsa-idr.cms.gov", "_blank")}
+                      >
+                        <ExternalLink size={12} className="mr-2" />CMS IDR Portal
+                      </Button>
+                      {selectedDraft.dbId && selectedDraft.status === "draft" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 border-blue-300 text-blue-700 hover:bg-blue-50"
+                          disabled={updateStatusMutation.isPending}
+                          onClick={() => updateStatusMutation.mutate({ draftId: selectedDraft.dbId!, status: "submitted" })}
+                        >
+                          Mark Submitted
+                        </Button>
+                      )}
+                      {selectedDraft.dbId && selectedDraft.status === "submitted" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 border-teal-300 text-teal-700 hover:bg-teal-50"
+                          disabled={updateStatusMutation.isPending}
+                          onClick={() => updateStatusMutation.mutate({ draftId: selectedDraft.dbId!, status: "determined" })}
+                        >
+                          Mark Determined
+                        </Button>
+                      )}
+                    </div>
                   </CardContent>
                 </Card>
               </div>

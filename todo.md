@@ -61,3 +61,9 @@
 - [x] AI Assistant React page (/ai-assistant) with chat UI, document analysis panel, CMS submission generator
 - [x] Stakeholder upload portal — document drag-and-drop with AI analysis on upload
 - [x] CMS submission tracker — status board showing submission drafts and eligibility results
+
+## Session 5 — Suggested Next Steps
+- [x] cms_drafts DB table — schema, migration, and DB helpers (save/load/list)
+- [x] Persist CMS drafts via tRPC — save on generate, load on tracker mount, list all drafts
+- [x] AI_SERVICE_URL secret — defaults to http://localhost:8000, configurable via env var
+- [x] AI dispute summary card — IDRAssistantAgent one-click summary on DisputeDetail page with confidence badge, sources, suggested actions, refresh button
