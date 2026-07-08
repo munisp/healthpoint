@@ -1,0 +1,249 @@
+import { useAuth } from "@/_core/hooks/useAuth";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { APP_LOGO, APP_TITLE, getLoginUrl } from "@/const";
+import { trpc } from "@/lib/trpc";
+import {
+  AlertTriangle, Bell, CheckCircle2, Clock, FileText,
+  Gavel, LogOut, Plus, Scale, TrendingUp
+} from "lucide-react";
+import { useLocation } from "wouter";
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    open_negotiation: "bg-blue-100 text-blue-700",
+    idr_initiated: "bg-purple-100 text-purple-700",
+    idr_entity_selection: "bg-indigo-100 text-indigo-700",
+    eligibility_review: "bg-amber-100 text-amber-700",
+    offer_submission: "bg-orange-100 text-orange-700",
+    under_arbitration: "bg-red-100 text-red-700",
+    determination_issued: "bg-teal-100 text-teal-700",
+    payment_pending: "bg-yellow-100 text-yellow-700",
+    closed: "bg-green-100 text-green-700",
+    appealed: "bg-rose-100 text-rose-700",
+    ineligible: "bg-slate-100 text-slate-600",
+  };
+  const label = status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${map[status] ?? "bg-slate-100 text-slate-600"}`}>{label}</span>;
+}
+
+export default function Dashboard() {
+  const [, navigate] = useLocation();
+  const { user, isAuthenticated, logout, loading: authLoading } = useAuth();
+  const { data: stats, isLoading } = trpc.dashboard.stats.useQuery(undefined, { enabled: isAuthenticated });
+  const { data: notifications } = trpc.notifications.list.useQuery({ unreadOnly: true }, { enabled: isAuthenticated });
+  const markReadMutation = trpc.notifications.markAllRead.useMutation();
+  const utils = trpc.useUtils();
+
+  if (authLoading) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+    </div>
+  );
+
+  if (!isAuthenticated) return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
+      <Scale size={48} className="text-blue-600" />
+      <h1 className="text-2xl font-bold text-slate-800">NSA IDR Workflow Platform</h1>
+      <p className="text-slate-500">Sign in to manage your IDR disputes</p>
+      <Button size="lg" onClick={() => (window.location.href = getLoginUrl())}>Sign In</Button>
+    </div>
+  );
+
+  const kpis = [
+    { title: "Total Disputes", value: stats?.total ?? 0, icon: FileText, color: "bg-blue-500", change: null },
+    { title: "Open Negotiation", value: stats?.openNegotiation ?? 0, icon: Clock, color: "bg-amber-500", change: null },
+    { title: "In IDR Process", value: stats?.inIDR ?? 0, icon: Gavel, color: "bg-purple-500", change: null },
+    { title: "Closed This Month", value: stats?.closedThisMonth ?? 0, icon: CheckCircle2, color: "bg-green-500", change: null },
+    { title: "Overdue", value: stats?.overdue ?? 0, icon: AlertTriangle, color: "bg-red-500", change: null },
+    { title: "Unread Alerts", value: stats?.unreadNotifications ?? 0, icon: Bell, color: "bg-indigo-500", change: null },
+  ];
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
+        <div className="flex items-center gap-3">
+          <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
+          <span className="text-lg font-bold text-slate-800">{APP_TITLE}</span>
+          <span className="hidden sm:block text-slate-400 text-sm">|</span>
+          <span className="hidden sm:block text-slate-500 text-sm">NSA/IDR Workflow</span>
+        </div>
+        <nav className="flex items-center gap-4">
+          <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600 font-medium">Disputes</button>
+          <button onClick={() => navigate("/idr-entities")} className="text-sm text-slate-600 hover:text-blue-600 font-medium">IDR Entities</button>
+          <button onClick={() => navigate("/disputes/new")} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
+            <Plus size={14} />New Dispute
+          </button>
+          <div className="relative">
+            <Bell size={18} className="text-slate-500 cursor-pointer hover:text-blue-600" />
+            {(stats?.unreadNotifications ?? 0) > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
+                {stats!.unreadNotifications}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-slate-600">{user?.name}</span>
+            <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
+          </div>
+        </nav>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+        {/* Page title */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
+            <p className="text-sm text-slate-500 mt-0.5">NSA No Surprises Act — Federal IDR Process Overview</p>
+          </div>
+          <Button onClick={() => navigate("/disputes/new")} className="flex items-center gap-2">
+            <Plus size={16} />Initiate IDR Dispute
+          </Button>
+        </div>
+
+        {/* KPI Cards */}
+        {isLoading ? (
+          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="bg-white rounded-xl border border-slate-200 p-5 animate-pulse">
+                <div className="w-10 h-10 bg-slate-200 rounded-lg mb-3" />
+                <div className="h-7 w-16 bg-slate-200 rounded mb-1" />
+                <div className="h-4 w-24 bg-slate-100 rounded" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+            {kpis.map(kpi => (
+              <Card key={kpi.title} className="border-slate-200 hover:shadow-md transition-shadow">
+                <CardContent className="p-5">
+                  <div className={`p-2.5 rounded-lg ${kpi.color} w-fit mb-3`}>
+                    <kpi.icon size={18} className="text-white" />
+                  </div>
+                  <div className="text-2xl font-bold text-slate-800 mb-0.5">{kpi.value.toLocaleString()}</div>
+                  <div className="text-xs font-medium text-slate-500">{kpi.title}</div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Recent Disputes */}
+          <div className="lg:col-span-2">
+            <Card className="border-slate-200">
+              <CardHeader className="flex flex-row items-center justify-between pb-3">
+                <CardTitle className="text-base font-semibold text-slate-800">Recent Disputes</CardTitle>
+                <button onClick={() => navigate("/disputes")} className="text-sm text-blue-600 hover:text-blue-700 font-medium">View all →</button>
+              </CardHeader>
+              <CardContent className="p-0">
+                {isLoading ? (
+                  <div className="p-6 space-y-3">
+                    {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-12 bg-slate-100 rounded animate-pulse" />)}
+                  </div>
+                ) : !stats?.recentDisputes?.length ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                    <Scale size={32} className="mb-2 opacity-30" />
+                    <p className="text-sm">No disputes yet</p>
+                    <button onClick={() => navigate("/disputes/new")} className="mt-2 text-sm text-blue-600 hover:text-blue-700">Initiate your first dispute →</button>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {stats.recentDisputes.map((d: any) => (
+                      <div key={d.id} className="flex items-center justify-between px-5 py-3 hover:bg-slate-50 cursor-pointer" onClick={() => navigate(`/disputes/${d.id}`)}>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-slate-800">{d.referenceNumber}</span>
+                            <StatusBadge status={d.status} />
+                          </div>
+                          <div className="text-xs text-slate-500 mt-0.5 truncate">
+                            {d.initiatingPartyName} vs {d.respondingPartyName ?? "TBD"} · {d.serviceType?.replace(/_/g, " ")}
+                          </div>
+                        </div>
+                        <div className="text-right ml-4">
+                          <div className="text-sm font-semibold text-slate-700">${Number(d.billedAmount).toLocaleString()}</div>
+                          <div className="text-xs text-slate-400">{new Date(d.createdAt).toLocaleDateString()}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Notifications Panel */}
+          <div>
+            <Card className="border-slate-200">
+              <CardHeader className="flex flex-row items-center justify-between pb-3">
+                <CardTitle className="text-base font-semibold text-slate-800">
+                  Deadline Alerts
+                  {(notifications?.length ?? 0) > 0 && (
+                    <Badge variant="destructive" className="ml-2 text-xs">{notifications!.length}</Badge>
+                  )}
+                </CardTitle>
+                {(notifications?.length ?? 0) > 0 && (
+                  <button onClick={async () => { await markReadMutation.mutateAsync(); utils.notifications.list.invalidate(); }}
+                    className="text-xs text-slate-500 hover:text-blue-600">Mark all read</button>
+                )}
+              </CardHeader>
+              <CardContent className="p-0">
+                {!notifications?.length ? (
+                  <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                    <CheckCircle2 size={28} className="mb-2 opacity-30" />
+                    <p className="text-sm">No pending alerts</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
+                    {notifications.map(n => (
+                      <div key={n.id} className="px-4 py-3 hover:bg-slate-50">
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle size={14} className="text-amber-500 mt-0.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-slate-700 truncate">{n.title}</p>
+                            <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{n.message}</p>
+                            {n.dueDate && <p className="text-xs text-red-500 mt-0.5 font-medium">Due: {new Date(n.dueDate).toLocaleDateString()}</p>}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* NSA Process Quick Reference */}
+            <Card className="border-slate-200 mt-4">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <TrendingUp size={14} className="text-blue-500" />NSA IDR Timeline
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-4 pt-0 space-y-2">
+                {[
+                  { label: "Open Negotiation", days: "30 business days", color: "bg-blue-500" },
+                  { label: "IDR Initiation", days: "4 business days", color: "bg-purple-500" },
+                  { label: "Entity Selection", days: "4 business days", color: "bg-indigo-500" },
+                  { label: "Eligibility Review", days: "3 business days", color: "bg-amber-500" },
+                  { label: "Offer Submission", days: "10 business days", color: "bg-orange-500" },
+                  { label: "Determination", days: "30 business days", color: "bg-red-500" },
+                  { label: "Payment Due", days: "30 calendar days", color: "bg-green-500" },
+                ].map(item => (
+                  <div key={item.label} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${item.color}`} />
+                      <span className="text-slate-600">{item.label}</span>
+                    </div>
+                    <span className="text-slate-400 font-medium">{item.days}</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}

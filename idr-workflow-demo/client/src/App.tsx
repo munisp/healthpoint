@@ -1,0 +1,52 @@
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import NotFound from "@/pages/NotFound";
+import { Route, Switch } from "wouter";
+import ErrorBoundary from "./components/ErrorBoundary";
+import { ThemeProvider } from "./contexts/ThemeContext";
+import Home from "./pages/Home";
+import IDREntityDashboard from "@/pages/IDREntityDashboard";
+import Notifications from "@/pages/Notifications";
+import Admin from "@/pages/Admin";
+import Dashboard from "./pages/Dashboard";
+import DisputesList from "./pages/DisputesList";
+import DisputeDetail from "./pages/DisputeDetail";
+import NewDispute from "./pages/NewDispute";
+import AIAssistant from "./pages/AIAssistant";
+import StakeholderUpload from "./pages/StakeholderUpload";
+import CMSSubmissionTracker from "./pages/CMSSubmissionTracker";
+
+function Router() {
+  return (
+    <Switch>
+      <Route path={"/"} component={Home} />
+      <Route path={"/dashboard"} component={Dashboard} />
+      <Route path={"/disputes"} component={DisputesList} />
+      <Route path={"/disputes/new"} component={NewDispute} />
+      <Route path={"/disputes/:id"} component={DisputeDetail} />
+      <Route path="/idr-entities" component={IDREntityDashboard} />
+      <Route path="/notifications" component={Notifications} />
+      <Route path="/admin" component={Admin} />
+      <Route path="/ai-assistant" component={AIAssistant} />
+      <Route path="/stakeholder-upload" component={StakeholderUpload} />
+      <Route path="/cms-tracker" component={CMSSubmissionTracker} />
+      <Route path={"/404"} component={NotFound} />
+      <Route component={NotFound} />
+    </Switch>
+  );
+}
+
+function App() {
+  return (
+    <ErrorBoundary>
+      <ThemeProvider defaultTheme="light">
+        <TooltipProvider>
+          <Toaster />
+          <Router />
+        </TooltipProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
+  );
+}
+
+export default App;
