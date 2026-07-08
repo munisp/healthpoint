@@ -255,3 +255,40 @@
 - [x] Command palette (Cmd+K) — built into DashboardLayout header, fuzzy search all pages
 - [x] Dark mode toggle — Sun/Moon button in header, persists to localStorage
 - [x] TypeScript: 0 errors | Tests: 40/40 passing
+
+### Session 22 — Middleware Implementation Sequence
+
+#### Phase 1 — Foundation
+- [ ] Migrate Drizzle schema from mysql2 to postgres-js driver (pgTable, pgEnum, integer)
+- [ ] Run pnpm db:push after schema migration
+- [ ] Add Redis client helper (server/redis.ts) — distributed locking, session cache, pub/sub
+- [ ] Add Redlock distributed lock wrapper for dispute state transitions
+- [ ] Upgrade JWT verification to support Keycloak-compatible JWKS (configurable issuer/JWKS URI)
+
+#### Phase 2 — Security and Gateway
+- [ ] Add Express rate-limiting middleware (express-rate-limit) per route/user
+- [ ] Add WAF-style request validation middleware (input size limits, injection pattern detection)
+- [ ] Implement Permify-style ReBAC authorization layer (server/authz.ts) — dispute ownership checks
+- [ ] Wire authz checks into all dispute/document tRPC procedures
+
+#### Phase 3 — Event Backbone and Workflow
+- [ ] Add event bus abstraction (server/events/bus.ts) — in-process EventEmitter with Kafka-ready interface
+- [ ] Publish dispute state change events from all dispute mutation procedures
+- [ ] Add event consumers: audit_log writer, webhook dispatcher, outcome prediction trigger
+- [ ] Implement IDR workflow state machine (server/workflow/idr-workflow.ts) — all 19 steps with transitions, guards, and statutory deadline timers
+- [ ] Add workflow timer service — tracks deadlines, auto-advances or auto-closes expired disputes
+- [ ] Add WorkflowStatus UI component — visual 19-step progress tracker with deadline countdown
+
+#### Phase 4 — Financial Ledger
+- [ ] Add double-entry ledger schema (ledger_accounts, ledger_entries tables)
+- [ ] Add ledger service (server/ledger.ts) — createAccount, recordEntry, getBalance, getHistory
+- [ ] Auto-create ledger accounts on dispute creation (billed, allowed, paid, determination)
+- [ ] Record ledger entries on offer submission and determination issuance
+- [ ] Add LedgerView UI component — dispute financial timeline with double-entry table
+
+#### Phase 5 — Analytics and Search
+- [ ] Add full-text search service (server/search.ts) — Fuse.js with OpenSearch-ready interface
+- [ ] Index disputes, documents, audit entries for full-text search
+- [ ] Add global search tRPC procedure (search.query)
+- [ ] Add Lakehouse export tRPC procedure (lakehouse.export) — generates NDJSON snapshots of all tables
+- [ ] Add DataExport UI page — schedule and download Lakehouse-ready exports

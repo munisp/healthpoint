@@ -57,6 +57,13 @@
       "when": 1783526274844,
       "tag": "0007_keen_paper_doll",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783535295192,
+      "tag": "0008_cheerful_apocalypse",
+      "breakpoints": true
     }
   ]
 }

@@ -46,6 +46,8 @@ import {
   Command,
   Activity,
   Webhook,
+  Search,
+  ArrowDownToLine,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useTheme } from "../contexts/ThemeContext";
@@ -71,6 +73,9 @@ const menuItems = [
   { icon: Activity, label: "Audit Trail", path: "/audit-trail" },
   { icon: Building2, label: "Payer Intel", path: "/payer-intelligence" },
   { icon: Webhook, label: "Webhooks", path: "/webhooks" },
+  { icon: BookOpen, label: "Fin. Ledger", path: "/ledger" },
+  { icon: Search, label: "Global Search", path: "/search" },
+  { icon: ArrowDownToLine, label: "Lakehouse", path: "/lakehouse" },
 ];
 
 const SIDEBAR_WIDTH_KEY = 'sidebar-width';
@@ -391,6 +396,12 @@ function CommandPaletteButton() {
     { label: 'Templates', path: '/templates', icon: BookTemplate },
     { label: 'Admin', path: '/admin', icon: ShieldCheck },
     { label: 'Leads CRM', path: '/admin/leads', icon: UserRoundSearch },
+    { label: 'Financial Ledger', path: '/ledger', icon: BookOpen },
+    { label: 'Global Search', path: '/search', icon: Search },
+    { label: 'Lakehouse Export', path: '/lakehouse', icon: ArrowDownToLine },
+    { label: 'Audit Trail', path: '/audit-trail', icon: Activity },
+    { label: 'Payer Intelligence', path: '/payer-intelligence', icon: Building2 },
+    { label: 'Webhooks', path: '/webhooks', icon: Webhook },
   ];
 
   const filtered = query
