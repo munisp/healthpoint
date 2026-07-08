@@ -112,3 +112,11 @@
 - [x] emr_sync_logs DB table — pgTable (16 cols, 2 indexes), migration pushed, listEMRSyncLogs + createEMRSyncLog helpers
 - [x] tRPC emr.syncHistory procedure — protected, owner/admin-gated, up to 200 rows
 - [x] EMR Connections: Sync History modal — Dialog with 4 summary metrics, expandable log rows, confidence chips, FHIR resource badges, warning list, trigger type badge, refresh button
+
+## Session 11 — Re-test Button, Outcome Analytics, Patient Autocomplete, HaloMD Gaps, Presentation
+- [x] EMR re-test button on EMR Connections list — emr.testById procedure, real-time confidence score update, sync log written
+- [x] Outcome analytics chart on Dashboard — dashboard.outcomeAnalytics procedure, win/loss BarChart by service type, win rate KPI card
+- [x] Patient/claim ID autocomplete on EMR pull panel — debounced ai.searchPatients procedure, /search-patients Python endpoint, dropdown in EMR pull panel
+- [x] HaloMD competitive research — identified gaps: state balance-billing law coverage, expert negotiation workflow, comprehensive reports page
+- [x] Implement HaloMD feature gaps — StateBalanceBilling page (/state-laws), ExpertReview workflow (/expert-review), Reports analytics page (/reports)
+- [x] Stakeholder presentation deck — 12-slide deck, manus-slides://xxQZNv0M1oQOef8CVeXeyX

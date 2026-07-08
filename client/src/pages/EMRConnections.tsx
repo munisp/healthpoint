@@ -260,8 +260,26 @@ export default function EMRConnections() {
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
   const [historyConn, setHistoryConn] = useState<{ id: string; name: string } | null>(null);
+  const [retestingId, setRetestingId] = useState<string | null>(null);
 
   const { data: connections, isLoading } = trpc.emr.list.useQuery();
+
+  const retest = trpc.emr.testById.useMutation({
+    onSuccess: (result, vars) => {
+      setRetestingId(null);
+      utils.emr.list.invalidate();
+      utils.emr.syncHistory.invalidate({ connectionId: vars.connectionId });
+      if (result.success) {
+        toast.success(`Re-test passed — confidence ${Math.round((result.confidence ?? 0) * 100)}%`);
+      } else {
+        toast.warning("Re-test completed with warnings. Check sync history.");
+      }
+    },
+    onError: (err: { message: string }) => {
+      setRetestingId(null);
+      toast.error(`Re-test failed: ${err.message}`);
+    },
+  });
 
   const deactivate = trpc.emr.deactivate.useMutation({
     onSuccess: () => {
@@ -347,6 +365,19 @@ export default function EMRConnections() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      {/* Re-test button */}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setRetestingId(conn.id);
+                          retest.mutate({ connectionId: conn.id });
+                        }}
+                        disabled={retestingId === conn.id}
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 mr-1 ${retestingId === conn.id ? "animate-spin" : ""}`} />
+                        {retestingId === conn.id ? "Testing…" : "Re-test"}
+                      </Button>
                       {/* Sync History button */}
                       <Button
                         variant="outline"

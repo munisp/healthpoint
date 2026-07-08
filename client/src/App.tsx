@@ -17,6 +17,9 @@ import StakeholderUpload from "./pages/StakeholderUpload";
 import CMSSubmissionTracker from "./pages/CMSSubmissionTracker";
 import EMRConnections from "./pages/EMRConnections";
 import EMROnboarding from "./pages/EMROnboarding";
+import StateBalanceBilling from "./pages/StateBalanceBilling";
+import ExpertReview from "./pages/ExpertReview";
+import Reports from "./pages/Reports";
 
 function Router() {
   return (
@@ -34,6 +37,9 @@ function Router() {
       <Route path="/cms-tracker" component={CMSSubmissionTracker} />
       <Route path="/emr-connections" component={EMRConnections} />
       <Route path="/emr-onboarding" component={EMROnboarding} />
+      <Route path="/state-laws" component={StateBalanceBilling} />
+      <Route path="/expert-review" component={ExpertReview} />
+      <Route path="/reports" component={Reports} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>

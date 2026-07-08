@@ -28,6 +28,9 @@ import {
   Upload,
   ClipboardList,
   Database,
+  BookOpen,
+  UserCheck,
+  BarChart2,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -42,6 +45,9 @@ const menuItems = [
   { icon: Upload, label: "Stakeholder Upload", path: "/stakeholder-upload" },
   { icon: ClipboardList, label: "CMS Tracker", path: "/cms-tracker" },
   { icon: Database, label: "EMR Connections", path: "/emr-connections" },
+  { icon: BookOpen, label: "State Laws", path: "/state-laws" },
+  { icon: UserCheck, label: "Expert Review", path: "/expert-review" },
+  { icon: BarChart2, label: "Reports", path: "/reports" },
   { icon: ShieldCheck, label: "Admin", path: "/admin" },
 ];
 
