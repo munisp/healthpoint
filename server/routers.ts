@@ -1,8 +1,9 @@
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
-import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { ENV } from "./_core/env";
+
 import {
   createDispute, getDisputeById, listDisputes, advanceDisputeStep,
   submitOffer, addDocument, listIDREntities, seedIDREntities,
@@ -13,6 +14,14 @@ import {
   getIDREntityCaseload, listAllIDREntityCaseloads,
 } from "./db";
 import { IDR_STEP, DISPUTE_STATUS, SERVICE_TYPE, PARTY_TYPE } from "../drizzle/schema";
+
+// Admin-only middleware
+const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if (ctx.user.role !== "admin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
+  }
+  return next({ ctx });
+});
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
 
@@ -337,6 +346,73 @@ export const appRouter = router({
         return { count: notifs.length };
       }),
   }),
+
+  // ─── Document upload ──────────────────────────────────────────────────────────
+  documents: router({
+    upload: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        fileName: z.string().min(1),
+        fileType: z.string().min(1),
+        documentType: z.enum([
+          "qpa_documentation", "eob", "contract", "medical_records",
+          "cost_sharing_info", "prior_authorization", "other",
+        ]),
+        fileSize: z.number().min(1),
+        storageKey: z.string().min(1),
+        storageUrl: z.string().url(),
+        description: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        return addDocument({
+          disputeId: input.disputeId,
+          uploadedBy: ctx.user.id,
+          fileName: input.fileName,
+          mimeType: input.fileType,
+          documentType: input.documentType,
+          fileSize: input.fileSize,
+          s3Key: input.storageKey,
+          description: input.description ?? null,
+        });
+      }),
+    list: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ input }) => {
+        const db = await (await import("./db")).getDb();
+        if (!db) return [];
+        const { disputeDocuments } = await import("../drizzle/schema");
+        const { eq, desc } = await import("drizzle-orm");
+        return db.select().from(disputeDocuments)
+          .where(eq(disputeDocuments.disputeId, input.disputeId))
+          .orderBy(desc(disputeDocuments.uploadedAt));
+      }),
+  }),
+
+  // ─── Admin ────────────────────────────────────────────────────────────────────
+  admin: router({
+    allDisputes: adminProcedure
+      .input(z.object({
+        page: z.number().min(1).default(1),
+        pageSize: z.number().min(1).max(100).default(25),
+        status: z.string().optional(),
+        search: z.string().optional(),
+      }))
+      .query(async ({ input }) => {
+        const limit = input.pageSize;
+        const offset = (input.page - 1) * input.pageSize;
+        return listDisputes({
+          status: input.status as any,
+          search: input.search,
+          limit,
+          offset,
+        });
+      }),
+
+    stats: adminProcedure.query(async () => {
+      return getDashboardStats(undefined);
+    }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;
+

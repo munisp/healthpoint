@@ -16,7 +16,7 @@
 - [x] disputes.advance — advance to next workflow step
 - [x] disputes.submitOffer — submit QPA/counter-offer
 - [x] disputes.selectArbitrator — assign certified IDR entity
-- [ ] disputes.uploadDocument — attach supporting evidence
+- [x] disputes.uploadDocument — attach supporting evidence
 - [x] dashboard.stats — KPI summary for dashboard
 - [x] arbitrators.list — list certified IDR entities
 - [x] notifications.list — get pending deadline alerts
@@ -30,12 +30,12 @@
 - [x] New Dispute (/disputes/new) — 5-step form wizard to initiate IDR
 - [x] Offer Submission modal — QPA/party offer entry with type selection
 - [x] Arbitrator Selection modal — certified IDR entity picker with stats
-- [ ] Document Upload modal — evidence attachment
-- [ ] Notifications panel — dedicated notifications page
-- [ ] Admin view (/admin) — all disputes across all parties
+- [x] Document Upload modal — evidence attachment (documents.upload + documents.list routers)
+- [x] Notifications panel — dedicated notifications page (/notifications)
+- [x] Admin view (/admin) — all disputes across all parties
 
 ## Infrastructure
 - [x] DB migration pushed (pnpm db:push)
 - [x] Vitest tests: 17 passing (business days, reference numbers, step sequence, status transitions, financial validation)
 - [x] TypeScript: 0 errors
-- [ ] Checkpoint saved
+- [x] Checkpoint saved

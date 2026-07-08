@@ -226,7 +226,7 @@ export async function advanceDisputeStep(
   return updated[0];
 }
 
-export async function getDashboardStats(userId: string) {
+export async function getDashboardStats(userId: string | undefined) {
   const db = await getDb();
   if (!db) return null;
   const now = new Date();
@@ -254,8 +254,11 @@ export async function getDashboardStats(userId: string) {
     db.select().from(disputes).orderBy(desc(disputes.createdAt)).limit(5),
   ]);
   // Unread notifications
-  const notifResult = await db.select({ count: count() }).from(notifications)
-    .where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
+  const notifResult = userId
+    ? await db.select({ count: count() }).from(notifications)
+        .where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)))
+    : await db.select({ count: count() }).from(notifications)
+        .where(eq(notifications.isRead, false));
   return {
     total: totalResult[0]?.count ?? 0,
     openNegotiation: openResult[0]?.count ?? 0,
