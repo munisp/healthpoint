@@ -119,6 +119,11 @@ export default function DisputeDetail() {
 
   // Queries
   const { data: timelineData, isLoading } = trpc.disputes.getTimeline.useQuery({ disputeId: id! });
+  // Fallback: load basic dispute data when getTimeline returns nothing (e.g. newly created dispute)
+  const { data: basicDispute } = trpc.disputes.getById.useQuery(
+    { id: id! },
+    { enabled: !!id && !isLoading && !timelineData }
+  );
   const { data: documentList, refetch: refetchDocs } = trpc.documents.list.useQuery(
     { disputeId: id! },
     { enabled: !!id }
@@ -212,7 +217,7 @@ export default function DisputeDetail() {
     </div>
   );
 
-  if (!timelineData) return (
+  if (!timelineData && !basicDispute) return (
     <div className="min-h-screen flex items-center justify-center">
       <div className="text-center">
         <AlertTriangle size={40} className="text-red-500 mx-auto mb-3" />
@@ -222,7 +227,10 @@ export default function DisputeDetail() {
     </div>
   );
 
-  const { dispute, timeline } = timelineData;
+  // Use full timeline data if available, fall back to basic dispute data
+  const dispute = timelineData?.dispute ?? basicDispute!;
+  const timeline = timelineData?.timeline ?? [];
+  const { dispute: _d, timeline: _t, ...timelineRest } = timelineData ?? {}; // keep offers etc.
   const offers = (timelineData as any).offers ?? [];
   const nextStep = NEXT_STEP_MAP[dispute.currentStep];
   const currentStepIndex = IDR_STEPS.findIndex(s => s.key === dispute.currentStep);

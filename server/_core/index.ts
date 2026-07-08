@@ -5,6 +5,7 @@ import net from "net";
 import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import morgan from "morgan";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerKeycloakRoutes } from "./keycloak";
 import { appRouter } from "../routers";
@@ -133,6 +134,10 @@ async function startServer() {
       skip: () => !ENV.isProduction,
     })
   );
+
+  // ── Request logging (morgan) ──────────────────────────────────────────────
+  // Use 'combined' format in production for full Apache-style logs, 'dev' in development
+  app.use(morgan(ENV.isProduction ? "combined" : "dev"));
 
   // ── Body parsers ──────────────────────────────────────────────────────────
   app.use(express.json({ limit: "50mb" }));
