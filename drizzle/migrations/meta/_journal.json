@@ -71,6 +71,13 @@
       "when": 1783541043219,
       "tag": "0009_woozy_sway",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783542524088,
+      "tag": "0010_smart_multiple_man",
+      "breakpoints": true
     }
   ]
 }

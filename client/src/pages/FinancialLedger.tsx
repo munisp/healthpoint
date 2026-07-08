@@ -13,7 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
   DollarSign, TrendingUp, TrendingDown, BookOpen, ArrowRightLeft,
-  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download
+  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download, Layers, List
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -126,6 +126,9 @@ export default function FinancialLedger() {
   const [visibleAccounts, setVisibleAccounts] = useState<Set<string>>(
     () => new Set(["billed", "paid", "determination"])
   );
+
+  // Group by account toggle
+  const [groupByAccount, setGroupByAccount] = useState(false);
 
   const disputesQuery = trpc.disputes.list.useQuery({ limit: 50 });
   const balancesQuery = trpc.ledger.balances.useQuery(
@@ -561,18 +564,33 @@ export default function FinancialLedger() {
             {/* Journal entry history — date filtered */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <ArrowRightLeft className="h-4 w-4" />
-                  Journal Entry History
-                  <Badge variant="secondary">
-                    {filteredHistory.length}{hasDateFilter && filteredHistory.length !== history.length ? ` of ${history.length}` : ""}
-                  </Badge>
-                  {hasDateFilter && (
-                    <Badge variant="outline" className="text-xs text-muted-foreground">
-                      {dateRangeLabel}
+                <div className="flex items-start justify-between gap-2">
+                  <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                    <ArrowRightLeft className="h-4 w-4" />
+                    Journal Entry History
+                    <Badge variant="secondary">
+                      {filteredHistory.length}{hasDateFilter && filteredHistory.length !== history.length ? ` of ${history.length}` : ""}
                     </Badge>
-                  )}
-                </CardTitle>
+                    {hasDateFilter && (
+                      <Badge variant="outline" className="text-xs text-muted-foreground">
+                        {dateRangeLabel}
+                      </Badge>
+                    )}
+                  </CardTitle>
+                  {/* Group by Account toggle */}
+                  <button
+                    className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border transition-colors shrink-0 ${
+                      groupByAccount
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "text-muted-foreground border-border hover:border-primary/50 hover:text-foreground"
+                    }`}
+                    onClick={() => setGroupByAccount(g => !g)}
+                    title={groupByAccount ? "Switch to flat list" : "Group by account"}
+                  >
+                    {groupByAccount ? <List className="h-3.5 w-3.5" /> : <Layers className="h-3.5 w-3.5" />}
+                    {groupByAccount ? "Flat list" : "Group by account"}
+                  </button>
+                </div>
               </CardHeader>
               <CardContent>
                 {historyQuery.isLoading ? (
@@ -582,6 +600,71 @@ export default function FinancialLedger() {
                     {hasDateFilter
                       ? <>No entries in the selected period. <button className="underline" onClick={() => { setDateFrom(""); setDateTo(""); }}>Clear filter</button></>
                       : "No journal entries yet. Record a payment to create the first entry."}
+                  </div>
+                ) : groupByAccount ? (
+                  /* ── Grouped by account view ── */
+                  <div className="space-y-4">
+                    {(() => {
+                      // Build groups keyed by debitAccountType (primary account)
+                      const groups = new Map<string, typeof filteredHistory>();
+                      filteredHistory.forEach(row => {
+                        const key = row.debitAccountType;
+                        if (!groups.has(key)) groups.set(key, []);
+                        groups.get(key)!.push(row);
+                      });
+                      return Array.from(groups.entries()).map(([accountKey, rows]) => {
+                        const groupDebits = rows.filter(r => r.entry.entryType === "debit").reduce((s, r) => s + r.entry.amountCents, 0);
+                        const groupCredits = rows.filter(r => r.entry.entryType === "credit").reduce((s, r) => s + r.entry.amountCents, 0);
+                        const groupNet = groupCredits - groupDebits;
+                        const color = ACCOUNT_COLORS[accountKey] ?? "#94a3b8";
+                        return (
+                          <div key={accountKey} className="border rounded-lg overflow-hidden">
+                            {/* Group header */}
+                            <div className="flex items-center justify-between px-3 py-2 bg-muted/40 border-b">
+                              <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                                <span className="text-sm font-semibold">{ACCOUNT_LABELS[accountKey] ?? accountKey}</span>
+                                <Badge variant="secondary" className="text-[10px]">{rows.length} entr{rows.length !== 1 ? "ies" : "y"}</Badge>
+                              </div>
+                              <div className="flex items-center gap-4 text-xs">
+                                {groupDebits > 0 && (
+                                  <span className="text-muted-foreground">Debits: <span className="font-mono text-red-600 dark:text-red-400">{fmt(groupDebits / 100)}</span></span>
+                                )}
+                                {groupCredits > 0 && (
+                                  <span className="text-muted-foreground">Credits: <span className="font-mono text-green-600 dark:text-green-400">{fmt(groupCredits / 100)}</span></span>
+                                )}
+                                <span className="text-muted-foreground">Net: <span className={`font-mono font-semibold ${groupNet >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>{groupNet >= 0 ? "+" : ""}{fmt(groupNet / 100)}</span></span>
+                              </div>
+                            </div>
+                            {/* Group rows */}
+                            <table className="w-full text-sm">
+                              <tbody>
+                                {rows.map(({ entry, debitAccountType, creditAccountType }) => (
+                                  <tr key={entry.id} className="border-b last:border-0 hover:bg-muted/20">
+                                    <td className="py-2 px-3 text-muted-foreground whitespace-nowrap w-28">
+                                      {entry.createdAt ? new Date(entry.createdAt).toLocaleDateString() : "—"}
+                                    </td>
+                                    <td className="py-2 pr-3 max-w-xs truncate">{entry.description}</td>
+                                    <td className="py-2 pr-3 text-xs text-muted-foreground">
+                                      <span className="inline-flex items-center gap-1">
+                                        <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }} />
+                                        → {ACCOUNT_LABELS[creditAccountType] ?? creditAccountType}
+                                      </span>
+                                    </td>
+                                    <td className="py-2 text-right font-mono font-medium pr-3">{fmt(entry.amountCents / 100)}</td>
+                                    <td className="py-2 pl-2 pr-3">
+                                      <Badge variant={entry.entryType === "credit" ? "default" : "secondary"} className="text-xs">
+                                        {entry.entryType}
+                                      </Badge>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
