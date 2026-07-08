@@ -14,6 +14,11 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { APP_LOGO, APP_TITLE } from "@/const";
+import { trpc } from "@/lib/trpc";
+import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import {
   LayoutDashboard,
   LogOut,
@@ -21,6 +26,8 @@ import {
   Users,
   Scale,
   Bell,
+  BellRing,
+  CheckCheck,
   ShieldCheck,
   Building2,
   Brain,
@@ -31,6 +38,7 @@ import {
   BookOpen,
   UserCheck,
   BarChart2,
+  BookTemplate,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -48,6 +56,7 @@ const menuItems = [
   { icon: BookOpen, label: "State Laws", path: "/state-laws" },
   { icon: UserCheck, label: "Expert Review", path: "/expert-review" },
   { icon: BarChart2, label: "Reports", path: "/reports" },
+  { icon: BookTemplate, label: "Templates", path: "/templates" },
   { icon: ShieldCheck, label: "Admin", path: "/admin" },
 ];
 
@@ -98,6 +107,17 @@ function DashboardLayoutContent({
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
+  const [notifOpen, setNotifOpen] = useState(false);
+
+  // Real-time notification bell — polls every 30 seconds
+  const { data: notifData, refetch: refetchNotifs } = trpc.notifications.list.useQuery(
+    { unreadOnly: false },
+    { refetchInterval: 30_000, staleTime: 25_000 }
+  );
+  const markAllRead = trpc.notifications.markAllRead.useMutation({
+    onSuccess: () => refetchNotifs(),
+  });
+  const unreadCount = notifData?.filter((n: { isRead: boolean | null }) => !n.isRead).length ?? 0;
 
   useEffect(() => {
     if (isCollapsed) {
@@ -216,6 +236,90 @@ function DashboardLayoutContent({
       </div>
 
       <SidebarInset>
+        {/* Top bar with notification bell */}
+        <div className="h-14 border-b flex items-center justify-end px-6 gap-3 bg-background">
+          <Popover open={notifOpen} onOpenChange={setNotifOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon" className="relative h-9 w-9">
+                {unreadCount > 0 ? (
+                  <BellRing className="h-5 w-5 text-amber-500" />
+                ) : (
+                  <Bell className="h-5 w-5" />
+                )}
+                {unreadCount > 0 && (
+                  <Badge className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-[10px] bg-red-500 text-white border-0">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </Badge>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-96 p-0" align="end">
+              <div className="flex items-center justify-between px-4 py-3 border-b">
+                <div className="flex items-center gap-2">
+                  <Bell className="h-4 w-4" />
+                  <span className="font-semibold text-sm">Notifications</span>
+                  {unreadCount > 0 && (
+                    <Badge variant="secondary" className="text-xs">{unreadCount} new</Badge>
+                  )}
+                </div>
+                {unreadCount > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => markAllRead.mutate()}
+                  >
+                    <CheckCheck className="h-3 w-3 mr-1" />
+                    Mark all read
+                  </Button>
+                )}
+              </div>
+              <ScrollArea className="h-80">
+                {!notifData?.length ? (
+                  <div className="flex flex-col items-center justify-center h-32 text-muted-foreground">
+                    <Bell className="h-8 w-8 mb-2 opacity-30" />
+                    <p className="text-sm">No notifications</p>
+                  </div>
+                ) : (
+                  <div className="divide-y">
+                    {notifData.map((n: { id: string; isRead: boolean | null; title: string; message: string; notificationType: string; createdAt: Date | null }) => (
+                      <div
+                        key={n.id}
+                        className={`px-4 py-3 hover:bg-accent/50 transition-colors ${
+                          !n.isRead ? 'bg-blue-50/50 dark:bg-blue-950/20' : ''
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          {!n.isRead && (
+                            <div className="mt-1.5 h-2 w-2 rounded-full bg-blue-500 shrink-0" />
+                          )}
+                          <div className={!n.isRead ? '' : 'ml-4'}>
+                            <p className="text-sm font-medium leading-tight">{n.title}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{n.message}</p>
+                            <p className="text-[10px] text-muted-foreground/70 mt-1">
+                              {n.createdAt ? new Date(n.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+              <Separator />
+              <div className="p-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full text-xs text-muted-foreground"
+                  onClick={() => { setNotifOpen(false); setLocation('/notifications'); }}
+                >
+                  View all notifications
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
         <main className="flex-1 p-6">{children}</main>
       </SidebarInset>
     </>

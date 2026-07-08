@@ -383,3 +383,36 @@ export const emrSyncLogs = pgTable(
 
 export type EMRSyncLog = typeof emrSyncLogs.$inferSelect;
 export type InsertEMRSyncLog = typeof emrSyncLogs.$inferInsert;
+
+// ── Dispute Templates ─────────────────────────────────────────────────────────
+export const disputeTemplates = pgTable(
+  "dispute_templates",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    createdBy: varchar("createdBy", { length: 64 }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    description: text("description"),
+    serviceType: varchar("serviceType", { length: 64 }),
+    initiatingPartyName: varchar("initiatingPartyName", { length: 255 }),
+    initiatingPartyType: varchar("initiatingPartyType", { length: 64 }),
+    respondingPartyName: varchar("respondingPartyName", { length: 255 }),
+    respondingPartyType: varchar("respondingPartyType", { length: 64 }),
+    billedAmount: varchar("billedAmount", { length: 32 }),
+    qpaAmount: varchar("qpaAmount", { length: 32 }),
+    dateOfService: varchar("dateOfService", { length: 32 }),
+    patientName: varchar("patientName", { length: 255 }),
+    claimNumber: varchar("claimNumber", { length: 128 }),
+    cptCodes: jsonb("cptCodes").$type<string[]>(),
+    icdCodes: jsonb("icdCodes").$type<string[]>(),
+    notes: text("notes"),
+    usageCount: integer("usageCount").default(0),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [
+    index("dispute_templates_user_idx").on(t.createdBy),
+    index("dispute_templates_created_idx").on(t.createdAt),
+  ]
+);
+export type DisputeTemplate = typeof disputeTemplates.$inferSelect;
+export type InsertDisputeTemplate = typeof disputeTemplates.$inferInsert;

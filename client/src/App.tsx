@@ -20,6 +20,7 @@ import EMROnboarding from "./pages/EMROnboarding";
 import StateBalanceBilling from "./pages/StateBalanceBilling";
 import ExpertReview from "./pages/ExpertReview";
 import Reports from "./pages/Reports";
+import DisputeTemplates from "./pages/DisputeTemplates";
 
 function Router() {
   return (
@@ -40,6 +41,10 @@ function Router() {
       <Route path="/state-laws" component={StateBalanceBilling} />
       <Route path="/expert-review" component={ExpertReview} />
       <Route path="/reports" component={Reports} />
+      <Route path="/templates" component={() => {
+        const DashboardLayout = require("./components/DashboardLayout").default;
+        return <DashboardLayout><DisputeTemplates /></DashboardLayout>;
+      }} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>

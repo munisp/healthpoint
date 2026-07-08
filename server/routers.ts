@@ -17,6 +17,8 @@ import {
   createEMRConnection, listEMRConnections, getEMRConnection,
   updateEMRConnectionStatus, deactivateEMRConnection, deleteEMRConnection,
   listEMRSyncLogs, createEMRSyncLog,
+  createDisputeTemplate, listDisputeTemplates, getDisputeTemplateById,
+  updateDisputeTemplate, deleteDisputeTemplate, incrementTemplateUsage,
 } from "./db";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
@@ -1302,6 +1304,98 @@ export const appRouter = router({
         } catch {
           return { analysis: "Expert analysis is being prepared. Our certified IDR specialists are reviewing the dispute details, QPA methodology, and comparable service benchmarks. You will receive a detailed analysis within the estimated response time.", sources: ["45 CFR § 149.510", "CMS IDR Guidance"], confidence: 0.8, recommendations: ["Gather all supporting clinical documentation", "Document QPA calculation methodology", "Identify comparable determinations"] };
         }
+      }),
+  }),
+
+  // ─── Dispute Templates ─────────────────────────────────────────────────────
+  templates: router({
+    list: protectedProcedure
+      .query(async ({ ctx }) => {
+        return listDisputeTemplates(ctx.user.id);
+      }),
+    getById: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .query(async ({ ctx, input }) => {
+        const template = await getDisputeTemplateById(input.id);
+        if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
+        if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+        return template;
+      }),
+    create: protectedProcedure
+      .input(z.object({
+        name: z.string().min(1).max(255),
+        description: z.string().optional(),
+        serviceType: z.string().optional(),
+        initiatingPartyName: z.string().optional(),
+        initiatingPartyType: z.string().optional(),
+        respondingPartyName: z.string().optional(),
+        respondingPartyType: z.string().optional(),
+        billedAmount: z.string().optional(),
+        qpaAmount: z.string().optional(),
+        dateOfService: z.string().optional(),
+        patientName: z.string().optional(),
+        claimNumber: z.string().optional(),
+        cptCodes: z.array(z.string()).optional(),
+        icdCodes: z.array(z.string()).optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const id = crypto.randomUUID();
+        return createDisputeTemplate({
+          id,
+          createdBy: ctx.user.id,
+          ...input,
+          cptCodes: input.cptCodes ?? [],
+          icdCodes: input.icdCodes ?? [],
+          usageCount: 0,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }),
+    update: protectedProcedure
+      .input(z.object({
+        id: z.string(),
+        name: z.string().min(1).max(255).optional(),
+        description: z.string().optional(),
+        serviceType: z.string().optional(),
+        initiatingPartyName: z.string().optional(),
+        initiatingPartyType: z.string().optional(),
+        respondingPartyName: z.string().optional(),
+        respondingPartyType: z.string().optional(),
+        billedAmount: z.string().optional(),
+        qpaAmount: z.string().optional(),
+        dateOfService: z.string().optional(),
+        patientName: z.string().optional(),
+        claimNumber: z.string().optional(),
+        cptCodes: z.array(z.string()).optional(),
+        icdCodes: z.array(z.string()).optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { id, ...updates } = input;
+        const template = await getDisputeTemplateById(id);
+        if (!template) throw new TRPCError({ code: "NOT_FOUND" });
+        if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+        await updateDisputeTemplate(id, updates);
+        return { success: true };
+      }),
+    delete: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        const template = await getDisputeTemplateById(input.id);
+        if (!template) throw new TRPCError({ code: "NOT_FOUND" });
+        if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+        await deleteDisputeTemplate(input.id);
+        return { success: true };
+      }),
+    use: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        const template = await getDisputeTemplateById(input.id);
+        if (!template) throw new TRPCError({ code: "NOT_FOUND" });
+        if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+        await incrementTemplateUsage(input.id);
+        return template;
       }),
   }),
 

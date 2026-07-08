@@ -120,3 +120,18 @@
 - [x] HaloMD competitive research — identified gaps: state balance-billing law coverage, expert negotiation workflow, comprehensive reports page
 - [x] Implement HaloMD feature gaps — StateBalanceBilling page (/state-laws), ExpertReview workflow (/expert-review), Reports analytics page (/reports)
 - [x] Stakeholder presentation deck — 12-slide deck, manus-slides://xxQZNv0M1oQOef8CVeXeyX
+
+## Session 12 — Bulk Actions, Notification Bell, Templates, Presentation Export, Marketing Site
+
+- [x] Disputes bulk-action toolbar — select multiple disputes, batch advance/export/assign
+- [x] Real-time notification bell — unread count badge, 30s polling, dropdown panel in header
+- [x] Dispute template wizard — save/load dispute templates for repeat filings
+- [x] Presentation PDF export — downloadable PDF of stakeholder deck (The_Most_Intelligent_NSA_IDR_Platform_on_the_Market.pdf)
+- [x] HealthPoint marketing website — separate webdev project at /home/ubuntu/healthpoint-marketing
+- [x] Marketing site: hero section with NSA/IDR value proposition and animated stats
+- [x] Marketing site: audience-targeted features section (providers, facilities, payers, aggregators)
+- [x] Marketing site: NSA/IDR explainer section (how the process works)
+- [x] Marketing site: sign-up / sign-in with Manus OAuth redirect to IDR platform
+- [x] Marketing site: testimonials / social proof section (pricing section)
+- [x] Marketing site: pricing / CTA section
+- [x] Marketing site: footer with regulatory references and links
