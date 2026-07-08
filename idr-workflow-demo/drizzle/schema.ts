@@ -448,3 +448,45 @@ export const userProfiles = pgTable(
 );
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type InsertUserProfile = typeof userProfiles.$inferInsert;
+
+// ─── Marketing Leads (lead-capture form from landing page) ────────────────────
+export const leadStatusEnum = pgEnum("lead_status", [
+  "new",
+  "contacted",
+  "qualified",
+  "converted",
+  "disqualified",
+]);
+
+export const marketingLeads = pgTable(
+  "marketing_leads",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() =>
+      `lead_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+    ),
+    firstName: varchar("firstName", { length: 128 }),
+    lastName: varchar("lastName", { length: 128 }),
+    email: varchar("email", { length: 320 }).notNull(),
+    orgName: varchar("orgName", { length: 255 }),
+    orgType: varchar("orgType", { length: 128 }),
+    stakeholderRole: varchar("stakeholderRole", { length: 64 }),
+    phone: varchar("phone", { length: 32 }),
+    message: text("message"),
+    source: varchar("source", { length: 128 }).default("landing_page"),
+    utmSource: varchar("utmSource", { length: 128 }),
+    utmMedium: varchar("utmMedium", { length: 128 }),
+    utmCampaign: varchar("utmCampaign", { length: 128 }),
+    status: leadStatusEnum("status").default("new").notNull(),
+    convertedUserId: varchar("convertedUserId", { length: 64 }),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [
+    index("marketing_leads_email_idx").on(t.email),
+    index("marketing_leads_status_idx").on(t.status),
+    index("marketing_leads_role_idx").on(t.stakeholderRole),
+  ]
+);
+export type MarketingLead = typeof marketingLeads.$inferSelect;
+export type InsertMarketingLead = typeof marketingLeads.$inferInsert;

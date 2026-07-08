@@ -13,6 +13,7 @@ import {
   cmsDrafts, CMSDraft, InsertCMSDraft,
   disputeTemplates, DisputeTemplate, InsertDisputeTemplate,
   userProfiles, UserProfile, InsertUserProfile,
+  marketingLeads, MarketingLead, InsertMarketingLead,
   IDR_STEP, IDRStep, DISPUTE_STATUS, DisputeStatus,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -1078,4 +1079,39 @@ export async function markOnboardingComplete(userId: string): Promise<void> {
       target: userProfiles.id,
       set: { onboardingCompleted: true, onboardingCompletedAt: new Date(), updatedAt: new Date() },
     });
+}
+
+// ─── Marketing Leads ──────────────────────────────────────────────────────────
+export async function createMarketingLead(lead: Omit<InsertMarketingLead, "id">): Promise<MarketingLead | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const id = `lead_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  await db.insert(marketingLeads).values({ ...lead, id });
+  const rows = await db.select().from(marketingLeads).where(eq(marketingLeads.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function listMarketingLeads(opts?: { status?: string; limit?: number; offset?: number }): Promise<MarketingLead[]> {
+  const db = await getDb();
+  if (!db) return [];
+  let q = db.select().from(marketingLeads).$dynamic();
+  if (opts?.status) {
+    q = q.where(eq(marketingLeads.status, opts.status as MarketingLead["status"]));
+  }
+  return q.orderBy(desc(marketingLeads.createdAt)).limit(opts?.limit ?? 100).offset(opts?.offset ?? 0);
+}
+
+export async function updateLeadStatus(id: string, status: MarketingLead["status"], notes?: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(marketingLeads)
+    .set({ status, notes: notes ?? undefined, updatedAt: new Date() })
+    .where(eq(marketingLeads.id, id));
+}
+
+export async function getLeadByEmail(email: string): Promise<MarketingLead | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(marketingLeads).where(eq(marketingLeads.email, email)).limit(1);
+  return rows[0];
 }

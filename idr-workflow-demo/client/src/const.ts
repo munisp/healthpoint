@@ -4,7 +4,7 @@ export const APP_TITLE = import.meta.env.VITE_APP_TITLE || "HealthPoint";
 
 export const APP_LOGO =
   import.meta.env.VITE_APP_LOGO ||
-  "https://placehold.co/128x128/0ea5e9/ffffff?text=HP";
+  "https://d2xsxph8kpxj0f.cloudfront.net/114501028/Ko6TiyjsXLeVjoMLkkxz58/healthpoint-logo-KHkgbr4JATo4FJnvK2noam.png";
 
 /**
  * Keycloak OIDC — all auth flows go through the server-side routes.

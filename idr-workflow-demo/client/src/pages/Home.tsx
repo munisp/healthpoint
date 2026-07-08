@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { APP_LOGO, APP_TITLE, getLoginUrl, getRegisterUrl } from "@/const";
+import { trpc } from "@/lib/trpc";
 import {
   Scale, Clock, Shield, Zap, Brain, FileText, Building2,
   Stethoscope, Landmark, Users, CheckCircle2, ArrowRight,
@@ -181,20 +182,41 @@ export default function Home() {
   const timeSaved = useCounter(18, 1200, statsRef.inView);
   const states = useCounter(50, 1000, statsRef.inView);
 
+  const submitLeadMutation = trpc.leads.submit.useMutation();
   useEffect(() => {
     if (!loading && isAuthenticated) navigate("/dashboard");
   }, [isAuthenticated, loading, navigate]);
-
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
     </div>
   );
 
-  const handleLeadSubmit = (e: React.FormEvent) => {
+  const handleLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!leadForm.email.includes("@")) { setLeadError("Please enter a valid email address."); return; }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(leadForm.email)) { setLeadError("Please enter a valid email address."); return; }
+    if (!leadForm.name.trim()) { setLeadError("Please enter your name."); return; }
     setLeadError("");
+    // Parse first/last name
+    const nameParts = leadForm.name.trim().split(" ");
+    const firstName = nameParts[0] ?? "";
+    const lastName = nameParts.slice(1).join(" ") || "-";
+    try {
+      await submitLeadMutation.mutateAsync({
+        firstName,
+        lastName,
+        email: leadForm.email,
+        orgName: leadForm.org || undefined,
+        stakeholderRole: leadForm.role as "provider" | "facility" | "payer" | "idr_entity" | "other",
+        source: "landing_page",
+        utmSource: new URLSearchParams(window.location.search).get("utm_source") ?? undefined,
+        utmMedium: new URLSearchParams(window.location.search).get("utm_medium") ?? undefined,
+        utmCampaign: new URLSearchParams(window.location.search).get("utm_campaign") ?? undefined,
+      });
+    } catch {
+      // Non-blocking — still redirect even if lead capture fails
+    }
     setLeadSubmitted(true);
     setTimeout(() => {
       window.location.href = getRegisterUrl(leadForm.role, "/dashboard");

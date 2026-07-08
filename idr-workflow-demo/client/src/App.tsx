@@ -22,6 +22,7 @@ import StateBalanceBilling from "./pages/StateBalanceBilling";
 import ExpertReview from "./pages/ExpertReview";
 import Reports from "./pages/Reports";
 import DisputeTemplates from "./pages/DisputeTemplates";
+import LeadsManager from "./pages/LeadsManager";
 
 function Router() {
   return (
@@ -35,6 +36,7 @@ function Router() {
       <Route path="/idr-entities" component={IDREntityDashboard} />
       <Route path="/notifications" component={Notifications} />
       <Route path="/admin" component={Admin} />
+      <Route path="/admin/leads" component={LeadsManager} />
       <Route path="/ai-assistant" component={AIAssistant} />
       <Route path="/stakeholder-upload" component={StakeholderUpload} />
       <Route path="/cms-tracker" component={CMSSubmissionTracker} />

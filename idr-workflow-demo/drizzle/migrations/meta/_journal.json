@@ -43,6 +43,13 @@
       "when": 1783518731899,
       "tag": "0005_thin_the_watchers",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783519471694,
+      "tag": "0006_bent_shinko_yamashiro",
+      "breakpoints": true
     }
   ]
 }

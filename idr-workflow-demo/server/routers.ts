@@ -20,6 +20,7 @@ import {
   createDisputeTemplate, listDisputeTemplates, getDisputeTemplateById,
   updateDisputeTemplate, deleteDisputeTemplate, incrementTemplateUsage,
   getUserProfile, upsertUserProfile, markOnboardingComplete,
+  createMarketingLead, listMarketingLeads, updateLeadStatus, getLeadByEmail,
 } from "./db";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
@@ -1399,6 +1400,65 @@ export const appRouter = router({
         if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
         await incrementTemplateUsage(input.id);
         return template;
+      }),
+  }),
+
+  // --- Marketing Leads (CRM) -----------------------------------------------
+  leads: router({
+    // Public: anyone can submit a lead from the landing page
+    submit: publicProcedure
+      .input(z.object({
+        firstName: z.string().min(1).max(128),
+        lastName: z.string().min(1).max(128),
+        email: z.string().email().max(320),
+        orgName: z.string().max(255).optional(),
+        orgType: z.string().max(128).optional(),
+        stakeholderRole: z.enum(["provider", "facility", "payer", "idr_entity", "other"]).optional(),
+        phone: z.string().max(32).optional(),
+        message: z.string().max(2000).optional(),
+        source: z.string().max(128).optional(),
+        utmSource: z.string().max(128).optional(),
+        utmMedium: z.string().max(128).optional(),
+        utmCampaign: z.string().max(128).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        // Deduplicate by email — update if already exists
+        const existing = await getLeadByEmail(input.email);
+        if (existing) {
+          // Update org/role info if provided but keep status
+          await updateLeadStatus(existing.id, existing.status);
+          return { id: existing.id, isNew: false };
+        }
+        const lead = await createMarketingLead({
+          ...input,
+          source: input.source ?? "landing_page",
+          status: "new",
+        });
+        return { id: lead?.id ?? "", isNew: true };
+      }),
+
+    // Admin only: list and manage leads
+    list: protectedProcedure
+      .input(z.object({
+        status: z.string().optional(),
+        limit: z.number().min(1).max(500).default(100),
+        offset: z.number().min(0).default(0),
+      }))
+      .query(async ({ ctx, input }) => {
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+        return listMarketingLeads(input);
+      }),
+
+    updateStatus: protectedProcedure
+      .input(z.object({
+        id: z.string(),
+        status: z.enum(["new", "contacted", "qualified", "converted", "disqualified"]),
+        notes: z.string().max(2000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+        await updateLeadStatus(input.id, input.status, input.notes);
+        return { success: true };
       }),
   }),
 

@@ -39,6 +39,7 @@ import {
   UserCheck,
   BarChart2,
   BookTemplate,
+  UserRoundSearch,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -58,6 +59,7 @@ const menuItems = [
   { icon: BarChart2, label: "Reports", path: "/reports" },
   { icon: BookTemplate, label: "Templates", path: "/templates" },
   { icon: ShieldCheck, label: "Admin", path: "/admin" },
+  { icon: UserRoundSearch, label: "Leads CRM", path: "/admin/leads" },
 ];
 
 const SIDEBAR_WIDTH_KEY = 'sidebar-width';
