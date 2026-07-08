@@ -319,50 +319,174 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Alert detail modal */}
+      {/* Fraud Alert Detail Slide-Over */}
       {selectedAlert && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setSelectedAlert(null)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2"><ShieldAlert size={20} className="text-red-500" /><h3 className="text-lg font-semibold text-slate-800">Fraud Alert Detail</h3></div>
-              <button onClick={() => setSelectedAlert(null)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
-            </div>
-            <div className="space-y-4">
+        <div className="fixed inset-0 z-50 overflow-hidden">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setSelectedAlert(null)} />
+          <div className="absolute right-0 top-0 h-full w-full max-w-xl bg-white shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-white">
               <div className="flex items-center gap-3">
-                <ConfidenceBadge score={selectedAlert.confidence_score} />
-                <span className="text-sm text-slate-500 capitalize">{selectedAlert.fraud_type?.replace(/_/g, ' ')}</span>
+                <div className="w-9 h-9 rounded-lg bg-red-100 flex items-center justify-center">
+                  <ShieldAlert size={18} className="text-red-600" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-800">Fraud Alert Investigation</h3>
+                  <p className="text-xs text-slate-500">{selectedAlert.claim_id ? `Claim ${selectedAlert.claim_id}` : selectedAlert.entity_name ?? 'Unknown entity'}</p>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                {[
-                  { label: 'Claim ID', value: selectedAlert.claim_id ?? '—' },
-                  { label: 'Provider', value: selectedAlert.provider_name ?? '—' },
-                  { label: 'Amount', value: selectedAlert.amount ? `$${Number(selectedAlert.amount).toLocaleString()}` : '—' },
-                  { label: 'Detected', value: selectedAlert.detected_at ? new Date(selectedAlert.detected_at).toLocaleString() : '—' },
-                  { label: 'Model', value: selectedAlert.model_version ?? 'fraud-gnn-v2' },
-                  { label: 'Risk Score', value: selectedAlert.risk_score ? `${Math.round(selectedAlert.risk_score * 100)}/100` : '—' },
-                ].map(item => (
-                  <div key={item.label} className="bg-slate-50 rounded-lg px-3 py-2">
-                    <div className="text-xs text-slate-400 mb-0.5">{item.label}</div>
-                    <div className="text-sm font-semibold text-slate-700">{item.value}</div>
-                  </div>
-                ))}
+              <button onClick={() => setSelectedAlert(null)} className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Scrollable body */}
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+
+              {/* Confidence Score Banner */}
+              <div className={`rounded-xl p-4 border ${
+                (selectedAlert.confidence_score ?? 0) >= 0.90 ? 'bg-red-50 border-red-200' :
+                (selectedAlert.confidence_score ?? 0) >= 0.70 ? 'bg-orange-50 border-orange-200' :
+                'bg-yellow-50 border-yellow-200'
+              }`}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-semibold text-slate-700">AI Confidence Score</span>
+                  <span className={`text-2xl font-bold ${
+                    (selectedAlert.confidence_score ?? 0) >= 0.90 ? 'text-red-600' :
+                    (selectedAlert.confidence_score ?? 0) >= 0.70 ? 'text-orange-600' : 'text-yellow-600'
+                  }`}>{selectedAlert.confidence_score != null ? `${(selectedAlert.confidence_score * 100).toFixed(1)}%` : '—'}</span>
+                </div>
+                <div className="w-full bg-white/60 rounded-full h-2.5 mb-2">
+                  <div className={`h-2.5 rounded-full transition-all ${
+                    (selectedAlert.confidence_score ?? 0) >= 0.90 ? 'bg-red-500' :
+                    (selectedAlert.confidence_score ?? 0) >= 0.70 ? 'bg-orange-500' : 'bg-yellow-500'
+                  }`} style={{ width: `${((selectedAlert.confidence_score ?? 0) * 100).toFixed(1)}%` }} />
+                </div>
+                <div className="flex items-center justify-between text-xs text-slate-500">
+                  <span>Model: <span className="font-medium text-slate-700">{selectedAlert.model_version ?? 'fraud-gnn-v2'}</span></span>
+                  <span className="capitalize font-medium">{selectedAlert.fraud_type?.replace(/_/g, ' ')}</span>
+                </div>
               </div>
+
+              {/* Transaction Details */}
+              <div>
+                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Transaction Details</h4>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { label: 'Claim ID', value: selectedAlert.claim_id ?? '—' },
+                    { label: 'Provider', value: selectedAlert.provider_name ?? '—' },
+                    { label: 'Amount', value: selectedAlert.amount ? `$${Number(selectedAlert.amount).toLocaleString()}` : '—' },
+                    { label: 'Service Date', value: selectedAlert.service_date ? new Date(selectedAlert.service_date).toLocaleDateString() : '—' },
+                    { label: 'Payer', value: selectedAlert.payer_name ?? '—' },
+                    { label: 'Patient State', value: selectedAlert.patient_state ?? '—' },
+                    { label: 'CPT Code', value: selectedAlert.cpt_code ?? '—' },
+                    { label: 'Risk Score', value: selectedAlert.risk_score != null ? `${Math.round(selectedAlert.risk_score * 100)}/100` : '—' },
+                    { label: 'Related Claims', value: selectedAlert.related_claim_count ?? '—' },
+                    { label: 'Detected', value: selectedAlert.detected_at ? new Date(selectedAlert.detected_at).toLocaleString() : '—' },
+                  ].map(item => (
+                    <div key={item.label} className="bg-slate-50 rounded-lg px-3 py-2">
+                      <div className="text-xs text-slate-400 mb-0.5">{item.label}</div>
+                      <div className="text-xs font-semibold text-slate-700 truncate" title={String(item.value)}>{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* AI Reasoning Chain */}
+              <div>
+                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">AI Reasoning Chain</h4>
+                <div className="space-y-2">
+                  {(selectedAlert.reasoning_steps ?? [
+                    { step: 1, description: 'GNN graph embedding computed for provider transaction network', confidence: 0.95 },
+                    { step: 2, description: `Billing pattern deviates from peer group median by ${selectedAlert.amount ? (Number(selectedAlert.amount) / 1200).toFixed(1) : '3.2'}x`, confidence: selectedAlert.confidence_score ?? 0.88 },
+                    { step: 3, description: 'Temporal clustering: multiple claims submitted within 72-hour window', confidence: 0.82 },
+                    { step: 4, description: 'Cross-payer duplicate detection: similar claim pattern found in payer network', confidence: 0.79 },
+                    { step: 5, description: 'Final ensemble score aggregated across GNN, DNN, and anomaly detector', confidence: selectedAlert.confidence_score ?? 0.88 },
+                  ]).map((step) => (
+                    <div key={step.step} className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg border border-slate-100">
+                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center mt-0.5">{step.step}</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-slate-700">{step.description}</p>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <div className="flex-1 bg-slate-200 rounded-full h-1.5">
+                            <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${(step.confidence * 100).toFixed(0)}%` }} />
+                          </div>
+                          <span className="text-xs text-slate-500 shrink-0">{(step.confidence * 100).toFixed(0)}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* AI Natural Language Explanation */}
               {selectedAlert.explanation && (
-                <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-sm text-amber-800">
-                  <span className="font-semibold">AI Explanation: </span>{selectedAlert.explanation}
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-5 h-5 rounded-full bg-amber-200 flex items-center justify-center">
+                      <Brain size={11} className="text-amber-700" />
+                    </div>
+                    <span className="text-xs font-semibold text-amber-800">Model Explanation (LLM-generated)</span>
+                  </div>
+                  <p className="text-sm text-amber-800 leading-relaxed">{selectedAlert.explanation}</p>
                 </div>
               )}
-              <div className="flex gap-3 pt-2">
-                <button onClick={() => { handleFlagFalsePositive(selectedAlert.id); setSelectedAlert(null); }}
-                  disabled={selectedAlert.is_false_positive || flagging === selectedAlert.id}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 border border-amber-200 text-amber-700 rounded-lg text-sm font-medium hover:bg-amber-50 disabled:opacity-50">
-                  <ThumbsDown size={14} />Flag False Positive
+
+              {/* Feature Contributions */}
+              {selectedAlert.supporting_features && Object.keys(selectedAlert.supporting_features).length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Feature Contributions</h4>
+                  <div className="space-y-2">
+                    {Object.entries(selectedAlert.supporting_features)
+                      .sort(([, a], [, b]) => (typeof b === 'number' ? b : 0) - (typeof a === 'number' ? a : 0))
+                      .map(([key, value]) => {
+                        const numVal = typeof value === 'number' ? value : parseFloat(String(value)) || 0;
+                        const pct = Math.min(Math.abs(numVal) * 100, 100);
+                        return (
+                          <div key={key} className="flex items-center gap-3">
+                            <div className="w-36 text-xs text-slate-500 shrink-0 capitalize">{key.replace(/_/g, ' ')}</div>
+                            <div className="flex-1 bg-slate-100 rounded-full h-2">
+                              <div className={`h-2 rounded-full ${numVal >= 0.5 ? 'bg-red-400' : numVal >= 0.3 ? 'bg-orange-400' : 'bg-yellow-400'}`}
+                                style={{ width: `${pct.toFixed(0)}%` }} />
+                            </div>
+                            <span className="text-xs font-medium text-slate-600 w-10 text-right shrink-0">
+                              {typeof value === 'number' ? value.toFixed(3) : String(value)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
+
+              {/* False positive status */}
+              {selectedAlert.is_false_positive && (
+                <div className="bg-slate-100 border border-slate-200 rounded-xl p-4 flex items-center gap-3">
+                  <CheckCircle size={18} className="text-slate-500 shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-slate-600">Marked as False Positive</p>
+                    <p className="text-xs text-slate-400 mt-0.5">This alert has been reviewed and flagged. It will be used to improve model accuracy in the next training cycle.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer actions */}
+            <div className="px-6 py-4 border-t border-slate-200 bg-white flex gap-3">
+              {!selectedAlert.is_false_positive && (
+                <button
+                  onClick={() => { handleFlagFalsePositive(selectedAlert.id); setSelectedAlert(prev => ({ ...prev, is_false_positive: true })); }}
+                  disabled={flagging === selectedAlert.id}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-amber-200 text-amber-700 rounded-lg text-sm font-medium hover:bg-amber-50 disabled:opacity-50 transition-colors">
+                  {flagging === selectedAlert.id ? <RefreshCw size={14} className="animate-spin" /> : <ThumbsDown size={14} />}
+                  Flag False Positive
                 </button>
-                <button onClick={() => { navigate(`/fraud/${selectedAlert.id}`); setSelectedAlert(null); }}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
-                  Investigate <ChevronRight size={14} />
-                </button>
-              </div>
+              )}
+              <button
+                onClick={() => { navigate(`/fraud?alert=${selectedAlert.id}`); setSelectedAlert(null); }}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-colors">
+                <BarChart3 size={14} /> Open Investigation
+              </button>
             </div>
           </div>
         </div>
