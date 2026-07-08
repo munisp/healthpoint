@@ -10,7 +10,8 @@ import { APP_LOGO, APP_TITLE } from "@/const";
 import { toast } from "sonner";
 import {
   AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock,
-  DollarSign, FileText, Gavel, LogOut, Scale, Upload, Users
+  DollarSign, FileText, Gavel, LogOut, Scale, Upload, Users,
+  TrendingUp, CheckCircle, XCircle, RefreshCw
 } from "lucide-react";
 
 const IDR_STEPS = [
@@ -54,29 +55,57 @@ const NEXT_STEP_MAP: Record<string, { step: string; status: string; label: strin
   STEP_16_ADMINISTRATIVE_FEE_PAID: { step: "STEP_17_DISPUTE_CLOSED", status: "closed", label: "Close Dispute" },
 };
 
+const OFFER_TYPE_LABELS: Record<string, string> = {
+  initiating_party: "Initiating Party",
+  responding_party: "Responding Party",
+  qpa: "QPA",
+  determination: "Determination",
+};
+
+const OFFER_TYPE_COLORS: Record<string, string> = {
+  initiating_party: "bg-blue-50 border-blue-200 text-blue-700",
+  responding_party: "bg-purple-50 border-purple-200 text-purple-700",
+  qpa: "bg-amber-50 border-amber-200 text-amber-700",
+  determination: "bg-green-50 border-green-200 text-green-700",
+};
+
 export default function DisputeDetail() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
   const { user, logout } = useAuth();
   const utils = trpc.useUtils();
 
+  // Modal states
   const [showOfferModal, setShowOfferModal] = useState(false);
+  const [showCounterOfferModal, setShowCounterOfferModal] = useState(false);
   const [showArbitratorModal, setShowArbitratorModal] = useState(false);
   const [showDocModal, setShowDocModal] = useState(false);
+
+  // Offer form state
+  const [offerAmount, setOfferAmount] = useState("");
+  const [offerRationale, setOfferRationale] = useState("");
+  const [offerType, setOfferType] = useState<"initiating_party" | "responding_party" | "qpa">("initiating_party");
+  const [counterOfferAmount, setCounterOfferAmount] = useState("");
+  const [counterOfferRationale, setCounterOfferRationale] = useState("");
+  const [acceptingOfferId, setAcceptingOfferId] = useState<string | null>(null);
+
+  // Document form state
   const [docTitle, setDocTitle] = useState("");
   const [docType, setDocType] = useState<"qpa_documentation" | "eob" | "contract" | "medical_records" | "cost_sharing_info" | "prior_authorization" | "other">("other");
   const [docDescription, setDocDescription] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [docFileName, setDocFileName] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [offerAmount, setOfferAmount] = useState("");
-  const [offerRationale, setOfferRationale] = useState("");
-  const [offerType, setOfferType] = useState<"initiating_party" | "responding_party" | "qpa">("initiating_party");
+
+  // Arbitrator state
   const [selectedArbitratorId, setSelectedArbitratorId] = useState("");
   const [selectedArbitratorName, setSelectedArbitratorName] = useState("");
+
+  // Advance state
   const [advanceDescription, setAdvanceDescription] = useState("");
   const [determinationBasis, setDeterminationBasis] = useState("");
 
+  // Queries
   const { data: timelineData, isLoading } = trpc.disputes.getTimeline.useQuery({ disputeId: id! });
   const { data: documentList, refetch: refetchDocs } = trpc.documents.list.useQuery(
     { disputeId: id! },
@@ -84,13 +113,39 @@ export default function DisputeDetail() {
   );
   const { data: arbitrators } = trpc.arbitrators.list.useQuery({}, { enabled: showArbitratorModal });
 
+  // Mutations
   const advanceMutation = trpc.disputes.advance.useMutation({
     onSuccess: () => { utils.disputes.getTimeline.invalidate(); utils.dashboard.stats.invalidate(); toast.success("Dispute advanced to next step"); },
     onError: (err) => toast.error(err.message),
   });
 
   const submitOfferMutation = trpc.disputes.submitOffer.useMutation({
-    onSuccess: () => { utils.disputes.getTimeline.invalidate(); setShowOfferModal(false); setOfferAmount(""); setOfferRationale(""); toast.success("Offer submitted successfully"); },
+    onSuccess: () => {
+      utils.disputes.getTimeline.invalidate();
+      setShowOfferModal(false);
+      setOfferAmount(""); setOfferRationale("");
+      toast.success("Offer submitted successfully");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const submitCounterOfferMutation = trpc.disputes.submitOffer.useMutation({
+    onSuccess: () => {
+      utils.disputes.getTimeline.invalidate();
+      setShowCounterOfferModal(false);
+      setCounterOfferAmount(""); setCounterOfferRationale("");
+      toast.success("Counter-offer submitted");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const acceptOfferMutation = trpc.disputes.acceptOffer.useMutation({
+    onSuccess: () => {
+      utils.disputes.getTimeline.invalidate();
+      utils.dashboard.stats.invalidate();
+      setAcceptingOfferId(null);
+      toast.success("Offer accepted — dispute resolved");
+    },
     onError: (err) => toast.error(err.message),
   });
 
@@ -104,11 +159,7 @@ export default function DisputeDetail() {
       utils.disputes.getTimeline.invalidate();
       refetchDocs();
       setShowDocModal(false);
-      setDocTitle("");
-      setDocDescription("");
-      setDocFileName("");
-      setSelectedFile(null);
-      setDocType("other");
+      setDocTitle(""); setDocDescription(""); setDocFileName(""); setSelectedFile(null); setDocType("other");
       toast.success("Document attached successfully");
     },
     onError: (err) => toast.error(err.message),
@@ -131,8 +182,10 @@ export default function DisputeDetail() {
   );
 
   const { dispute, timeline } = timelineData;
+  const offers = (timelineData as any).offers ?? [];
   const nextStep = NEXT_STEP_MAP[dispute.currentStep];
   const currentStepIndex = IDR_STEPS.findIndex(s => s.key === dispute.currentStep);
+  const isOfferPhase = ["offer_submission", "under_arbitration"].includes(dispute.status);
 
   const handleAdvance = () => {
     if (!nextStep) return;
@@ -161,7 +214,7 @@ export default function DisputeDetail() {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
-        {/* Header */}
+        {/* Page header */}
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-3 mb-1">
@@ -179,11 +232,11 @@ export default function DisputeDetail() {
               </span>
             </div>
             <p className="text-sm text-slate-500 ml-7">
-              {dispute.initiatingPartyName} vs {dispute.respondingPartyName ?? "TBD"} ·
-              {dispute.serviceType?.replace(/_/g, " ")} · Filed {dispute.createdAt ? new Date(dispute.createdAt as unknown as string).toLocaleDateString() : '—'}
+              {dispute.initiatingPartyName} vs {dispute.respondingPartyName ?? "TBD"} ·{" "}
+              {dispute.serviceType?.replace(/_/g, " ")} · Filed {dispute.createdAt ? new Date(dispute.createdAt as unknown as string).toLocaleDateString() : "—"}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             <Button variant="outline" onClick={() => setShowDocModal(true)} className="flex items-center gap-2">
               <Upload size={14} />Attach Evidence
             </Button>
@@ -195,6 +248,11 @@ export default function DisputeDetail() {
             {["STEP_09_OFFER_SUBMISSION", "STEP_10_QPA_DISCLOSURE"].includes(dispute.currentStep) && (
               <Button variant="outline" onClick={() => setShowOfferModal(true)} className="flex items-center gap-2">
                 <DollarSign size={14} />Submit Offer
+              </Button>
+            )}
+            {isOfferPhase && offers.length > 0 && (
+              <Button variant="outline" onClick={() => setShowCounterOfferModal(true)} className="flex items-center gap-2 border-purple-300 text-purple-700 hover:bg-purple-50">
+                <RefreshCw size={14} />Counter-Offer
               </Button>
             )}
             {nextStep && !["STEP_06_IDR_ENTITY_SELECTION"].includes(dispute.currentStep) && dispute.status !== "closed" && (
@@ -218,13 +276,11 @@ export default function DisputeDetail() {
               <CardContent className="p-4 pt-0">
                 <div className="space-y-1">
                   {IDR_STEPS.map((step, index) => {
-                    const tStep = timeline.find(t => t.step === step.key);
+                    const tStep = timeline.find((t: any) => t.step === step.key);
                     const isCompleted = tStep?.isCompleted ?? false;
                     const isCurrent = tStep?.isCurrent ?? false;
-                    const isPending = tStep?.isPending ?? true;
                     return (
                       <div key={step.key} className={`flex items-start gap-3 p-3 rounded-lg transition-colors ${isCurrent ? "bg-blue-50 border border-blue-200" : isCompleted ? "bg-green-50" : "hover:bg-slate-50"}`}>
-                        {/* Step indicator */}
                         <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold mt-0.5 ${
                           isCompleted ? "bg-green-500 text-white" :
                           isCurrent ? "bg-blue-600 text-white" :
@@ -232,10 +288,9 @@ export default function DisputeDetail() {
                         }`}>
                           {isCompleted ? <CheckCircle2 size={14} /> : index + 1}
                         </div>
-                        {/* Step content */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-2">
-                            <span className={`text-sm font-semibold ${isCurrent ? "text-blue-700" : isCompleted ? "text-green-700" : "text-slate-500"}`}>
+                            <span className={`text-sm font-medium ${isCurrent ? "text-blue-700" : isCompleted ? "text-green-700" : "text-slate-600"}`}>
                               {step.label}
                             </span>
                             <span className="text-xs text-slate-400 shrink-0">{step.days}</span>
@@ -245,20 +300,70 @@ export default function DisputeDetail() {
                           </p>
                           {tStep?.event && (
                             <div className="mt-1.5 text-xs text-slate-500 bg-white border border-slate-200 rounded px-2 py-1">
-                              {tStep.event.description} · {tStep.event.createdAt ? new Date(tStep.event.createdAt as unknown as string).toLocaleString() : ''}
+                              {tStep.event.description} · {tStep.event.createdAt ? new Date(tStep.event.createdAt as unknown as string).toLocaleString() : ""}
                             </div>
                           )}
                         </div>
-                        {/* Connector line */}
-                        {index < IDR_STEPS.length - 1 && (
-                          <div className="absolute left-[2.35rem] mt-8 w-0.5 h-4 bg-slate-200" style={{ display: "none" }} />
-                        )}
                       </div>
                     );
                   })}
                 </div>
               </CardContent>
             </Card>
+
+            {/* Offer Negotiation History — full-width card below timeline */}
+            {offers.length > 0 && (
+              <Card className="border-slate-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base font-semibold text-slate-800 flex items-center justify-between">
+                    <span className="flex items-center gap-2"><TrendingUp size={16} className="text-green-500" />Offer Negotiation History</span>
+                    <span className="text-xs text-slate-400 font-normal">{offers.length} offer{offers.length !== 1 ? "s" : ""} submitted</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {offers.map((offer: any) => (
+                      <div key={offer.id} className={`p-4 rounded-xl border-2 ${offer.isAccepted ? "bg-green-50 border-green-300" : `${OFFER_TYPE_COLORS[offer.offerType] ?? "bg-slate-50 border-slate-200"}`}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${OFFER_TYPE_COLORS[offer.offerType] ?? "bg-slate-100 border-slate-200 text-slate-600"}`}>
+                            {OFFER_TYPE_LABELS[offer.offerType] ?? offer.offerType}
+                          </span>
+                          {offer.isAccepted && (
+                            <span className="flex items-center gap-1 text-xs font-semibold text-green-700">
+                              <CheckCircle size={12} />Accepted
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-2xl font-bold text-slate-800 mb-1">
+                          ${Number(offer.amount).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                        </div>
+                        {offer.rationale && (
+                          <p className="text-xs text-slate-600 leading-relaxed mb-2 line-clamp-3">{offer.rationale}</p>
+                        )}
+                        <div className="text-xs text-slate-400">
+                          {offer.submittedAt ? new Date(offer.submittedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : ""}
+                        </div>
+                        {!offer.isAccepted && isOfferPhase && (
+                          <button
+                            onClick={() => { setAcceptingOfferId(offer.id); acceptOfferMutation.mutate({ disputeId: dispute.id, offerId: offer.id }); }}
+                            disabled={acceptOfferMutation.isPending && acceptingOfferId === offer.id}
+                            className="mt-3 w-full py-1.5 rounded-lg bg-green-600 text-white text-xs font-semibold hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5">
+                            {acceptOfferMutation.isPending && acceptingOfferId === offer.id
+                              ? <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Accepting...</>
+                              : <><CheckCircle size={12} />Accept This Offer</>}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {isOfferPhase && (
+                    <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+                      <strong>NSA §2799A-2(b):</strong> The IDR entity must select one party's offer as the payment amount. Accepting an offer here records agreement — the IDR entity makes the binding determination.
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
           </div>
 
           {/* Right sidebar */}
@@ -272,15 +377,15 @@ export default function DisputeDetail() {
               </CardHeader>
               <CardContent className="space-y-3 pt-0">
                 {[
-                  { label: "Billed Amount", value: dispute.billedAmount, highlight: false },
-                  { label: "QPA", value: dispute.qpaAmount, highlight: false },
-                  { label: "Initiating Party Offer", value: dispute.initiatingPartyOffer, highlight: false },
-                  { label: "Responding Party Offer", value: dispute.respondingPartyOffer, highlight: false },
+                  { label: "Billed Amount", value: dispute.billedAmount },
+                  { label: "QPA", value: dispute.qpaAmount },
+                  { label: "Initiating Party Offer", value: dispute.initiatingPartyOffer },
+                  { label: "Responding Party Offer", value: dispute.respondingPartyOffer },
                   { label: "Determination Amount", value: dispute.determinationAmount, highlight: true },
                 ].map(item => (
                   <div key={item.label} className="flex items-center justify-between text-sm">
                     <span className="text-slate-500">{item.label}</span>
-                    <span className={`font-semibold ${item.highlight ? "text-blue-700" : "text-slate-700"}`}>
+                    <span className={`font-semibold ${(item as any).highlight ? "text-blue-700" : "text-slate-700"}`}>
                       {item.value ? `$${Number(item.value).toLocaleString()}` : <span className="text-slate-300 font-normal">—</span>}
                     </span>
                   </div>
@@ -288,7 +393,7 @@ export default function DisputeDetail() {
               </CardContent>
             </Card>
 
-            {/* Deadlines */}
+            {/* NSA Deadlines */}
             <Card className="border-slate-200">
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
@@ -374,40 +479,42 @@ export default function DisputeDetail() {
                 ))}
               </CardContent>
             </Card>
-                    {/* Evidence Documents */}
-          <Card className="border-slate-200">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold text-slate-700 flex items-center justify-between">
-                <span className="flex items-center gap-2"><FileText size={14} className="text-orange-500" />Evidence Documents</span>
-                <button onClick={() => setShowDocModal(true)} className="text-xs text-blue-600 hover:underline font-normal">+ Attach</button>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              {!documentList || documentList.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center py-3">No documents attached yet</p>
-              ) : (
-                <div className="space-y-2">
-                  {documentList.map((doc: any) => (
-                    <div key={doc.id} className="flex items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
-                      <FileText size={14} className="text-slate-400 mt-0.5 shrink-0" />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-semibold text-slate-700 truncate">{doc.title}</div>
-                        <div className="text-xs text-slate-400 capitalize">{doc.documentType?.replace(/_/g, " ")}</div>
-                        {doc.fileSize && doc.fileSize > 0 && (
-                          <div className="text-xs text-slate-400">{(doc.fileSize / 1024).toFixed(1)} KB</div>
-                        )}
-                        <div className="text-xs text-slate-400">{doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : ""}</div>
+
+            {/* Evidence Documents */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center justify-between">
+                  <span className="flex items-center gap-2"><FileText size={14} className="text-orange-500" />Evidence Documents</span>
+                  <button onClick={() => setShowDocModal(true)} className="text-xs text-blue-600 hover:underline font-normal">+ Attach</button>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {!documentList || documentList.length === 0 ? (
+                  <p className="text-xs text-slate-400 text-center py-3">No documents attached yet</p>
+                ) : (
+                  <div className="space-y-2">
+                    {documentList.map((doc: any) => (
+                      <div key={doc.id} className="flex items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
+                        <FileText size={14} className="text-slate-400 mt-0.5 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-slate-700 truncate">{doc.title}</div>
+                          <div className="text-xs text-slate-400 capitalize">{doc.documentType?.replace(/_/g, " ")}</div>
+                          {doc.fileSize && doc.fileSize > 0 && (
+                            <div className="text-xs text-slate-400">{(doc.fileSize / 1024).toFixed(1)} KB</div>
+                          )}
+                          <div className="text-xs text-slate-400">{doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : ""}</div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
         </div>
       </main>
-      {/* Offer Submission Modal */}
+
+      {/* ── Offer Submission Modal ─────────────────────────────────────── */}
       {showOfferModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
@@ -446,7 +553,45 @@ export default function DisputeDetail() {
         </div>
       )}
 
-      {/* Document Upload Modal */}
+      {/* ── Counter-Offer Modal ────────────────────────────────────────── */}
+      {showCounterOfferModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Submit Counter-Offer</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Submit a counter-offer in response to the opposing party's offer. The certified IDR entity will consider all offers when making their binding determination under NSA §2799A-2.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Counter-Offer Amount ($)</label>
+                <input type="number" step="0.01" min="0" value={counterOfferAmount} onChange={e => setCounterOfferAmount(e.target.value)}
+                  placeholder="0.00" autoFocus
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              {dispute.qpaAmount && (
+                <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+                  <strong>QPA Reference:</strong> ${Number(dispute.qpaAmount).toLocaleString()} — The IDR entity must begin with a presumption that the QPA is the appropriate out-of-network rate.
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Supporting Rationale</label>
+                <textarea value={counterOfferRationale} onChange={e => setCounterOfferRationale(e.target.value)} rows={4}
+                  placeholder="Cite QPA benchmarks, comparable rates, clinical complexity, prior authorization status, or other NSA-recognized factors (45 CFR §149.510(c)(4))..."
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <Button variant="outline" className="flex-1" onClick={() => setShowCounterOfferModal(false)}>Cancel</Button>
+              <Button className="flex-1 bg-purple-600 hover:bg-purple-700" disabled={!counterOfferAmount || submitCounterOfferMutation.isPending}
+                onClick={() => submitCounterOfferMutation.mutate({ disputeId: dispute.id, offerType: "responding_party", amount: counterOfferAmount, rationale: counterOfferRationale || undefined })}>
+                {submitCounterOfferMutation.isPending ? "Submitting..." : "Submit Counter-Offer"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Document Upload Modal ──────────────────────────────────────── */}
       {showDocModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
@@ -473,7 +618,7 @@ export default function DisputeDetail() {
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-600 mb-1">File (reference name)</label>
+                <label className="block text-sm font-medium text-slate-600 mb-1">File</label>
                 <div className="flex gap-2">
                   <input type="text" value={docFileName} onChange={e => setDocFileName(e.target.value)}
                     placeholder="filename.pdf"
@@ -517,7 +662,7 @@ export default function DisputeDetail() {
         </div>
       )}
 
-      {/* Arbitrator Selection Modal */}
+      {/* ── Arbitrator Selection Modal ─────────────────────────────────── */}
       {showArbitratorModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">

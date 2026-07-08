@@ -294,6 +294,39 @@ export async function submitOffer(data: Omit<DisputeOffer, 'id' | 'submittedAt' 
   return id;
 }
 
+export async function acceptOffer(disputeId: string, offerId: string, performedBy: string, performedByName: string): Promise<Dispute> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await db.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
+  if (existing.length === 0) throw new Error("Dispute not found");
+  const offer = await db.select().from(disputeOffers).where(eq(disputeOffers.id, offerId)).limit(1);
+  if (offer.length === 0) throw new Error("Offer not found");
+  const now = new Date();
+  // Mark offer as accepted
+  await db.update(disputeOffers).set({ isAccepted: true }).where(eq(disputeOffers.id, offerId));
+  // Advance dispute to determination issued
+  await db.update(disputes).set({
+    currentStep: "STEP_13_DETERMINATION_ISSUED",
+    status: "determination_issued",
+    determinationAmount: offer[0].amount,
+    updatedAt: now,
+  }).where(eq(disputes.id, disputeId));
+  // Record timeline event
+  await createDisputeEvent({
+    id: crypto.randomUUID(),
+    disputeId,
+    step: "STEP_13_DETERMINATION_ISSUED",
+    previousStep: existing[0].currentStep as IDRStep,
+    eventType: "offer_accepted",
+    description: `Offer of $${Number(offer[0].amount).toLocaleString()} accepted — determination issued`,
+    performedBy,
+    performedByName,
+    metadata: { offerId, acceptedAmount: offer[0].amount },
+  });
+  const updated = await db.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
+  return updated[0];
+}
+
 // ─── Document helpers ─────────────────────────────────────────────────────────
 
 export async function addDocument(data: Omit<DisputeDocument, 'id' | 'uploadedAt'>) {

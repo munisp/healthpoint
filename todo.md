@@ -45,3 +45,11 @@
 - [x] Document Upload modal — on Dispute Detail page, wired to documents.upload tRPC, with document list
 - [x] Fraud Alert Detail view — clickable alerts on Dashboard showing AI reasoning, confidence breakdown, transaction details
 - [x] Final publish-ready checkpoint
+
+## Session 4 Features
+- [x] Offer negotiation panel on Dispute Detail — Counter-Offer form, offer history timeline, accept/reject actions
+- [x] acceptOffer tRPC procedure — marks offer accepted, advances dispute to STEP_13, creates determination notification
+- [x] TypeScript errors fixed: acceptOffer procedure added to disputes router, err type annotation corrected
+- [ ] Notification delivery — SendGrid email + Twilio SMS wired to notifications table on status changes
+- [ ] Dispute PDF export — server-side NSA IDR summary PDF with full timeline, offers, and determination
+- [ ] Agentic AI layer — document upload agent (extraction, validation, classification) and CMS submission agent (form pre-fill, eligibility check, submission tracking)

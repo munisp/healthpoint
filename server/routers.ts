@@ -6,7 +6,7 @@ import { ENV } from "./_core/env";
 
 import {
   createDispute, getDisputeById, listDisputes, advanceDisputeStep,
-  submitOffer, addDocument, listIDREntities, seedIDREntities,
+  submitOffer, acceptOffer, addDocument, listIDREntities, seedIDREntities,
   getDashboardStats, listNotifications, markNotificationRead,
   createNotification,
   upsertDisputeDraft, getDisputeDraft, deleteDisputeDraft,
@@ -200,6 +200,29 @@ export const appRouter = router({
         return { offerId };
       }),
 
+    acceptOffer: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        offerId: z.string(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const dispute = await acceptOffer(
+          input.disputeId,
+          input.offerId,
+          ctx.user.id,
+          ctx.user.name ?? "Unknown"
+        );
+        await createNotification({
+          disputeId: input.disputeId,
+          userId: ctx.user.id,
+          notificationType: "determination_issued",
+          title: `Determination Issued — ${dispute.referenceNumber}`,
+          message: `An offer has been accepted and the dispute has been resolved. Determination amount: $${Number(dispute.determinationAmount).toLocaleString()}.`,
+          dueDate: null,
+        });
+        return { success: true, dispute };
+      }),
+
     selectArbitrator: protectedProcedure
       .input(z.object({
         disputeId: z.string(),
@@ -257,7 +280,7 @@ export const appRouter = router({
           isPending: index > currentStepIndex,
           event: dispute.events.find(e => e.step === step) ?? null,
         }));
-        return { timeline, dispute };
+        return { timeline, dispute, offers: dispute.offers ?? [] };
       }),
   }),
 
