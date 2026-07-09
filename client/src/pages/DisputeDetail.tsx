@@ -17,6 +17,7 @@ import {
 import WorkflowTimeline from "@/components/WorkflowTimeline";
 import DeadlineCountdownBanner from "@/components/DeadlineCountdownBanner";
 import OutcomePredictionGauge from "@/components/OutcomePredictionGauge";
+import DisputeComments from "@/components/DisputeComments";
 
 const IDR_STEPS = [
   { key: "STEP_01_OPEN_NEGOTIATION_INITIATED", label: "Open Negotiation Initiated", description: "Party sends open negotiation notice per NSA §2799A-1", days: "Day 0" },
@@ -632,6 +633,9 @@ export default function DisputeDetail() {
                 )}
               </CardContent>
             </Card>
+
+            {/* Comments Thread */}
+            <DisputeComments disputeId={dispute.id} />
           </div>
         </div>
       </main>

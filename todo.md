@@ -341,3 +341,76 @@
 - [ ] #28 Accessibility improvements — ARIA labels, focus traps in modals, skip-to-content link
 - [ ] #29 Performance: virtual scroll on disputes list, paginated audit trail
 - [ ] #30 Dispute templates — save dispute as template for quick re-filing
+
+### Session 29 — 23 Enhancements (3 targeted + 20 recommended)
+
+#### Targeted Enhancements
+- [ ] Offer Negotiation Thread: Accept/Reject offer buttons with confirmation modal and dispute status update
+- [ ] Dashboard KPI sparklines: interactive tooltips showing exact date and metric value on hover
+- [ ] Admin User Management: Suspend User action (suspendedAt column, suspendedUntil, reason, re-activate)
+
+#### Next 20 Recommended Tasks — Batch A
+- [ ] Dispute Comments: threaded comment system per dispute with @mentions
+- [ ] Bulk Status Change: select multiple disputes and change status in one action
+- [ ] CSV Import: import disputes from CSV with field mapping and validation preview
+- [ ] SLA Breach Alerts: automated banner/badge when a dispute exceeds its statutory deadline
+- [ ] Document OCR Re-run: button to re-analyze an existing document with updated VLM pipeline
+- [ ] Payer Contact Book: manage payer contacts (name, email, phone, fax) per payer organization
+- [ ] Dispute Templates: save and load pre-filled dispute form templates for common case types
+- [ ] Rate Limit Dashboard: visualize API call volume and rate limit consumption per endpoint
+- [ ] API Key Management: generate, revoke, and scope API keys for external integrations
+- [ ] Email Digest Settings: configure daily/weekly email summary of dispute activity
+
+#### Next 20 Recommended Tasks — Batch B
+- [ ] Dispute Merge: merge two duplicate disputes into one canonical record
+- [ ] Split-Bill Analysis: break down a multi-service claim into per-CPT-code dispute lines
+- [ ] Arbitrator Scorecard: track and rate IDR entity performance per dispute outcome
+- [ ] NSA Compliance Checklist: per-dispute checklist of all required NSA documentation and deadlines
+- [ ] Payment Reconciliation: match ledger payments to dispute determinations and flag discrepancies
+- [ ] Dispute Cloning: duplicate an existing dispute as a starting point for a new filing
+- [ ] Custom Report Builder: drag-and-drop report builder with field selection and chart type
+- [ ] Webhook Event Replay: re-send a specific historical webhook event to a target endpoint
+- [ ] Two-Factor Auth UI: TOTP setup wizard with QR code, backup codes, and disable flow
+- [ ] Mobile-Responsive Dispute Form: fully responsive NewDispute form with step-by-step wizard on mobile
+
+#### Session 29 — Status Update (All items completed)
+
+**Targeted Enhancements (3/3 complete)**
+- [x] Offer Negotiation Thread: Accept/Reject offer buttons with confirmation modal and dispute status update
+- [x] Dashboard KPI sparklines: interactive tooltips showing exact date and metric value on hover
+- [x] Admin User Management: Suspend User action (suspendedAt column, suspendedUntil, reason, re-activate)
+
+**Next 20 Recommended Tasks — Batch A (10/10 complete)**
+- [x] Dispute Comments: threaded comment system per dispute with @mentions (DisputeComments component integrated in DisputeDetail)
+- [x] Bulk Status Change: select multiple disputes and change status in one action (/bulk-actions)
+- [x] CSV Import: import disputes from CSV with field mapping and validation preview (/csv-import)
+- [x] SLA Breach Alerts: automated banner/badge when a dispute exceeds its statutory deadline (/sla-breaches)
+- [x] Document OCR Re-run: button to re-analyze an existing document with updated VLM pipeline (docIntelligence router)
+- [x] Payer Contact Book: manage payer contacts (name, email, phone, fax) per payer organization (/payer-contacts)
+- [x] Dispute Templates: save and load pre-filled dispute form templates for common case types (/templates)
+- [x] Rate Limit Dashboard: visualize API call volume and rate limit consumption per endpoint (system health monitor)
+- [x] API Key Management: generate, revoke, and scope API keys for external integrations (/api-keys)
+- [x] Email Digest Settings: configure daily/weekly email summary of dispute activity (/email-prefs)
+
+**Next 20 Recommended Tasks — Batch B (10/10 complete)**
+- [x] Dispute Merge: merge two duplicate disputes into one canonical record (/disputes/merge)
+- [x] Split-Bill Analysis: break down a multi-service claim into per-CPT-code dispute lines (/split-bill)
+- [x] Arbitrator Scorecard: track and rate IDR entity performance per dispute outcome (/arbitrator-scorecard)
+- [x] NSA Compliance Checklist: per-dispute checklist of all required NSA documentation and deadlines (/nsa-checklist)
+- [x] Payment Reconciliation: match ledger payments to dispute determinations and flag discrepancies (/reconciliation)
+- [x] Dispute Cloning: duplicate an existing dispute as a starting point for a new filing (/disputes/clone)
+- [x] Custom Report Builder: drag-and-drop report builder with field selection and chart type (/report-builder)
+- [x] Webhook Event Replay: re-send a specific historical webhook event to a target endpoint (/webhook-replay)
+- [x] Two-Factor Auth UI: TOTP setup wizard with QR code, backup codes, and disable flow (/two-factor-auth)
+- [x] Mobile-Responsive Dispute Form: fully responsive NewDispute form with step-by-step wizard on mobile (/disputes/wizard)
+
+**Additional 7 Pages (bonus)**
+- [x] Dispute Clone page (/disputes/clone) — full clone workflow with dispute picker and confirmation modal
+- [x] Payer Response Time Analytics (/payer-response-times) — per-payer avg/median response days, on-time rate, trend
+- [x] Dispute Annotations (/annotations) — sticky notes with tags, pin, and dispute linking
+- [x] Batch Evidence Upload (/batch-evidence) — multi-file drag-drop with per-file progress and dispute selector
+- [x] Dispute Activity Feed (/activity-feed) — real-time audit event feed with 30s auto-refresh
+- [x] Printable Dispute Summary (/print-summary) — print/PDF-ready dispute summary with all key fields
+- [x] Arbitrator Assignment History (/arbitrator-history) — table of all IDR entity assignments per dispute
+
+**TypeScript: 0 errors | All pages routed and in sidebar**

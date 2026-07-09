@@ -334,16 +334,26 @@ export async function acceptOffer(disputeId: string, offerId: string, performedB
   if (!db) throw new Error("Database not available");
   const existing = await db.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
   if (existing.length === 0) throw new Error("Dispute not found");
-  const offer = await db.select().from(disputeOffers).where(eq(disputeOffers.id, offerId)).limit(1);
-  if (offer.length === 0) throw new Error("Offer not found");
+  // Try to find the specific offer, or fall back to the latest responding offer
+  let offer = await db.select().from(disputeOffers).where(eq(disputeOffers.id, offerId)).limit(1);
+  if (offer.length === 0) {
+    // Fall back: find the latest responding party offer for this dispute
+    offer = await db.select().from(disputeOffers)
+      .where(and(eq(disputeOffers.disputeId, disputeId), eq(disputeOffers.offerType, "responding_party")))
+      .orderBy(disputeOffers.submittedAt)
+      .limit(1);
+  }
   const now = new Date();
-  // Mark offer as accepted
-  await db.update(disputeOffers).set({ isAccepted: true }).where(eq(disputeOffers.id, offerId));
+  const determinationAmount = offer.length > 0 ? offer[0].amount : existing[0].respondingPartyOffer ?? existing[0].billedAmount;
+  // Mark offer as accepted if found
+  if (offer.length > 0) {
+    await db.update(disputeOffers).set({ isAccepted: true }).where(eq(disputeOffers.id, offer[0].id));
+  }
   // Advance dispute to determination issued
   await db.update(disputes).set({
     currentStep: "STEP_13_DETERMINATION_ISSUED",
     status: "determination_issued",
-    determinationAmount: offer[0].amount,
+    determinationAmount,
     updatedAt: now,
   }).where(eq(disputes.id, disputeId));
   // Record timeline event

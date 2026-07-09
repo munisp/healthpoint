@@ -38,7 +38,7 @@ import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
 import { eq, and } from "drizzle-orm";
-import { stepNotes, users, disputes as disputesTable } from "../drizzle/schema";
+import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
@@ -459,6 +459,48 @@ export const appRouter = router({
         return results;
       }),
 
+    rejectOffer: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        reason: z.string().max(1000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
+        const { eq } = await import("drizzle-orm");
+        const { disputeEvents: disputeEventsTable } = await import("../drizzle/schema");
+        // Mark dispute as rejected / ineligible and record in timeline
+        await db.update(disputesTable)
+          .set({
+            status: "ineligible" as any,
+            currentStep: "STEP_19_APPEAL_RESOLVED",
+            updatedAt: new Date(),
+          })
+          .where(eq(disputesTable.id, input.disputeId));
+        // Record timeline event
+        await db.insert(disputeEventsTable).values({
+          id: crypto.randomUUID(),
+          disputeId: input.disputeId,
+          step: "STEP_19_APPEAL_RESOLVED",
+          eventType: "offer_rejected",
+          description: input.reason ? `Offer rejected: ${input.reason}` : "Offer rejected by initiating party",
+          performedBy: ctx.user.id,
+          performedByName: ctx.user.name ?? "Unknown",
+          metadata: { reason: input.reason ?? null },
+          createdAt: new Date(),
+        });
+        // Notify
+        await createNotification({
+          disputeId: input.disputeId,
+          userId: ctx.user.id,
+          notificationType: "system_alert",
+          title: "Offer Rejected",
+          message: input.reason ? `Offer was rejected: ${input.reason}` : "The offer has been rejected and the dispute has been closed.",
+          dueDate: null,
+        });
+        return { success: true };
+      }),
+
     sendNotification: protectedProcedure
       .input(z.object({
         disputeId: z.string(),
@@ -490,6 +532,83 @@ export const appRouter = router({
           message: input.message,
         });
         return { success: true, deliveryResults: results };
+      }),
+
+    clone: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        const original = await getDisputeById(input.disputeId);
+        if (!original) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        const newDispute = await createDispute({
+          id: crypto.randomUUID(),
+          referenceNumber: `IDR-CLONE-${Date.now().toString(36).toUpperCase()}`,
+          initiatingPartyId: ctx.user.id,
+          initiatingPartyName: original.initiatingPartyName,
+          initiatingPartyType: original.initiatingPartyType,
+          respondingPartyName: original.respondingPartyName ?? undefined,
+          respondingPartyType: original.respondingPartyType ?? undefined,
+          serviceType: original.serviceType,
+          serviceDate: original.serviceDate,
+          billedAmount: original.billedAmount,
+          qpaAmount: original.qpaAmount ?? undefined,
+          patientState: original.patientState,
+          facilityState: original.facilityState,
+          cptCodes: original.cptCodes,
+          notes: `Cloned from ${original.referenceNumber}`,
+          createdBy: ctx.user.id,
+        });
+        const db = await getDb();
+        if (db) {
+          const { disputeEvents: disputeEventsTable } = await import("../drizzle/schema");
+          await db.insert(disputeEventsTable).values({
+            id: crypto.randomUUID(),
+            disputeId: newDispute.id,
+            step: "STEP_01_OPEN_NEGOTIATION_INITIATED",
+            eventType: "dispute_cloned",
+            description: `Dispute cloned from ${original.referenceNumber}`,
+            performedBy: ctx.user.id,
+            performedByName: ctx.user.name ?? "Unknown",
+            metadata: { sourceDisputeId: input.disputeId, sourceRef: original.referenceNumber },
+          });
+        }
+        return { success: true, newDisputeId: newDispute.id, referenceNumber: newDispute.referenceNumber };
+      }),
+
+    merge: protectedProcedure
+      .input(z.object({
+        primaryDisputeId: z.string(),
+        secondaryDisputeId: z.string(),
+        reason: z.string().max(1000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        if (input.primaryDisputeId === input.secondaryDisputeId) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot merge a dispute with itself" });
+        }
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { eq } = await import("drizzle-orm");
+        const primary = await getDisputeById(input.primaryDisputeId);
+        const secondary = await getDisputeById(input.secondaryDisputeId);
+        if (!primary || !secondary) throw new TRPCError({ code: "NOT_FOUND", message: "One or both disputes not found" });
+        // Mark secondary as merged/closed
+        await db.update(disputesTable).set({
+          status: "closed" as any,
+          notes: `[Merged into ${primary.referenceNumber}] ${secondary.notes ?? ""}`.trim(),
+          updatedAt: new Date(),
+        }).where(eq(disputesTable.id, input.secondaryDisputeId));
+        // Record merge event on primary
+        const { disputeEvents: disputeEventsTable } = await import("../drizzle/schema");
+        await db.insert(disputeEventsTable).values({
+          id: crypto.randomUUID(),
+          disputeId: input.primaryDisputeId,
+          step: primary.currentStep,
+          eventType: "dispute_merged",
+          description: `Merged with ${secondary.referenceNumber}${input.reason ? `: ${input.reason}` : ""}`,
+          performedBy: ctx.user.id,
+          performedByName: ctx.user.name ?? "Unknown",
+          metadata: { mergedDisputeId: input.secondaryDisputeId, mergedRef: secondary.referenceNumber, reason: input.reason ?? null },
+        });
+        return { success: true, primaryDisputeId: input.primaryDisputeId };
       }),
   }),
 
@@ -696,6 +815,39 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { eq } = await import("drizzle-orm");
         await db.update(users).set({ role: input.role }).where(eq(users.id, input.userId));
+        return { success: true };
+      }),
+
+    suspendUser: adminProcedure
+      .input(z.object({
+        userId: z.string(),
+        reason: z.string().max(500).optional(),
+        suspendUntil: z.string().datetime().optional(), // ISO date string
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        if (input.userId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot suspend yourself" });
+        const { eq } = await import("drizzle-orm");
+        await db.update(users).set({
+          suspendedAt: new Date(),
+          suspendedUntil: input.suspendUntil ? new Date(input.suspendUntil) : null,
+          suspendReason: input.reason ?? null,
+        }).where(eq(users.id, input.userId));
+        return { success: true };
+      }),
+
+    unsuspendUser: adminProcedure
+      .input(z.object({ userId: z.string() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { eq } = await import("drizzle-orm");
+        await db.update(users).set({
+          suspendedAt: null,
+          suspendedUntil: null,
+          suspendReason: null,
+        }).where(eq(users.id, input.userId));
         return { success: true };
       }),
   }),
@@ -2286,6 +2438,408 @@ Based on NSA IDR historical data and legal precedent, provide:
           format: input.format,
           exportedAt: new Date().toISOString(),
         };
+      }),
+  }),
+  // ── Dispute Comments ──────────────────────────────────────────────────────
+  comments: router({
+    list: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        const { eq, isNull } = await import("drizzle-orm");
+        return db.select().from(disputeComments)
+          .where(and(eq(disputeComments.disputeId, input.disputeId), isNull(disputeComments.parentId)))
+          .orderBy(disputeComments.createdAt);
+      }),
+
+    add: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        content: z.string().min(1).max(5000),
+        parentId: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [comment] = await db.insert(disputeComments).values({
+          disputeId: input.disputeId,
+          authorId: ctx.user.id,
+          authorName: ctx.user.name ?? "Unknown",
+          content: input.content,
+          parentId: input.parentId ?? null,
+        }).returning();
+        return comment;
+      }),
+
+    update: protectedProcedure
+      .input(z.object({ id: z.string(), content: z.string().min(1).max(5000) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [existing] = await db.select().from(disputeComments).where(eq(disputeComments.id, input.id)).limit(1);
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+        if (existing.authorId !== ctx.user.id && ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+        const [updated] = await db.update(disputeComments).set({ content: input.content, edited: true, updatedAt: new Date() }).where(eq(disputeComments.id, input.id)).returning();
+        return updated;
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [existing] = await db.select().from(disputeComments).where(eq(disputeComments.id, input.id)).limit(1);
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+        if (existing.authorId !== ctx.user.id && ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+        await db.delete(disputeComments).where(eq(disputeComments.id, input.id));
+        return { success: true };
+      }),
+
+    replies: protectedProcedure
+      .input(z.object({ parentId: z.string() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        return db.select().from(disputeComments).where(eq(disputeComments.parentId, input.parentId)).orderBy(disputeComments.createdAt);
+      }),
+  }),
+
+  // ── Payer Contact Book ─────────────────────────────────────────────────────
+  payerContacts: router({
+    list: protectedProcedure
+      .input(z.object({ search: z.string().optional() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        if (input.search) {
+          const { ilike, or } = await import("drizzle-orm");
+          const q = `%${input.search}%`;
+          return db.select().from(payerContacts).where(or(ilike(payerContacts.payerName, q), ilike(payerContacts.contactName, q), ilike(payerContacts.email, q)));
+        }
+        return db.select().from(payerContacts).orderBy(payerContacts.payerName);
+      }),
+
+    create: protectedProcedure
+      .input(z.object({
+        payerName: z.string().min(1).max(200),
+        payerId: z.string().optional(),
+        contactName: z.string().optional(),
+        contactTitle: z.string().optional(),
+        email: z.string().email().optional(),
+        phone: z.string().optional(),
+        fax: z.string().optional(),
+        address: z.string().optional(),
+        idrPortalUrl: z.string().url().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [contact] = await db.insert(payerContacts).values({ ...input, createdBy: ctx.user.id }).returning();
+        return contact;
+      }),
+
+    update: protectedProcedure
+      .input(z.object({
+        id: z.string(),
+        payerName: z.string().min(1).max(200).optional(),
+        contactName: z.string().optional(),
+        email: z.string().email().optional(),
+        phone: z.string().optional(),
+        fax: z.string().optional(),
+        address: z.string().optional(),
+        idrPortalUrl: z.string().url().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { id, ...rest } = input;
+        const [updated] = await db.update(payerContacts).set({ ...rest, updatedAt: new Date() }).where(eq(payerContacts.id, id)).returning();
+        return updated;
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.delete(payerContacts).where(eq(payerContacts.id, input.id));
+        return { success: true };
+      }),
+  }),
+
+  // ── API Key Management ─────────────────────────────────────────────────────
+  apiKeys: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return db.select({
+        id: apiKeys.id,
+        name: apiKeys.name,
+        keyPrefix: apiKeys.keyPrefix,
+        scopes: apiKeys.scopes,
+        lastUsedAt: apiKeys.lastUsedAt,
+        expiresAt: apiKeys.expiresAt,
+        revokedAt: apiKeys.revokedAt,
+        createdAt: apiKeys.createdAt,
+      }).from(apiKeys).where(eq(apiKeys.userId, ctx.user.id)).orderBy(apiKeys.createdAt);
+    }),
+
+    create: protectedProcedure
+      .input(z.object({
+        name: z.string().min(1).max(100),
+        scopes: z.array(z.enum(["read", "write", "admin"])).min(1),
+        expiresAt: z.string().datetime().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { createHash, randomBytes } = await import("crypto");
+        const rawKey = `hp_${randomBytes(32).toString("hex")}`;
+        const keyHash = createHash("sha256").update(rawKey).digest("hex");
+        const keyPrefix = rawKey.substring(0, 8);
+        await db.insert(apiKeys).values({
+          userId: ctx.user.id,
+          name: input.name,
+          keyHash,
+          keyPrefix,
+          scopes: input.scopes.join(","),
+          expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+        });
+        return { key: rawKey, prefix: keyPrefix }; // raw key returned only once
+      }),
+
+    revoke: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [existing] = await db.select().from(apiKeys).where(and(eq(apiKeys.id, input.id), eq(apiKeys.userId, ctx.user.id))).limit(1);
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+        await db.update(apiKeys).set({ revokedAt: new Date() }).where(eq(apiKeys.id, input.id));
+        return { success: true };
+      }),
+  }),
+
+  // ── SLA Breach Monitoring ──────────────────────────────────────────────────
+  sla: router({
+    breaches: protectedProcedure
+      .input(z.object({
+        disputeId: z.string().optional(),
+        severity: z.enum(["warning", "critical"]).optional(),
+        limit: z.number().min(1).max(200).default(50),
+      }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        const conditions: any[] = [];
+        if (input.disputeId) conditions.push(eq(slaBreaches.disputeId, input.disputeId));
+        if (input.severity) conditions.push(eq(slaBreaches.severity, input.severity));
+        const query = db.select().from(slaBreaches).orderBy(slaBreaches.detectedAt);
+        return conditions.length > 0 ? query.where(and(...conditions)).limit(input.limit) : query.limit(input.limit);
+      }),
+
+    check: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // Check current dispute step against statutory deadlines
+        const [dispute] = await db.select().from(disputesTable).where(eq(disputesTable.id, input.disputeId)).limit(1);
+        if (!dispute) throw new TRPCError({ code: "NOT_FOUND" });
+        const stepDeadlines: Record<string, number> = {
+          STEP_01_OPEN_NEGOTIATION: 30, STEP_02_IDR_NOTICE: 4, STEP_03_IDR_INITIATION: 3,
+          STEP_04_ENTITY_SELECTION: 3, STEP_05_ENTITY_SELECTION_PERIOD: 3, STEP_06_ENTITY_CONFIRMATION: 1,
+          STEP_07_ADDITIONAL_INFO: 10, STEP_08_PRELIMINARY_PAYMENT: 30, STEP_09_OFFER_SUBMISSION: 10,
+          STEP_10_ARBITRATION: 30, STEP_11_DETERMINATION: 30, STEP_12_PAYMENT: 30,
+        };
+        const currentStep = dispute.currentStep ?? "STEP_01_OPEN_NEGOTIATION";
+        const deadlineDays = stepDeadlines[currentStep] ?? 30;
+        const createdAt = dispute.createdAt ? new Date(dispute.createdAt) : new Date();
+        const actualDays = Math.floor((Date.now() - createdAt.getTime()) / 86400000);
+        const breachDays = actualDays - deadlineDays;
+        if (breachDays > 0) {
+          await db.insert(slaBreaches).values({
+            disputeId: input.disputeId,
+            step: currentStep,
+            deadlineDays,
+            actualDays,
+            breachDays,
+            severity: breachDays > 5 ? "critical" : "warning",
+          });
+          return { breached: true, breachDays, severity: breachDays > 5 ? "critical" : "warning" };
+        }
+        return { breached: false, breachDays: 0, severity: null };
+      }),
+
+    summary: protectedProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) return { total: 0, critical: 0, warning: 0, resolved: 0 };
+      const { isNotNull, isNull, count, sql } = await import("drizzle-orm");
+      const all = await db.select().from(slaBreaches);
+      return {
+        total: all.length,
+        critical: all.filter(b => b.severity === "critical").length,
+        warning: all.filter(b => b.severity === "warning").length,
+        resolved: all.filter(b => b.resolvedAt !== null).length,
+      };
+    }),
+  }),
+  bulkActions: router({
+    changeStatus: protectedProcedure
+      .input(z.object({
+        ids: z.array(z.string()).min(1).max(500),
+        status: z.enum(["open_negotiation", "idr_initiated", "idr_entity_selection", "eligibility_review", "offer_submission", "under_arbitration", "determination_issued", "payment_pending", "closed", "appealed", "ineligible"]),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const { inArray } = await import("drizzle-orm");
+        await db.update(disputesTable).set({ status: input.status, updatedAt: new Date() }).where(inArray(disputesTable.id, input.ids));
+        return { updated: input.ids.length };
+      }),
+    addNote: protectedProcedure
+      .input(z.object({
+        ids: z.array(z.string()).min(1).max(500),
+        note: z.string().min(1).max(1000),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const { nanoid } = await import("nanoid");
+        for (const disputeId of input.ids) {
+          await db.insert(disputeComments).values({ disputeId, authorId: ctx.user.id, authorName: ctx.user.name ?? "User", content: input.note });
+        }
+        return { updated: input.ids.length };
+      }),
+  }),
+
+  csvImport: router({
+    preview: protectedProcedure
+      .input(z.object({ csvContent: z.string().max(500_000) }))
+      .mutation(async ({ input }) => {
+        const lines = input.csvContent.split("\n").filter(l => l.trim());
+        if (lines.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "CSV must have header + at least one row" });
+        const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+        const rows = lines.slice(1, 11).map(line => {
+          const vals = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+          const row: Record<string, string> = {};
+          headers.forEach((h, i) => { row[h] = vals[i] ?? ""; });
+          return row;
+        });
+        return { headers, preview: rows, totalRows: lines.length - 1 };
+      }),
+    import: protectedProcedure
+      .input(z.object({ csvContent: z.string().max(500_000) }))
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const lines = input.csvContent.split("\n").filter(l => l.trim());
+        if (lines.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "CSV must have header + at least one row" });
+        const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+        let imported = 0;
+        let skipped = 0;
+        const errors: string[] = [];
+        for (let i = 1; i < lines.length; i++) {
+          try {
+            const vals = lines[i].split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+            const row: Record<string, string> = {};
+            headers.forEach((h, j) => { row[h] = vals[j] ?? ""; });
+            if (!row.respondingPartyName && !row.payer) { skipped++; continue; }
+            await createDispute({
+              id: crypto.randomUUID(),
+              referenceNumber: row.referenceNumber || row.reference || `IMPORT-${Date.now()}-${i}`,
+              initiatingPartyId: ctx.user.id,
+              initiatingPartyType: (row.initiatingPartyType as any) || "provider",
+              initiatingPartyName: row.initiatingPartyName || row.provider || ctx.user.name || "Imported",
+              respondingPartyType: (row.respondingPartyType as any) || "payer",
+              respondingPartyName: row.respondingPartyName || row.payer || "Unknown Payer",
+              billedAmount: row.billedAmount || row.billed || "0",
+              qpaAmount: row.qpaAmount || row.qpa || null,
+              serviceType: (row.serviceType || row.service || "emergency_medicine") as any,
+              serviceDate: new Date(),
+              patientState: row.patientState || "CA",
+              facilityState: row.facilityState || "CA",
+              cptCodes: row.cptCodes ? row.cptCodes.split(";") : [],
+            });
+            imported++;
+          } catch (e: any) {
+            errors.push(`Row ${i}: ${e.message}`);
+            skipped++;
+          }
+        }
+        return { imported, skipped, errors: errors.slice(0, 20) };
+      }),
+  }),
+
+  webhookReplay: router({
+    list: protectedProcedure
+      .input(z.object({ status: z.enum(["failed", "pending", "delivered"]).optional(), limit: z.number().min(1).max(200).default(50) }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        const { desc, eq } = await import("drizzle-orm");
+        let q = db.select().from(webhookDeliveries).orderBy(desc(webhookDeliveries.createdAt)).limit(input.limit);
+        if (input.status) {
+          const results = await db.select().from(webhookDeliveries).where(eq(webhookDeliveries.status, input.status)).orderBy(desc(webhookDeliveries.createdAt)).limit(input.limit);
+          return results;
+        }
+        return q;
+      }),
+    replay: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const { eq } = await import("drizzle-orm");
+        const [delivery] = await db.select().from(webhookDeliveries).where(eq(webhookDeliveries.id, input.id)).limit(1);
+        if (!delivery) throw new TRPCError({ code: "NOT_FOUND", message: "Delivery not found" });
+        await db.update(webhookDeliveries).set({ status: "pending", attempts: 0, nextRetryAt: new Date() }).where(eq(webhookDeliveries.id, input.id));
+        return { queued: true };
+      }),
+    replayAll: protectedProcedure
+      .input(z.object({ status: z.enum(["failed", "pending"]) }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const { eq } = await import("drizzle-orm");
+        await db.update(webhookDeliveries).set({ status: "pending", attempts: 0, nextRetryAt: new Date() }).where(eq(webhookDeliveries.status, input.status));
+        return { queued: true };
+      }),
+  }),
+
+  emailPrefs: router({
+    get: protectedProcedure.query(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) return null;
+      const { eq } = await import("drizzle-orm");
+      const [pref] = await db.select().from(emailDigestPreferences).where(eq(emailDigestPreferences.userId, ctx.user.id)).limit(1);
+      return pref ?? null;
+    }),
+    upsert: protectedProcedure
+      .input(z.object({
+        digestFrequency: z.enum(["daily", "weekly", "never"]),
+        notifyOnNewDispute: z.boolean().default(true),
+        notifyOnStatusChange: z.boolean().default(true),
+        notifyOnDeadlineApproach: z.boolean().default(true),
+        notifyOnDetermination: z.boolean().default(true),
+        notifyOnSLABreach: z.boolean().default(true),
+        digestTime: z.string().default("08:00"),
+        digestDayOfWeek: z.number().min(0).max(6).default(1),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const existing = await db.select().from(emailDigestPreferences).where((await import("drizzle-orm")).eq(emailDigestPreferences.userId, ctx.user.id)).limit(1);
+        if (existing.length > 0) {
+          await db.update(emailDigestPreferences).set({ ...input, updatedAt: new Date() }).where((await import("drizzle-orm")).eq(emailDigestPreferences.userId, ctx.user.id));
+        } else {
+          const { nanoid } = await import("nanoid");
+          await db.insert(emailDigestPreferences).values({ id: nanoid(), userId: ctx.user.id, ...input });
+        }
+        return { success: true };
       }),
   }),
 });

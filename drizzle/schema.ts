@@ -24,6 +24,9 @@ export const users = pgTable("users", {
   role: roleEnum("role").default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow(),
+  suspendedAt: timestamp("suspendedAt"),
+  suspendedUntil: timestamp("suspendedUntil"),
+  suspendReason: text("suspendReason"),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
@@ -711,3 +714,148 @@ export const stepNotes = pgTable(
 );
 export type StepNote = typeof stepNotes.$inferSelect;
 export type InsertStepNote = typeof stepNotes.$inferInsert;
+
+// ─── Dispute Comments ────────────────────────────────────────────────────────
+export const disputeComments = pgTable(
+  "dispute_comments",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    authorId: varchar("authorId", { length: 64 }).notNull(),
+    authorName: text("authorName"),
+    content: text("content").notNull(),
+    parentId: varchar("parentId", { length: 64 }), // for threaded replies
+    edited: boolean("edited").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("dispute_comments_disputeId_idx").on(t.disputeId),
+    index("dispute_comments_parentId_idx").on(t.parentId),
+  ]
+);
+export type DisputeComment = typeof disputeComments.$inferSelect;
+export type InsertDisputeComment = typeof disputeComments.$inferInsert;
+
+// ─── Payer Contact Book ───────────────────────────────────────────────────────
+export const payerContacts = pgTable(
+  "payer_contacts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    payerName: text("payerName").notNull(),
+    payerId: varchar("payerId", { length: 64 }),
+    contactName: text("contactName"),
+    contactTitle: text("contactTitle"),
+    email: varchar("email", { length: 320 }),
+    phone: varchar("phone", { length: 32 }),
+    fax: varchar("fax", { length: 32 }),
+    address: text("address"),
+    idrPortalUrl: text("idrPortalUrl"),
+    notes: text("notes"),
+    createdBy: varchar("createdBy", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("payer_contacts_payerName_idx").on(t.payerName),
+  ]
+);
+export type PayerContact = typeof payerContacts.$inferSelect;
+export type InsertPayerContact = typeof payerContacts.$inferInsert;
+
+// ─── API Keys ─────────────────────────────────────────────────────────────────
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    name: text("name").notNull(),
+    keyHash: varchar("keyHash", { length: 128 }).notNull(), // SHA-256 of the key
+    keyPrefix: varchar("keyPrefix", { length: 8 }).notNull(), // first 8 chars for display
+    scopes: text("scopes").default("read").notNull(), // comma-separated: read,write,admin
+    lastUsedAt: timestamp("lastUsedAt"),
+    expiresAt: timestamp("expiresAt"),
+    revokedAt: timestamp("revokedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("api_keys_userId_idx").on(t.userId),
+    index("api_keys_keyHash_idx").on(t.keyHash),
+  ]
+);
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type InsertApiKey = typeof apiKeys.$inferInsert;
+
+// ─── SLA Breach Log ───────────────────────────────────────────────────────────
+export const slaBreaches = pgTable(
+  "sla_breaches",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    step: text("step").notNull(),
+    deadlineDays: integer("deadlineDays").notNull(),
+    actualDays: integer("actualDays").notNull(),
+    breachDays: integer("breachDays").notNull(), // actualDays - deadlineDays
+    detectedAt: timestamp("detectedAt").defaultNow().notNull(),
+    resolvedAt: timestamp("resolvedAt"),
+    severity: text("severity").notNull().default("warning"), // warning | critical
+  },
+  (t) => [
+    index("sla_breaches_disputeId_idx").on(t.disputeId),
+    index("sla_breaches_detectedAt_idx").on(t.detectedAt),
+  ]
+);
+export type SLABreach = typeof slaBreaches.$inferSelect;
+export type InsertSLABreach = typeof slaBreaches.$inferInsert;
+
+// ─── Webhook Deliveries ───────────────────────────────────────────────────────
+export const webhookDeliveryStatusEnum = pgEnum("webhook_delivery_status", ["pending", "delivered", "failed"]);
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    webhookId: varchar("webhookId", { length: 64 }).notNull(),
+    eventType: varchar("eventType", { length: 64 }).notNull(),
+    payload: text("payload").notNull(), // JSON string
+    status: webhookDeliveryStatusEnum("status").default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    lastAttemptAt: timestamp("lastAttemptAt"),
+    nextRetryAt: timestamp("nextRetryAt"),
+    responseStatus: integer("responseStatus"),
+    responseBody: text("responseBody"),
+    errorMessage: text("errorMessage"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("webhook_deliveries_webhookId_idx").on(t.webhookId),
+    index("webhook_deliveries_status_idx").on(t.status),
+    index("webhook_deliveries_createdAt_idx").on(t.createdAt),
+  ]
+);
+export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type InsertWebhookDelivery = typeof webhookDeliveries.$inferInsert;
+
+// ─── Email Digest Preferences ─────────────────────────────────────────────────
+export const digestFrequencyEnum = pgEnum("digest_frequency", ["daily", "weekly", "never"]);
+export const emailDigestPreferences = pgTable(
+  "email_digest_preferences",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    userId: varchar("userId", { length: 64 }).notNull().unique(),
+    digestFrequency: digestFrequencyEnum("digestFrequency").default("daily").notNull(),
+    notifyOnNewDispute: boolean("notifyOnNewDispute").default(true).notNull(),
+    notifyOnStatusChange: boolean("notifyOnStatusChange").default(true).notNull(),
+    notifyOnDeadlineApproach: boolean("notifyOnDeadlineApproach").default(true).notNull(),
+    notifyOnDetermination: boolean("notifyOnDetermination").default(true).notNull(),
+    notifyOnSLABreach: boolean("notifyOnSLABreach").default(true).notNull(),
+    digestTime: varchar("digestTime", { length: 5 }).default("08:00").notNull(), // HH:MM
+    digestDayOfWeek: integer("digestDayOfWeek").default(1).notNull(), // 0=Sun, 1=Mon...
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("email_digest_prefs_userId_idx").on(t.userId),
+  ]
+);
+export type EmailDigestPreference = typeof emailDigestPreferences.$inferSelect;
+export type InsertEmailDigestPreference = typeof emailDigestPreferences.$inferInsert;

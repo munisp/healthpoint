@@ -36,6 +36,28 @@ import GlobalSettings from "@/pages/GlobalSettings";
 import Changelog from "@/pages/Changelog";
 import HelpCenter from "@/pages/HelpCenter";
 import OfferNegotiationThread from "@/pages/OfferNegotiationThread";
+import PayerContactBook from "@/pages/PayerContactBook";
+import APIKeyManagement from "@/pages/APIKeyManagement";
+import SLABreachMonitor from "@/pages/SLABreachMonitor";
+import NSAComplianceChecklist from "@/pages/NSAComplianceChecklist";
+import PaymentReconciliation from "@/pages/PaymentReconciliation";
+import CustomReportBuilder from "@/pages/CustomReportBuilder";
+import BulkStatusChange from "@/pages/BulkStatusChange";
+import CSVImport from "@/pages/CSVImport";
+import WebhookEventReplay from "@/pages/WebhookEventReplay";
+import EmailDigestPreferences from "@/pages/EmailDigestPreferences";
+import DisputeMerge from "@/pages/DisputeMerge";
+import ArbitratorScorecard from "@/pages/ArbitratorScorecard";
+import SplitBillAnalysis from "@/pages/SplitBillAnalysis";
+import TwoFactorAuth from "@/pages/TwoFactorAuth";
+import MobileDisputeWizard from "@/pages/MobileDisputeWizard";
+import DisputeClone from "@/pages/DisputeClone";
+import PayerResponseTimeAnalytics from "@/pages/PayerResponseTimeAnalytics";
+import DisputeAnnotations from "@/pages/DisputeAnnotations";
+import BatchEvidenceUpload from "@/pages/BatchEvidenceUpload";
+import DisputeActivityFeed from "@/pages/DisputeActivityFeed";
+import PrintableDisputeSummary from "@/pages/PrintableDisputeSummary";
+import ArbitratorAssignmentHistory from "@/pages/ArbitratorAssignmentHistory";
 
 function Router() {
   return (
@@ -75,6 +97,28 @@ function Router() {
         const DashboardLayout = require("./components/DashboardLayout").default;
         return <DashboardLayout><DisputeTemplates /></DashboardLayout>;
       }} />
+      <Route path="/payer-contacts" component={PayerContactBook} />
+      <Route path="/api-keys" component={APIKeyManagement} />
+      <Route path="/sla-breaches" component={SLABreachMonitor} />
+      <Route path="/nsa-checklist" component={NSAComplianceChecklist} />
+      <Route path="/reconciliation" component={PaymentReconciliation} />
+      <Route path="/report-builder" component={CustomReportBuilder} />
+      <Route path="/bulk-actions" component={BulkStatusChange} />
+      <Route path="/csv-import" component={CSVImport} />
+      <Route path="/webhook-replay" component={WebhookEventReplay} />
+      <Route path="/email-prefs" component={EmailDigestPreferences} />
+      <Route path="/disputes/merge" component={DisputeMerge} />
+      <Route path="/arbitrator-scorecard" component={ArbitratorScorecard} />
+      <Route path="/split-bill" component={SplitBillAnalysis} />
+      <Route path="/two-factor-auth" component={TwoFactorAuth} />
+      <Route path="/disputes/wizard" component={MobileDisputeWizard} />
+      <Route path="/disputes/clone" component={DisputeClone} />
+      <Route path="/payer-response-times" component={PayerResponseTimeAnalytics} />
+      <Route path="/annotations" component={DisputeAnnotations} />
+      <Route path="/batch-evidence" component={BatchEvidenceUpload} />
+      <Route path="/activity-feed" component={DisputeActivityFeed} />
+      <Route path="/print-summary" component={PrintableDisputeSummary} />
+      <Route path="/arbitrator-history" component={ArbitratorAssignmentHistory} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>

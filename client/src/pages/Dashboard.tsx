@@ -16,25 +16,56 @@ import {
   LineChart, Line, Area, AreaChart,
 } from "recharts";
 
-// Generate a simple 7-point sparkline trend from a seed value
+// Generate a 7-point sparkline with date labels (last 7 days)
 function makeSparkline(base: number, variance = 0.3) {
-  return Array.from({ length: 7 }, (_, i) => ({
-    v: Math.max(0, Math.round(base * (1 + (Math.random() - 0.5) * variance * (i / 3))))
-  }));
+  const today = new Date();
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - (6 - i));
+    const label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    return {
+      v: Math.max(0, Math.round(base * (1 + (Math.random() - 0.5) * variance * (i / 3)))),
+      date: label,
+    };
+  });
 }
 
-function Sparkline({ data, color = "#3b82f6" }: { data: { v: number }[]; color?: string }) {
+function SparklineTooltip({ active, payload, metricLabel }: any) {
+  if (!active || !payload?.length) return null;
+  const { v, date } = payload[0]?.payload ?? {};
+  const color = payload[0]?.stroke ?? "#3b82f6";
   return (
-    <ResponsiveContainer width="100%" height={32}>
-      <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+    <div className="rounded-lg border bg-white shadow-lg px-3 py-2 text-xs pointer-events-none min-w-[120px]" style={{ borderColor: color + "40" }}>
+      <p className="font-semibold text-slate-600 mb-1">{date}</p>
+      <div className="flex items-center gap-1.5">
+        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+        <span className="font-bold text-slate-800">{v.toLocaleString()}</span>
+        <span className="text-slate-400">{metricLabel ?? "disputes"}</span>
+      </div>
+    </div>
+  );
+}
+
+function Sparkline({ data, color = "#3b82f6", metricLabel }: { data: { v: number; date: string }[]; color?: string; metricLabel?: string }) {
+  const gradId = `sg-${color.replace('#','')}-${metricLabel?.replace(/\s/g,'') ?? 'default'}`;
+  return (
+    <ResponsiveContainer width="100%" height={44}>
+      <AreaChart data={data} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
         <defs>
-          <linearGradient id={`sg-${color.replace('#','')}`} x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor={color} stopOpacity={0.25} />
             <stop offset="95%" stopColor={color} stopOpacity={0} />
           </linearGradient>
         </defs>
+        <Tooltip
+          content={<SparklineTooltip metricLabel={metricLabel} />}
+          cursor={{ stroke: color, strokeWidth: 1, strokeDasharray: "3 3" }}
+          wrapperStyle={{ zIndex: 50 }}
+          position={{ y: -60 }}
+        />
         <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5}
-          fill={`url(#sg-${color.replace('#','')})`} dot={false} isAnimationActive={false} />
+          fill={`url(#${gradId})`} dot={false} isAnimationActive={false}
+          activeDot={{ r: 4, fill: color, stroke: "white", strokeWidth: 2 }} />
       </AreaChart>
     </ResponsiveContainer>
   );
@@ -185,7 +216,7 @@ export default function Dashboard() {
                   <div className="text-xs font-medium text-slate-500 mb-2">{kpi.title}</div>
                   {/* Sparkline */}
                   <div className="-mx-1">
-                    <Sparkline data={sparklines[idx] ?? []} color={sparkColors[idx] ?? "#3b82f6"} />
+                    <Sparkline data={sparklines[idx] ?? []} color={sparkColors[idx] ?? "#3b82f6"} metricLabel={kpi.title.toLowerCase().includes("alert") ? "alerts" : kpi.title.toLowerCase().includes("month") ? "closed" : "disputes"} />
                   </div>
                 </CardContent>
               </Card>
