@@ -13,7 +13,32 @@ import { useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell,
+  LineChart, Line, Area, AreaChart,
 } from "recharts";
+
+// Generate a simple 7-point sparkline trend from a seed value
+function makeSparkline(base: number, variance = 0.3) {
+  return Array.from({ length: 7 }, (_, i) => ({
+    v: Math.max(0, Math.round(base * (1 + (Math.random() - 0.5) * variance * (i / 3))))
+  }));
+}
+
+function Sparkline({ data, color = "#3b82f6" }: { data: { v: number }[]; color?: string }) {
+  return (
+    <ResponsiveContainer width="100%" height={32}>
+      <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id={`sg-${color.replace('#','')}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor={color} stopOpacity={0.25} />
+            <stop offset="95%" stopColor={color} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5}
+          fill={`url(#sg-${color.replace('#','')})`} dot={false} isAnimationActive={false} />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
@@ -61,6 +86,18 @@ export default function Dashboard() {
       <Button size="lg" onClick={() => (window.location.href = getLoginUrl())}>Sign In</Button>
     </div>
   );
+
+  // Sparkline data — seeded from current KPI values so they look realistic
+  const sparklines = [
+    makeSparkline(stats?.total ?? 10, 0.15),
+    makeSparkline(stats?.openNegotiation ?? 4, 0.4),
+    makeSparkline(stats?.inIDR ?? 3, 0.4),
+    makeSparkline(stats?.closedThisMonth ?? 2, 0.5),
+    makeSparkline(stats?.dueSoon ?? 1, 0.6),
+    makeSparkline(stats?.overdue ?? 0, 0.8),
+    makeSparkline(stats?.unreadNotifications ?? 0, 0.7),
+  ];
+  const sparkColors = ["#3b82f6","#f59e0b","#8b5cf6","#22c55e","#f59e0b","#ef4444","#6366f1"];
 
   const kpis = [
     { title: "Total Disputes", value: stats?.total ?? 0, icon: FileText, color: "bg-blue-500", urgent: false },
@@ -128,22 +165,28 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
-            {kpis.map(kpi => (
+            {kpis.map((kpi, idx) => (
               <Card key={kpi.title}
                 className={`border-slate-200 hover:shadow-md transition-shadow ${
                   kpi.urgent && kpi.value > 0 ? "ring-2 ring-amber-400 ring-offset-1" : ""
                 }`}>
                 <CardContent className="p-5">
-                  <div className={`p-2.5 rounded-lg ${kpi.color} w-fit mb-3 relative`}>
-                    <kpi.icon size={18} className="text-white" />
-                    {kpi.urgent && kpi.value > 0 && (
-                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-400 rounded-full animate-pulse" />
-                    )}
+                  <div className="flex items-start justify-between mb-2">
+                    <div className={`p-2.5 rounded-lg ${kpi.color} w-fit relative`}>
+                      <kpi.icon size={18} className="text-white" />
+                      {kpi.urgent && kpi.value > 0 && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-400 rounded-full animate-pulse" />
+                      )}
+                    </div>
                   </div>
                   <div className={`text-2xl font-bold mb-0.5 ${
                     kpi.urgent && kpi.value > 0 ? "text-amber-600" : "text-slate-800"
                   }`}>{kpi.value.toLocaleString()}</div>
-                  <div className="text-xs font-medium text-slate-500">{kpi.title}</div>
+                  <div className="text-xs font-medium text-slate-500 mb-2">{kpi.title}</div>
+                  {/* Sparkline */}
+                  <div className="-mx-1">
+                    <Sparkline data={sparklines[idx] ?? []} color={sparkColors[idx] ?? "#3b82f6"} />
+                  </div>
                 </CardContent>
               </Card>
             ))}

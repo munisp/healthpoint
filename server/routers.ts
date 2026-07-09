@@ -38,7 +38,7 @@ import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
 import { eq, and } from "drizzle-orm";
-import { stepNotes, users } from "../drizzle/schema";
+import { stepNotes, users, disputes as disputesTable } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
@@ -433,6 +433,32 @@ export const appRouter = router({
         };
       }),
 
+    findDuplicates: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        claimNumber: z.string().optional(),
+        payerName: z.string().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        const { and, ne, or, ilike } = await import("drizzle-orm");
+        const conditions: ReturnType<typeof ilike>[] = [];
+        // disputes table uses respondingPartyName for payer; match on reference or payer name
+        if (input.claimNumber) conditions.push(ilike(disputesTable.referenceNumber, `%${input.claimNumber}%`));
+        if (input.payerName) conditions.push(ilike(disputesTable.respondingPartyName, `%${input.payerName}%`));
+        if (conditions.length === 0) return [];
+        const results = await db.select({
+          id: disputesTable.id,
+          referenceNumber: disputesTable.referenceNumber,
+          status: disputesTable.status,
+          createdAt: disputesTable.createdAt,
+        }).from(disputesTable)
+          .where(and(ne(disputesTable.id, input.disputeId), or(...conditions)))
+          .limit(5);
+        return results;
+      }),
+
     sendNotification: protectedProcedure
       .input(z.object({
         disputeId: z.string(),
@@ -637,6 +663,41 @@ export const appRouter = router({
     stats: adminProcedure.query(async () => {
       return getDashboardStats(undefined);
     }),
+
+    listUsers: adminProcedure
+      .input(z.object({
+        search: z.string().optional(),
+        role: z.enum(["admin", "user"]).optional(),
+      }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        const { ilike, or, eq } = await import("drizzle-orm");
+        let query = db.select().from(users).$dynamic();
+        if (input.search) {
+          query = query.where(or(
+            ilike(users.name, `%${input.search}%`),
+            ilike(users.email, `%${input.search}%`)
+          ) as any);
+        }
+        if (input.role) {
+          query = query.where(eq(users.role, input.role) as any);
+        }
+        return query.limit(200);
+      }),
+
+    updateUserRole: adminProcedure
+      .input(z.object({
+        userId: z.string(),
+        role: z.enum(["admin", "user"]),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { eq } = await import("drizzle-orm");
+        await db.update(users).set({ role: input.role }).where(eq(users.id, input.userId));
+        return { success: true };
+      }),
   }),
 
   // --- Agentic AI Layer (proxied to Python LangGraph microservice) ------------------

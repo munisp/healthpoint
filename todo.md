@@ -299,3 +299,45 @@
 - [ ] WorkflowTimeline: Add Note button on active step — inline note form, persist to DB via tRPC, display notes under step
 - [ ] DB: step_notes table for workflow step notes
 - [ ] tRPC: workflow.addNote, workflow.getNotes procedures
+
+### Session 28 — 30 Autonomous Enhancements
+
+#### Batch 1: UX Polish & Navigation
+- [ ] #01 Keyboard shortcuts help modal (? key) — lists all shortcuts
+- [ ] #02 Notification center — bell icon, in-app notifications for deadlines/state changes/webhook failures
+- [ ] #03 Dispute list bulk actions — checkbox multi-select, bulk status update, bulk CSV export, bulk assign
+- [ ] #04 First-run onboarding tour — 5-step guided walkthrough for new users
+- [ ] #05 Rich empty states — illustrated empty states for disputes, documents, audit trail, ledger
+- [ ] #06 Print/PDF export — print CSS + Export as PDF button on DisputeDetail
+
+#### Batch 2: Data Integrity & Security
+- [ ] #07 Dispute status badge color system — consistent semantic colors for all 19 IDR step statuses
+- [ ] #08 Deadline countdown banner — sticky warning banner on DisputeDetail when deadline ≤ 3 business days
+- [ ] #09 Document version history — track revisions, show diff, restore previous version
+- [ ] #10 Role-based nav guards — redirect unauthorized users from admin-only routes
+- [ ] #11 Session timeout warning — modal 2 min before JWT expiry with Stay Logged In button
+- [ ] #12 Responsive mobile layout — sidebar collapses to hamburger on mobile
+
+#### Batch 3: Analytics & Intelligence
+- [ ] #13 Dashboard KPI sparklines — mini trend lines on each KPI card (last 30 days)
+- [ ] #14 Dispute activity feed — chronological event feed on DisputeDetail
+- [ ] #15 Smart duplicate detection — warn on same claim number + payer when creating dispute
+- [ ] #16 Offer negotiation thread — structured counter-offer thread with accept/reject
+- [ ] #17 Outcome prediction confidence meter — visual gauge on DisputeDetail
+- [ ] #18 Batch document upload — multi-file drag-drop with per-file progress bars
+
+#### Batch 4: Admin & Operations
+- [ ] #19 Admin user management page — list users, change roles, deactivate (admin only)
+- [ ] #20 System health monitor — /admin/health page showing DB, Redis, S3, event bus status
+- [ ] #21 API rate limit indicator — show remaining quota in dev mode header
+- [ ] #22 Data retention policy UI — admin page to configure auto-archive rules
+- [ ] #23 Email notification preferences — user settings for opting in/out of email types
+- [ ] #24 Two-factor auth prompt — UI prompt to encourage 2FA setup on first login
+
+#### Batch 5: Platform & DX
+- [ ] #25 Global settings page — /settings with Profile, Notifications, Security, Appearance tabs
+- [ ] #26 Changelog / release notes page — /changelog with version history
+- [ ] #27 Help center sidebar — slide-out panel with contextual help articles per page
+- [ ] #28 Accessibility improvements — ARIA labels, focus traps in modals, skip-to-content link
+- [ ] #29 Performance: virtual scroll on disputes list, paginated audit trail
+- [ ] #30 Dispute templates — save dispute as template for quick re-filing

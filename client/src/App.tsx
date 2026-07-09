@@ -30,6 +30,12 @@ import WebhookManager from "@/pages/WebhookManager";
 import FinancialLedger from "@/pages/FinancialLedger";
 import GlobalSearch from "@/pages/GlobalSearch";
 import LakehouseExport from "@/pages/LakehouseExport";
+import AdminUserManagement from "@/pages/AdminUserManagement";
+import SystemHealthMonitor from "@/pages/SystemHealthMonitor";
+import GlobalSettings from "@/pages/GlobalSettings";
+import Changelog from "@/pages/Changelog";
+import HelpCenter from "@/pages/HelpCenter";
+import OfferNegotiationThread from "@/pages/OfferNegotiationThread";
 
 function Router() {
   return (
@@ -59,6 +65,12 @@ function Router() {
       <Route path={"/ledger"} component={FinancialLedger} />
       <Route path={"/search"} component={GlobalSearch} />
       <Route path={"/lakehouse"} component={LakehouseExport} />
+      <Route path={"/admin/users"} component={AdminUserManagement} />
+      <Route path={"/system-health"} component={SystemHealthMonitor} />
+      <Route path={"/settings"} component={GlobalSettings} />
+      <Route path={"/changelog"} component={Changelog} />
+      <Route path={"/help"} component={HelpCenter} />
+      <Route path={"/disputes/:id/negotiate"} component={OfferNegotiationThread} />
       <Route path="/templates" component={() => {
         const DashboardLayout = require("./components/DashboardLayout").default;
         return <DashboardLayout><DisputeTemplates /></DashboardLayout>;

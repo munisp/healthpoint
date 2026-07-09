@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
+import EmptyState from "@/components/EmptyState";
 
 const DISPUTE_STATUSES = [
   { value: "all", label: "All Disputes" },
@@ -450,14 +451,15 @@ export default function DisputesList() {
                 <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
               </div>
             ) : items.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-slate-400">
-                <Gavel size={40} className="mb-3 opacity-30" />
-                <p className="font-medium text-slate-600">No disputes found</p>
-                <p className="text-sm mt-1">{search ? "Try a different search term" : "No disputes match the selected filter"}</p>
-                <Button variant="outline" className="mt-4" onClick={() => navigate("/disputes/new")}>
-                  <Plus size={14} className="mr-2" />Initiate First Dispute
-                </Button>
-              </div>
+              <EmptyState
+                variant="disputes"
+                title={search ? "No matching disputes" : "No disputes yet"}
+                description={search ? `No disputes match "${search}". Try a different search term or clear your filters.` : undefined}
+                actionLabel="Create First Dispute"
+                onAction={() => navigate("/disputes/new")}
+                secondaryActionLabel={search ? "Clear search" : undefined}
+                onSecondaryAction={search ? () => window.location.reload() : undefined}
+              />
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full">
