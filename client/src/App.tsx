@@ -89,6 +89,11 @@ import DisputeReminders from "@/pages/DisputeReminders";
 import DisputeExportCenter from "@/pages/DisputeExportCenter";
 import UserRoleMatrix from "@/pages/UserRoleMatrix";
 import SystemHealthDashboard from "@/pages/SystemHealthDashboard";
+import LastEHRIntegration from "@/pages/LastEHRIntegration";
+import FHIRCapabilityExplorer from "@/pages/FHIRCapabilityExplorer";
+import BulkFHIRExport from "@/pages/BulkFHIRExport";
+import CDSHooksManager from "@/pages/CDSHooksManager";
+import USCDICompleteness from "@/pages/USCDICompleteness";
 
 function Router() {
   return (
@@ -181,6 +186,11 @@ function Router() {
       <Route path="/export" component={DisputeExportCenter} />
       <Route path="/role-matrix" component={UserRoleMatrix} />
       <Route path="/system-health-dashboard" component={SystemHealthDashboard} />
+      <Route path="/last-ehr" component={LastEHRIntegration} />
+      <Route path="/fhir-capability" component={FHIRCapabilityExplorer} />
+      <Route path="/bulk-fhir-export" component={BulkFHIRExport} />
+      <Route path="/cds-hooks" component={CDSHooksManager} />
+      <Route path="/uscdi-completeness" component={USCDICompleteness} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>

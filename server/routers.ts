@@ -38,7 +38,7 @@ import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
 import { eq, and } from "drizzle-orm";
-import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts } from "../drizzle/schema";
+import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
@@ -3057,6 +3057,239 @@ Based on NSA IDR historical data and legal precedent, provide:
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         await db.update(documentExpiryAlerts).set({ dismissed: true }).where(eq(documentExpiryAlerts.id, input.id));
+        return { success: true };
+      }),
+  }),
+
+  // ─── FHIR Capability Statements ──────────────────────────────────────────
+  fhirCapability: router({
+    fetch: protectedProcedure
+      .input(z.object({ emrConnectionId: z.string() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // In production this would call the EMR's /metadata endpoint
+        // For now we store a synthetic capability statement
+        const { nanoid } = await import("nanoid");
+        const id = nanoid();
+        const [cap] = await db.insert(fhirCapabilityStatements).values({
+          id,
+          emrConnectionId: input.emrConnectionId,
+          fhirVersion: "R4",
+          softwareName: "HealthPoint IDR",
+          softwareVersion: "1.0.0",
+          supportedResources: ["Patient", "Claim", "Coverage", "Organization", "Practitioner", "ExplanationOfBenefit", "ServiceRequest", "Encounter"],
+          supportedSearchParams: { Patient: ["_id", "identifier", "name"], Claim: ["patient", "status", "use"] },
+          smartScopes: ["openid", "profile", "launch", "patient/*.read", "user/*.read"],
+          bulkExportSupported: true,
+          cdsHooksSupported: true,
+        }).returning();
+        return cap;
+      }),
+    list: protectedProcedure
+      .input(z.object({ emrConnectionId: z.string() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        return db.select().from(fhirCapabilityStatements).where(eq(fhirCapabilityStatements.emrConnectionId, input.emrConnectionId));
+      }),
+  }),
+
+  // ─── SMART on FHIR Tokens ─────────────────────────────────────────────────
+  smartAuth: router({
+    listTokens: protectedProcedure
+      .input(z.object({ emrConnectionId: z.string() }))
+      .query(async ({ input, ctx }) => {
+        const db = await getDb();
+        if (!db) return [];
+        return db.select().from(smartTokens).where(and(eq(smartTokens.emrConnectionId, input.emrConnectionId), eq(smartTokens.userId, ctx.user.id)) as ReturnType<typeof and>);
+      }),
+    revokeToken: protectedProcedure
+      .input(z.object({ tokenId: z.string() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.delete(smartTokens).where(eq(smartTokens.id, input.tokenId));
+        return { success: true };
+      }),
+  }),
+
+  // ─── Bulk FHIR Export ─────────────────────────────────────────────────────
+  bulkFhir: router({
+    startExport: protectedProcedure
+      .input(z.object({
+        emrConnectionId: z.string(),
+        exportType: z.enum(["Patient", "Group", "System"]).default("Patient"),
+        resourceTypes: z.array(z.string()).default(["Patient", "Claim", "Coverage", "ExplanationOfBenefit"]),
+        since: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { nanoid } = await import("nanoid");
+        const id = nanoid();
+        const [job] = await db.insert(bulkFhirExportJobs).values({
+          id,
+          emrConnectionId: input.emrConnectionId,
+          initiatedBy: ctx.user.id,
+          exportType: input.exportType,
+          resourceTypes: input.resourceTypes,
+          since: input.since ? new Date(input.since) : undefined,
+          status: "pending",
+        }).returning();
+        return job;
+      }),
+    listJobs: protectedProcedure
+      .input(z.object({ emrConnectionId: z.string().optional() }))
+      .query(async ({ input, ctx }) => {
+        const db = await getDb();
+        if (!db) return [];
+        return db.select().from(bulkFhirExportJobs)
+          .where(eq(bulkFhirExportJobs.initiatedBy, ctx.user.id))
+          .orderBy(bulkFhirExportJobs.createdAt);
+      }),
+    cancelJob: protectedProcedure
+      .input(z.object({ jobId: z.string() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.update(bulkFhirExportJobs).set({ status: "cancelled" }).where(eq(bulkFhirExportJobs.id, input.jobId));
+        return { success: true };
+      }),
+  }),
+
+  // ─── CDS Hooks ────────────────────────────────────────────────────────────
+  cdsHooksRouter: router({
+    list: protectedProcedure
+      .input(z.object({ emrConnectionId: z.string() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        return db.select().from(cdsHooks).where(eq(cdsHooks.emrConnectionId, input.emrConnectionId));
+      }),
+    register: protectedProcedure
+      .input(z.object({
+        emrConnectionId: z.string(),
+        hookId: z.string(),
+        title: z.string(),
+        description: z.string().optional(),
+        prefetch: z.record(z.string(), z.string()).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { nanoid } = await import("nanoid");
+        const [hook] = await db.insert(cdsHooks).values({
+          id: nanoid() as string,
+          emrConnectionId: input.emrConnectionId,
+          hookId: input.hookId,
+          title: input.title,
+          description: input.description ?? null,
+          prefetch: (input.prefetch ?? {}) as Record<string, string>,
+          status: "active" as const,
+        }).returning();
+        return hook;
+      }),
+    toggleStatus: protectedProcedure
+      .input(z.object({ id: z.string(), status: z.enum(["active", "inactive"]) }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.update(cdsHooks).set({ status: input.status }).where(eq(cdsHooks.id, input.id));
+        return { success: true };
+      }),
+  }),
+
+  // ─── Da Vinci / PDEX / PAS ────────────────────────────────────────────────
+  daVinci: router({
+    list: protectedProcedure
+      .input(z.object({ disputeId: z.string().optional(), txType: z.string().optional() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        const conditions = [];
+        if (input.disputeId) conditions.push(eq(daVinciTransactions.disputeId, input.disputeId));
+        return db.select().from(daVinciTransactions)
+          .where(conditions.length ? conditions[0] : undefined)
+          .orderBy(daVinciTransactions.createdAt) as Promise<typeof daVinciTransactions.$inferSelect[]>;
+      }),
+    submitPAS: protectedProcedure
+      .input(z.object({
+        disputeId: z.string().optional(),
+        emrConnectionId: z.string().optional(),
+        requestPayload: z.record(z.string(), z.unknown()),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { nanoid } = await import("nanoid");
+        const [tx] = await db.insert(daVinciTransactions).values({
+          id: nanoid() as string,
+          disputeId: input.disputeId ?? null,
+          emrConnectionId: input.emrConnectionId ?? null,
+          txType: "pas_prior_auth" as const,
+          status: "pending" as const,
+          requestPayload: input.requestPayload as Record<string, unknown>,
+        }).returning();
+        return tx;
+      }),
+  }),
+
+  // ─── USCDI Data Completeness ──────────────────────────────────────────────
+  uscdi: router({
+    getCompleteness: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return null;
+        const [result] = await db.select().from(uscdiDataElements).where(eq(uscdiDataElements.disputeId, input.disputeId)).limit(1);
+        return result ?? null;
+      }),
+    updateCompleteness: protectedProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        elements: z.record(z.string(), z.boolean()),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { nanoid } = await import("nanoid");
+        const fields = input.elements as Record<string, boolean>;
+        const total = Object.keys(fields).length;
+        const filled = Object.values(fields).filter(Boolean).length;
+        const score = total > 0 ? Math.round((filled / total) * 100) : 0;
+        const missing = Object.entries(fields).filter(([, v]) => !v).map(([k]) => k);
+        const existing = await db.select().from(uscdiDataElements).where(eq(uscdiDataElements.disputeId, input.disputeId)).limit(1);
+        if (existing.length > 0) {
+          await db.update(uscdiDataElements).set({ completenessScore: score, missingElements: missing, lastUpdatedAt: new Date() }).where(eq(uscdiDataElements.disputeId, input.disputeId));
+        } else {
+          await db.insert(uscdiDataElements).values({ id: nanoid() as string, disputeId: input.disputeId, completenessScore: score, missingElements: missing });
+        }
+        return { score, missing };
+      }),
+  }),
+
+  // ─── FHIR Resource Cache ──────────────────────────────────────────────────
+  fhirCache: router({
+    list: protectedProcedure
+      .input(z.object({ disputeId: z.string().optional(), emrConnectionId: z.string().optional(), resourceType: z.string().optional() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        const conditions = [];
+        if (input.disputeId) conditions.push(eq(fhirResourceCache.disputeId, input.disputeId));
+        if (input.emrConnectionId) conditions.push(eq(fhirResourceCache.emrConnectionId, input.emrConnectionId));
+        if (input.resourceType) conditions.push(eq(fhirResourceCache.resourceType, input.resourceType));
+        return db.select().from(fhirResourceCache)
+          .where(conditions.length ? conditions[0] : undefined)
+          .orderBy(fhirResourceCache.fetchedAt) as Promise<typeof fhirResourceCache.$inferSelect[]>;
+      }),
+    purge: protectedProcedure
+      .input(z.object({ emrConnectionId: z.string() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.delete(fhirResourceCache).where(eq(fhirResourceCache.emrConnectionId, input.emrConnectionId));
         return { success: true };
       }),
   }),

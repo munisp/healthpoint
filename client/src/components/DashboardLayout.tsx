@@ -95,6 +95,9 @@ import {
   Target,
   BookmarkCheck,
   Siren,
+  Cpu,
+  FileDown,
+  Stethoscope,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useTheme } from "../contexts/ThemeContext";
@@ -184,6 +187,11 @@ const menuItems = [
   { icon: Download, label: "Export Center", path: "/export" },
   { icon: Shield, label: "Role Matrix", path: "/role-matrix" },
   { icon: Activity, label: "System Health Dashboard", path: "/system-health-dashboard" },
+  { icon: Stethoscope, label: "Last-EHR Integration", path: "/last-ehr" },
+  { icon: Cpu, label: "FHIR Capability Explorer", path: "/fhir-capability" },
+  { icon: FileDown, label: "Bulk FHIR Export", path: "/bulk-fhir-export" },
+  { icon: Webhook, label: "CDS Hooks Manager", path: "/cds-hooks" },
+  { icon: ClipboardCheck, label: "USCDI Completeness", path: "/uscdi-completeness" },
 ];
 
 const SIDEBAR_WIDTH_KEY = 'sidebar-width';

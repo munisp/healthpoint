@@ -455,3 +455,37 @@
 - [x] Dispute Compare View (/compare) — side-by-side comparison of two disputes
 - [x] Dispute Tag Manager (/tags) — custom label/tag system for categorizing disputes
 - [x] Performance Benchmarks (/benchmarks) — platform KPI comparison against NSA industry benchmarks
+
+## Session 31 — last-ehr Integration, Georgetown Expansion, EMR/FHIR Enhancements
+
+### 3 Targeted Features
+- [x] AI-powered comment summary button in DisputeComments (invokeLLM server-side, collapsible amber panel)
+- [x] Mandatory rejection reason textarea in Reject Offer modal (blocks confirm until non-empty)
+- [x] CSV Import intelligent auto-mapping with fuzzy header matching and confidence badges
+
+### last-ehr Integration
+- [x] LastEHRIntegration page (/last-ehr) — FHIR agent integration, resource query, dispute pre-fill from EHR data
+
+### Georgetown State Law Expansion
+- [x] StateBalanceBilling rebuilt with all 50 states + DC (was 11 states)
+- [x] Real Georgetown CHIR data, NCSL state law status, effective dates, IDR thresholds
+- [x] Compliance comparison tool, law update tracking, state filter/search, CSV export
+
+### EMR/FHIR Enhancements (Backend)
+- [x] fhirCapabilityStatements table + router (fetch/list capability statements)
+- [x] smartTokens table + router (list/revoke SMART on FHIR tokens)
+- [x] bulkFhirExportJobs table + router (start/list/cancel bulk FHIR exports)
+- [x] cdsHooks table + router (register/list/toggle CDS Hooks)
+- [x] daVinciTransactions table + router (list/submitPAS Da Vinci transactions)
+- [x] fhirResourceCache table + router (list/purge FHIR resource cache)
+- [x] uscdiDataElements table + router (get/update USCDI data completeness)
+
+### EMR/FHIR Enhancement Pages
+- [x] FHIRCapabilityExplorer (/fhir-capability) — FHIR R4/R5 resources, SMART scopes, Da Vinci IGs, R5 roadmap
+- [x] BulkFHIRExport (/bulk-fhir-export) — FHIR Bulk Data $export job management
+- [x] CDSHooksManager (/cds-hooks) — CDS Hooks 2.0 registration and management
+- [x] USCDICompleteness (/uscdi-completeness) — USCDI v3 data completeness tracker per dispute
+
+### Routing & Navigation
+- [x] All 5 new pages wired into App.tsx routes
+- [x] All 5 new pages added to DashboardLayout sidebar
