@@ -58,6 +58,37 @@ import BatchEvidenceUpload from "@/pages/BatchEvidenceUpload";
 import DisputeActivityFeed from "@/pages/DisputeActivityFeed";
 import PrintableDisputeSummary from "@/pages/PrintableDisputeSummary";
 import ArbitratorAssignmentHistory from "@/pages/ArbitratorAssignmentHistory";
+import DisputeWatchlist from "@/pages/DisputeWatchlist";
+import EscalationManager from "@/pages/EscalationManager";
+import AppealTracker from "@/pages/AppealTracker";
+import NarrativeGenerator from "@/pages/NarrativeGenerator";
+import DocumentExpiryTracker from "@/pages/DocumentExpiryTracker";
+import DisputeKanban from "@/pages/DisputeKanban";
+import QPABenchmarkLookup from "@/pages/QPABenchmarkLookup";
+import IDRCostEstimator from "@/pages/IDRCostEstimator";
+import NSADeadlineCalendar from "@/pages/NSADeadlineCalendar";
+import ClaimAgingReport from "@/pages/ClaimAgingReport";
+import ContractRateComparison from "@/pages/ContractRateComparison";
+import DisputeRiskHeatmap from "@/pages/DisputeRiskHeatmap";
+import BatchNotificationSender from "@/pages/BatchNotificationSender";
+import DisputeOutcomeSimulator from "@/pages/DisputeOutcomeSimulator";
+import RegulatoryChangeFeed from "@/pages/RegulatoryChangeFeed";
+import OfferCounterWizard from "@/pages/OfferCounterWizard";
+import MultiPartyCoordinator from "@/pages/MultiPartyCoordinator";
+import ProviderNetworkGapAnalyzer from "@/pages/ProviderNetworkGapAnalyzer";
+import SmartDeadlineCalculator from "@/pages/SmartDeadlineCalculator";
+import PayerScorecard from "@/pages/PayerScorecard";
+import DisputeStatusTimeline from "@/pages/DisputeStatusTimeline";
+import AuditTrailViewer from "@/pages/AuditTrailViewer";
+import DisputeSearchAdvanced from "@/pages/DisputeSearchAdvanced";
+import DisputeFavorites from "@/pages/DisputeFavorites";
+import DisputeCompareView from "@/pages/DisputeCompareView";
+import DisputeTagManager from "@/pages/DisputeTagManager";
+import PerformanceBenchmarks from "@/pages/PerformanceBenchmarks";
+import DisputeReminders from "@/pages/DisputeReminders";
+import DisputeExportCenter from "@/pages/DisputeExportCenter";
+import UserRoleMatrix from "@/pages/UserRoleMatrix";
+import SystemHealthDashboard from "@/pages/SystemHealthDashboard";
 
 function Router() {
   return (
@@ -119,6 +150,37 @@ function Router() {
       <Route path="/activity-feed" component={DisputeActivityFeed} />
       <Route path="/print-summary" component={PrintableDisputeSummary} />
       <Route path="/arbitrator-history" component={ArbitratorAssignmentHistory} />
+      <Route path="/watchlist" component={DisputeWatchlist} />
+      <Route path="/escalations" component={EscalationManager} />
+      <Route path="/appeals" component={AppealTracker} />
+      <Route path="/narrative-generator" component={NarrativeGenerator} />
+      <Route path="/doc-expiry" component={DocumentExpiryTracker} />
+      <Route path="/kanban" component={DisputeKanban} />
+      <Route path="/qpa-benchmark" component={QPABenchmarkLookup} />
+      <Route path="/idr-cost-estimator" component={IDRCostEstimator} />
+      <Route path="/nsa-calendar" component={NSADeadlineCalendar} />
+      <Route path="/claim-aging" component={ClaimAgingReport} />
+      <Route path="/contract-rates" component={ContractRateComparison} />
+      <Route path="/risk-heatmap" component={DisputeRiskHeatmap} />
+      <Route path="/batch-notify" component={BatchNotificationSender} />
+      <Route path="/outcome-simulator" component={DisputeOutcomeSimulator} />
+      <Route path="/regulatory-feed" component={RegulatoryChangeFeed} />
+      <Route path="/counter-offer" component={OfferCounterWizard} />
+      <Route path="/multi-party" component={MultiPartyCoordinator} />
+      <Route path="/network-gaps" component={ProviderNetworkGapAnalyzer} />
+      <Route path="/deadline-calculator" component={SmartDeadlineCalculator} />
+      <Route path="/payer-scorecard" component={PayerScorecard} />
+      <Route path="/status-timeline" component={DisputeStatusTimeline} />
+      <Route path="/audit-viewer" component={AuditTrailViewer} />
+      <Route path="/advanced-search" component={DisputeSearchAdvanced} />
+      <Route path="/bookmarks" component={DisputeFavorites} />
+      <Route path="/compare" component={DisputeCompareView} />
+      <Route path="/tags" component={DisputeTagManager} />
+      <Route path="/benchmarks" component={PerformanceBenchmarks} />
+      <Route path="/reminders" component={DisputeReminders} />
+      <Route path="/export" component={DisputeExportCenter} />
+      <Route path="/role-matrix" component={UserRoleMatrix} />
+      <Route path="/system-health-dashboard" component={SystemHealthDashboard} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>

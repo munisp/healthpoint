@@ -391,16 +391,22 @@ export default function OfferNegotiationThread() {
             </div>
             <div>
               <label className="text-sm font-medium text-foreground mb-1.5 block">
-                Reason for rejection <span className="text-muted-foreground font-normal">(optional)</span>
+                Reason for rejection <span className="text-red-500 font-normal">*</span>
+                <span className="text-xs text-muted-foreground font-normal ml-1">(required — will be shared with all parties)</span>
               </label>
               <Textarea
-                placeholder="e.g. Offer is below QPA threshold, requesting arbitration..."
+                placeholder="e.g. The offered amount of $X is below the applicable QPA of $Y. We are requesting independent dispute resolution arbitration to determine the appropriate out-of-network rate..."
                 value={rejectReason}
                 onChange={e => setRejectReason(e.target.value)}
-                className="min-h-[80px] resize-none"
+                className={`min-h-[100px] resize-none ${!rejectReason.trim() ? 'border-red-300 focus-visible:ring-red-400' : ''}`}
                 maxLength={1000}
               />
-              <p className="text-xs text-muted-foreground mt-1">{rejectReason.length}/1000</p>
+              <div className="flex items-center justify-between mt-1">
+                <span className={`text-xs ${!rejectReason.trim() ? 'text-red-500' : 'text-muted-foreground'}`}>
+                  {!rejectReason.trim() ? 'A reason is required to reject an offer' : `${rejectReason.length}/1000 characters`}
+                </span>
+                <span className="text-xs text-muted-foreground">{rejectReason.length}/1000</span>
+              </div>
             </div>
             <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
               <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -412,7 +418,7 @@ export default function OfferNegotiationThread() {
             <Button
               variant="destructive"
               onClick={handleRejectConfirm}
-              disabled={rejectMutation.isPending}
+              disabled={rejectMutation.isPending || !rejectReason.trim()}
             >
               {rejectMutation.isPending ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Rejecting...</> : <><XCircle className="h-4 w-4 mr-1" />Confirm Reject</>}
             </Button>

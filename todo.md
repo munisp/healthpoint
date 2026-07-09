@@ -414,3 +414,44 @@
 - [x] Arbitrator Assignment History (/arbitrator-history) — table of all IDR entity assignments per dispute
 
 **TypeScript: 0 errors | All pages routed and in sidebar**
+
+## Session 30 — AI Features, Targeted Fixes & 20 New Platform Enhancements
+
+### 3 Targeted Features
+- [x] AI-powered comment summary button in DisputeComments (invokeLLM, collapsible summary panel, key points extraction)
+- [x] Mandatory rejection reason textarea in Reject Offer modal (required validation, passed to rejectOffer procedure)
+- [x] CSV Import intelligent auto-mapping (fuzzy header matching, confidence scores, color-coded suggestions, manual override)
+
+### 20 Recommended Platform Enhancements
+- [x] Dispute Watchlist (/watchlist) — star/watch disputes, due-date sorting, quick-access panel
+- [x] Escalation Manager (/escalations) — create/track escalations with priority, reason, assignee, resolution notes
+- [x] Appeal Tracker (/appeals) — file and track appeals with outcome recording and timeline
+- [x] AI Narrative Generator (/narrative-generator) — LLM-powered dispute narrative drafting with tone/length controls
+- [x] Document Expiry Tracker (/doc-expiry) — track document expiration dates, alert on upcoming expirations
+- [x] Dispute Kanban Board (/kanban) — drag-and-drop status columns with dispute cards
+- [x] QPA Benchmark Lookup (/qpa-benchmark) — CPT code + state lookup with benchmark rate display
+- [x] IDR Cost Estimator (/idr-cost-estimator) — estimate proceeding costs by dispute type and complexity
+- [x] NSA Deadline Calendar (/nsa-calendar) — visual monthly calendar of all NSA/IDR deadlines
+- [x] Claim Aging Report (/claim-aging) — bucket disputes by age (0-30, 31-60, 61-90, 90+ days)
+- [x] Contract Rate Comparison (/contract-rates) — compare billed vs. contracted vs. QPA rates per CPT code
+- [x] Dispute Risk Heatmap (/risk-heatmap) — risk scoring matrix across payer x service type dimensions
+- [x] Batch Notification Sender (/batch-notify) — send bulk notifications to dispute parties with templates
+- [x] Dispute Outcome Simulator (/outcome-simulator) — ML-style probability scoring for IDR outcomes
+- [x] Regulatory Change Feed (/regulatory-feed) — curated NSA/IDR regulatory update tracker
+- [x] Counter-Offer Wizard (/counter-offer) — step-by-step guided counter-offer proposal builder
+- [x] Multi-Party Coordinator (/multi-party) — manage disputes with 3+ parties and track per-party status
+- [x] Provider Network Gap Analyzer (/network-gaps) — identify out-of-network coverage gaps by specialty/state
+- [x] Smart Deadline Calculator (/deadline-calculator) — compute all NSA deadlines from any start date
+- [x] Payer Scorecard (/payer-scorecard) — rate payers on response time, compliance, and settlement rate
+
+### Bonus Pages (also implemented)
+- [x] Dispute Reminders (/reminders) — personal reminder system with priority, due date, and overdue alerts
+- [x] Export Center (/export) — CSV/TSV/JSON export with custom field selection and date/status filters
+- [x] User Role Matrix (/role-matrix) — comprehensive RBAC permission matrix across Admin/Analyst/Provider/Viewer
+- [x] System Health Dashboard (/system-health-dashboard) — live service status cards + latency trend chart with auto-refresh
+- [x] Audit Trail Viewer (/audit-viewer) — searchable audit log with event-type filter and actor tracking
+- [x] Advanced Search (/advanced-search) — full-text search across all dispute fields with multi-filter support
+- [x] Dispute Bookmarks (/bookmarks) — browser-local bookmark system for quick dispute access
+- [x] Dispute Compare View (/compare) — side-by-side comparison of two disputes
+- [x] Dispute Tag Manager (/tags) — custom label/tag system for categorizing disputes
+- [x] Performance Benchmarks (/benchmarks) — platform KPI comparison against NSA industry benchmarks

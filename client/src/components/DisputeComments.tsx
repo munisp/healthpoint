@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { MessageSquare, Reply, Pencil, Trash2, Send, ChevronDown, ChevronRight } from "lucide-react";
+import { MessageSquare, Reply, Pencil, Trash2, Send, ChevronDown, ChevronRight, Sparkles, Loader2, X } from "lucide-react";
 
 interface CommentItemProps {
   comment: any;
@@ -152,8 +152,20 @@ function CommentItem({ comment, currentUserId, currentUserRole, disputeId, onRef
 export default function DisputeComments({ disputeId }: { disputeId: string }) {
   const { user } = useAuth();
   const [newComment, setNewComment] = useState("");
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [showSummary, setShowSummary] = useState(false);
 
   const { data: comments, refetch, isLoading } = trpc.comments.list.useQuery({ disputeId });
+
+  const summarizeMutation = trpc.comments.summarize.useMutation({
+    onSuccess: (data) => {
+      setAiSummary(data.summary);
+      setShowSummary(true);
+    },
+    onError: (e) => {
+      import("sonner").then(({ toast }) => toast.error("Failed to generate summary: " + e.message));
+    },
+  });
 
   const addMutation = trpc.comments.add.useMutation({
     onSuccess: () => { toast.success("Comment added"); setNewComment(""); refetch(); },
@@ -162,12 +174,49 @@ export default function DisputeComments({ disputeId }: { disputeId: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2 pb-2 border-b">
-        <MessageSquare className="h-4 w-4 text-primary" />
-        <h3 className="font-semibold text-sm">
-          Discussion {comments && comments.length > 0 && <span className="text-muted-foreground">({comments.length})</span>}
-        </h3>
+      <div className="flex items-center justify-between pb-2 border-b">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-primary" />
+          <h3 className="font-semibold text-sm">
+            Discussion {comments && comments.length > 0 && <span className="text-muted-foreground">({comments.length})</span>}
+          </h3>
+        </div>
+        {comments && comments.length >= 2 && (
+          <button
+            onClick={() => {
+              if (showSummary) { setShowSummary(false); return; }
+              summarizeMutation.mutate({ disputeId });
+            }}
+            disabled={summarizeMutation.isPending}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-violet-50 text-violet-700 hover:bg-violet-100 border border-violet-200 transition-colors disabled:opacity-60"
+          >
+            {summarizeMutation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Sparkles className="h-3 w-3" />
+            )}
+            {showSummary ? "Hide Summary" : "AI Summary"}
+          </button>
+        )}
       </div>
+
+      {/* AI Summary Panel */}
+      {showSummary && aiSummary && (
+        <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5 text-violet-600" />
+              <span className="text-xs font-semibold text-violet-700">AI-Generated Summary</span>
+              <span className="text-xs text-violet-500">· {comments?.length ?? 0} comments analyzed</span>
+            </div>
+            <button onClick={() => setShowSummary(false)} className="text-violet-400 hover:text-violet-600">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="text-sm text-violet-900 whitespace-pre-wrap leading-relaxed">{aiSummary}</div>
+          <p className="text-xs text-violet-400">AI summaries may not capture all nuances. Review original comments for full context.</p>
+        </div>
+      )}
 
       {/* New comment input */}
       {user && (

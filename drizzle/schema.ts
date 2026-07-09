@@ -859,3 +859,115 @@ export const emailDigestPreferences = pgTable(
 );
 export type EmailDigestPreference = typeof emailDigestPreferences.$inferSelect;
 export type InsertEmailDigestPreference = typeof emailDigestPreferences.$inferInsert;
+
+// ─── Dispute Watchlist ────────────────────────────────────────────────────────
+export const disputeWatchlist = pgTable(
+  "dispute_watchlist",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    note: text("note"),
+    alertOnStatusChange: boolean("alertOnStatusChange").default(true).notNull(),
+    alertOnDeadline: boolean("alertOnDeadline").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("watchlist_userId_idx").on(t.userId),
+    index("watchlist_disputeId_idx").on(t.disputeId),
+  ]
+);
+export type DisputeWatchlistEntry = typeof disputeWatchlist.$inferSelect;
+
+// ─── Dispute Escalations ──────────────────────────────────────────────────────
+export const escalationStatusEnum = pgEnum("escalation_status", ["open", "in_review", "resolved", "dismissed"]);
+export const escalationPriorityEnum = pgEnum("escalation_priority", ["low", "medium", "high", "critical"]);
+export const disputeEscalations = pgTable(
+  "dispute_escalations",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    raisedBy: varchar("raisedBy", { length: 64 }).notNull(),
+    raisedByName: varchar("raisedByName", { length: 255 }).notNull(),
+    assignedTo: varchar("assignedTo", { length: 64 }),
+    priority: escalationPriorityEnum("priority").default("medium").notNull(),
+    status: escalationStatusEnum("status").default("open").notNull(),
+    reason: text("reason").notNull(),
+    resolution: text("resolution"),
+    resolvedAt: timestamp("resolvedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("escalations_disputeId_idx").on(t.disputeId),
+    index("escalations_status_idx").on(t.status),
+  ]
+);
+export type DisputeEscalation = typeof disputeEscalations.$inferSelect;
+
+// ─── Document Expiry Tracker ──────────────────────────────────────────────────
+export const documentExpiryAlerts = pgTable(
+  "document_expiry_alerts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    documentName: varchar("documentName", { length: 255 }).notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    alertSentAt: timestamp("alertSentAt"),
+    dismissed: boolean("dismissed").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("doc_expiry_disputeId_idx").on(t.disputeId),
+    index("doc_expiry_expiresAt_idx").on(t.expiresAt),
+  ]
+);
+export type DocumentExpiryAlert = typeof documentExpiryAlerts.$inferSelect;
+
+// ─── Dispute Appeals ──────────────────────────────────────────────────────────
+export const appealStatusEnum = pgEnum("appeal_status", ["draft", "submitted", "under_review", "upheld", "denied", "withdrawn"]);
+export const disputeAppeals = pgTable(
+  "dispute_appeals",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    submittedBy: varchar("submittedBy", { length: 64 }).notNull(),
+    submittedByName: varchar("submittedByName", { length: 255 }).notNull(),
+    status: appealStatusEnum("status").default("draft").notNull(),
+    groundsForAppeal: text("groundsForAppeal").notNull(),
+    supportingEvidence: text("supportingEvidence"),
+    originalDetermination: text("originalDetermination"),
+    appealDecision: text("appealDecision"),
+    decidedAt: timestamp("decidedAt"),
+    submittedAt: timestamp("submittedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("appeals_disputeId_idx").on(t.disputeId),
+    index("appeals_status_idx").on(t.status),
+  ]
+);
+export type DisputeAppeal = typeof disputeAppeals.$inferSelect;
+
+// ─── Saved Narratives ─────────────────────────────────────────────────────────
+export const disputeNarratives = pgTable(
+  "dispute_narratives",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    generatedBy: varchar("generatedBy", { length: 64 }).notNull(),
+    narrativeType: varchar("narrativeType", { length: 64 }).default("opening_statement").notNull(),
+    content: text("content").notNull(),
+    wordCount: integer("wordCount").default(0).notNull(),
+    approved: boolean("approved").default(false).notNull(),
+    approvedBy: varchar("approvedBy", { length: 64 }),
+    approvedAt: timestamp("approvedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("narratives_disputeId_idx").on(t.disputeId),
+  ]
+);
+export type DisputeNarrative = typeof disputeNarratives.$inferSelect;
