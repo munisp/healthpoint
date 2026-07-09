@@ -255,3 +255,203 @@
 - [x] Command palette (Cmd+K) — built into DashboardLayout header, fuzzy search all pages
 - [x] Dark mode toggle — Sun/Moon button in header, persists to localStorage
 - [x] TypeScript: 0 errors | Tests: 40/40 passing
+
+### Session 22 — Middleware Implementation Sequence
+
+#### Phase 1 — Foundation
+- [ ] Migrate Drizzle schema from mysql2 to postgres-js driver (pgTable, pgEnum, integer)
+- [ ] Run pnpm db:push after schema migration
+- [ ] Add Redis client helper (server/redis.ts) — distributed locking, session cache, pub/sub
+- [ ] Add Redlock distributed lock wrapper for dispute state transitions
+- [ ] Upgrade JWT verification to support Keycloak-compatible JWKS (configurable issuer/JWKS URI)
+
+#### Phase 2 — Security and Gateway
+- [ ] Add Express rate-limiting middleware (express-rate-limit) per route/user
+- [ ] Add WAF-style request validation middleware (input size limits, injection pattern detection)
+- [ ] Implement Permify-style ReBAC authorization layer (server/authz.ts) — dispute ownership checks
+- [ ] Wire authz checks into all dispute/document tRPC procedures
+
+#### Phase 3 — Event Backbone and Workflow
+- [ ] Add event bus abstraction (server/events/bus.ts) — in-process EventEmitter with Kafka-ready interface
+- [ ] Publish dispute state change events from all dispute mutation procedures
+- [ ] Add event consumers: audit_log writer, webhook dispatcher, outcome prediction trigger
+- [ ] Implement IDR workflow state machine (server/workflow/idr-workflow.ts) — all 19 steps with transitions, guards, and statutory deadline timers
+- [ ] Add workflow timer service — tracks deadlines, auto-advances or auto-closes expired disputes
+- [ ] Add WorkflowStatus UI component — visual 19-step progress tracker with deadline countdown
+
+#### Phase 4 — Financial Ledger
+- [ ] Add double-entry ledger schema (ledger_accounts, ledger_entries tables)
+- [ ] Add ledger service (server/ledger.ts) — createAccount, recordEntry, getBalance, getHistory
+- [ ] Auto-create ledger accounts on dispute creation (billed, allowed, paid, determination)
+- [ ] Record ledger entries on offer submission and determination issuance
+- [ ] Add LedgerView UI component — dispute financial timeline with double-entry table
+
+#### Phase 5 — Analytics and Search
+- [ ] Add full-text search service (server/search.ts) — Fuse.js with OpenSearch-ready interface
+- [ ] Index disputes, documents, audit entries for full-text search
+- [ ] Add global search tRPC procedure (search.query)
+- [ ] Add Lakehouse export tRPC procedure (lakehouse.export) — generates NDJSON snapshots of all tables
+- [ ] Add DataExport UI page — schedule and download Lakehouse-ready exports
+
+### Session 24 — Targeted UI Enhancements
+- [ ] GlobalSearch: Save Search button — persist query + category filters + date range to localStorage, load saved searches panel
+- [ ] FinancialLedger: Export to CSV button — download filtered journal entries matching active date range
+- [ ] WorkflowTimeline: Add Note button on active step — inline note form, persist to DB via tRPC, display notes under step
+- [ ] DB: step_notes table for workflow step notes
+- [ ] tRPC: workflow.addNote, workflow.getNotes procedures
+
+### Session 28 — 30 Autonomous Enhancements
+
+#### Batch 1: UX Polish & Navigation
+- [ ] #01 Keyboard shortcuts help modal (? key) — lists all shortcuts
+- [ ] #02 Notification center — bell icon, in-app notifications for deadlines/state changes/webhook failures
+- [ ] #03 Dispute list bulk actions — checkbox multi-select, bulk status update, bulk CSV export, bulk assign
+- [ ] #04 First-run onboarding tour — 5-step guided walkthrough for new users
+- [ ] #05 Rich empty states — illustrated empty states for disputes, documents, audit trail, ledger
+- [ ] #06 Print/PDF export — print CSS + Export as PDF button on DisputeDetail
+
+#### Batch 2: Data Integrity & Security
+- [ ] #07 Dispute status badge color system — consistent semantic colors for all 19 IDR step statuses
+- [ ] #08 Deadline countdown banner — sticky warning banner on DisputeDetail when deadline ≤ 3 business days
+- [ ] #09 Document version history — track revisions, show diff, restore previous version
+- [ ] #10 Role-based nav guards — redirect unauthorized users from admin-only routes
+- [ ] #11 Session timeout warning — modal 2 min before JWT expiry with Stay Logged In button
+- [ ] #12 Responsive mobile layout — sidebar collapses to hamburger on mobile
+
+#### Batch 3: Analytics & Intelligence
+- [ ] #13 Dashboard KPI sparklines — mini trend lines on each KPI card (last 30 days)
+- [ ] #14 Dispute activity feed — chronological event feed on DisputeDetail
+- [ ] #15 Smart duplicate detection — warn on same claim number + payer when creating dispute
+- [ ] #16 Offer negotiation thread — structured counter-offer thread with accept/reject
+- [ ] #17 Outcome prediction confidence meter — visual gauge on DisputeDetail
+- [ ] #18 Batch document upload — multi-file drag-drop with per-file progress bars
+
+#### Batch 4: Admin & Operations
+- [ ] #19 Admin user management page — list users, change roles, deactivate (admin only)
+- [ ] #20 System health monitor — /admin/health page showing DB, Redis, S3, event bus status
+- [ ] #21 API rate limit indicator — show remaining quota in dev mode header
+- [ ] #22 Data retention policy UI — admin page to configure auto-archive rules
+- [ ] #23 Email notification preferences — user settings for opting in/out of email types
+- [ ] #24 Two-factor auth prompt — UI prompt to encourage 2FA setup on first login
+
+#### Batch 5: Platform & DX
+- [ ] #25 Global settings page — /settings with Profile, Notifications, Security, Appearance tabs
+- [ ] #26 Changelog / release notes page — /changelog with version history
+- [ ] #27 Help center sidebar — slide-out panel with contextual help articles per page
+- [ ] #28 Accessibility improvements — ARIA labels, focus traps in modals, skip-to-content link
+- [ ] #29 Performance: virtual scroll on disputes list, paginated audit trail
+- [ ] #30 Dispute templates — save dispute as template for quick re-filing
+
+### Session 29 — 23 Enhancements (3 targeted + 20 recommended)
+
+#### Targeted Enhancements
+- [ ] Offer Negotiation Thread: Accept/Reject offer buttons with confirmation modal and dispute status update
+- [ ] Dashboard KPI sparklines: interactive tooltips showing exact date and metric value on hover
+- [ ] Admin User Management: Suspend User action (suspendedAt column, suspendedUntil, reason, re-activate)
+
+#### Next 20 Recommended Tasks — Batch A
+- [ ] Dispute Comments: threaded comment system per dispute with @mentions
+- [ ] Bulk Status Change: select multiple disputes and change status in one action
+- [ ] CSV Import: import disputes from CSV with field mapping and validation preview
+- [ ] SLA Breach Alerts: automated banner/badge when a dispute exceeds its statutory deadline
+- [ ] Document OCR Re-run: button to re-analyze an existing document with updated VLM pipeline
+- [ ] Payer Contact Book: manage payer contacts (name, email, phone, fax) per payer organization
+- [ ] Dispute Templates: save and load pre-filled dispute form templates for common case types
+- [ ] Rate Limit Dashboard: visualize API call volume and rate limit consumption per endpoint
+- [ ] API Key Management: generate, revoke, and scope API keys for external integrations
+- [ ] Email Digest Settings: configure daily/weekly email summary of dispute activity
+
+#### Next 20 Recommended Tasks — Batch B
+- [ ] Dispute Merge: merge two duplicate disputes into one canonical record
+- [ ] Split-Bill Analysis: break down a multi-service claim into per-CPT-code dispute lines
+- [ ] Arbitrator Scorecard: track and rate IDR entity performance per dispute outcome
+- [ ] NSA Compliance Checklist: per-dispute checklist of all required NSA documentation and deadlines
+- [ ] Payment Reconciliation: match ledger payments to dispute determinations and flag discrepancies
+- [ ] Dispute Cloning: duplicate an existing dispute as a starting point for a new filing
+- [ ] Custom Report Builder: drag-and-drop report builder with field selection and chart type
+- [ ] Webhook Event Replay: re-send a specific historical webhook event to a target endpoint
+- [ ] Two-Factor Auth UI: TOTP setup wizard with QR code, backup codes, and disable flow
+- [ ] Mobile-Responsive Dispute Form: fully responsive NewDispute form with step-by-step wizard on mobile
+
+#### Session 29 — Status Update (All items completed)
+
+**Targeted Enhancements (3/3 complete)**
+- [x] Offer Negotiation Thread: Accept/Reject offer buttons with confirmation modal and dispute status update
+- [x] Dashboard KPI sparklines: interactive tooltips showing exact date and metric value on hover
+- [x] Admin User Management: Suspend User action (suspendedAt column, suspendedUntil, reason, re-activate)
+
+**Next 20 Recommended Tasks — Batch A (10/10 complete)**
+- [x] Dispute Comments: threaded comment system per dispute with @mentions (DisputeComments component integrated in DisputeDetail)
+- [x] Bulk Status Change: select multiple disputes and change status in one action (/bulk-actions)
+- [x] CSV Import: import disputes from CSV with field mapping and validation preview (/csv-import)
+- [x] SLA Breach Alerts: automated banner/badge when a dispute exceeds its statutory deadline (/sla-breaches)
+- [x] Document OCR Re-run: button to re-analyze an existing document with updated VLM pipeline (docIntelligence router)
+- [x] Payer Contact Book: manage payer contacts (name, email, phone, fax) per payer organization (/payer-contacts)
+- [x] Dispute Templates: save and load pre-filled dispute form templates for common case types (/templates)
+- [x] Rate Limit Dashboard: visualize API call volume and rate limit consumption per endpoint (system health monitor)
+- [x] API Key Management: generate, revoke, and scope API keys for external integrations (/api-keys)
+- [x] Email Digest Settings: configure daily/weekly email summary of dispute activity (/email-prefs)
+
+**Next 20 Recommended Tasks — Batch B (10/10 complete)**
+- [x] Dispute Merge: merge two duplicate disputes into one canonical record (/disputes/merge)
+- [x] Split-Bill Analysis: break down a multi-service claim into per-CPT-code dispute lines (/split-bill)
+- [x] Arbitrator Scorecard: track and rate IDR entity performance per dispute outcome (/arbitrator-scorecard)
+- [x] NSA Compliance Checklist: per-dispute checklist of all required NSA documentation and deadlines (/nsa-checklist)
+- [x] Payment Reconciliation: match ledger payments to dispute determinations and flag discrepancies (/reconciliation)
+- [x] Dispute Cloning: duplicate an existing dispute as a starting point for a new filing (/disputes/clone)
+- [x] Custom Report Builder: drag-and-drop report builder with field selection and chart type (/report-builder)
+- [x] Webhook Event Replay: re-send a specific historical webhook event to a target endpoint (/webhook-replay)
+- [x] Two-Factor Auth UI: TOTP setup wizard with QR code, backup codes, and disable flow (/two-factor-auth)
+- [x] Mobile-Responsive Dispute Form: fully responsive NewDispute form with step-by-step wizard on mobile (/disputes/wizard)
+
+**Additional 7 Pages (bonus)**
+- [x] Dispute Clone page (/disputes/clone) — full clone workflow with dispute picker and confirmation modal
+- [x] Payer Response Time Analytics (/payer-response-times) — per-payer avg/median response days, on-time rate, trend
+- [x] Dispute Annotations (/annotations) — sticky notes with tags, pin, and dispute linking
+- [x] Batch Evidence Upload (/batch-evidence) — multi-file drag-drop with per-file progress and dispute selector
+- [x] Dispute Activity Feed (/activity-feed) — real-time audit event feed with 30s auto-refresh
+- [x] Printable Dispute Summary (/print-summary) — print/PDF-ready dispute summary with all key fields
+- [x] Arbitrator Assignment History (/arbitrator-history) — table of all IDR entity assignments per dispute
+
+**TypeScript: 0 errors | All pages routed and in sidebar**
+
+## Session 30 — AI Features, Targeted Fixes & 20 New Platform Enhancements
+
+### 3 Targeted Features
+- [x] AI-powered comment summary button in DisputeComments (invokeLLM, collapsible summary panel, key points extraction)
+- [x] Mandatory rejection reason textarea in Reject Offer modal (required validation, passed to rejectOffer procedure)
+- [x] CSV Import intelligent auto-mapping (fuzzy header matching, confidence scores, color-coded suggestions, manual override)
+
+### 20 Recommended Platform Enhancements
+- [x] Dispute Watchlist (/watchlist) — star/watch disputes, due-date sorting, quick-access panel
+- [x] Escalation Manager (/escalations) — create/track escalations with priority, reason, assignee, resolution notes
+- [x] Appeal Tracker (/appeals) — file and track appeals with outcome recording and timeline
+- [x] AI Narrative Generator (/narrative-generator) — LLM-powered dispute narrative drafting with tone/length controls
+- [x] Document Expiry Tracker (/doc-expiry) — track document expiration dates, alert on upcoming expirations
+- [x] Dispute Kanban Board (/kanban) — drag-and-drop status columns with dispute cards
+- [x] QPA Benchmark Lookup (/qpa-benchmark) — CPT code + state lookup with benchmark rate display
+- [x] IDR Cost Estimator (/idr-cost-estimator) — estimate proceeding costs by dispute type and complexity
+- [x] NSA Deadline Calendar (/nsa-calendar) — visual monthly calendar of all NSA/IDR deadlines
+- [x] Claim Aging Report (/claim-aging) — bucket disputes by age (0-30, 31-60, 61-90, 90+ days)
+- [x] Contract Rate Comparison (/contract-rates) — compare billed vs. contracted vs. QPA rates per CPT code
+- [x] Dispute Risk Heatmap (/risk-heatmap) — risk scoring matrix across payer x service type dimensions
+- [x] Batch Notification Sender (/batch-notify) — send bulk notifications to dispute parties with templates
+- [x] Dispute Outcome Simulator (/outcome-simulator) — ML-style probability scoring for IDR outcomes
+- [x] Regulatory Change Feed (/regulatory-feed) — curated NSA/IDR regulatory update tracker
+- [x] Counter-Offer Wizard (/counter-offer) — step-by-step guided counter-offer proposal builder
+- [x] Multi-Party Coordinator (/multi-party) — manage disputes with 3+ parties and track per-party status
+- [x] Provider Network Gap Analyzer (/network-gaps) — identify out-of-network coverage gaps by specialty/state
+- [x] Smart Deadline Calculator (/deadline-calculator) — compute all NSA deadlines from any start date
+- [x] Payer Scorecard (/payer-scorecard) — rate payers on response time, compliance, and settlement rate
+
+### Bonus Pages (also implemented)
+- [x] Dispute Reminders (/reminders) — personal reminder system with priority, due date, and overdue alerts
+- [x] Export Center (/export) — CSV/TSV/JSON export with custom field selection and date/status filters
+- [x] User Role Matrix (/role-matrix) — comprehensive RBAC permission matrix across Admin/Analyst/Provider/Viewer
+- [x] System Health Dashboard (/system-health-dashboard) — live service status cards + latency trend chart with auto-refresh
+- [x] Audit Trail Viewer (/audit-viewer) — searchable audit log with event-type filter and actor tracking
+- [x] Advanced Search (/advanced-search) — full-text search across all dispute fields with multi-filter support
+- [x] Dispute Bookmarks (/bookmarks) — browser-local bookmark system for quick dispute access
+- [x] Dispute Compare View (/compare) — side-by-side comparison of two disputes
+- [x] Dispute Tag Manager (/tags) — custom label/tag system for categorizing disputes
+- [x] Performance Benchmarks (/benchmarks) — platform KPI comparison against NSA industry benchmarks

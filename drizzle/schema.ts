@@ -24,6 +24,9 @@ export const users = pgTable("users", {
   role: roleEnum("role").default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow(),
+  suspendedAt: timestamp("suspendedAt"),
+  suspendedUntil: timestamp("suspendedUntil"),
+  suspendReason: text("suspendReason"),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
@@ -688,3 +691,283 @@ export const eventLog = pgTable(
 );
 export type EventLogEntry = typeof eventLog.$inferSelect;
 export type InsertEventLogEntry = typeof eventLog.$inferInsert;
+
+// ─── Workflow Step Notes ──────────────────────────────────────────────────────
+export const stepNotes = pgTable(
+  "step_notes",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    stepId: varchar("stepId", { length: 64 }).notNull(),       // e.g. "STEP_09_OFFER_SUBMISSION"
+    authorId: varchar("authorId", { length: 64 }).notNull(),
+    authorName: text("authorName"),
+    note: text("note").notNull(),
+    // JSON array of { key, url, name, size, mimeType } objects stored as text
+    attachments: text("attachments").default("[]").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("step_notes_disputeId_idx").on(t.disputeId),
+    index("step_notes_stepId_idx").on(t.stepId),
+  ]
+);
+export type StepNote = typeof stepNotes.$inferSelect;
+export type InsertStepNote = typeof stepNotes.$inferInsert;
+
+// ─── Dispute Comments ────────────────────────────────────────────────────────
+export const disputeComments = pgTable(
+  "dispute_comments",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    authorId: varchar("authorId", { length: 64 }).notNull(),
+    authorName: text("authorName"),
+    content: text("content").notNull(),
+    parentId: varchar("parentId", { length: 64 }), // for threaded replies
+    edited: boolean("edited").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("dispute_comments_disputeId_idx").on(t.disputeId),
+    index("dispute_comments_parentId_idx").on(t.parentId),
+  ]
+);
+export type DisputeComment = typeof disputeComments.$inferSelect;
+export type InsertDisputeComment = typeof disputeComments.$inferInsert;
+
+// ─── Payer Contact Book ───────────────────────────────────────────────────────
+export const payerContacts = pgTable(
+  "payer_contacts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    payerName: text("payerName").notNull(),
+    payerId: varchar("payerId", { length: 64 }),
+    contactName: text("contactName"),
+    contactTitle: text("contactTitle"),
+    email: varchar("email", { length: 320 }),
+    phone: varchar("phone", { length: 32 }),
+    fax: varchar("fax", { length: 32 }),
+    address: text("address"),
+    idrPortalUrl: text("idrPortalUrl"),
+    notes: text("notes"),
+    createdBy: varchar("createdBy", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("payer_contacts_payerName_idx").on(t.payerName),
+  ]
+);
+export type PayerContact = typeof payerContacts.$inferSelect;
+export type InsertPayerContact = typeof payerContacts.$inferInsert;
+
+// ─── API Keys ─────────────────────────────────────────────────────────────────
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    name: text("name").notNull(),
+    keyHash: varchar("keyHash", { length: 128 }).notNull(), // SHA-256 of the key
+    keyPrefix: varchar("keyPrefix", { length: 8 }).notNull(), // first 8 chars for display
+    scopes: text("scopes").default("read").notNull(), // comma-separated: read,write,admin
+    lastUsedAt: timestamp("lastUsedAt"),
+    expiresAt: timestamp("expiresAt"),
+    revokedAt: timestamp("revokedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("api_keys_userId_idx").on(t.userId),
+    index("api_keys_keyHash_idx").on(t.keyHash),
+  ]
+);
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type InsertApiKey = typeof apiKeys.$inferInsert;
+
+// ─── SLA Breach Log ───────────────────────────────────────────────────────────
+export const slaBreaches = pgTable(
+  "sla_breaches",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    step: text("step").notNull(),
+    deadlineDays: integer("deadlineDays").notNull(),
+    actualDays: integer("actualDays").notNull(),
+    breachDays: integer("breachDays").notNull(), // actualDays - deadlineDays
+    detectedAt: timestamp("detectedAt").defaultNow().notNull(),
+    resolvedAt: timestamp("resolvedAt"),
+    severity: text("severity").notNull().default("warning"), // warning | critical
+  },
+  (t) => [
+    index("sla_breaches_disputeId_idx").on(t.disputeId),
+    index("sla_breaches_detectedAt_idx").on(t.detectedAt),
+  ]
+);
+export type SLABreach = typeof slaBreaches.$inferSelect;
+export type InsertSLABreach = typeof slaBreaches.$inferInsert;
+
+// ─── Webhook Deliveries ───────────────────────────────────────────────────────
+export const webhookDeliveryStatusEnum = pgEnum("webhook_delivery_status", ["pending", "delivered", "failed"]);
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    webhookId: varchar("webhookId", { length: 64 }).notNull(),
+    eventType: varchar("eventType", { length: 64 }).notNull(),
+    payload: text("payload").notNull(), // JSON string
+    status: webhookDeliveryStatusEnum("status").default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    lastAttemptAt: timestamp("lastAttemptAt"),
+    nextRetryAt: timestamp("nextRetryAt"),
+    responseStatus: integer("responseStatus"),
+    responseBody: text("responseBody"),
+    errorMessage: text("errorMessage"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("webhook_deliveries_webhookId_idx").on(t.webhookId),
+    index("webhook_deliveries_status_idx").on(t.status),
+    index("webhook_deliveries_createdAt_idx").on(t.createdAt),
+  ]
+);
+export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type InsertWebhookDelivery = typeof webhookDeliveries.$inferInsert;
+
+// ─── Email Digest Preferences ─────────────────────────────────────────────────
+export const digestFrequencyEnum = pgEnum("digest_frequency", ["daily", "weekly", "never"]);
+export const emailDigestPreferences = pgTable(
+  "email_digest_preferences",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    userId: varchar("userId", { length: 64 }).notNull().unique(),
+    digestFrequency: digestFrequencyEnum("digestFrequency").default("daily").notNull(),
+    notifyOnNewDispute: boolean("notifyOnNewDispute").default(true).notNull(),
+    notifyOnStatusChange: boolean("notifyOnStatusChange").default(true).notNull(),
+    notifyOnDeadlineApproach: boolean("notifyOnDeadlineApproach").default(true).notNull(),
+    notifyOnDetermination: boolean("notifyOnDetermination").default(true).notNull(),
+    notifyOnSLABreach: boolean("notifyOnSLABreach").default(true).notNull(),
+    digestTime: varchar("digestTime", { length: 5 }).default("08:00").notNull(), // HH:MM
+    digestDayOfWeek: integer("digestDayOfWeek").default(1).notNull(), // 0=Sun, 1=Mon...
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("email_digest_prefs_userId_idx").on(t.userId),
+  ]
+);
+export type EmailDigestPreference = typeof emailDigestPreferences.$inferSelect;
+export type InsertEmailDigestPreference = typeof emailDigestPreferences.$inferInsert;
+
+// ─── Dispute Watchlist ────────────────────────────────────────────────────────
+export const disputeWatchlist = pgTable(
+  "dispute_watchlist",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    note: text("note"),
+    alertOnStatusChange: boolean("alertOnStatusChange").default(true).notNull(),
+    alertOnDeadline: boolean("alertOnDeadline").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("watchlist_userId_idx").on(t.userId),
+    index("watchlist_disputeId_idx").on(t.disputeId),
+  ]
+);
+export type DisputeWatchlistEntry = typeof disputeWatchlist.$inferSelect;
+
+// ─── Dispute Escalations ──────────────────────────────────────────────────────
+export const escalationStatusEnum = pgEnum("escalation_status", ["open", "in_review", "resolved", "dismissed"]);
+export const escalationPriorityEnum = pgEnum("escalation_priority", ["low", "medium", "high", "critical"]);
+export const disputeEscalations = pgTable(
+  "dispute_escalations",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    raisedBy: varchar("raisedBy", { length: 64 }).notNull(),
+    raisedByName: varchar("raisedByName", { length: 255 }).notNull(),
+    assignedTo: varchar("assignedTo", { length: 64 }),
+    priority: escalationPriorityEnum("priority").default("medium").notNull(),
+    status: escalationStatusEnum("status").default("open").notNull(),
+    reason: text("reason").notNull(),
+    resolution: text("resolution"),
+    resolvedAt: timestamp("resolvedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("escalations_disputeId_idx").on(t.disputeId),
+    index("escalations_status_idx").on(t.status),
+  ]
+);
+export type DisputeEscalation = typeof disputeEscalations.$inferSelect;
+
+// ─── Document Expiry Tracker ──────────────────────────────────────────────────
+export const documentExpiryAlerts = pgTable(
+  "document_expiry_alerts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    documentName: varchar("documentName", { length: 255 }).notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    alertSentAt: timestamp("alertSentAt"),
+    dismissed: boolean("dismissed").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("doc_expiry_disputeId_idx").on(t.disputeId),
+    index("doc_expiry_expiresAt_idx").on(t.expiresAt),
+  ]
+);
+export type DocumentExpiryAlert = typeof documentExpiryAlerts.$inferSelect;
+
+// ─── Dispute Appeals ──────────────────────────────────────────────────────────
+export const appealStatusEnum = pgEnum("appeal_status", ["draft", "submitted", "under_review", "upheld", "denied", "withdrawn"]);
+export const disputeAppeals = pgTable(
+  "dispute_appeals",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    submittedBy: varchar("submittedBy", { length: 64 }).notNull(),
+    submittedByName: varchar("submittedByName", { length: 255 }).notNull(),
+    status: appealStatusEnum("status").default("draft").notNull(),
+    groundsForAppeal: text("groundsForAppeal").notNull(),
+    supportingEvidence: text("supportingEvidence"),
+    originalDetermination: text("originalDetermination"),
+    appealDecision: text("appealDecision"),
+    decidedAt: timestamp("decidedAt"),
+    submittedAt: timestamp("submittedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("appeals_disputeId_idx").on(t.disputeId),
+    index("appeals_status_idx").on(t.status),
+  ]
+);
+export type DisputeAppeal = typeof disputeAppeals.$inferSelect;
+
+// ─── Saved Narratives ─────────────────────────────────────────────────────────
+export const disputeNarratives = pgTable(
+  "dispute_narratives",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    generatedBy: varchar("generatedBy", { length: 64 }).notNull(),
+    narrativeType: varchar("narrativeType", { length: 64 }).default("opening_statement").notNull(),
+    content: text("content").notNull(),
+    wordCount: integer("wordCount").default(0).notNull(),
+    approved: boolean("approved").default(false).notNull(),
+    approvedBy: varchar("approvedBy", { length: 64 }),
+    approvedAt: timestamp("approvedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("narratives_disputeId_idx").on(t.disputeId),
+  ]
+);
+export type DisputeNarrative = typeof disputeNarratives.$inferSelect;
