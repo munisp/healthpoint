@@ -3293,6 +3293,56 @@ Based on NSA IDR historical data and legal precedent, provide:
         return { success: true };
       }),
   }),
+
+  // ── Ollama LLM Management ────────────────────────────────────────────────
+  ollama: router({
+    /** Check if local Ollama is running and return version */
+    status: publicProcedure.query(async () => {
+      const { checkOllamaStatus } = await import("./_core/llm");
+      return checkOllamaStatus();
+    }),
+
+    /** List all locally available Ollama models */
+    listModels: publicProcedure.query(async () => {
+      const { listOllamaModels } = await import("./_core/llm");
+      return listOllamaModels();
+    }),
+
+    /** Pull a model from Ollama registry (admin only) */
+    pullModel: protectedProcedure
+      .input(z.object({ model: z.string().min(1) }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+        const { pullOllamaModel } = await import("./_core/llm");
+        return pullOllamaModel(input.model);
+      }),
+
+    /** Run a prompt through Ollama (or fallback LLM) */
+    generate: protectedProcedure
+      .input(z.object({
+        prompt: z.string().min(1),
+        model: z.string().optional(),
+        systemPrompt: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const response = await invokeLLM({
+          messages: [
+            ...(input.systemPrompt ? [{ role: "system" as const, content: input.systemPrompt }] : []),
+            { role: "user" as const, content: input.prompt },
+          ],
+          model: input.model,
+        });
+        const content = response?.choices?.[0]?.message?.content;
+        return { text: typeof content === "string" ? content : JSON.stringify(content) };
+      }),
+
+    /** Resolve which LLM backend is currently active */
+    activeBackend: publicProcedure.query(async () => {
+      const { resolveBackend } = await import("./_core/llm");
+      const backend = await resolveBackend();
+      return backend;
+    }),
+  }),
 });
 export type AppRouter = typeof appRouter;
 

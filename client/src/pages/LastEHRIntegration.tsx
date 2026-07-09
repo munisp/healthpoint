@@ -612,9 +612,10 @@ cp .env.example .env.local
                   {
                     step: "3. Register SMART on FHIR App (Epic/Cerner)",
                     code: `# In your EHR admin:
-launchUri = https://your-healthpoint.manus.space/launch
-redirectUri = https://your-healthpoint.manus.space/launch/callback
-# Set SMART_CLIENT_ID in HealthPoint env`,
+launchUri = https://your-healthpoint-domain.example.com/launch
+redirectUri = https://your-healthpoint-domain.example.com/launch/callback
+# Set SMART_CLIENT_ID in HealthPoint env
+# Replace with your actual deployment URL (set via VITE_APP_URL env var)`,
                   },
                   {
                     step: "4. Connect to HealthPoint AI Service",

@@ -98,6 +98,7 @@ import {
   Cpu,
   FileDown,
   Stethoscope,
+  Bot,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useTheme } from "../contexts/ThemeContext";
@@ -192,6 +193,7 @@ const menuItems = [
   { icon: FileDown, label: "Bulk FHIR Export", path: "/bulk-fhir-export" },
   { icon: Webhook, label: "CDS Hooks Manager", path: "/cds-hooks" },
   { icon: ClipboardCheck, label: "USCDI Completeness", path: "/uscdi-completeness" },
+  { icon: Bot, label: "Ollama LLM Manager", path: "/ollama" },
 ];
 
 const SIDEBAR_WIDTH_KEY = 'sidebar-width';

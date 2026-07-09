@@ -489,3 +489,26 @@
 ### Routing & Navigation
 - [x] All 5 new pages wired into App.tsx routes
 - [x] All 5 new pages added to DashboardLayout sidebar
+
+## Session 32 — Open-Source Migration, Ollama, D3 Map, USCDI, Production Hardening
+
+- [x] Replace Manus LLM helper (invokeLLM) with Ollama-first / OpenAI-compatible fallback in server/_core/llm.ts
+- [x] Replace Manus-specific env vars with open-source equivalents (Keycloak, Ollama, MinIO, Umami, ALLOWED_ORIGINS)
+- [x] Replace hardcoded manus.space CORS origins with ALLOWED_ORIGINS env var
+- [x] Replace manus.space OAuth redirect URIs in EMROnboarding and LastEHRIntegration with generic placeholders
+- [x] Add Ollama management router (status, list models, pull model, generate) to routers.ts
+- [x] Create OllamaManager.tsx page for managing local Ollama LLM models and testing inference
+- [x] Wire OllamaManager into App.tsx routes and DashboardLayout sidebar
+- [x] Add confidence score badges and warning tooltips to all Field components in NewDispute.tsx wizard
+- [x] Install D3 and TopoJSON packages for US choropleth map
+- [x] Create USChoroplethMap.tsx D3 component with hover tooltips and Apache Sedona lakehouse integration
+- [x] Add interactive Map tab to StateBalanceBilling.tsx with D3 choropleth
+- [x] Add Request Missing Data button and AI-generated template modal to USCDICompleteness.tsx
+- [x] Add response compression (gzip/brotli) middleware to server
+- [x] Add HTTP Parameter Pollution (HPP) protection middleware to server
+- [x] Add X-Request-ID distributed tracing header to every request
+- [x] Add express-slow-down brute-force protection for auth endpoints
+- [x] Add structured JSON logging for production (morgan JSON format for Loki/Datadog/CloudWatch)
+- [x] Add /api/ready liveness probe endpoint (Kubernetes/Docker-compatible)
+- [x] Create SECURITY.md with full production deployment guide (PostgreSQL, Keycloak, Ollama, MinIO, Umami)
+- [x] Confirmed PostgreSQL throughout (pgTable, drizzle-orm/postgres-js, dialect: postgresql)

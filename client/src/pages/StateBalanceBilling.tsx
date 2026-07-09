@@ -10,8 +10,10 @@ import { trpc } from "@/lib/trpc";
 import {
   Search, ExternalLink, AlertTriangle, CheckCircle2, Info,
   MapPin, Scale, FileText, TrendingUp, Filter, Download,
-  BookOpen, RefreshCw, Star, ChevronDown, ChevronUp
+  BookOpen, RefreshCw, Star, ChevronDown, ChevronUp, Map
 } from "lucide-react";
+import USChoroplethMap from "@/components/USChoroplethMap";
+import type { StateLawData } from "@/components/USChoroplethMap";
 
 type ProtectionLevel = "strong" | "moderate" | "limited" | "none";
 
@@ -111,7 +113,8 @@ export default function StateBalanceBilling() {
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [compareStates, setCompareStates] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<"browser" | "table" | "compare" | "insights">("browser");
+  const [activeTab, setActiveTab] = useState<"map" | "browser" | "table" | "compare" | "insights">("map");
+  const [selectedState, setSelectedState] = useState<string | null>(null);
 
   const aiMutation = trpc.ai.askAssistant.useMutation();
 
@@ -211,13 +214,84 @@ export default function StateBalanceBilling() {
 
         {/* Tabs */}
         <div className="flex gap-1 border-b border-slate-200">
-          {(["browser","table","compare","insights"] as const).map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
+          {(["map","browser","table","compare","insights"] as const).map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab as any)}
               className={`px-4 py-2 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${activeTab===tab?"border-blue-600 text-blue-600":"border-transparent text-slate-500 hover:text-slate-700"}`}>
-              {tab==="browser"?"State Browser":tab==="compare"?"Compare States":tab==="insights"?"Georgetown Insights":"Full Table"}
+              {tab==="map"?<span className="flex items-center gap-1.5"><Map size={13}/>Interactive Map</span>:tab==="browser"?"State Browser":tab==="compare"?"Compare States":tab==="insights"?"Georgetown Insights":"Full Table"}
             </button>
           ))}
         </div>
+
+        {/* ── Interactive Choropleth Map ── */}
+        {(activeTab as string) === "map" && (() => {
+          // Build StateLawData array from STATE_LAWS for the map
+          const mapData: StateLawData[] = allStates.map(s => ({
+            code: s.code,
+            name: s.state,
+            hasLaw: s.hasLaw,
+            lawName: s.lawName,
+            idrThreshold: s.idrThreshold ? parseInt(s.idrThreshold.replace(/[^0-9]/g, "")) || undefined : undefined,
+            effectiveDate: s.effectiveDate,
+            tier: s.protectionLevel === "strong" ? "full"
+              : s.protectionLevel === "moderate" ? "partial"
+              : s.protectionLevel === "limited" ? "partial"
+              : "none",
+            complianceStatus: s.georgetownRating === "A" ? "compliant"
+              : s.georgetownRating === "B" || s.georgetownRating === "C" ? "at_risk"
+              : s.georgetownRating === "D" || s.georgetownRating === "F" ? "non_compliant"
+              : "unknown",
+          }));
+          return (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-base font-semibold text-slate-800 flex items-center gap-2">
+                    <Map size={16} className="text-blue-600" />
+                    Interactive US State Law Map
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Hover any state to view its IDR threshold, protection tier, and Georgetown compliance rating.
+                    Click a state to open its detailed law profile.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">Powered by D3 + TopoJSON</span>
+                  <span className="text-xs text-slate-300">|</span>
+                  <span className="text-xs text-slate-500">Apache Sedona Lakehouse overlay available</span>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 overflow-hidden bg-slate-50">
+                <USChoroplethMap
+                  stateLaws={mapData}
+                  selectedState={selectedState || null}
+                  onStateSelect={s => setSelectedState(s.code)}
+                  height={500}
+                  showLakehouseOverlay={false}
+                />
+              </div>
+              {selectedState && STATE_LAWS[selectedState] && (
+                <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="font-semibold text-blue-900">{STATE_LAWS[selectedState].state} — Selected</h3>
+                    <button onClick={() => setSelectedState(null)} className="text-xs text-blue-500 hover:text-blue-700">× Deselect</button>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                    <div><span className="text-slate-500">Law</span><p className="font-medium text-slate-800 mt-0.5">{STATE_LAWS[selectedState].lawName || "No state law"}</p></div>
+                    <div><span className="text-slate-500">Effective</span><p className="font-medium text-slate-800 mt-0.5">{STATE_LAWS[selectedState].effectiveDate || "N/A"}</p></div>
+                    <div><span className="text-slate-500">IDR Threshold</span><p className="font-medium text-slate-800 mt-0.5">{STATE_LAWS[selectedState].idrThreshold || "Federal NSA"}</p></div>
+                    <div><span className="text-slate-500">Georgetown Rating</span><p className="font-medium text-slate-800 mt-0.5">{STATE_LAWS[selectedState].georgetownRating || "N/A"}</p></div>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab("browser" as any)}
+                    className="mt-3 text-xs text-blue-600 hover:text-blue-800 font-medium underline"
+                  >
+                    View full law details →
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* State Browser */}
         {activeTab === "browser" && (

@@ -5,7 +5,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
-import { CheckCircle2, XCircle, AlertCircle, Database, RefreshCw, Info, TrendingUp } from "lucide-react";
+import { CheckCircle2, XCircle, AlertCircle, Database, RefreshCw, Info, TrendingUp, Mail, ClipboardList } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 
 const USCDI_V3_ELEMENTS = [
   { category: "Patient Demographics", elements: [
@@ -54,7 +56,7 @@ export default function USCDICompleteness() {
   const [elementValues, setElementValues] = useState<Record<string, boolean>>({});
   const [hasEdits, setHasEdits] = useState(false);
 
-  const { data: disputes } = trpc.disputes.list.useQuery({ limit: 50, offset: 0 });
+  const { data: disputes } = trpc.disputes.list.useQuery({ limit: 50, offset: 0 });  // eslint-disable-line @typescript-eslint/no-explicit-any
   const { data: completeness, refetch } = trpc.uscdi.getCompleteness.useQuery(
     { disputeId: selectedDisputeId },
     { enabled: !!selectedDisputeId }
@@ -91,6 +93,50 @@ export default function USCDICompleteness() {
   const score = completeness?.completenessScore ?? 0;
   const missing = (completeness?.missingElements as string[]) ?? [];
   const requiredMissing = missing.filter(k => ALL_ELEMENTS.find(e => e.key === k)?.required);
+
+  const [showRequestModal, setShowRequestModal] = useState(false);
+  const [requestTemplate, setRequestTemplate] = useState("");
+
+  const generateRequestTemplate = () => {
+    const selectedDispute = disputes?.items?.find((d: { id: string; referenceNumber: string }) => d.id === selectedDisputeId) as { id: string; referenceNumber: string; patientName?: string | null } | undefined;
+    const requiredLabels = requiredMissing.map(k => ALL_ELEMENTS.find(e => e.key === k)?.label ?? k);
+    const optionalMissing = missing.filter(k => !ALL_ELEMENTS.find(e => e.key === k)?.required);
+    const optionalLabels = optionalMissing.map(k => ALL_ELEMENTS.find(e => e.key === k)?.label ?? k);
+    const lines = [
+      `Subject: Missing USCDI v3 Data Required for IDR Dispute ${selectedDispute?.referenceNumber ?? selectedDisputeId}`,
+      ``,
+      `Dear [Payer/Provider Contact],`,
+      ``,
+      `We are writing regarding IDR Dispute Reference: ${selectedDispute?.referenceNumber ?? selectedDisputeId}`,
+      `Patient: ${selectedDispute?.patientName ?? "[Patient Name]"}`,
+      ``,
+      `To proceed with the Independent Dispute Resolution (IDR) process under the No Surprises Act, we require the following USCDI v3 data elements that are currently missing from our records:`,
+      ``,
+    ];
+    if (requiredLabels.length > 0) {
+      lines.push(`REQUIRED FIELDS (${requiredLabels.length} missing \u2014 IDR submission blocked without these):`);
+      requiredLabels.forEach((l, i) => lines.push(`  ${i + 1}. ${l}`));
+      lines.push(``);
+    }
+    if (optionalLabels.length > 0) {
+      lines.push(`RECOMMENDED FIELDS (${optionalLabels.length} missing \u2014 improves IDR outcome quality):`);
+      optionalLabels.forEach((l, i) => lines.push(`  ${i + 1}. ${l}`));
+      lines.push(``);
+    }
+    lines.push(
+      `Please provide the above information within 5 business days to avoid delays in the IDR process.`,
+      ``,
+      `Per 45 CFR \u00a7 149.510 and the No Surprises Act (NSA) requirements, all parties must provide complete and accurate information to the certified IDR entity.`,
+      ``,
+      `If you have questions, please contact our IDR team at [contact information].`,
+      ``,
+      `Sincerely,`,
+      `[Your Name / Organization]`,
+      `[Date: ${new Date().toLocaleDateString()}]`,
+    );
+    setRequestTemplate(lines.join("\n"));
+    setShowRequestModal(true);
+  };
 
   const scoreColor = score >= 90 ? "text-green-600" : score >= 70 ? "text-amber-600" : "text-red-600";
   const scoreBg = score >= 90 ? "bg-green-100" : score >= 70 ? "bg-amber-100" : "bg-red-100";
@@ -167,9 +213,25 @@ export default function USCDICompleteness() {
                   <div className={`h-3 rounded-full transition-all ${score >= 90 ? "bg-green-500" : score >= 70 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${score}%` }} />
                 </div>
                 {requiredMissing.length > 0 && (
-                  <div className="flex items-start gap-2 mt-3 p-2 bg-red-50 rounded border border-red-200">
-                    <AlertCircle size={13} className="text-red-600 mt-0.5 shrink-0" />
-                    <p className="text-xs text-red-700"><strong>Required fields missing:</strong> {requiredMissing.map(k => ALL_ELEMENTS.find(e => e.key === k)?.label ?? k).join(", ")}</p>
+                  <div className="mt-3 p-3 bg-red-50 rounded border border-red-200">
+                    <div className="flex items-start gap-2 mb-2">
+                      <AlertCircle size={13} className="text-red-600 mt-0.5 shrink-0" />
+                      <p className="text-xs text-red-700"><strong>Required fields missing:</strong> {requiredMissing.map(k => ALL_ELEMENTS.find(e => e.key === k)?.label ?? k).join(", ")}</p>
+                    </div>
+                    <Button size="sm" variant="outline" className="gap-1.5 text-xs h-7 border-red-300 text-red-700 hover:bg-red-100" onClick={generateRequestTemplate}>
+                      <Mail size={11} />Request Missing Data
+                    </Button>
+                  </div>
+                )}
+                {missing.length > 0 && requiredMissing.length === 0 && (
+                  <div className="flex items-center justify-between mt-3 p-2 bg-amber-50 rounded border border-amber-200">
+                    <div className="flex items-center gap-2">
+                      <Info size={13} className="text-amber-600 shrink-0" />
+                      <p className="text-xs text-amber-700">{missing.length} optional fields missing — consider requesting for better IDR outcomes.</p>
+                    </div>
+                    <Button size="sm" variant="outline" className="gap-1 text-xs h-7 border-amber-300 text-amber-700 hover:bg-amber-100" onClick={generateRequestTemplate}>
+                      <ClipboardList size={11} />Generate Request
+                    </Button>
                   </div>
                 )}
               </CardContent>
@@ -224,6 +286,56 @@ export default function USCDICompleteness() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Request Missing Data Modal */}
+      <Dialog open={showRequestModal} onOpenChange={setShowRequestModal}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail size={16} className="text-teal-600" />
+              Request Missing USCDI Data
+            </DialogTitle>
+            <DialogDescription>
+              A pre-filled message template listing all missing USCDI v3 fields for this dispute. Review, edit, and send to the relevant party.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Textarea
+              value={requestTemplate}
+              onChange={e => setRequestTemplate(e.target.value)}
+              className="font-mono text-xs min-h-[320px] resize-y"
+              placeholder="Template will appear here..."
+            />
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-slate-500">Edit the template above before sending. Bracketed items [like this] need to be filled in.</p>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 text-xs"
+                  onClick={() => {
+                    navigator.clipboard.writeText(requestTemplate);
+                    toast.success("Template copied to clipboard");
+                  }}
+                >
+                  <ClipboardList size={12} />Copy to Clipboard
+                </Button>
+                <Button
+                  size="sm"
+                  className="gap-1.5 text-xs"
+                  onClick={() => {
+                    const subject = requestTemplate.split("\n")[0].replace("Subject: ", "");
+                    const body = requestTemplate.split("\n").slice(2).join("\n");
+                    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                  }}
+                >
+                  <Mail size={12} />Open in Email Client
+                </Button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }
