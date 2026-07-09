@@ -971,3 +971,189 @@ export const disputeNarratives = pgTable(
   ]
 );
 export type DisputeNarrative = typeof disputeNarratives.$inferSelect;
+
+// ─── FHIR Capability Statements ──────────────────────────────────────────────
+// Stores the parsed CapabilityStatement from each connected EMR
+export const fhirCapabilityStatements = pgTable(
+  "fhir_capability_statements",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }).notNull(),
+    fhirVersion: varchar("fhirVersion", { length: 8 }).default("R4").notNull(),
+    softwareName: varchar("softwareName", { length: 128 }),
+    softwareVersion: varchar("softwareVersion", { length: 64 }),
+    supportedResources: jsonb("supportedResources").$type<string[]>().default([]),
+    supportedSearchParams: jsonb("supportedSearchParams").$type<Record<string, string[]>>().default({}),
+    smartScopes: jsonb("smartScopes").$type<string[]>().default([]),
+    bulkExportSupported: boolean("bulkExportSupported").default(false),
+    cdsHooksSupported: boolean("cdsHooksSupported").default(false),
+    rawStatement: jsonb("rawStatement"),
+    fetchedAt: timestamp("fetchedAt").defaultNow(),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("fhir_cap_emr_idx").on(t.emrConnectionId),
+  ]
+);
+export type FHIRCapabilityStatement = typeof fhirCapabilityStatements.$inferSelect;
+
+// ─── SMART on FHIR Token Store ────────────────────────────────────────────────
+export const smartTokens = pgTable(
+  "smart_tokens",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }).notNull(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    accessToken: text("accessToken").notNull(),
+    refreshToken: text("refreshToken"),
+    tokenType: varchar("tokenType", { length: 32 }).default("Bearer"),
+    scope: text("scope"),
+    expiresAt: timestamp("expiresAt"),
+    patientContext: varchar("patientContext", { length: 64 }),
+    encounterContext: varchar("encounterContext", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [
+    index("smart_tokens_emr_user_idx").on(t.emrConnectionId, t.userId),
+  ]
+);
+export type SmartToken = typeof smartTokens.$inferSelect;
+
+// ─── Bulk FHIR Export Jobs ────────────────────────────────────────────────────
+export const bulkFhirStatusEnum = pgEnum("bulk_fhir_status", ["pending", "in_progress", "completed", "failed", "cancelled"]);
+export const bulkFhirExportJobs = pgTable(
+  "bulk_fhir_export_jobs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }).notNull(),
+    initiatedBy: varchar("initiatedBy", { length: 64 }).notNull(),
+    exportType: varchar("exportType", { length: 32 }).default("Patient").notNull(), // Patient | Group | System
+    resourceTypes: jsonb("resourceTypes").$type<string[]>().default([]),
+    since: timestamp("since"),
+    statusUrl: text("statusUrl"),
+    status: bulkFhirStatusEnum("status").default("pending").notNull(),
+    progress: integer("progress").default(0),
+    outputFiles: jsonb("outputFiles").$type<Array<{ type: string; url: string; count: number }>>().default([]),
+    errorFiles: jsonb("errorFiles").$type<Array<{ type: string; url: string }>>().default([]),
+    totalRecords: integer("totalRecords").default(0),
+    disputesCreated: integer("disputesCreated").default(0),
+    errorMessage: text("errorMessage"),
+    startedAt: timestamp("startedAt"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("bulk_fhir_emr_idx").on(t.emrConnectionId),
+    index("bulk_fhir_status_idx").on(t.status),
+  ]
+);
+export type BulkFHIRExportJob = typeof bulkFhirExportJobs.$inferSelect;
+
+// ─── CDS Hooks ────────────────────────────────────────────────────────────────
+export const cdsHookStatusEnum = pgEnum("cds_hook_status", ["active", "inactive", "error"]);
+export const cdsHooks = pgTable(
+  "cds_hooks",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }).notNull(),
+    hookId: varchar("hookId", { length: 128 }).notNull(), // e.g. "patient-view", "order-sign"
+    title: varchar("title", { length: 256 }).notNull(),
+    description: text("description"),
+    prefetch: jsonb("prefetch").$type<Record<string, string>>().default({}),
+    status: cdsHookStatusEnum("status").default("active").notNull(),
+    invocationCount: integer("invocationCount").default(0),
+    lastInvokedAt: timestamp("lastInvokedAt"),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("cds_hooks_emr_idx").on(t.emrConnectionId),
+    index("cds_hooks_hookId_idx").on(t.hookId),
+  ]
+);
+export type CDSHook = typeof cdsHooks.$inferSelect;
+
+// ─── Da Vinci / PDEX / PAS Transactions ──────────────────────────────────────
+export const daVinciTxTypeEnum = pgEnum("davinci_tx_type", ["pdex_payer_network", "pas_prior_auth", "crd_coverage_req", "dtr_doc_templates", "hrex_member_match"]);
+export const daVinciTxStatusEnum = pgEnum("davinci_tx_status", ["pending", "approved", "denied", "pended", "error"]);
+export const daVinciTransactions = pgTable(
+  "davinci_transactions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }),
+    txType: daVinciTxTypeEnum("txType").notNull(),
+    status: daVinciTxStatusEnum("status").default("pending").notNull(),
+    requestPayload: jsonb("requestPayload"),
+    responsePayload: jsonb("responsePayload"),
+    priorAuthNumber: varchar("priorAuthNumber", { length: 64 }),
+    coverageDecision: varchar("coverageDecision", { length: 32 }),
+    errorCode: varchar("errorCode", { length: 32 }),
+    errorMessage: text("errorMessage"),
+    processingTimeMs: integer("processingTimeMs"),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [
+    index("davinci_dispute_idx").on(t.disputeId),
+    index("davinci_type_status_idx").on(t.txType, t.status),
+  ]
+);
+export type DaVinciTransaction = typeof daVinciTransactions.$inferSelect;
+
+// ─── FHIR Resource Cache ──────────────────────────────────────────────────────
+// Caches individual FHIR resources fetched from EMRs to reduce API calls
+export const fhirResourceCache = pgTable(
+  "fhir_resource_cache",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }).notNull(),
+    resourceType: varchar("resourceType", { length: 64 }).notNull(), // Patient, Claim, Coverage, etc.
+    resourceId: varchar("resourceId", { length: 128 }).notNull(),
+    fhirVersion: varchar("fhirVersion", { length: 8 }).default("R4"),
+    resourceData: jsonb("resourceData").notNull(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    expiresAt: timestamp("expiresAt"),
+    fetchedAt: timestamp("fetchedAt").defaultNow(),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("fhir_cache_emr_type_idx").on(t.emrConnectionId, t.resourceType),
+    index("fhir_cache_dispute_idx").on(t.disputeId),
+  ]
+);
+export type FHIRResourceCache = typeof fhirResourceCache.$inferSelect;
+
+// ─── USCDI Data Elements Mapping ─────────────────────────────────────────────
+// Tracks which USCDI v3 data elements have been populated for each dispute
+export const uscdiDataElements = pgTable(
+  "uscdi_data_elements",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }),
+    // Core USCDI v3 elements relevant to IDR
+    patientName: boolean("patientName").default(false),
+    patientDOB: boolean("patientDOB").default(false),
+    patientAddress: boolean("patientAddress").default(false),
+    patientInsuranceMemberId: boolean("patientInsuranceMemberId").default(false),
+    diagnosisCodes: boolean("diagnosisCodes").default(false),
+    procedureCodes: boolean("procedureCodes").default(false),
+    encounterDate: boolean("encounterDate").default(false),
+    facilityNPI: boolean("facilityNPI").default(false),
+    providerNPI: boolean("providerNPI").default(false),
+    billedAmount: boolean("billedAmount").default(false),
+    allowedAmount: boolean("allowedAmount").default(false),
+    payerName: boolean("payerName").default(false),
+    planType: boolean("planType").default(false),
+    priorAuthNumber: boolean("priorAuthNumber").default(false),
+    completenessScore: integer("completenessScore").default(0), // 0-100
+    missingElements: jsonb("missingElements").$type<string[]>().default([]),
+    lastUpdatedAt: timestamp("lastUpdatedAt").defaultNow(),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("uscdi_dispute_idx").on(t.disputeId),
+  ]
+);
+export type USCDIDataElement = typeof uscdiDataElements.$inferSelect;
