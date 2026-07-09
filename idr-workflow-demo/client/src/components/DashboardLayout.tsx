@@ -48,10 +48,19 @@ import {
   Webhook,
   Search,
   ArrowDownToLine,
+  HeartPulse,
+  Settings,
+  BookMarked,
+  HelpCircle,
+  MessageSquare,
+  Gauge,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useTheme } from "../contexts/ThemeContext";
 import { useLocation } from "wouter";
+import KeyboardShortcutsModal from "./KeyboardShortcutsModal";
+import OnboardingTour from "./OnboardingTour";
+import SessionTimeoutWarning from "./SessionTimeoutWarning";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
@@ -76,6 +85,11 @@ const menuItems = [
   { icon: BookOpen, label: "Fin. Ledger", path: "/ledger" },
   { icon: Search, label: "Global Search", path: "/search" },
   { icon: ArrowDownToLine, label: "Lakehouse", path: "/lakehouse" },
+  { icon: Users, label: "User Mgmt", path: "/admin/users" },
+  { icon: HeartPulse, label: "System Health", path: "/system-health" },
+  { icon: Settings, label: "Settings", path: "/settings" },
+  { icon: BookMarked, label: "Changelog", path: "/changelog" },
+  { icon: HelpCircle, label: "Help Center", path: "/help" },
 ];
 
 const SIDEBAR_WIDTH_KEY = 'sidebar-width';
@@ -253,6 +267,9 @@ function DashboardLayoutContent({
       />
       </div>
 
+      <KeyboardShortcutsModal />
+      <OnboardingTour />
+      <SessionTimeoutWarning />
       <SidebarInset>
         {/* Top bar with notification bell + dark mode + command palette */}
         <div className="h-14 border-b flex items-center justify-end px-6 gap-3 bg-background">

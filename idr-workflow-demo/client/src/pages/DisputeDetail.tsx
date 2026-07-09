@@ -15,6 +15,8 @@ import {
   Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp
 } from "lucide-react";
 import WorkflowTimeline from "@/components/WorkflowTimeline";
+import DeadlineCountdownBanner from "@/components/DeadlineCountdownBanner";
+import OutcomePredictionGauge from "@/components/OutcomePredictionGauge";
 
 const IDR_STEPS = [
   { key: "STEP_01_OPEN_NEGOTIATION_INITIATED", label: "Open Negotiation Initiated", description: "Party sends open negotiation notice per NSA §2799A-1", days: "Day 0" },
@@ -263,6 +265,17 @@ export default function DisputeDetail() {
         </nav>
       </header>
 
+      {/* Deadline countdown banner — shows when ≤ 3 business days remain */}
+      {dispute && (dispute as any).deadlineDays !== undefined && (
+        <DeadlineCountdownBanner
+          disputeId={dispute.id}
+          claimNumber={(dispute as any).claimNumber}
+          currentStep={dispute.currentStep}
+          deadlineDays={(dispute as any).deadlineDays ?? 99}
+          deadlineDate={(dispute as any).deadlineDate}
+        />
+      )}
+
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
         {/* Page header */}
         <div className="flex items-start justify-between">
@@ -396,6 +409,15 @@ export default function DisputeDetail() {
 
           {/* Right sidebar */}
           <div className="space-y-4">
+            {/* Outcome Prediction */}
+            <OutcomePredictionGauge
+              disputeId={dispute.id}
+              billedAmount={String(dispute.billedAmount ?? "")}
+              qpaAmount={String(dispute.qpaAmount ?? "")}
+              currentStep={dispute.currentStep ?? undefined}
+              payerName={dispute.respondingPartyName ?? undefined}
+            />
+
             {/* Financial Summary */}
             <Card className="border-slate-200">
               <CardHeader className="pb-3">
