@@ -77,7 +77,10 @@ export default function OllamaManager() {
       cancelled = true;
       es.close();
       setPullProgress(null);
-      toast.info(`Pull of ${target} cancelled.`);
+      toast.info(`Download of ${target} was cancelled.`, {
+        description: "The model was not saved. You can restart the download at any time.",
+        duration: 4000,
+      });
     });
 
     es.onmessage = (event) => {
@@ -102,13 +105,19 @@ export default function OllamaManager() {
         } else if (data.type === "done") {
           es.close();
           setPullProgress(null);
-          toast.success(`Model ${target} pulled successfully!`);
+          toast.success(`${target} is ready to use!`, {
+            description: "The model has been downloaded and is now available for inference.",
+            duration: 6000,
+          });
           modelsQuery.refetch();
           setPullModel("");
         } else if (data.type === "error") {
           es.close();
           setPullProgress(prev => prev ? { ...prev, error: data.message ?? "Unknown error", active: false } : null);
-          toast.error(`Pull failed: ${data.message}`);
+          toast.error(`Failed to download ${target}`, {
+            description: data.message ?? "An unexpected error occurred. Check that Ollama is running and the model name is correct.",
+            duration: 8000,
+          });
         }
       } catch {
         // ignore parse errors
@@ -119,6 +128,10 @@ export default function OllamaManager() {
       if (cancelled) return;
       es.close();
       setPullProgress(prev => prev ? { ...prev, error: "Connection lost", active: false } : null);
+      toast.error(`Connection to Ollama lost`, {
+        description: `Download of ${target} was interrupted. Ensure Ollama is running and try again.`,
+        duration: 8000,
+      });
     };
   };
 
