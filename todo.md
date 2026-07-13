@@ -512,3 +512,38 @@
 - [x] Add /api/ready liveness probe endpoint (Kubernetes/Docker-compatible)
 - [x] Create SECURITY.md with full production deployment guide (PostgreSQL, Keycloak, Ollama, MinIO, Umami)
 - [x] Confirmed PostgreSQL throughout (pgTable, drizzle-orm/postgres-js, dialect: postgresql)
+
+## Session 33 — SmartForm AI Auto-Fill & Ollama Progress Bar
+
+- [ ] Add smartFormExtractions DB table to schema.ts (stores extraction history, field results, confidence scores)
+- [ ] Push new DB table with pnpm db:push
+- [ ] Add smartForm.extract tRPC procedure — accepts raw text/base64 + target form type, calls Ollama LLM with structured JSON schema output
+- [ ] Add smartForm.history tRPC procedure — list recent extractions for a user
+- [ ] Add smartForm.applyToDispute tRPC procedure — persist extracted fields to a dispute draft
+- [ ] Create SmartFormPanel.tsx reusable component — drag-drop upload, text paste, URL input, LLM extraction, field preview with confidence badges, apply/dismiss per field
+- [ ] Wire SmartFormPanel into NewDispute.tsx wizard (Step 1 — Document Upload)
+- [ ] Wire SmartFormPanel into OfferCounterWizard.tsx
+- [ ] Wire SmartFormPanel into MobileDisputeWizard.tsx
+- [ ] Wire SmartFormPanel into CMSSubmissionTracker.tsx
+- [ ] Create SmartFormDemoPage.tsx standalone page at /smart-form for testing extraction on any document
+- [ ] Add SmartForm to App.tsx routes and DashboardLayout sidebar
+- [ ] Add real-time SSE streaming progress bar to Ollama Manager pull model flow
+- [ ] Add cancel button that aborts in-flight pull request in Ollama Manager
+- [ ] TypeScript 0 errors
+- [ ] 40/40 tests passing
+- [ ] Checkpoint saved
+- [ ] GitHub push
+
+## Session 33 — Completed Items
+- [x] SmartFormPanel component built (SmartFormPanel.tsx) — drag-drop, text paste, FHIR JSON, LLM extraction, confidence badges, field selection, apply
+- [x] smartForm tRPC router added (extract, history, apply, delete, markApplied procedures)
+- [x] smartFormExtractions DB table added to schema.ts
+- [x] SmartFormPanel wired into NewDispute.tsx (dispute targetForm, maps to FormData fields)
+- [x] SmartFormPanel wired into OfferCounterWizard.tsx (offer targetForm, offerAmount + rationale)
+- [x] SmartFormPanel wired into MobileDisputeWizard.tsx (mobile_dispute targetForm, all key fields)
+- [x] SmartFormPanel wired into EMROnboarding.tsx (emr_onboarding targetForm, FHIR URL + clientId)
+- [x] OllamaManager: real-time SSE pull progress bar with percentage + MB counters
+- [x] OllamaManager: Cancel button backed by AbortController
+- [x] /api/ollama/pull-stream SSE endpoint added to server/_core/index.ts
+- [x] TypeScript: 0 errors
+- [x] Tests: 40/40 passing

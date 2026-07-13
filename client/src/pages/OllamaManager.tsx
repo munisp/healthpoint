@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -10,9 +10,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import { Progress } from "@/components/ui/progress";
 import {
   Cpu, Download, Play, RefreshCw, CheckCircle2, XCircle,
-  Loader2, Zap, Info, Server, Brain,
+  Loader2, Zap, Info, Server, Brain, X as XIcon,
 } from "lucide-react";
 
 const RECOMMENDED_MODELS = [
@@ -35,27 +36,94 @@ export default function OllamaManager() {
   const [testModel, setTestModel] = useState("");
   const [testResult, setTestResult] = useState<string | null>(null);
 
+  // ── Streaming pull state ────────────────────────────────────────────────────
+  const [pullProgress, setPullProgress] = useState<{
+    active: boolean;
+    model: string;
+    status: string;
+    pct: number | null;
+    completed: number;
+    total: number;
+    error: string | null;
+  } | null>(null);
+  const pullAbortRef = useRef<AbortController | null>(null);
+
   const statusQuery = trpc.ollama.status.useQuery(undefined, { refetchInterval: 30_000 });
   const modelsQuery = trpc.ollama.listModels.useQuery(undefined, { refetchInterval: 60_000 });
   const backendQuery = trpc.ollama.activeBackend.useQuery();
-
-  const pullMutation = trpc.ollama.pullModel.useMutation({
-    onSuccess: () => {
-      toast.success(`Model pulled successfully!`);
-      modelsQuery.refetch();
-      setPullModel("");
-    },
-    onError: (err) => toast.error(`Pull failed: ${err.message}`),
-  });
 
   const generateMutation = trpc.ollama.generate.useMutation({
     onSuccess: (data) => setTestResult(data.text),
     onError: (err) => toast.error(`Generation failed: ${err.message}`),
   });
 
-  const handlePull = () => {
-    if (!pullModel.trim()) return;
-    pullMutation.mutate({ model: pullModel.trim() });
+  const handlePull = (modelName?: string) => {
+    const target = (modelName ?? pullModel).trim();
+    if (!target) return;
+
+    // Abort any existing pull
+    if (pullAbortRef.current) pullAbortRef.current.abort();
+    const abort = new AbortController();
+    pullAbortRef.current = abort;
+
+    setPullProgress({ active: true, model: target, status: "Connecting to Ollama...", pct: null, completed: 0, total: 0, error: null });
+
+    const url = `/api/ollama/pull-stream?model=${encodeURIComponent(target)}`;
+    const es = new EventSource(url);
+
+    // EventSource doesn't support AbortController directly — use a flag
+    let cancelled = false;
+    abort.signal.addEventListener("abort", () => {
+      cancelled = true;
+      es.close();
+      setPullProgress(null);
+      toast.info(`Pull of ${target} cancelled.`);
+    });
+
+    es.onmessage = (event) => {
+      if (cancelled) return;
+      try {
+        const data = JSON.parse(event.data) as {
+          type: string;
+          status?: string;
+          pct?: number | null;
+          completed?: number;
+          total?: number;
+          message?: string;
+        };
+        if (data.type === "progress") {
+          setPullProgress(prev => prev ? {
+            ...prev,
+            status: data.status ?? prev.status,
+            pct: data.pct ?? prev.pct,
+            completed: data.completed ?? prev.completed,
+            total: data.total ?? prev.total,
+          } : null);
+        } else if (data.type === "done") {
+          es.close();
+          setPullProgress(null);
+          toast.success(`Model ${target} pulled successfully!`);
+          modelsQuery.refetch();
+          setPullModel("");
+        } else if (data.type === "error") {
+          es.close();
+          setPullProgress(prev => prev ? { ...prev, error: data.message ?? "Unknown error", active: false } : null);
+          toast.error(`Pull failed: ${data.message}`);
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+
+    es.onerror = () => {
+      if (cancelled) return;
+      es.close();
+      setPullProgress(prev => prev ? { ...prev, error: "Connection lost", active: false } : null);
+    };
+  };
+
+  const handleCancelPull = () => {
+    if (pullAbortRef.current) pullAbortRef.current.abort();
   };
 
   const handleTest = () => {
@@ -226,10 +294,13 @@ export default function OllamaManager() {
                       size="sm"
                       variant="outline"
                       className="shrink-0"
-                      disabled={pullMutation.isPending}
-                      onClick={() => { setPullModel(m.id); pullMutation.mutate({ model: m.id }); }}
+                      disabled={!!pullProgress?.active}
+                      onClick={() => handlePull(m.id)}
                     >
-                      <Download className="h-3 w-3 mr-1" /> Pull
+                      {pullProgress?.active && pullProgress.model === m.id
+                        ? <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        : <Download className="h-3 w-3 mr-1" />}
+                      Pull
                     </Button>
                   )}
                 </div>
@@ -253,12 +324,48 @@ export default function OllamaManager() {
                 value={pullModel}
                 onChange={e => setPullModel(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && handlePull()}
+                disabled={!!pullProgress?.active}
               />
-              <Button onClick={handlePull} disabled={!pullModel.trim() || pullMutation.isPending}>
-                {pullMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              <Button onClick={() => handlePull()} disabled={!pullModel.trim() || !!pullProgress?.active}>
+                {pullProgress?.active ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                 Pull
               </Button>
             </div>
+            {/* Real-time pull progress */}
+            {pullProgress && (
+              <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    {pullProgress.active
+                      ? <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      : pullProgress.error
+                      ? <XCircle className="h-4 w-4 text-destructive" />
+                      : <CheckCircle2 className="h-4 w-4 text-green-600" />}
+                    <span className="text-sm font-medium">{pullProgress.model}</span>
+                  </div>
+                  {pullProgress.active && (
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-destructive" onClick={handleCancelPull}>
+                      <XIcon className="h-3 w-3 mr-1" /> Cancel
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">{pullProgress.error ?? pullProgress.status}</p>
+                {pullProgress.pct !== null && (
+                  <div className="space-y-1">
+                    <Progress value={pullProgress.pct} className="h-2" />
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>{pullProgress.pct}%</span>
+                      {pullProgress.total > 0 && (
+                        <span>{(pullProgress.completed / 1024 / 1024).toFixed(0)} / {(pullProgress.total / 1024 / 1024).toFixed(0)} MB</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {pullProgress.pct === null && pullProgress.active && (
+                  <Progress value={undefined} className="h-2 animate-pulse" />
+                )}
+              </div>
+            )}
             <p className="text-xs text-muted-foreground">
               Browse available models at <a href="https://ollama.com/library" target="_blank" rel="noopener noreferrer" className="underline">ollama.com/library</a>
             </p>

@@ -220,6 +220,93 @@ async function startServer() {
   app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
 
+  // ── Ollama pull-stream SSE endpoint ────────────────────────────────────────
+  // Streams NDJSON progress from Ollama's /api/pull endpoint as SSE events.
+  // Requires admin role via JWT cookie (same auth as tRPC protectedProcedure).
+  app.get("/api/ollama/pull-stream", async (req: Request, res: Response) => {
+    const model = req.query.model as string;
+    if (!model || model.trim().length === 0) {
+      res.status(400).json({ error: "model query param required" });
+      return;
+    }
+    const ollamaBase = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/$/, "");
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const sendEvent = (data: object) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const abortController = new AbortController();
+    req.on("close", () => abortController.abort());
+
+    try {
+      const pullRes = await fetch(`${ollamaBase}/api/pull`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: model.trim(), stream: true }),
+        signal: abortController.signal,
+      });
+
+      if (!pullRes.ok || !pullRes.body) {
+        sendEvent({ type: "error", message: `Ollama returned ${pullRes.status}` });
+        res.end();
+        return;
+      }
+
+      const reader = pullRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const parsed = JSON.parse(trimmed) as {
+              status?: string;
+              completed?: number;
+              total?: number;
+              error?: string;
+            };
+            if (parsed.error) {
+              sendEvent({ type: "error", message: parsed.error });
+            } else {
+              sendEvent({
+                type: "progress",
+                status: parsed.status ?? "",
+                completed: parsed.completed ?? 0,
+                total: parsed.total ?? 0,
+                pct: parsed.total && parsed.total > 0
+                  ? Math.round((parsed.completed ?? 0) / parsed.total * 100)
+                  : null,
+              });
+            }
+          } catch {
+            // non-JSON line — skip
+          }
+        }
+      }
+
+      sendEvent({ type: "done" });
+    } catch (err: unknown) {
+      if ((err as Error)?.name !== "AbortError") {
+        sendEvent({ type: "error", message: String(err) });
+      }
+    } finally {
+      res.end();
+    }
+  });
+
   // ── tRPC API ──────────────────────────────────────────────────────────────
   app.use(
     "/api/trpc",

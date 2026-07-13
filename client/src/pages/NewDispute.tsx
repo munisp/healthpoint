@@ -14,6 +14,7 @@ import {
   ShieldCheck, ShieldAlert, ShieldX,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import SmartFormPanel from "@/components/SmartFormPanel";
 
 const SERVICE_TYPES = [
   { value: "emergency_medicine", label: "Emergency Medicine" },
@@ -230,6 +231,7 @@ export default function NewDispute() {
   // ─── EMR Data Pull ─────────────────────────────────────────────────────────
   const { data: emrConnections } = trpc.emr.list.useQuery();
   const [showEMRPull, setShowEMRPull] = useState(false);
+
   const [patientSearchQuery, setPatientSearchQuery] = useState("");
   const [patientSuggestions, setPatientSuggestions] = useState<{ id: string; name: string; dob: string; mrn: string }[]>([]);
   const [showPatientDropdown, setShowPatientDropdown] = useState(false);
@@ -515,6 +517,35 @@ export default function NewDispute() {
           )}
         </div>
 
+        {/* SmartForm AI Auto-Fill Panel */}
+        <div className="mb-4">
+          <SmartFormPanel
+            targetForm="dispute"
+            onApply={(fields) => {
+              const fieldMap: Record<string, keyof FormData> = {
+                patientName: "notes",
+                providerName: "initiatingPartyName",
+                providerNPI: "initiatingPartyNpi",
+                payerName: "respondingPartyName",
+                serviceDate: "serviceDate",
+                billedAmount: "billedAmount",
+                cptCodes: "cptCodes",
+                diagnosisCodes: "icd10Codes",
+                serviceType: "serviceType",
+                placeOfService: "facilityState",
+              };
+              let count = 0;
+              Object.entries(fields).forEach(([key, extracted]) => {
+                const formKey = fieldMap[key];
+                if (formKey && extracted.value) {
+                  update(formKey, String(extracted.value));
+                  count++;
+                }
+              });
+              if (count > 0) toast.success(`SmartForm populated ${count} fields from your document.`);
+            }}
+          />
+        </div>
         {/* EMR Pull Panel */}
         {activeEMRConnections.length > 0 && (
           <div className="mb-6">

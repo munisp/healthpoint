@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { ChevronRight, ChevronLeft, Check, Building2, Stethoscope, DollarSign, FileText, Rocket } from "lucide-react";
+import SmartFormPanel, { type ExtractedField } from "@/components/SmartFormPanel";
 
 const STEPS = [
   { id: 1, title: "Parties", icon: Building2, description: "Identify the initiating and responding parties" },
@@ -146,6 +147,18 @@ export default function MobileDisputeWizard() {
             {/* Step 1: Parties */}
             {currentStep === 1 && (
               <>
+                <SmartFormPanel
+                  targetForm="mobile_dispute"
+                  triggerLabel="Auto-fill from document"
+                  onApply={(fields: Record<string, ExtractedField>) => {
+                    if (fields.providerName?.value) update("initiatingPartyName", String(fields.providerName.value));
+                    if (fields.payerName?.value) update("respondingPartyName", String(fields.payerName.value));
+                    if (fields.serviceDate?.value) update("serviceDate", String(fields.serviceDate.value));
+                    if (fields.billedAmount?.value) update("billedAmount", String(fields.billedAmount.value));
+                    if (fields.cptCodes?.value) update("cptCodes", String(fields.cptCodes.value));
+                    toast.success("SmartForm applied fields from your document.");
+                  }}
+                />
                 <div className="space-y-3">
                   <div className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                     <Building2 size={14} className="text-blue-500" />Initiating Party

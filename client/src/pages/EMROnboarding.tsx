@@ -16,6 +16,7 @@ import {
   Database, Key, Map, Zap, Power, AlertCircle, Info,
   Activity, Shield, RefreshCw, ExternalLink,
 } from "lucide-react";
+import SmartFormPanel, { type ExtractedField } from "@/components/SmartFormPanel";
 
 // ── EMR System catalogue ──────────────────────────────────────────────────────
 
@@ -290,6 +291,16 @@ export default function EMROnboarding() {
 
     return (
       <div className="space-y-5">
+        <SmartFormPanel
+          targetForm="emr_onboarding"
+          triggerLabel="Auto-fill from onboarding document"
+          onApply={(fields: Record<string, ExtractedField>) => {
+            if (fields.fhirBaseUrl?.value) handleCredentialChange("baseUrl", String(fields.fhirBaseUrl.value));
+            if (fields.clientId?.value) handleCredentialChange("clientId", String(fields.clientId.value));
+            if (fields.organizationNPI?.value) handleCredentialChange("facilityId", String(fields.organizationNPI.value));
+            toast.success("SmartForm applied EMR connection fields from your document.");
+          }}
+        />
         <Alert>
           <Shield className="h-4 w-4" />
           <AlertDescription>
