@@ -178,6 +178,8 @@ function FieldRow({
   selected,
   onToggle,
   onEdit,
+  originalValue,
+  onRevert,
 }: {
   fieldKey: string;
   field: ExtractedField;
@@ -185,6 +187,10 @@ function FieldRow({
   selected: boolean;
   onToggle: () => void;
   onEdit: (key: string, newValue: string) => void;
+  /** The original AI-extracted value before any manual edit (undefined if not edited) */
+  originalValue?: string | null;
+  /** Reverts this single field back to the AI-extracted value */
+  onRevert?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -194,6 +200,8 @@ function FieldRow({
   const isEdited = field.source === "user_edit";
   const displayValue =
     field.value === null || field.value === undefined ? "—" : String(field.value);
+  // originalValue is passed down only for edited fields so we can show a strikethrough
+  // (the prop is optional — non-edited rows simply don't receive it)
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -226,13 +234,16 @@ function FieldRow({
 
   return (
     <div
-      className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${
+      className={`flex items-start gap-3 p-3 rounded-lg border transition-colors relative ${
         field.value === null && !editing
           ? "opacity-50 cursor-not-allowed border-muted"
+          : isEdited
+          ? "bg-blue-50/60 border-blue-300 dark:bg-blue-950/30 dark:border-blue-700"
           : selected
           ? "bg-primary/5 border-primary/30"
           : "hover:bg-muted/50 border-border cursor-pointer"
       }`}
+      style={isEdited ? { borderLeftWidth: "3px" } : undefined}
       onClick={() => !editing && field.value !== null && onToggle()}
     >
       {/* Checkbox */}
@@ -299,11 +310,24 @@ function FieldRow({
             </Button>
           </div>
         ) : (
-          <p className="text-sm font-medium truncate">{displayValue}</p>
+          <div className="space-y-0.5">
+            {/* Current (edited) value */}
+            <p className={`text-sm font-semibold truncate ${
+              isEdited ? "text-blue-700 dark:text-blue-300" : ""
+            }`}>
+              {displayValue}
+            </p>
+            {/* Original AI value shown as strikethrough when field was edited */}
+            {isEdited && originalValue !== undefined && originalValue !== null && String(originalValue) !== displayValue && (
+              <p className="text-xs text-muted-foreground line-through truncate">
+                AI: {String(originalValue)}
+              </p>
+            )}
+          </div>
         )}
       </div>
 
-      {/* Action buttons (copy + edit) */}
+      {/* Action buttons (copy + edit + per-field revert) */}
       {!editing && (
         <div className="flex items-center gap-0.5 shrink-0">
           {field.value !== null && (
@@ -330,6 +354,18 @@ function FieldRow({
           >
             <Pencil className="h-3 w-3" />
           </Button>
+          {/* Per-field revert — only shown when this field has been edited */}
+          {isEdited && onRevert && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 text-blue-500 hover:text-blue-700 hover:bg-blue-50"
+              onClick={(e) => { e.stopPropagation(); onRevert(); }}
+              title="Revert this field to AI-extracted value"
+            >
+              <RotateCcw className="h-3 w-3" />
+            </Button>
+          )}
         </div>
       )}
     </div>
@@ -1055,6 +1091,26 @@ export function SmartFormPanel({
                 selected={selectedFields.has(key)}
                 onToggle={() => toggleField(key)}
                 onEdit={handleEdit}
+                originalValue={
+                  key in editedFields && extractionResult
+                    ? (() => {
+                        const orig = extractionResult.extractedFields[key];
+                        return orig ? (orig.value === null ? null : String(orig.value)) : null;
+                      })()
+                    : undefined
+                }
+                onRevert={
+                  key in editedFields
+                    ? () => {
+                        setEditedFields((prev) => {
+                          const next = { ...prev };
+                          delete next[key];
+                          return next;
+                        });
+                        toast.info(`"${labels[key] ?? key}" reverted to AI value.`);
+                      }
+                    : undefined
+                }
               />
             ))}
           </div>
@@ -1062,7 +1118,7 @@ export function SmartFormPanel({
           {/* Inline edit hint */}
           <p className="text-xs text-muted-foreground flex items-center gap-1">
             <Pencil className="h-3 w-3" />
-            Click the pencil icon on any field to manually correct the extracted value before applying.
+            Click ✏ to edit a field. Edited fields are highlighted in blue with the original AI value shown below.
           </p>
 
           {/* Action buttons */}
