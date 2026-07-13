@@ -38,7 +38,7 @@ import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb } from "./db";
 import { eq, and } from "drizzle-orm";
-import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements } from "../drizzle/schema";
+import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
@@ -3290,6 +3290,304 @@ Based on NSA IDR historical data and legal precedent, provide:
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         await db.delete(fhirResourceCache).where(eq(fhirResourceCache.emrConnectionId, input.emrConnectionId));
+        return { success: true };
+      }),
+  }),
+
+  // ── Ollama LLM Management ────────────────────────────────────────────────
+  ollama: router({
+    /** Check if local Ollama is running and return version */
+    status: publicProcedure.query(async () => {
+      const { checkOllamaStatus } = await import("./_core/llm");
+      return checkOllamaStatus();
+    }),
+
+    /** List all locally available Ollama models */
+    listModels: publicProcedure.query(async () => {
+      const { listOllamaModels } = await import("./_core/llm");
+      return listOllamaModels();
+    }),
+
+    /** Pull a model from Ollama registry (admin only) */
+    pullModel: protectedProcedure
+      .input(z.object({ model: z.string().min(1) }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+        const { pullOllamaModel } = await import("./_core/llm");
+        return pullOllamaModel(input.model);
+      }),
+
+    /** Run a prompt through Ollama (or fallback LLM) */
+    generate: protectedProcedure
+      .input(z.object({
+        prompt: z.string().min(1),
+        model: z.string().optional(),
+        systemPrompt: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const response = await invokeLLM({
+          messages: [
+            ...(input.systemPrompt ? [{ role: "system" as const, content: input.systemPrompt }] : []),
+            { role: "user" as const, content: input.prompt },
+          ],
+          model: input.model,
+        });
+        const content = response?.choices?.[0]?.message?.content;
+        return { text: typeof content === "string" ? content : JSON.stringify(content) };
+      }),
+
+    /** Resolve which LLM backend is currently active */
+    activeBackend: publicProcedure.query(async () => {
+      const { resolveBackend } = await import("./_core/llm");
+      const backend = await resolveBackend();
+      return backend;
+    }),
+  }),
+
+  // ─── SmartForm AI Auto-Fill ─────────────────────────────────────────────────
+  smartForm: router({
+    /**
+     * Extract structured fields from an unstructured document using the LLM.
+     * Accepts raw text, base64-encoded PDF content, or a FHIR JSON bundle.
+     * Returns a map of field names → { value, confidence, source }.
+     */
+    extract: protectedProcedure
+      .input(z.object({
+        inputType: z.enum(["text", "pdf_base64", "fhir_json", "url"]).default("text"),
+        content: z.string().min(1, "Content is required"),
+        documentName: z.string().optional(),
+        targetForm: z.enum(["dispute", "offer", "cms_submission", "emr_onboarding", "mobile_dispute", "generic"]).default("dispute"),
+        disputeId: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        const { nanoid } = await import("nanoid");
+        const extractionId = nanoid();
+        const startMs = Date.now();
+
+        // Insert a pending record immediately so the UI can poll status
+        if (db) {
+          await db.insert(smartFormExtractions).values({
+            id: extractionId,
+            userId: ctx.user.id,
+            targetForm: input.targetForm,
+            disputeId: input.disputeId ?? null,
+            inputType: input.inputType,
+            inputPreview: input.content.slice(0, 500),
+            documentName: input.documentName ?? null,
+            status: "processing",
+          });
+        }
+
+        // Build the field schema for the target form
+        const fieldSchemas: Record<string, Record<string, { type: string; description: string }>> = {
+          dispute: {
+            patientName: { type: "string", description: "Full name of the patient" },
+            patientDOB: { type: "string", description: "Patient date of birth (YYYY-MM-DD)" },
+            patientMemberId: { type: "string", description: "Insurance member ID or policy number" },
+            providerName: { type: "string", description: "Name of the healthcare provider or facility" },
+            providerNPI: { type: "string", description: "Provider NPI (10-digit number)" },
+            payerName: { type: "string", description: "Insurance company / payer name" },
+            payerClaimNumber: { type: "string", description: "Claim number assigned by the payer" },
+            serviceDate: { type: "string", description: "Date of service (YYYY-MM-DD)" },
+            billedAmount: { type: "number", description: "Total billed amount in USD" },
+            allowedAmount: { type: "number", description: "Payer allowed amount in USD" },
+            qpaAmount: { type: "number", description: "Qualifying Payment Amount (QPA) in USD" },
+            cptCodes: { type: "string", description: "CPT/procedure codes (comma-separated)" },
+            diagnosisCodes: { type: "string", description: "ICD-10 diagnosis codes (comma-separated)" },
+            placeOfService: { type: "string", description: "Place of service code or description" },
+            serviceType: { type: "string", description: "Type of service (emergency, non-emergency, ancillary, etc.)" },
+          },
+          offer: {
+            offerAmount: { type: "number", description: "Proposed settlement amount in USD" },
+            rationale: { type: "string", description: "Justification or reasoning for the offer" },
+            counterOfferDeadline: { type: "string", description: "Deadline for counter-offer response (YYYY-MM-DD)" },
+            supportingBenchmark: { type: "string", description: "Benchmark or reference used (e.g., Medicare rate, QPA)" },
+          },
+          cms_submission: {
+            submissionType: { type: "string", description: "Type of CMS submission (IDR initiation, appeal, etc.)" },
+            referenceNumber: { type: "string", description: "CMS reference or tracking number" },
+            submissionDate: { type: "string", description: "Date of submission (YYYY-MM-DD)" },
+            determinationDeadline: { type: "string", description: "Expected determination deadline (YYYY-MM-DD)" },
+          },
+          emr_onboarding: {
+            ehrVendor: { type: "string", description: "EHR vendor name (Epic, Cerner, Meditech, etc.)" },
+            fhirBaseUrl: { type: "string", description: "FHIR R4 base URL" },
+            clientId: { type: "string", description: "SMART on FHIR client ID" },
+            organizationName: { type: "string", description: "Healthcare organization name" },
+            organizationNPI: { type: "string", description: "Organization NPI" },
+          },
+          mobile_dispute: {
+            patientName: { type: "string", description: "Full name of the patient" },
+            serviceDate: { type: "string", description: "Date of service (YYYY-MM-DD)" },
+            billedAmount: { type: "number", description: "Total billed amount in USD" },
+            providerName: { type: "string", description: "Provider or facility name" },
+            payerName: { type: "string", description: "Insurance payer name" },
+          },
+          generic: {
+            title: { type: "string", description: "Document title or subject" },
+            date: { type: "string", description: "Primary date in the document (YYYY-MM-DD)" },
+            amount: { type: "number", description: "Primary monetary amount" },
+            partyA: { type: "string", description: "First party name" },
+            partyB: { type: "string", description: "Second party name" },
+            referenceNumber: { type: "string", description: "Any reference, claim, or tracking number" },
+            summary: { type: "string", description: "One-sentence summary of the document" },
+          },
+        };
+
+        const schema = fieldSchemas[input.targetForm] ?? fieldSchemas.generic;
+        const schemaDescription = Object.entries(schema)
+          .map(([k, v]) => `  "${k}": { "value": <${v.type} or null>, "confidence": <0-100>, "source": "<brief quote or reason>" }`)
+          .join(",\n");
+
+        const contentPreview = input.inputType === "pdf_base64"
+          ? `[PDF document — base64 encoded, ${Math.round(input.content.length * 0.75 / 1024)}KB]\n\nExtract all readable text fields from this PDF.`
+          : input.content.slice(0, 8000);
+
+        const prompt = `You are a medical billing and healthcare claims expert. Extract structured data from the following ${input.inputType === "fhir_json" ? "FHIR JSON bundle" : "document"} and return a JSON object.
+
+For each field, provide:
+- "value": the extracted value (string, number, or null if not found)
+- "confidence": integer 0-100 (100 = exact match found, 80 = high confidence, 50 = inferred, 20 = guessed, 0 = not found)
+- "source": a brief quote or explanation of where you found this value
+
+Return ONLY valid JSON with this exact structure:
+{
+${schemaDescription}
+}
+
+Document content:
+---
+${contentPreview}
+---
+
+IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
+
+        try {
+          const { invokeLLM } = await import("./_core/llm");
+          const response = await invokeLLM({
+            messages: [
+              { role: "system", content: "You are a precise medical billing data extraction assistant. Always return valid JSON only." },
+              { role: "user", content: prompt },
+            ],
+            response_format: { type: "json_object" },
+          });
+
+          const rawContent = response?.choices?.[0]?.message?.content ?? "{}";
+          let extractedFields: Record<string, { value: string | number | null; confidence: number; source: string }> = {};
+
+          try {
+            const parsed = JSON.parse(typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent));
+            // Normalize: ensure each field has value/confidence/source
+            for (const [key, val] of Object.entries(parsed)) {
+              if (val && typeof val === "object" && "value" in val) {
+                const v = val as Record<string, unknown>;
+                extractedFields[key] = {
+                  value: (v.value as string | number | null) ?? null,
+                  confidence: typeof v.confidence === "number" ? Math.min(100, Math.max(0, v.confidence)) : 50,
+                  source: typeof v.source === "string" ? v.source : "LLM extraction",
+                };
+              }
+            }
+          } catch {
+            // If JSON parse fails, return empty extraction with error note
+            extractedFields = {};
+          }
+
+          const fieldCount = Object.keys(extractedFields).length;
+          const highConfidenceCount = Object.values(extractedFields).filter(f => f.confidence >= 80).length;
+          const lowConfidenceCount = Object.values(extractedFields).filter(f => f.confidence < 50).length;
+          const overallConfidence = fieldCount > 0
+            ? Math.round(Object.values(extractedFields).reduce((sum, f) => sum + f.confidence, 0) / fieldCount)
+            : 0;
+          const processingMs = Date.now() - startMs;
+
+          // Determine which model was used
+          const { resolveBackend } = await import("./_core/llm");
+          const backend = resolveBackend();
+          const modelUsed = `${backend.name}:${backend.defaultModel}`;
+
+          if (db) {
+            await db.update(smartFormExtractions)
+              .set({
+                extractedFields,
+                overallConfidence,
+                fieldCount,
+                highConfidenceCount,
+                lowConfidenceCount,
+                status: "complete",
+                processingMs,
+                modelUsed,
+              })
+              .where(eq(smartFormExtractions.id, extractionId));
+          }
+
+          return {
+            extractionId,
+            extractedFields,
+            overallConfidence,
+            fieldCount,
+            highConfidenceCount,
+            lowConfidenceCount,
+            processingMs,
+            modelUsed,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "LLM extraction failed";
+          if (db) {
+            await db.update(smartFormExtractions)
+              .set({ status: "failed", errorMessage: msg })
+              .where(eq(smartFormExtractions.id, extractionId));
+          }
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: msg });
+        }
+      }),
+
+    /** List recent extractions for the current user */
+    history: protectedProcedure
+      .input(z.object({ limit: z.number().min(1).max(50).default(20) }))
+      .query(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        const { desc: descOrder } = await import("drizzle-orm");
+        return db.select().from(smartFormExtractions)
+          .where(eq(smartFormExtractions.userId, ctx.user.id))
+          .orderBy(descOrder(smartFormExtractions.createdAt))
+          .limit(input.limit);
+      }),
+
+    /** Mark an extraction as applied and record which fields were used */
+    markApplied: protectedProcedure
+      .input(z.object({
+        extractionId: z.string(),
+        appliedFields: z.array(z.string()),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        await db.update(smartFormExtractions)
+          .set({
+            appliedAt: new Date(),
+            appliedFields: input.appliedFields,
+          })
+          .where(and(
+            eq(smartFormExtractions.id, input.extractionId),
+            eq(smartFormExtractions.userId, ctx.user.id)
+          ));
+        return { success: true };
+      }),
+
+    /** Delete an extraction record */
+    delete: protectedProcedure
+      .input(z.object({ extractionId: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        await db.delete(smartFormExtractions)
+          .where(and(
+            eq(smartFormExtractions.id, input.extractionId),
+            eq(smartFormExtractions.userId, ctx.user.id)
+          ));
         return { success: true };
       }),
   }),

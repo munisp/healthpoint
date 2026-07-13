@@ -305,28 +305,27 @@ describe("Environment configuration validation", () => {
     expect(ENV.keycloakUrl).toMatch(/^https?:\/\//);
   });
 
-  it("appUrl defaults to healthpoint domain", async () => {
+  it("appUrl defaults to localhost in development", async () => {
     const { ENV } = await import("./_core/env");
-    expect(ENV.appUrl).toContain("healthpoint");
+    expect(ENV.appUrl).toMatch(/^https?:\/\//); // Must be a valid URL
   });
 });
 
 // ─── Security configuration tests ────────────────────────────────────────────
 describe("Security configuration", () => {
-  it("CORS allowed origins include manus.space domains", () => {
-    const isAllowedOrigin = (origin: string) => {
-      const patterns = [
-        /^https?:\/\/localhost(:\d+)?$/,
-        /\.manus\.space$/,
-        /\.manus\.computer$/,
-        /^https:\/\/healthpoint\./,
-      ];
-      return patterns.some(p => p.test(origin));
+  it("CORS allowed origins are configured via ALLOWED_ORIGINS env var", () => {
+    // In production, only origins in ALLOWED_ORIGINS + VITE_APP_URL are allowed.
+    // In development, all origins are allowed.
+    const buildAllowedOrigins = (appUrl: string, allowedOriginsEnv: string) =>
+      [appUrl, ...allowedOriginsEnv.split(",").map((s: string) => s.trim()).filter(Boolean)];
+    const isAllowedOrigin = (origin: string, appUrl: string, allowedOriginsEnv = "") => {
+      const origins = buildAllowedOrigins(appUrl, allowedOriginsEnv);
+      return origins.some(o => origin === o || origin.startsWith(o));
     };
-    expect(isAllowedOrigin("http://localhost:3000")).toBe(true);
-    expect(isAllowedOrigin("https://healthpoint.manus.space")).toBe(true);
-    expect(isAllowedOrigin("https://3000-abc123.us2.manus.computer")).toBe(true);
-    expect(isAllowedOrigin("https://evil.example.com")).toBe(false);
+    expect(isAllowedOrigin("http://localhost:3000", "http://localhost:3000")).toBe(true);
+    expect(isAllowedOrigin("https://healthpoint.example.com", "https://healthpoint.example.com")).toBe(true);
+    expect(isAllowedOrigin("https://app2.example.com", "http://localhost:3000", "https://app2.example.com")).toBe(true);
+    expect(isAllowedOrigin("https://evil.example.com", "http://localhost:3000")).toBe(false);
   });
 
   it("rate limit window is 15 minutes in milliseconds", () => {

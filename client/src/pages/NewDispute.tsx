@@ -11,7 +11,10 @@ import { toast } from "sonner";
 import {
   ArrowLeft, ArrowRight, CheckCircle2, LogOut, Scale,
   Save, AlertTriangle, AlertCircle, Info, TrendingUp, Clock,
+  ShieldCheck, ShieldAlert, ShieldX,
 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import SmartFormPanel from "@/components/SmartFormPanel";
 
 const SERVICE_TYPES = [
   { value: "emergency_medicine", label: "Emergency Medicine" },
@@ -228,6 +231,7 @@ export default function NewDispute() {
   // ─── EMR Data Pull ─────────────────────────────────────────────────────────
   const { data: emrConnections } = trpc.emr.list.useQuery();
   const [showEMRPull, setShowEMRPull] = useState(false);
+
   const [patientSearchQuery, setPatientSearchQuery] = useState("");
   const [patientSuggestions, setPatientSuggestions] = useState<{ id: string; name: string; dob: string; mrn: string }[]>([]);
   const [showPatientDropdown, setShowPatientDropdown] = useState(false);
@@ -321,16 +325,56 @@ export default function NewDispute() {
   };
 
   const Field = ({
-    label, required, children, hint,
-  }: { label: string; required?: boolean; children: React.ReactNode; hint?: string }) => (
-    <div>
-      <label className="block text-sm font-medium text-slate-600 mb-1.5">
-        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
-      </label>
-      {children}
-      {hint && <p className="text-xs text-slate-400 mt-1">{hint}</p>}
-    </div>
-  );
+    label, required, children, hint, fieldKey,
+  }: { label: string; required?: boolean; children: React.ReactNode; hint?: string; fieldKey?: string }) => {
+    // Map camelCase fieldKey to snake_case for confidence lookup
+    const snakeKey = fieldKey ? fieldKey.replace(/([A-Z])/g, '_$1').toLowerCase() : undefined;
+    const confScore = emrPullResult?.fieldConfidence
+      ? (fieldKey ? emrPullResult.fieldConfidence[fieldKey] : undefined)
+        ?? (snakeKey ? emrPullResult.fieldConfidence[snakeKey] : undefined)
+      : undefined;
+    const confPct = confScore !== undefined ? Math.round(confScore * 100) : null;
+    const isExtracted = confPct !== null;
+    const confLabel = confPct === null ? '' : confPct >= 90 ? 'High confidence' : confPct >= 70 ? 'Medium confidence — review recommended' : 'Low confidence — manual verification required';
+    const ConfIcon = confPct === null ? null : confPct >= 90 ? ShieldCheck : confPct >= 70 ? ShieldAlert : ShieldX;
+    const confColor = confPct === null ? '' : confPct >= 90 ? 'text-green-600' : confPct >= 70 ? 'text-amber-600' : 'text-red-600';
+    const fieldBorder = isExtracted ? (confPct! >= 90 ? 'ring-1 ring-green-300' : confPct! >= 70 ? 'ring-1 ring-amber-300' : 'ring-2 ring-red-300') : '';
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <label className="block text-sm font-medium text-slate-600">
+            {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+          </label>
+          {isExtracted && ConfIcon && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className={`flex items-center gap-1 text-xs font-medium cursor-help ${confColor}`}>
+                  <ConfIcon className="h-3.5 w-3.5" />
+                  {confPct}%
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                <p className="text-xs">
+                  <strong>EMR Extraction Confidence: {confPct}%</strong><br />
+                  {confLabel}.
+                  {confPct! < 90 && " Please verify this field before submitting."}
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+        <div className={`rounded-lg ${fieldBorder}`}>
+          {children}
+        </div>
+        {hint && <p className="text-xs text-slate-400 mt-1">{hint}</p>}
+        {isExtracted && confPct! < 70 && (
+          <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
+            <ShieldX className="h-3 w-3" /> Low confidence — please verify this value manually.
+          </p>
+        )}
+      </div>
+    );
+  };
 
   // ─── QPA panel ──────────────────────────────────────────────────────────────
   const QPAPanel = () => {
@@ -473,6 +517,35 @@ export default function NewDispute() {
           )}
         </div>
 
+        {/* SmartForm AI Auto-Fill Panel */}
+        <div className="mb-4">
+          <SmartFormPanel
+            targetForm="dispute"
+            onApply={(fields) => {
+              const fieldMap: Record<string, keyof FormData> = {
+                patientName: "notes",
+                providerName: "initiatingPartyName",
+                providerNPI: "initiatingPartyNpi",
+                payerName: "respondingPartyName",
+                serviceDate: "serviceDate",
+                billedAmount: "billedAmount",
+                cptCodes: "cptCodes",
+                diagnosisCodes: "icd10Codes",
+                serviceType: "serviceType",
+                placeOfService: "facilityState",
+              };
+              let count = 0;
+              Object.entries(fields).forEach(([key, extracted]) => {
+                const formKey = fieldMap[key];
+                if (formKey && extracted.value) {
+                  update(formKey, String(extracted.value));
+                  count++;
+                }
+              });
+              if (count > 0) toast.success(`SmartForm populated ${count} fields from your document.`);
+            }}
+          />
+        </div>
         {/* EMR Pull Panel */}
         {activeEMRConnections.length > 0 && (
           <div className="mb-6">
@@ -668,14 +741,14 @@ export default function NewDispute() {
                     {PARTY_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
                 </Field>
-                <Field label="Party Name" required>
+                <Field label="Party Name" required fieldKey="initiatingPartyName">
                   <Input
                     value={form.initiatingPartyName}
                     onChange={e => update("initiatingPartyName", e.target.value)}
                     placeholder="e.g., Acme Emergency Medicine Group"
                   />
                 </Field>
-                <Field label="NPI Number" hint="10-digit National Provider Identifier (if applicable)">
+                <Field label="NPI Number" hint="10-digit National Provider Identifier (if applicable)" fieldKey="initiatingPartyNpi">
                   <Input
                     value={form.initiatingPartyNpi}
                     onChange={e => update("initiatingPartyNpi", e.target.value)}
@@ -702,14 +775,14 @@ export default function NewDispute() {
                     {PARTY_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
                 </Field>
-                <Field label="Party Name" required>
+                <Field label="Party Name" required fieldKey="respondingPartyName">
                   <Input
                     value={form.respondingPartyName}
                     onChange={e => update("respondingPartyName", e.target.value)}
                     placeholder="e.g., BlueCross BlueShield of Texas"
                   />
                 </Field>
-                <Field label="NPI Number" hint="10-digit NPI (if applicable)">
+                <Field label="NPI Number" hint="10-digit NPI (if applicable)" fieldKey="respondingPartyNpi">
                   <Input
                     value={form.respondingPartyNpi}
                     onChange={e => update("respondingPartyNpi", e.target.value)}
@@ -723,7 +796,7 @@ export default function NewDispute() {
             {/* ── Step 3: Service Details ──────────────────────────────────── */}
             {currentStep === 3 && (
               <>
-                <Field label="Service Type" required>
+                <Field label="Service Type" required fieldKey="serviceType">
                   <select
                     value={form.serviceType}
                     onChange={e => update("serviceType", e.target.value)}
@@ -732,7 +805,7 @@ export default function NewDispute() {
                     {SERVICE_TYPES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 </Field>
-                <Field label="Date of Service" required>
+                <Field label="Date of Service" required fieldKey="serviceDate">
                   <Input
                     type="date"
                     value={form.serviceDate}
@@ -740,7 +813,7 @@ export default function NewDispute() {
                   />
                 </Field>
                 <div className="grid grid-cols-2 gap-4">
-                  <Field label="Patient State" required>
+                  <Field label="Patient State" required fieldKey="patientState">
                     <select
                       value={form.patientState}
                       onChange={e => update("patientState", e.target.value)}
@@ -749,7 +822,7 @@ export default function NewDispute() {
                       {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
                   </Field>
-                  <Field label="Facility State" required>
+                  <Field label="Facility State" required fieldKey="facilityState">
                     <select
                       value={form.facilityState}
                       onChange={e => update("facilityState", e.target.value)}
@@ -765,7 +838,7 @@ export default function NewDispute() {
             {/* ── Step 4: Financial + QPA ──────────────────────────────────── */}
             {currentStep === 4 && (
               <>
-                <Field label="Billed Amount ($)" required>
+                <Field label="Billed Amount ($)" required fieldKey="billedAmount">
                   <Input
                     type="number"
                     step="0.01"
@@ -779,6 +852,7 @@ export default function NewDispute() {
                   label="CPT Codes (comma-separated)"
                   required
                   hint="Enter all CPT codes associated with the disputed service. QPA benchmarks will appear automatically."
+                  fieldKey="cptCodes"
                 >
                   <Input
                     value={form.cptCodes}
@@ -786,7 +860,7 @@ export default function NewDispute() {
                     placeholder="e.g., 99285, 99291, 36556"
                   />
                 </Field>
-                <Field label="ICD-10 Codes (comma-separated)">
+                <Field label="ICD-10 Codes (comma-separated)" fieldKey="icd10Codes">
                   <Input
                     value={form.icd10Codes}
                     onChange={e => update("icd10Codes", e.target.value)}

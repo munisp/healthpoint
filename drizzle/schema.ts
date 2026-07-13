@@ -1157,3 +1157,48 @@ export const uscdiDataElements = pgTable(
   ]
 );
 export type USCDIDataElement = typeof uscdiDataElements.$inferSelect;
+
+// ─── SmartForm AI Extraction ──────────────────────────────────────────────────
+export const smartFormTargetEnum = pgEnum("smart_form_target", [
+  "dispute",
+  "offer",
+  "cms_submission",
+  "emr_onboarding",
+  "mobile_dispute",
+  "generic",
+]);
+
+export const smartFormExtractions = pgTable(
+  "smart_form_extractions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    targetForm: smartFormTargetEnum("targetForm").notNull().default("generic"),
+    disputeId: varchar("disputeId", { length: 64 }),
+    // Input
+    inputType: varchar("inputType", { length: 32 }).notNull().default("text"), // text | pdf_base64 | url | fhir_json
+    inputPreview: text("inputPreview"), // first 500 chars of input for display
+    documentName: varchar("documentName", { length: 256 }),
+    // Output
+    extractedFields: jsonb("extractedFields").$type<Record<string, { value: string | number | null; confidence: number; source: string }>>().default({}),
+    overallConfidence: integer("overallConfidence").default(0), // 0-100
+    fieldCount: integer("fieldCount").default(0),
+    highConfidenceCount: integer("highConfidenceCount").default(0),
+    lowConfidenceCount: integer("lowConfidenceCount").default(0),
+    // Status
+    status: varchar("status", { length: 32 }).notNull().default("pending"), // pending | processing | complete | failed
+    errorMessage: text("errorMessage"),
+    processingMs: integer("processingMs"),
+    modelUsed: varchar("modelUsed", { length: 128 }),
+    // Applied
+    appliedAt: timestamp("appliedAt"),
+    appliedFields: jsonb("appliedFields").$type<string[]>().default([]),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("smart_form_user_idx").on(t.userId),
+    index("smart_form_dispute_idx").on(t.disputeId),
+  ]
+);
+export type SmartFormExtraction = typeof smartFormExtractions.$inferSelect;
+export type InsertSmartFormExtraction = typeof smartFormExtractions.$inferInsert;

@@ -5,7 +5,11 @@ import net from "net";
 import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import slowDown from "express-slow-down";
+import compression from "compression";
+import hpp from "hpp";
 import morgan from "morgan";
+import { v4 as uuidv4 } from "uuid";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerKeycloakRoutes } from "./keycloak";
 import { appRouter } from "../routers";
@@ -83,31 +87,41 @@ async function startServer() {
   );
 
   // ── CORS ──────────────────────────────────────────────────────────────────
-  const allowedOrigins = ENV.isProduction
-    ? [ENV.appUrl, `https://${process.env.VITE_APP_ID ?? ""}.manus.space`].filter(Boolean)
-    : ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"];
-
-  // Sandbox/preview domains always allowed (manus.computer proxy)
-  const isSandboxOrigin = (origin: string) =>
-    origin.includes(".manus.computer") || origin.includes(".manus.space");
-
+  // Configure via ALLOWED_ORIGINS env var (comma-separated list of origins).
+  // In development all origins are allowed; in production only the listed ones.
+  const configuredOrigins = [ENV.appUrl, ...ENV.allowedOrigins].filter(Boolean);
+  // Export for testing
+  (app as any).__allowedOrigins = configuredOrigins;
   app.use(
     cors({
       origin: (origin, callback) => {
         // Allow requests with no origin (mobile apps, curl, server-to-server)
         if (!origin) return callback(null, true);
-        // Always allow sandbox preview and manus.space domains
-        if (isSandboxOrigin(origin)) return callback(null, true);
-        if (allowedOrigins.some(o => origin.startsWith(o))) return callback(null, true);
         // In dev, allow all origins
         if (!ENV.isProduction) return callback(null, true);
-        callback(new Error(`CORS: origin ${origin} not allowed`));
+        if (configuredOrigins.some(o => origin === o || origin.startsWith(o))) return callback(null, true);
+        callback(new Error(`CORS: origin ${origin} not allowed. Add it to ALLOWED_ORIGINS env var.`));
       },
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
     })
   );
+
+  // ── Response compression ────────────────────────────────────────────────
+  app.use(compression());
+
+  // ── HTTP Parameter Pollution protection ──────────────────────────────────
+  app.use(hpp());
+
+  // ── Request ID tracing ───────────────────────────────────────────────────
+  // Attach a unique X-Request-ID to every request for distributed tracing
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const reqId = (req.headers["x-request-id"] as string) || uuidv4();
+    res.setHeader("X-Request-ID", reqId);
+    (req as any).requestId = reqId;
+    next();
+  });
 
   // ── Rate limiting ──────────────────────────────────────────────────────────
   // Global limiter: 200 req/min per IP
@@ -135,6 +149,17 @@ async function startServer() {
     })
   );
 
+  // Brute-force slow-down for auth endpoints: delay after 5 requests
+  app.use(
+    "/api/auth",
+    slowDown({
+      windowMs: 60_000,
+      delayAfter: 5,
+      delayMs: (hits) => hits * 200, // 200ms, 400ms, 600ms...
+      skip: () => !ENV.isProduction,
+    })
+  );
+
   // ── Request logging (morgan) ──────────────────────────────────────────────
   // Use 'combined' format in production for full Apache-style logs, 'dev' in development
   app.use(morgan(ENV.isProduction ? "combined" : "dev"));
@@ -142,6 +167,26 @@ async function startServer() {
   // ── Body parsers ──────────────────────────────────────────────────────────
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // ── Structured JSON logging for production ────────────────────────────────
+  if (ENV.isProduction) {
+    morgan.token("request-id", (req: Request) => (req as any).requestId ?? "-");
+    morgan.token("user-id", (req: Request) => (req as any).user?.id ?? "-");
+    app.use(morgan((tokens, req, res) => {
+      return JSON.stringify({
+        timestamp: new Date().toISOString(),
+        requestId: tokens["request-id"](req, res),
+        method: tokens.method(req, res),
+        url: tokens.url(req, res),
+        status: parseInt(tokens.status(req, res) ?? "0"),
+        responseTimeMs: parseFloat(tokens["response-time"](req, res) ?? "0"),
+        contentLength: tokens.res(req, res, "content-length") ?? "-",
+        userId: tokens["user-id"](req, res),
+        userAgent: tokens["user-agent"](req, res),
+        remoteAddr: tokens["remote-addr"](req, res),
+      });
+    }));
+  }
 
   // ── Health check ──────────────────────────────────────────────────────────
   const startTime = Date.now();
@@ -163,12 +208,104 @@ async function startServer() {
     });
   });
 
-  // ── Keycloak OIDC routes ──────────────────────────────────────────────────
+  // ── Liveness probe (Kubernetes/Docker-compatible) ─────────────────────────────────
+  app.get("/api/ready", (_req: Request, res: Response) => {
+    res.status(200).json({ ready: true, uptime: Math.round((Date.now() - startTime) / 1000) });
+  });
+
+  // ── Keycloak OIDC routes ──────────────────────────────────────────────────────
   registerKeycloakRoutes(app);
 
   // ── Scheduled heartbeat endpoints (auth-guarded in production) ───────────
   app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
+
+  // ── Ollama pull-stream SSE endpoint ────────────────────────────────────────
+  // Streams NDJSON progress from Ollama's /api/pull endpoint as SSE events.
+  // Requires admin role via JWT cookie (same auth as tRPC protectedProcedure).
+  app.get("/api/ollama/pull-stream", async (req: Request, res: Response) => {
+    const model = req.query.model as string;
+    if (!model || model.trim().length === 0) {
+      res.status(400).json({ error: "model query param required" });
+      return;
+    }
+    const ollamaBase = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/$/, "");
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const sendEvent = (data: object) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const abortController = new AbortController();
+    req.on("close", () => abortController.abort());
+
+    try {
+      const pullRes = await fetch(`${ollamaBase}/api/pull`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: model.trim(), stream: true }),
+        signal: abortController.signal,
+      });
+
+      if (!pullRes.ok || !pullRes.body) {
+        sendEvent({ type: "error", message: `Ollama returned ${pullRes.status}` });
+        res.end();
+        return;
+      }
+
+      const reader = pullRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const parsed = JSON.parse(trimmed) as {
+              status?: string;
+              completed?: number;
+              total?: number;
+              error?: string;
+            };
+            if (parsed.error) {
+              sendEvent({ type: "error", message: parsed.error });
+            } else {
+              sendEvent({
+                type: "progress",
+                status: parsed.status ?? "",
+                completed: parsed.completed ?? 0,
+                total: parsed.total ?? 0,
+                pct: parsed.total && parsed.total > 0
+                  ? Math.round((parsed.completed ?? 0) / parsed.total * 100)
+                  : null,
+              });
+            }
+          } catch {
+            // non-JSON line — skip
+          }
+        }
+      }
+
+      sendEvent({ type: "done" });
+    } catch (err: unknown) {
+      if ((err as Error)?.name !== "AbortError") {
+        sendEvent({ type: "error", message: String(err) });
+      }
+    } finally {
+      res.end();
+    }
+  });
 
   // ── tRPC API ──────────────────────────────────────────────────────────────
   app.use(

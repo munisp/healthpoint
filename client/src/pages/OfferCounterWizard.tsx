@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { Handshake, ChevronRight, ChevronLeft, CheckCircle2, DollarSign, FileText, Send, Loader2 } from "lucide-react";
 import { useLocation } from "wouter";
+import SmartFormPanel, { type ExtractedField } from "@/components/SmartFormPanel";
 
 const STEPS = [
   { id: 1, label: "Select Dispute", icon: FileText },
@@ -133,6 +134,14 @@ export default function OfferCounterWizard() {
           {step === 2 && (
             <div className="space-y-4">
               <h2 className="font-semibold">Set your counter-offer amount</h2>
+              <SmartFormPanel
+                targetForm="offer"
+                onApply={(fields: Record<string, ExtractedField>) => {
+                  if (fields.offerAmount?.value) setOfferAmount(String(fields.offerAmount.value));
+                  if (fields.rationale?.value) setJustification(String(fields.rationale.value));
+                  toast.success("SmartForm applied offer fields from your document.");
+                }}
+              />
               {selectedDispute && (
                 <div className="flex items-center gap-4 p-3 bg-muted/50 rounded-lg text-sm">
                   <div><span className="text-muted-foreground">Billed: </span><span className="font-medium">{formatCurrency(selectedDispute.billedAmount)}</span></div>

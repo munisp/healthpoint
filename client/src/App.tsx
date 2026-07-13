@@ -94,6 +94,7 @@ import FHIRCapabilityExplorer from "@/pages/FHIRCapabilityExplorer";
 import BulkFHIRExport from "@/pages/BulkFHIRExport";
 import CDSHooksManager from "@/pages/CDSHooksManager";
 import USCDICompleteness from "@/pages/USCDICompleteness";
+import OllamaManager from "@/pages/OllamaManager";
 
 function Router() {
   return (
@@ -191,6 +192,7 @@ function Router() {
       <Route path="/bulk-fhir-export" component={BulkFHIRExport} />
       <Route path="/cds-hooks" component={CDSHooksManager} />
       <Route path="/uscdi-completeness" component={USCDICompleteness} />
+      <Route path="/ollama" component={OllamaManager} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>
