@@ -61,9 +61,20 @@ import {
   FilterX,
   SplitSquareVertical,
   ArrowRight,
+  Download,
+  FileJson,
+  Sheet,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 
 export type ExtractedField = {
@@ -1273,6 +1284,84 @@ export function SmartFormPanel({
             >
               Try Another Document
             </Button>
+
+            {/* Export dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-1.5">
+                  <Download className="h-3.5 w-3.5" />
+                  Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuLabel className="text-xs">Download as…</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="gap-2 cursor-pointer"
+                  onClick={() => {
+                    const rows = Object.entries(mergedFields).map(([key, field]) => ({
+                      field: labels[key] ?? key,
+                      value: field.value === null ? "" : String(field.value),
+                      confidence: field.confidence,
+                      source: field.source,
+                      edited: key in editedFields ? "yes" : "no",
+                      selected: selectedFields.has(key) ? "yes" : "no",
+                    }));
+                    const payload = {
+                      exportedAt: new Date().toISOString(),
+                      documentName: documentName || "unknown",
+                      form: targetForm,
+                      model: extractionResult?.modelUsed ?? "",
+                      overallConfidence: extractionResult?.overallConfidence ?? 0,
+                      editedCount,
+                      fields: rows,
+                    };
+                    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+                      type: "application/json",
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `smartform-${targetForm}-${Date.now()}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast.success("Exported as JSON");
+                  }}
+                >
+                  <FileJson className="h-4 w-4 text-violet-500" />
+                  JSON
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="gap-2 cursor-pointer"
+                  onClick={() => {
+                    const headers = ["Field", "Value", "Confidence", "Source", "Edited", "Selected"];
+                    const rows = Object.entries(mergedFields).map(([key, field]) => [
+                      labels[key] ?? key,
+                      field.value === null ? "" : String(field.value).replace(/,/g, ";"),
+                      String(field.confidence),
+                      (field.source ?? "").replace(/,/g, ";"),
+                      key in editedFields ? "yes" : "no",
+                      selectedFields.has(key) ? "yes" : "no",
+                    ]);
+                    const csv = [headers, ...rows]
+                      .map((r) => r.map((c) => `"${c}"`).join(","))
+                      .join("\n");
+                    const blob = new Blob([csv], { type: "text/csv" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `smartform-${targetForm}-${Date.now()}.csv`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast.success("Exported as CSV");
+                  }}
+                >
+                  <Sheet className="h-4 w-4 text-green-600" />
+                  CSV
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             <Button
               size="sm"
               onClick={handleApply}
