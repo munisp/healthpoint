@@ -15,6 +15,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -670,6 +680,7 @@ export function SmartFormPanel({
   const [editedFields, setEditedFields] = useState<Record<string, string>>({});
   const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set());
   const [showSource, setShowSource] = useState(false);
+  const [revertAllOpen, setRevertAllOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const labels = fieldLabels ?? FIELD_LABELS[targetForm] ?? {};
@@ -1054,10 +1065,7 @@ export function SmartFormPanel({
                   variant="ghost"
                   size="sm"
                   className="h-7 text-xs gap-1 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                  onClick={() => {
-                    setEditedFields({});
-                    toast.info(`Reverted ${editedCount} manual edit${editedCount !== 1 ? "s" : ""} — AI values restored.`);
-                  }}
+                  onClick={() => setRevertAllOpen(true)}
                   title="Discard all manual edits and restore AI-extracted values"
                 >
                   <RotateCcw className="h-3 w-3" />
@@ -1186,6 +1194,34 @@ export function SmartFormPanel({
           labels={labels}
           onReuse={handleReuseFromHistory}
         />
+
+        {/* Revert All confirmation dialog */}
+        <AlertDialog open={revertAllOpen} onOpenChange={setRevertAllOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2">
+                <RotateCcw className="h-4 w-4 text-blue-600" />
+                Revert all manual edits?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                You have <span className="font-semibold text-foreground">{editedCount} manually edited field{editedCount !== 1 ? "s" : ""}</span>. Reverting will discard every change and restore the original AI-extracted values. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep my edits</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+                onClick={() => {
+                  setEditedFields({});
+                  toast.info(`Reverted ${editedCount} manual edit${editedCount !== 1 ? "s" : ""} — AI values restored.`);
+                }}
+              >
+                <RotateCcw className="h-4 w-4 mr-1" />
+                Yes, revert all
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </>
     );
   }
@@ -1248,6 +1284,34 @@ export function SmartFormPanel({
         labels={labels}
         onReuse={handleReuseFromHistory}
       />
+
+      {/* Revert All confirmation dialog */}
+      <AlertDialog open={revertAllOpen} onOpenChange={setRevertAllOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <RotateCcw className="h-4 w-4 text-blue-600" />
+              Revert all manual edits?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              You have <span className="font-semibold text-foreground">{editedCount} manually edited field{editedCount !== 1 ? "s" : ""}</span>. Reverting will discard every change and restore the original AI-extracted values. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep my edits</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={() => {
+                setEditedFields({});
+                toast.info(`Reverted ${editedCount} manual edit${editedCount !== 1 ? "s" : ""} — AI values restored.`);
+              }}
+            >
+              <RotateCcw className="h-4 w-4 mr-1" />
+              Yes, revert all
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
