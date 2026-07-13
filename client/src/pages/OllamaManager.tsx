@@ -116,7 +116,11 @@ export default function OllamaManager() {
           setPullProgress(prev => prev ? { ...prev, error: data.message ?? "Unknown error", active: false } : null);
           toast.error(`Failed to download ${target}`, {
             description: data.message ?? "An unexpected error occurred. Check that Ollama is running and the model name is correct.",
-            duration: 8000,
+            duration: 12000,
+            action: {
+              label: "Retry",
+              onClick: () => handlePull(target),
+            },
           });
         }
       } catch {
@@ -130,7 +134,11 @@ export default function OllamaManager() {
       setPullProgress(prev => prev ? { ...prev, error: "Connection lost", active: false } : null);
       toast.error(`Connection to Ollama lost`, {
         description: `Download of ${target} was interrupted. Ensure Ollama is running and try again.`,
-        duration: 8000,
+        duration: 12000,
+        action: {
+          label: "Retry",
+          onClick: () => handlePull(target),
+        },
       });
     };
   };

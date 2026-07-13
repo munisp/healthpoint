@@ -46,6 +46,9 @@ import {
   History,
   RotateCcw,
   Clock,
+  Search,
+  CalendarDays,
+  FilterX,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -349,13 +352,43 @@ function HistoryModal({
   onReuse: (fields: Record<string, ExtractedField>, extractionId: string) => void;
 }) {
   const historyQuery = trpc.smartForm.history.useQuery(
-    { limit: 20 },
+    { limit: 50 },
     { enabled: open, staleTime: 0 }
   );
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
-  const history = historyQuery.data ?? [];
+  const allHistory = historyQuery.data ?? [];
+
+  // ── Client-side filtering ──────────────────────────────────────────────────
+  const filtered = allHistory.filter((item) => {
+    const docName = (item.documentName ?? "").toLowerCase();
+    const matchesSearch = !search.trim() || docName.includes(search.trim().toLowerCase());
+
+    let matchesFrom = true;
+    let matchesTo = true;
+    if (item.createdAt) {
+      const created = new Date(item.createdAt);
+      if (dateFrom) matchesFrom = created >= new Date(dateFrom);
+      if (dateTo) {
+        const toEnd = new Date(dateTo);
+        toEnd.setHours(23, 59, 59, 999);
+        matchesTo = created <= toEnd;
+      }
+    }
+    return matchesSearch && matchesFrom && matchesTo;
+  });
+
+  const hasFilters = search.trim() !== "" || dateFrom !== "" || dateTo !== "";
+
+  const clearFilters = () => {
+    setSearch("");
+    setDateFrom("");
+    setDateTo("");
+  };
 
   const formatDate = (d: Date | string | null) => {
     if (!d) return "Unknown date";
@@ -377,10 +410,75 @@ function HistoryModal({
             Extraction History
           </DialogTitle>
           <DialogDescription>
-            Past SmartForm extractions for this form type. Click "Reuse" to apply a previous
-            result without re-uploading.
+            Past SmartForm extractions. Use search or date filters to find a previous result, then
+            click "Reuse" to load it without re-uploading.
           </DialogDescription>
         </DialogHeader>
+
+        {/* ── Search + date filters ── */}
+        <div className="space-y-2">
+          {/* Search bar */}
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              placeholder="Search by document name…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8 h-8 text-sm"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <XIcon className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Date range row */}
+          <div className="flex items-center gap-2">
+            <CalendarDays className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <Input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="h-8 text-sm flex-1"
+              title="From date"
+            />
+            <span className="text-xs text-muted-foreground shrink-0">to</span>
+            <Input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="h-8 text-sm flex-1"
+              title="To date"
+            />
+            {hasFilters && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-xs gap-1 text-muted-foreground"
+                onClick={clearFilters}
+                title="Clear all filters"
+              >
+                <FilterX className="h-3.5 w-3.5" />
+                Clear
+              </Button>
+            )}
+          </div>
+
+          {/* Results summary */}
+          {!historyQuery.isLoading && (
+            <p className="text-xs text-muted-foreground">
+              {hasFilters
+                ? `${filtered.length} of ${allHistory.length} extractions match`
+                : `${allHistory.length} extraction${allHistory.length !== 1 ? "s" : ""} total`}
+            </p>
+          )}
+        </div>
+
+        <Separator />
 
         {historyQuery.isLoading && (
           <div className="flex items-center justify-center py-10">
@@ -388,15 +486,24 @@ function HistoryModal({
           </div>
         )}
 
-        {!historyQuery.isLoading && history.length === 0 && (
+        {!historyQuery.isLoading && filtered.length === 0 && (
           <div className="text-center py-10 text-muted-foreground">
             <History className="h-10 w-10 mx-auto mb-3 opacity-30" />
-            <p className="text-sm">No past extractions found for this form type.</p>
+            <p className="text-sm">
+              {hasFilters
+                ? "No extractions match your filters."
+                : "No past extractions found for this form type."}
+            </p>
+            {hasFilters && (
+              <Button variant="ghost" size="sm" className="mt-2 text-xs" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            )}
           </div>
         )}
 
         <div className="space-y-3">
-          {history.map((item) => {
+          {filtered.map((item) => {
             const fields = (() => {
               try {
                 return (typeof item.extractedFields === "string"
@@ -899,13 +1006,28 @@ export function SmartFormPanel({
                 </span>
               )}
             </p>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap justify-end">
               <Button variant="ghost" size="sm" onClick={selectAll} className="h-7 text-xs">
                 Select All
               </Button>
               <Button variant="ghost" size="sm" onClick={selectNone} className="h-7 text-xs">
                 None
               </Button>
+              {editedCount > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs gap-1 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                  onClick={() => {
+                    setEditedFields({});
+                    toast.info(`Reverted ${editedCount} manual edit${editedCount !== 1 ? "s" : ""} — AI values restored.`);
+                  }}
+                  title="Discard all manual edits and restore AI-extracted values"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Revert All
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
