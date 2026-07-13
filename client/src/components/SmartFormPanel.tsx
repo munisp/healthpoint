@@ -1115,7 +1115,7 @@ export function SmartFormPanel({
           {compareMode && editedCount > 0 ? (
             <div className="rounded-lg border overflow-hidden">
               {/* Column headers */}
-              <div className="grid grid-cols-[1fr_auto_1fr] bg-muted/60 px-3 py-1.5 text-xs font-semibold text-muted-foreground border-b">
+              <div className="grid grid-cols-[1fr_auto_1fr_auto] bg-muted/60 px-3 py-1.5 text-xs font-semibold text-muted-foreground border-b">
                 <span className="flex items-center gap-1">
                   <Sparkles className="h-3 w-3 text-violet-500" />
                   AI Extracted
@@ -1125,6 +1125,7 @@ export function SmartFormPanel({
                   <Pencil className="h-3 w-3" />
                   Your Edit
                 </span>
+                <span className="w-14" />
               </div>
 
               {/* Only rows that have been edited */}
@@ -1147,7 +1148,7 @@ export function SmartFormPanel({
                     return (
                       <div
                         key={key}
-                        className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-2 text-sm"
+                        className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-2 px-3 py-2 text-sm hover:bg-muted/20 transition-colors"
                       >
                         {/* AI value */}
                         <div className="min-w-0">
@@ -1177,6 +1178,25 @@ export function SmartFormPanel({
                             <p className="text-[10px] text-muted-foreground">(unchanged)</p>
                           )}
                         </div>
+
+                        {/* Per-field Revert button */}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-14 text-xs gap-1 shrink-0 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40"
+                          title={`Revert "${labels[key] ?? key}" to AI value`}
+                          onClick={() => {
+                            setEditedFields((prev) => {
+                              const next = { ...prev };
+                              delete next[key];
+                              return next;
+                            });
+                            toast.info(`"${labels[key] ?? key}" reverted to AI value.`);
+                          }}
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          Revert
+                        </Button>
                       </div>
                     );
                   })}
