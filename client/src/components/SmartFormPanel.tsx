@@ -59,7 +59,11 @@ import {
   Search,
   CalendarDays,
   FilterX,
+  SplitSquareVertical,
+  ArrowRight,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 
 export type ExtractedField = {
@@ -681,6 +685,7 @@ export function SmartFormPanel({
   const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set());
   const [showSource, setShowSource] = useState(false);
   const [revertAllOpen, setRevertAllOpen] = useState(false);
+  const [compareMode, setCompareMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const labels = fieldLabels ?? FIELD_LABELS[targetForm] ?? {};
@@ -1044,7 +1049,7 @@ export function SmartFormPanel({
           </div>
 
           {/* Field selection controls */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <p className="text-sm font-medium">
               {selectedFields.size} of {extractionResult.fieldCount} fields selected
               {editedCount > 0 && (
@@ -1053,7 +1058,25 @@ export function SmartFormPanel({
                 </span>
               )}
             </p>
-            <div className="flex gap-2 flex-wrap justify-end">
+            <div className="flex gap-2 flex-wrap justify-end items-center">
+              {/* Compare toggle — only shown when there are manual edits */}
+              {editedCount > 0 && (
+                <div className="flex items-center gap-1.5 border rounded-md px-2 py-1 bg-muted/40">
+                  <SplitSquareVertical className="h-3.5 w-3.5 text-muted-foreground" />
+                  <Label
+                    htmlFor="compare-toggle"
+                    className="text-xs cursor-pointer select-none text-muted-foreground"
+                  >
+                    Compare
+                  </Label>
+                  <Switch
+                    id="compare-toggle"
+                    checked={compareMode}
+                    onCheckedChange={setCompareMode}
+                    className="scale-75 origin-right"
+                  />
+                </div>
+              )}
               <Button variant="ghost" size="sm" onClick={selectAll} className="h-7 text-xs">
                 Select All
               </Button>
@@ -1088,40 +1111,126 @@ export function SmartFormPanel({
             </div>
           </div>
 
-          {/* Field rows — now with inline editing */}
-          <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-            {Object.entries(mergedFields).map(([key, field]) => (
-              <FieldRow
-                key={key}
-                fieldKey={key}
-                field={field}
-                label={labels[key] ?? key}
-                selected={selectedFields.has(key)}
-                onToggle={() => toggleField(key)}
-                onEdit={handleEdit}
-                originalValue={
-                  key in editedFields && extractionResult
-                    ? (() => {
-                        const orig = extractionResult.extractedFields[key];
-                        return orig ? (orig.value === null ? null : String(orig.value)) : null;
-                      })()
-                    : undefined
-                }
-                onRevert={
-                  key in editedFields
-                    ? () => {
-                        setEditedFields((prev) => {
-                          const next = { ...prev };
-                          delete next[key];
-                          return next;
-                        });
-                        toast.info(`"${labels[key] ?? key}" reverted to AI value.`);
-                      }
-                    : undefined
-                }
-              />
-            ))}
-          </div>
+          {/* ── Compare mode: side-by-side diff table ── */}
+          {compareMode && editedCount > 0 ? (
+            <div className="rounded-lg border overflow-hidden">
+              {/* Column headers */}
+              <div className="grid grid-cols-[1fr_auto_1fr] bg-muted/60 px-3 py-1.5 text-xs font-semibold text-muted-foreground border-b">
+                <span className="flex items-center gap-1">
+                  <Sparkles className="h-3 w-3 text-violet-500" />
+                  AI Extracted
+                </span>
+                <span className="w-6" />
+                <span className="flex items-center gap-1 text-blue-700">
+                  <Pencil className="h-3 w-3" />
+                  Your Edit
+                </span>
+              </div>
+
+              {/* Only rows that have been edited */}
+              <div className="divide-y max-h-72 overflow-y-auto">
+                {Object.entries(mergedFields)
+                  .filter(([key]) => key in editedFields)
+                  .map(([key, field]) => {
+                    const origField = extractionResult?.extractedFields[key];
+                    const origVal = origField
+                      ? origField.value === null
+                        ? "—"
+                        : String(origField.value)
+                      : "—";
+                    const editedVal =
+                      field.value === null || field.value === undefined
+                        ? "—"
+                        : String(field.value);
+                    const unchanged = origVal === editedVal;
+
+                    return (
+                      <div
+                        key={key}
+                        className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-2 text-sm"
+                      >
+                        {/* AI value */}
+                        <div className="min-w-0">
+                          <p className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium mb-0.5">
+                            {labels[key] ?? key}
+                          </p>
+                          <p className={`truncate ${
+                            unchanged ? "text-muted-foreground" : "line-through text-muted-foreground/70"
+                          }`}>
+                            {origVal}
+                          </p>
+                        </div>
+
+                        {/* Arrow */}
+                        <ArrowRight className={`h-3.5 w-3.5 shrink-0 ${
+                          unchanged ? "text-muted-foreground/40" : "text-blue-500"
+                        }`} />
+
+                        {/* Edited value */}
+                        <div className="min-w-0">
+                          <p className={`truncate font-medium ${
+                            unchanged ? "text-muted-foreground" : "text-blue-700 dark:text-blue-300"
+                          }`}>
+                            {editedVal}
+                          </p>
+                          {unchanged && (
+                            <p className="text-[10px] text-muted-foreground">(unchanged)</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {/* Footer summary */}
+              <div className="px-3 py-1.5 bg-muted/30 border-t text-xs text-muted-foreground flex items-center justify-between">
+                <span>{editedCount} field{editedCount !== 1 ? "s" : ""} modified</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-xs px-2 text-blue-600 hover:text-blue-700"
+                  onClick={() => setCompareMode(false)}
+                >
+                  Back to list
+                </Button>
+              </div>
+            </div>
+          ) : (
+            /* Field rows — normal editing mode */
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+              {Object.entries(mergedFields).map(([key, field]) => (
+                <FieldRow
+                  key={key}
+                  fieldKey={key}
+                  field={field}
+                  label={labels[key] ?? key}
+                  selected={selectedFields.has(key)}
+                  onToggle={() => toggleField(key)}
+                  onEdit={handleEdit}
+                  originalValue={
+                    key in editedFields && extractionResult
+                      ? (() => {
+                          const orig = extractionResult.extractedFields[key];
+                          return orig ? (orig.value === null ? null : String(orig.value)) : null;
+                        })()
+                      : undefined
+                  }
+                  onRevert={
+                    key in editedFields
+                      ? () => {
+                          setEditedFields((prev) => {
+                            const next = { ...prev };
+                            delete next[key];
+                            return next;
+                          });
+                          toast.info(`"${labels[key] ?? key}" reverted to AI value.`);
+                        }
+                      : undefined
+                  }
+                />
+              ))}
+            </div>
+          )}
 
           {/* Inline edit hint */}
           <p className="text-xs text-muted-foreground flex items-center gap-1">
