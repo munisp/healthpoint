@@ -95,105 +95,122 @@ import BulkFHIRExport from "@/pages/BulkFHIRExport";
 import CDSHooksManager from "@/pages/CDSHooksManager";
 import USCDICompleteness from "@/pages/USCDICompleteness";
 import OllamaManager from "@/pages/OllamaManager";
+import ProtectedRoute from "./components/ProtectedRoute";
+
+/** Helper: wraps a component in ProtectedRoute */
+function P({ component: C, admin }: { component: React.ComponentType; admin?: boolean }) {
+  return (
+    <ProtectedRoute adminOnly={admin}>
+      <C />
+    </ProtectedRoute>
+  );
+}
 
 function Router() {
   return (
     <Switch>
+      {/* Public routes */}
       <Route path={"/"} component={Home} />
-      <Route path={"/onboarding"} component={Onboarding} />
-      <Route path={"/dashboard"} component={Dashboard} />
-      <Route path={"/disputes"} component={DisputesList} />
-      <Route path={"/disputes/new"} component={NewDispute} />
-      <Route path={"/disputes/:id"} component={DisputeDetail} />
-      <Route path="/idr-entities" component={IDREntityDashboard} />
-      <Route path="/notifications" component={Notifications} />
-      <Route path="/admin" component={Admin} />
-      <Route path="/admin/leads" component={LeadsManager} />
-      <Route path="/ai-assistant" component={AIAssistant} />
-      <Route path="/stakeholder-upload" component={StakeholderUpload} />
-      <Route path="/cms-tracker" component={CMSSubmissionTracker} />
-      <Route path="/emr-connections" component={EMRConnections} />
-      <Route path="/emr-onboarding" component={EMROnboarding} />
-      <Route path="/state-laws" component={StateBalanceBilling} />
-      <Route path="/expert-review" component={ExpertReview} />
-      <Route path="/reports" component={Reports} />
-      <Route path="/doc-analyzer" component={DocumentAnalyzer} />
-      <Route path="/audit-trail" component={AuditTrail} />
-      <Route path="/payer-intelligence" component={PayerIntelligence} />
-      <Route path={"/webhooks"} component={WebhookManager} />
-      <Route path={"/ledger"} component={FinancialLedger} />
-      <Route path={"/search"} component={GlobalSearch} />
-      <Route path={"/lakehouse"} component={LakehouseExport} />
-      <Route path={"/admin/users"} component={AdminUserManagement} />
-      <Route path={"/system-health"} component={SystemHealthMonitor} />
-      <Route path={"/settings"} component={GlobalSettings} />
+      <Route path={"/404"} component={NotFound} />
       <Route path={"/changelog"} component={Changelog} />
       <Route path={"/help"} component={HelpCenter} />
-      <Route path={"/disputes/:id/negotiate"} component={OfferNegotiationThread} />
+      <Route path="/state-laws" component={StateBalanceBilling} />
+
+      {/* Auth-required routes */}
+      <Route path={"/onboarding"} component={() => <P component={Onboarding} />} />
+      <Route path={"/dashboard"} component={() => <P component={Dashboard} />} />
+      <Route path={"/disputes/new"} component={() => <P component={NewDispute} />} />
+      <Route path={"/disputes/merge"} component={() => <P component={DisputeMerge} />} />
+      <Route path={"/disputes/wizard"} component={() => <P component={MobileDisputeWizard} />} />
+      <Route path={"/disputes/clone"} component={() => <P component={DisputeClone} />} />
+      <Route path={"/disputes/:id/negotiate"} component={() => <P component={OfferNegotiationThread} />} />
+      <Route path={"/disputes/:id"} component={() => <P component={DisputeDetail} />} />
+      <Route path={"/disputes"} component={() => <P component={DisputesList} />} />
+      <Route path="/idr-entities" component={() => <P component={IDREntityDashboard} />} />
+      <Route path="/notifications" component={() => <P component={Notifications} />} />
+      <Route path="/ai-assistant" component={() => <P component={AIAssistant} />} />
+      <Route path="/stakeholder-upload" component={() => <P component={StakeholderUpload} />} />
+      <Route path="/cms-tracker" component={() => <P component={CMSSubmissionTracker} />} />
+      <Route path="/emr-connections" component={() => <P component={EMRConnections} />} />
+      <Route path="/emr-onboarding" component={() => <P component={EMROnboarding} />} />
+      <Route path="/expert-review" component={() => <P component={ExpertReview} />} />
+      <Route path="/reports" component={() => <P component={Reports} />} />
+      <Route path="/doc-analyzer" component={() => <P component={DocumentAnalyzer} />} />
+      <Route path="/audit-trail" component={() => <P component={AuditTrail} />} />
+      <Route path="/payer-intelligence" component={() => <P component={PayerIntelligence} />} />
+      <Route path={"/webhooks"} component={() => <P component={WebhookManager} />} />
+      <Route path={"/ledger"} component={() => <P component={FinancialLedger} />} />
+      <Route path={"/search"} component={() => <P component={GlobalSearch} />} />
+      <Route path={"/lakehouse"} component={() => <P component={LakehouseExport} />} />
+      <Route path={"/system-health"} component={() => <P component={SystemHealthMonitor} />} />
+      <Route path={"/settings"} component={() => <P component={GlobalSettings} />} />
+      <Route path={"/disputes/:id/negotiate"} component={() => <P component={OfferNegotiationThread} />} />
       <Route path="/templates" component={() => {
         const DashboardLayout = require("./components/DashboardLayout").default;
-        return <DashboardLayout><DisputeTemplates /></DashboardLayout>;
+        return <ProtectedRoute><DashboardLayout><DisputeTemplates /></DashboardLayout></ProtectedRoute>;
       }} />
-      <Route path="/payer-contacts" component={PayerContactBook} />
-      <Route path="/api-keys" component={APIKeyManagement} />
-      <Route path="/sla-breaches" component={SLABreachMonitor} />
-      <Route path="/nsa-checklist" component={NSAComplianceChecklist} />
-      <Route path="/reconciliation" component={PaymentReconciliation} />
-      <Route path="/report-builder" component={CustomReportBuilder} />
-      <Route path="/bulk-actions" component={BulkStatusChange} />
-      <Route path="/csv-import" component={CSVImport} />
-      <Route path="/webhook-replay" component={WebhookEventReplay} />
-      <Route path="/email-prefs" component={EmailDigestPreferences} />
-      <Route path="/disputes/merge" component={DisputeMerge} />
-      <Route path="/arbitrator-scorecard" component={ArbitratorScorecard} />
-      <Route path="/split-bill" component={SplitBillAnalysis} />
-      <Route path="/two-factor-auth" component={TwoFactorAuth} />
-      <Route path="/disputes/wizard" component={MobileDisputeWizard} />
-      <Route path="/disputes/clone" component={DisputeClone} />
-      <Route path="/payer-response-times" component={PayerResponseTimeAnalytics} />
-      <Route path="/annotations" component={DisputeAnnotations} />
-      <Route path="/batch-evidence" component={BatchEvidenceUpload} />
-      <Route path="/activity-feed" component={DisputeActivityFeed} />
-      <Route path="/print-summary" component={PrintableDisputeSummary} />
-      <Route path="/arbitrator-history" component={ArbitratorAssignmentHistory} />
-      <Route path="/watchlist" component={DisputeWatchlist} />
-      <Route path="/escalations" component={EscalationManager} />
-      <Route path="/appeals" component={AppealTracker} />
-      <Route path="/narrative-generator" component={NarrativeGenerator} />
-      <Route path="/doc-expiry" component={DocumentExpiryTracker} />
-      <Route path="/kanban" component={DisputeKanban} />
-      <Route path="/qpa-benchmark" component={QPABenchmarkLookup} />
-      <Route path="/idr-cost-estimator" component={IDRCostEstimator} />
-      <Route path="/nsa-calendar" component={NSADeadlineCalendar} />
-      <Route path="/claim-aging" component={ClaimAgingReport} />
-      <Route path="/contract-rates" component={ContractRateComparison} />
-      <Route path="/risk-heatmap" component={DisputeRiskHeatmap} />
-      <Route path="/batch-notify" component={BatchNotificationSender} />
-      <Route path="/outcome-simulator" component={DisputeOutcomeSimulator} />
-      <Route path="/regulatory-feed" component={RegulatoryChangeFeed} />
-      <Route path="/counter-offer" component={OfferCounterWizard} />
-      <Route path="/multi-party" component={MultiPartyCoordinator} />
-      <Route path="/network-gaps" component={ProviderNetworkGapAnalyzer} />
-      <Route path="/deadline-calculator" component={SmartDeadlineCalculator} />
-      <Route path="/payer-scorecard" component={PayerScorecard} />
-      <Route path="/status-timeline" component={DisputeStatusTimeline} />
-      <Route path="/audit-viewer" component={AuditTrailViewer} />
-      <Route path="/advanced-search" component={DisputeSearchAdvanced} />
-      <Route path="/bookmarks" component={DisputeFavorites} />
-      <Route path="/compare" component={DisputeCompareView} />
-      <Route path="/tags" component={DisputeTagManager} />
-      <Route path="/benchmarks" component={PerformanceBenchmarks} />
-      <Route path="/reminders" component={DisputeReminders} />
-      <Route path="/export" component={DisputeExportCenter} />
-      <Route path="/role-matrix" component={UserRoleMatrix} />
-      <Route path="/system-health-dashboard" component={SystemHealthDashboard} />
-      <Route path="/last-ehr" component={LastEHRIntegration} />
-      <Route path="/fhir-capability" component={FHIRCapabilityExplorer} />
-      <Route path="/bulk-fhir-export" component={BulkFHIRExport} />
-      <Route path="/cds-hooks" component={CDSHooksManager} />
-      <Route path="/uscdi-completeness" component={USCDICompleteness} />
-      <Route path="/ollama" component={OllamaManager} />
-      <Route path={"/404"} component={NotFound} />
+      <Route path="/payer-contacts" component={() => <P component={PayerContactBook} />} />
+      <Route path="/api-keys" component={() => <P component={APIKeyManagement} />} />
+      <Route path="/sla-breaches" component={() => <P component={SLABreachMonitor} />} />
+      <Route path="/nsa-checklist" component={() => <P component={NSAComplianceChecklist} />} />
+      <Route path="/reconciliation" component={() => <P component={PaymentReconciliation} />} />
+      <Route path="/report-builder" component={() => <P component={CustomReportBuilder} />} />
+      <Route path="/bulk-actions" component={() => <P component={BulkStatusChange} />} />
+      <Route path="/csv-import" component={() => <P component={CSVImport} />} />
+      <Route path="/webhook-replay" component={() => <P component={WebhookEventReplay} />} />
+      <Route path="/email-prefs" component={() => <P component={EmailDigestPreferences} />} />
+      <Route path="/arbitrator-scorecard" component={() => <P component={ArbitratorScorecard} />} />
+      <Route path="/split-bill" component={() => <P component={SplitBillAnalysis} />} />
+      <Route path="/two-factor-auth" component={() => <P component={TwoFactorAuth} />} />
+      <Route path="/payer-response-times" component={() => <P component={PayerResponseTimeAnalytics} />} />
+      <Route path="/annotations" component={() => <P component={DisputeAnnotations} />} />
+      <Route path="/batch-evidence" component={() => <P component={BatchEvidenceUpload} />} />
+      <Route path="/activity-feed" component={() => <P component={DisputeActivityFeed} />} />
+      <Route path="/print-summary" component={() => <P component={PrintableDisputeSummary} />} />
+      <Route path="/arbitrator-history" component={() => <P component={ArbitratorAssignmentHistory} />} />
+      <Route path="/watchlist" component={() => <P component={DisputeWatchlist} />} />
+      <Route path="/escalations" component={() => <P component={EscalationManager} />} />
+      <Route path="/appeals" component={() => <P component={AppealTracker} />} />
+      <Route path="/narrative-generator" component={() => <P component={NarrativeGenerator} />} />
+      <Route path="/doc-expiry" component={() => <P component={DocumentExpiryTracker} />} />
+      <Route path="/kanban" component={() => <P component={DisputeKanban} />} />
+      <Route path="/qpa-benchmark" component={() => <P component={QPABenchmarkLookup} />} />
+      <Route path="/idr-cost-estimator" component={() => <P component={IDRCostEstimator} />} />
+      <Route path="/nsa-calendar" component={() => <P component={NSADeadlineCalendar} />} />
+      <Route path="/claim-aging" component={() => <P component={ClaimAgingReport} />} />
+      <Route path="/contract-rates" component={() => <P component={ContractRateComparison} />} />
+      <Route path="/risk-heatmap" component={() => <P component={DisputeRiskHeatmap} />} />
+      <Route path="/batch-notify" component={() => <P component={BatchNotificationSender} />} />
+      <Route path="/outcome-simulator" component={() => <P component={DisputeOutcomeSimulator} />} />
+      <Route path="/regulatory-feed" component={() => <P component={RegulatoryChangeFeed} />} />
+      <Route path="/counter-offer" component={() => <P component={OfferCounterWizard} />} />
+      <Route path="/multi-party" component={() => <P component={MultiPartyCoordinator} />} />
+      <Route path="/network-gaps" component={() => <P component={ProviderNetworkGapAnalyzer} />} />
+      <Route path="/deadline-calculator" component={() => <P component={SmartDeadlineCalculator} />} />
+      <Route path="/payer-scorecard" component={() => <P component={PayerScorecard} />} />
+      <Route path="/status-timeline" component={() => <P component={DisputeStatusTimeline} />} />
+      <Route path="/audit-viewer" component={() => <P component={AuditTrailViewer} />} />
+      <Route path="/advanced-search" component={() => <P component={DisputeSearchAdvanced} />} />
+      <Route path="/bookmarks" component={() => <P component={DisputeFavorites} />} />
+      <Route path="/compare" component={() => <P component={DisputeCompareView} />} />
+      <Route path="/tags" component={() => <P component={DisputeTagManager} />} />
+      <Route path="/benchmarks" component={() => <P component={PerformanceBenchmarks} />} />
+      <Route path="/reminders" component={() => <P component={DisputeReminders} />} />
+      <Route path="/export" component={() => <P component={DisputeExportCenter} />} />
+      <Route path="/role-matrix" component={() => <P component={UserRoleMatrix} />} />
+      <Route path="/system-health-dashboard" component={() => <P component={SystemHealthDashboard} />} />
+      <Route path="/last-ehr" component={() => <P component={LastEHRIntegration} />} />
+      <Route path="/fhir-capability" component={() => <P component={FHIRCapabilityExplorer} />} />
+      <Route path="/bulk-fhir-export" component={() => <P component={BulkFHIRExport} />} />
+      <Route path="/cds-hooks" component={() => <P component={CDSHooksManager} />} />
+      <Route path="/uscdi-completeness" component={() => <P component={USCDICompleteness} />} />
+      <Route path="/ollama" component={() => <P component={OllamaManager} />} />
+
+      {/* Admin-only routes */}
+      <Route path="/admin/leads" component={() => <P component={LeadsManager} admin />} />
+      <Route path={"/admin/users"} component={() => <P component={AdminUserManagement} admin />} />
+      <Route path="/admin" component={() => <P component={Admin} admin />} />
+
       <Route component={NotFound} />
     </Switch>
   );
