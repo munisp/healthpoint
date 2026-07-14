@@ -6,8 +6,9 @@ import { APP_LOGO, APP_TITLE, getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
 import {
   AlertTriangle, Bell, CheckCircle2, Clock, FileText,
-  Gavel, LogOut, Plus, Scale, TrendingUp
+  Gavel, LogOut, Plus, Scale, TrendingUp, Activity
 } from "lucide-react";
+import SlaProgressBar, { SlaLegend, getSlaStatus } from "@/components/SlaProgressBar";
 import { useLocation } from "wouter";
 import { useState } from "react";
 import {
@@ -99,6 +100,10 @@ export default function Dashboard() {
     { enabled: isAuthenticated }
   );
   const { data: outcomeData } = trpc.dashboard.outcomeAnalytics.useQuery(undefined, { enabled: isAuthenticated });
+  const { data: slaProgress, isLoading: slaLoading } = trpc.sla.liveProgress.useQuery(
+    { limit: 10 },
+    { enabled: isAuthenticated, refetchInterval: 60_000 }
+  );
   const { data: notifications } = trpc.notifications.list.useQuery({ unreadOnly: true }, { enabled: isAuthenticated });
   const markReadMutation = trpc.notifications.markAllRead.useMutation();
   const utils = trpc.useUtils();
@@ -457,6 +462,95 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           </div>
+        </div>
+
+        {/* ── SLA Progress Monitor ─────────────────────────────────────────── */}
+        <div className="mt-6">
+          <Card className="border-slate-200">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-base font-semibold text-slate-800 flex items-center gap-2">
+                <Activity size={16} className="text-blue-500" />
+                SLA Progress Monitor
+                {slaProgress && slaProgress.length > 0 && (
+                  <span className="ml-1 text-xs font-normal text-slate-400">
+                    — {slaProgress.filter(d => getSlaStatus(d.percent) === "breached").length} breached,{" "}
+                    {slaProgress.filter(d => getSlaStatus(d.percent) === "critical").length} critical,{" "}
+                    {slaProgress.filter(d => getSlaStatus(d.percent) === "warning").length} at risk
+                  </span>
+                )}
+              </CardTitle>
+              <div className="flex items-center gap-3">
+                <SlaLegend />
+                <button onClick={() => navigate("/sla-breaches")} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+                  Full report →
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {slaLoading ? (
+                <div className="space-y-4">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="space-y-1.5 animate-pulse">
+                      <div className="flex justify-between">
+                        <div className="h-3 w-32 bg-slate-100 rounded" />
+                        <div className="h-3 w-16 bg-slate-100 rounded" />
+                      </div>
+                      <div className="h-2.5 w-full bg-slate-100 rounded-full" />
+                    </div>
+                  ))}
+                </div>
+              ) : !slaProgress?.length ? (
+                <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                  <CheckCircle2 size={28} className="mb-2 opacity-30" />
+                  <p className="text-sm">No active disputes to monitor</p>
+                  <button onClick={() => navigate("/disputes/new")} className="mt-2 text-sm text-blue-600 hover:text-blue-700">
+                    Initiate a dispute →
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
+                  {slaProgress.map(d => (
+                    <div
+                      key={d.disputeId}
+                      className="cursor-pointer hover:bg-slate-50 rounded-lg p-2 -mx-2 transition-colors"
+                      onClick={() => navigate(`/disputes/${d.disputeId}`)}
+                    >
+                      {/* Dispute header */}
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs font-semibold text-slate-700 truncate">
+                            {d.referenceNumber}
+                          </span>
+                          {d.patientName && (
+                            <span className="text-xs text-slate-400 truncate hidden sm:block">
+                              · {d.patientName}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-xs text-slate-400 shrink-0 ml-2">
+                          {d.deadlineDate
+                            ? new Date(d.deadlineDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                            : `${d.deadlineDays}d window`}
+                        </span>
+                      </div>
+                      {/* Progress bar */}
+                      <SlaProgressBar
+                        percent={d.percent}
+                        stepLabel={d.stepLabel}
+                        deadlineLabel={
+                          d.deadlineDate
+                            ? new Date(d.deadlineDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                            : undefined
+                        }
+                        daysRemaining={d.daysRemaining}
+                        deadlineDays={d.deadlineDays}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </main>
     </div>
