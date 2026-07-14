@@ -31,43 +31,63 @@ export function getSlaStatus(percent: number): SlaStatus {
 
 const STATUS_CONFIG: Record<SlaStatus, {
   bar: string;
+  barPulse: string;
   track: string;
   text: string;
   badge: string;
+  badgePulse: string;
   icon: React.ReactNode;
+  iconPulse: string;
   label: string;
+  shouldPulse: boolean;
 }> = {
   ok: {
     bar: "bg-emerald-500",
+    barPulse: "",
     track: "bg-emerald-100",
     text: "text-emerald-700",
     badge: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    badgePulse: "",
     icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+    iconPulse: "",
     label: "On Track",
+    shouldPulse: false,
   },
   warning: {
     bar: "bg-amber-400",
+    barPulse: "",
     track: "bg-amber-100",
     text: "text-amber-700",
     badge: "bg-amber-50 text-amber-700 border-amber-200",
+    badgePulse: "",
     icon: <Clock className="h-3.5 w-3.5" />,
+    iconPulse: "",
     label: "At Risk",
+    shouldPulse: false,
   },
   critical: {
     bar: "bg-red-500",
+    barPulse: "animate-pulse",
     track: "bg-red-100",
     text: "text-red-700",
     badge: "bg-red-50 text-red-700 border-red-200",
-    icon: <AlertTriangle className="h-3.5 w-3.5" />,
+    badgePulse: "animate-pulse",
+    icon: <AlertTriangle className="h-3.5 w-3.5 animate-bounce" />,
+    iconPulse: "animate-bounce",
     label: "Critical",
+    shouldPulse: true,
   },
   breached: {
     bar: "bg-red-700",
+    barPulse: "animate-pulse",
     track: "bg-red-200",
     text: "text-red-800",
     badge: "bg-red-100 text-red-800 border-red-300",
-    icon: <XCircle className="h-3.5 w-3.5" />,
+    badgePulse: "animate-pulse",
+    icon: <XCircle className="h-3.5 w-3.5 animate-spin" style={{ animationDuration: "2s" }} />,
+    iconPulse: "",
     label: "Breached",
+    shouldPulse: true,
   },
 };
 
@@ -110,12 +130,12 @@ export default function SlaProgressBar({
             {/* Bar */}
             <div className={`flex-1 h-1.5 rounded-full ${cfg.track} overflow-hidden`}>
               <div
-                className={`h-full rounded-full transition-all ${cfg.bar}`}
+                className={`h-full rounded-full transition-all ${cfg.bar} ${cfg.barPulse}`}
                 style={{ width: `${clamped}%` }}
               />
             </div>
             {/* Percentage */}
-            <span className={`text-xs font-medium tabular-nums shrink-0 ${cfg.text}`}>
+            <span className={`text-xs font-medium tabular-nums shrink-0 ${cfg.text} ${cfg.shouldPulse ? "animate-pulse" : ""}`}>
               {Math.round(clamped)}%
             </span>
           </div>
@@ -137,22 +157,26 @@ export default function SlaProgressBar({
               )}
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              {/* Status badge */}
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium border ${cfg.badge}`}>
+              {/* Status badge — pulses for critical/breached */}
+              <span
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium border ${cfg.badge} ${cfg.badgePulse}`}
+              >
                 {cfg.icon}
                 {cfg.label}
               </span>
-              {/* Percentage */}
-              <span className={`text-xs font-bold tabular-nums ${cfg.text}`}>
+              {/* Percentage — pulses for critical/breached */}
+              <span
+                className={`text-xs font-bold tabular-nums ${cfg.text} ${cfg.shouldPulse ? "animate-pulse" : ""}`}
+              >
                 {Math.round(clamped)}%
               </span>
             </div>
           </div>
 
-          {/* Track + bar */}
+          {/* Track + bar — bar fill pulses for critical/breached */}
           <div className={`h-2.5 rounded-full ${cfg.track} overflow-hidden relative`}>
             <div
-              className={`h-full rounded-full transition-all duration-500 ${cfg.bar}`}
+              className={`h-full rounded-full transition-all duration-500 ${cfg.bar} ${cfg.barPulse}`}
               style={{ width: `${clamped}%` }}
             />
             {/* Threshold markers */}
@@ -197,10 +221,10 @@ export function SlaLegend() {
         <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400" /> At Risk (≥75%)
       </span>
       <span className="flex items-center gap-1">
-        <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500" /> Critical (≥90%)
+        <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" /> Critical (≥90%)
       </span>
       <span className="flex items-center gap-1">
-        <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-700" /> Breached
+        <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-700 animate-pulse" /> Breached
       </span>
     </div>
   );
