@@ -95,6 +95,10 @@ import BulkFHIRExport from "@/pages/BulkFHIRExport";
 import CDSHooksManager from "@/pages/CDSHooksManager";
 import USCDICompleteness from "@/pages/USCDICompleteness";
 import OllamaManager from "@/pages/OllamaManager";
+import DaVinciTransactions from "@/pages/DaVinciTransactions";
+import FHIRCacheViewer from "@/pages/FHIRCacheViewer";
+import SMARTTokenManager from "@/pages/SMARTTokenManager";
+import DisputeAccessControl from "@/pages/DisputeAccessControl";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 /** Helper: wraps a component in ProtectedRoute */
@@ -205,6 +209,10 @@ function Router() {
       <Route path="/cds-hooks" component={() => <P component={CDSHooksManager} />} />
       <Route path="/uscdi-completeness" component={() => <P component={USCDICompleteness} />} />
       <Route path="/ollama" component={() => <P component={OllamaManager} />} />
+      <Route path="/davinci" component={() => <P component={DaVinciTransactions} />} />
+      <Route path="/fhir-cache" component={() => <P component={FHIRCacheViewer} />} />
+      <Route path="/smart-tokens" component={() => <P component={SMARTTokenManager} />} />
+      <Route path="/access-control" component={() => <P component={DisputeAccessControl} />} />
 
       {/* Admin-only routes */}
       <Route path="/admin/leads" component={() => <P component={LeadsManager} admin />} />

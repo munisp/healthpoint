@@ -6,6 +6,15 @@ import superjson from "superjson";
 import App from "./App";
 import "./index.css";
 
+// Register service worker for PWA offline support
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // SW registration failed silently — app still works online
+    });
+  });
+}
+
 const queryClient = new QueryClient();
 const trpcClient = trpc.createClient({
   links: [

@@ -99,6 +99,7 @@ import {
   FileDown,
   Stethoscope,
   Bot,
+  Lock,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useTheme } from "../contexts/ThemeContext";
@@ -530,6 +531,10 @@ function CommandPaletteButton() {
     { label: 'Activity Feed', path: '/activity-feed', icon: Activity },
     { label: 'Print Summary', path: '/print-summary', icon: Printer },
     { label: 'Arbitrator History', path: '/arbitrator-history', icon: History },
+    { label: 'Da Vinci Transactions', path: '/davinci', icon: GitBranch },
+    { label: 'FHIR Cache Viewer', path: '/fhir-cache', icon: Database },
+    { label: 'SMART Token Manager', path: '/smart-tokens', icon: Shield },
+    { label: 'Access Control', path: '/access-control', icon: Lock },
   ];
 
   const filtered = query
