@@ -7,6 +7,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { Lock, UserPlus, Trash2, RefreshCw, Shield } from "lucide-react";
 
@@ -16,11 +26,21 @@ const PERMISSION_COLORS: Record<string, string> = {
   admin: "bg-red-100 text-red-800 border-red-200",
 };
 
+interface AccessEntry {
+  userId: string;
+  permission: string;
+  grantedAt?: Date | null;
+  grantedBy?: string | null;
+}
+
 export default function DisputeAccessControl() {
   const [disputeId, setDisputeId] = useState("");
   const [inputId, setInputId] = useState("");
   const [grantUserId, setGrantUserId] = useState("");
   const [grantPermission, setGrantPermission] = useState<"read" | "write" | "admin">("read");
+
+  // Confirmation dialog state
+  const [revokeTarget, setRevokeTarget] = useState<{ userId: string; permission: string } | null>(null);
 
   const { data: accessList = [], refetch, isLoading } = trpc.authz.listAccess.useQuery(
     { disputeId },
@@ -29,20 +49,38 @@ export default function DisputeAccessControl() {
 
   const grantMutation = trpc.authz.grantAccess.useMutation({
     onSuccess: () => {
-      toast.success(`Access granted: ${grantPermission} for user ${grantUserId}`);
+      toast.success("Access granted", {
+        description: `${grantPermission} permission granted to user ${grantUserId}`,
+      });
       setGrantUserId("");
       refetch();
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error("Grant failed", { description: err.message }),
   });
 
   const revokeMutation = trpc.authz.revokeAccess.useMutation({
     onSuccess: () => {
-      toast.success("Access revoked.");
+      toast.success("Access revoked", {
+        description: `${revokeTarget?.permission} permission removed from user ${revokeTarget?.userId}`,
+      });
+      setRevokeTarget(null);
       refetch();
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => {
+      toast.error("Revocation failed", { description: err.message });
+      setRevokeTarget(null);
+    },
   });
+
+  const handleRevokeClick = (entry: AccessEntry) => {
+    setRevokeTarget({ userId: entry.userId, permission: entry.permission });
+  };
+
+  const confirmRevoke = () => {
+    if (revokeTarget) {
+      revokeMutation.mutate({ disputeId, userId: revokeTarget.userId });
+    }
+  };
 
   return (
     <DashboardLayout>
@@ -144,7 +182,7 @@ export default function DisputeAccessControl() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {accessList.map((entry: { userId: string; permission: string; grantedAt?: Date | null; grantedBy?: string | null }) => (
+                    {(accessList as AccessEntry[]).map((entry) => (
                       <div key={entry.userId} className="flex items-center justify-between p-3 rounded-lg border bg-muted/20">
                         <div className="space-y-0.5">
                           <div className="flex items-center gap-2">
@@ -162,8 +200,9 @@ export default function DisputeAccessControl() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-red-500 hover:text-red-700"
-                          onClick={() => revokeMutation.mutate({ disputeId, userId: entry.userId })}
+                          onClick={() => handleRevokeClick(entry)}
                           disabled={revokeMutation.isPending}
+                          title="Revoke access"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -176,6 +215,51 @@ export default function DisputeAccessControl() {
           </>
         )}
       </div>
+
+      {/* Revoke Confirmation Dialog */}
+      <AlertDialog open={!!revokeTarget} onOpenChange={open => !open && setRevokeTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Trash2 className="h-5 w-5 text-red-500" />
+              Revoke Access Grant?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  You are about to remove{" "}
+                  <Badge className={`text-xs border mx-1 ${PERMISSION_COLORS[revokeTarget?.permission ?? "read"] ?? ""}`}>
+                    {revokeTarget?.permission}
+                  </Badge>
+                  access from user{" "}
+                  <span className="font-mono text-xs bg-muted px-1 py-0.5 rounded">
+                    {revokeTarget?.userId}
+                  </span>
+                  .
+                </p>
+                <p className="text-destructive font-medium text-sm">
+                  This action cannot be undone.
+                </p>
+                <p className="text-sm">
+                  The user will immediately lose the ability to perform{" "}
+                  <strong>{revokeTarget?.permission}</strong> operations on dispute{" "}
+                  <span className="font-mono text-xs">{disputeId}</span>. You can re-grant access at any time.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel — keep access</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={confirmRevoke}
+              disabled={revokeMutation.isPending}
+            >
+              {revokeMutation.isPending ? "Revoking..." : "Yes, revoke access"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </DashboardLayout>
   );
 }

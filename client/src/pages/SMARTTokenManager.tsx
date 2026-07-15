@@ -6,12 +6,25 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { Shield, RefreshCw, Trash2, AlertTriangle } from "lucide-react";
 
 export default function SMARTTokenManager() {
   const [emrConnectionId, setEmrConnectionId] = useState("");
   const [inputValue, setInputValue] = useState("");
+
+  // Confirmation dialog state
+  const [revokeTarget, setRevokeTarget] = useState<{ id: string; preview: string } | null>(null);
 
   const { data: tokens = [], refetch, isLoading } = trpc.smartAuth.listTokens.useQuery(
     { emrConnectionId },
@@ -20,11 +33,28 @@ export default function SMARTTokenManager() {
 
   const revokeMutation = trpc.smartAuth.revokeToken.useMutation({
     onSuccess: () => {
-      toast.success("SMART token revoked successfully.");
+      toast.success("SMART token revoked", {
+        description: "The token has been invalidated. The EMR connection will need to re-authorize.",
+      });
+      setRevokeTarget(null);
       refetch();
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => {
+      toast.error("Revocation failed", { description: err.message });
+      setRevokeTarget(null);
+    },
   });
+
+  const handleRevokeClick = (token: { id: string; accessToken: string | null }) => {
+    const preview = token.accessToken ? token.accessToken.slice(0, 16) + "..." : token.id.slice(0, 16) + "...";
+    setRevokeTarget({ id: token.id, preview });
+  };
+
+  const confirmRevoke = () => {
+    if (revokeTarget) {
+      revokeMutation.mutate({ tokenId: revokeTarget.id });
+    }
+  };
 
   const isExpired = (expiresAt: Date | null | string) => {
     if (!expiresAt) return false;
@@ -107,7 +137,7 @@ export default function SMARTTokenManager() {
                               <Badge className="text-xs bg-emerald-100 text-emerald-800 border-emerald-200">Active</Badge>
                             )}
                           </div>
-                          <div className="flex gap-4 text-xs text-muted-foreground">
+                          <div className="flex gap-4 text-xs text-muted-foreground flex-wrap">
                             <span>Scope: {token.scope ?? "—"}</span>
                             <span>Issued: {token.createdAt ? new Date(token.createdAt).toLocaleString() : "—"}</span>
                             {token.expiresAt && (
@@ -121,8 +151,9 @@ export default function SMARTTokenManager() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-red-500 hover:text-red-700 shrink-0"
-                          onClick={() => revokeMutation.mutate({ tokenId: token.id })}
+                          onClick={() => handleRevokeClick(token)}
                           disabled={revokeMutation.isPending}
+                          title="Revoke token"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -151,6 +182,46 @@ export default function SMARTTokenManager() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Revoke Confirmation Dialog */}
+      <AlertDialog open={!!revokeTarget} onOpenChange={open => !open && setRevokeTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Trash2 className="h-5 w-5 text-red-500" />
+              Revoke SMART Token?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  You are about to revoke the token{" "}
+                  <span className="font-mono text-xs bg-muted px-1 py-0.5 rounded">
+                    {revokeTarget?.preview}
+                  </span>
+                </p>
+                <p className="text-destructive font-medium text-sm">
+                  This action cannot be undone.
+                </p>
+                <p className="text-sm">
+                  All API calls currently using this token will fail immediately. The associated EMR
+                  connection will need to complete a new SMART on FHIR authorization flow before it
+                  can access patient data again.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel — keep token</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={confirmRevoke}
+              disabled={revokeMutation.isPending}
+            >
+              {revokeMutation.isPending ? "Revoking..." : "Yes, revoke token"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </DashboardLayout>
   );
 }

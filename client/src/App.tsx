@@ -1,4 +1,5 @@
 import { Toaster } from "@/components/ui/sonner";
+import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
@@ -225,6 +226,7 @@ function Router() {
 }
 
 function App() {
+  useNetworkStatus();
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light" switchable>
