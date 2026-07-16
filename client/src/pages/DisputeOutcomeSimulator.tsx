@@ -4,8 +4,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
-import { Zap, Info, TrendingUp, DollarSign } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
+import { Zap, Info, DollarSign, Bot, Loader2, Sparkles, CheckCircle2, AlertTriangle } from "lucide-react";
+import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 
 // Base win rates by service type (CMS IDR data)
 const BASE_WIN_RATES: Record<string, number> = {
@@ -77,6 +80,20 @@ export default function DisputeOutcomeSimulator() {
     return { winRate, loseRate, expectedValue, gain, scenarios, fullWin, partialWin, lose, offer };
   }, [serviceType, billedAmount, payerOffer, qpaPosition, docQuality, entityExp, priorOutcomes]);
 
+  const [disputeIdForHermes, setDisputeIdForHermes] = useState("");
+  const [hermesResult, setHermesResult] = useState<{
+    providerWinPct: number; payerWinPct: number; splitPct: number; withdrawnPct: number;
+    basis: string; keyFactors: string[]; recommendedAction: string; latencyMs: number;
+  } | null>(null);
+
+  const hermesMutation = trpc.hermes.simulateOutcome.useMutation({
+    onSuccess: (data) => {
+      setHermesResult(data);
+      toast.success("Hermes simulation complete", { description: `${(data.latencyMs / 1000).toFixed(1)}s` });
+    },
+    onError: (err) => toast.error("Hermes error", { description: err.message }),
+  });
+
   const formatCurrency = (v: number) =>
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
 
@@ -96,6 +113,78 @@ export default function DisputeOutcomeSimulator() {
         <Info className="h-4 w-4 shrink-0" />
         <span>This simulator uses statistical models based on CMS IDR outcome data. Results are probabilistic estimates for planning purposes only, not legal predictions.</span>
       </div>
+
+      {/* Hermes AI Simulation Card */}
+      <Card className="border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50">
+        <CardContent className="p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center flex-shrink-0">
+              <Bot className="w-5 h-5 text-white" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-blue-800">Hermes AI Simulation</p>
+              <p className="text-xs text-blue-600 mt-0.5">Get an LLM-powered outcome prediction for a specific dispute using real case data</p>
+              <div className="flex gap-2 mt-3">
+                <Input
+                  placeholder="Dispute ID (e.g. disp_abc123)"
+                  value={disputeIdForHermes}
+                  onChange={e => setDisputeIdForHermes(e.target.value)}
+                  className="text-sm bg-white"
+                />
+                <Button
+                  onClick={() => hermesMutation.mutate({ disputeId: disputeIdForHermes })}
+                  disabled={!disputeIdForHermes.trim() || hermesMutation.isPending}
+                  className="bg-blue-600 hover:bg-blue-700 flex-shrink-0"
+                >
+                  {hermesMutation.isPending
+                    ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" />Running...</>
+                    : <><Sparkles className="w-4 h-4 mr-1" />Analyze</>}
+                </Button>
+              </div>
+              {hermesResult && (
+                <div className="mt-3 space-y-2">
+                  <div className="grid grid-cols-4 gap-2">
+                    {[
+                      { label: "Provider", pct: hermesResult.providerWinPct, color: "bg-emerald-500" },
+                      { label: "Payer", pct: hermesResult.payerWinPct, color: "bg-red-500" },
+                      { label: "Split", pct: hermesResult.splitPct, color: "bg-amber-500" },
+                      { label: "Withdrawn", pct: hermesResult.withdrawnPct, color: "bg-slate-400" },
+                    ].map(item => (
+                      <div key={item.label} className="bg-white rounded-lg p-2 text-center border">
+                        <p className="text-xs text-muted-foreground">{item.label}</p>
+                        <p className="text-lg font-bold">{item.pct}%</p>
+                        <div className="h-1.5 bg-muted rounded-full mt-1 overflow-hidden">
+                          <div className={`h-full ${item.color} rounded-full`} style={{ width: `${item.pct}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="bg-white rounded-lg p-2 border text-xs">
+                    <p className="font-medium text-muted-foreground mb-0.5">AI Basis</p>
+                    <p>{hermesResult.basis}</p>
+                  </div>
+                  {hermesResult.keyFactors.length > 0 && (
+                    <div className="bg-white rounded-lg p-2 border text-xs">
+                      <p className="font-medium text-muted-foreground mb-1">Key Factors</p>
+                      <ul className="space-y-0.5">
+                        {hermesResult.keyFactors.map((f, i) => (
+                          <li key={i} className="flex gap-1.5">
+                            <AlertTriangle className="w-3 h-3 text-amber-500 mt-0.5 flex-shrink-0" />{f}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <div className="bg-blue-600 text-white rounded-lg p-2 text-xs">
+                    <p className="font-medium flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />Recommended Action</p>
+                    <p className="mt-0.5 text-blue-100">{hermesResult.recommendedAction}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Parameters */}

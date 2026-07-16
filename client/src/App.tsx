@@ -100,6 +100,7 @@ import DaVinciTransactions from "@/pages/DaVinciTransactions";
 import FHIRCacheViewer from "@/pages/FHIRCacheViewer";
 import SMARTTokenManager from "@/pages/SMARTTokenManager";
 import DisputeAccessControl from "@/pages/DisputeAccessControl";
+import HermesAssistant from "@/pages/HermesAssistant";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 /** Helper: wraps a component in ProtectedRoute */
@@ -214,6 +215,7 @@ function Router() {
       <Route path="/fhir-cache" component={() => <P component={FHIRCacheViewer} />} />
       <Route path="/smart-tokens" component={() => <P component={SMARTTokenManager} />} />
       <Route path="/access-control" component={() => <P component={DisputeAccessControl} />} />
+      <Route path="/hermes" component={() => <P component={HermesAssistant} />} />
 
       {/* Admin-only routes */}
       <Route path="/admin/leads" component={() => <P component={LeadsManager} admin />} />
