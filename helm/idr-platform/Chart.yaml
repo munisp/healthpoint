@@ -1,0 +1,47 @@
+apiVersion: v2
+name: idr-platform
+description: HealthPoint IDR Platform — full-stack Helm chart with all middleware dependencies
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+maintainers:
+  - name: HealthPoint Engineering
+    email: engineering@healthpoint.io
+
+dependencies:
+  # Message streaming
+  - name: kafka
+    version: "29.3.4"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: kafka.enabled
+
+  # Caching and pub/sub
+  - name: redis
+    version: "19.6.4"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
+
+  # Full-text search and analytics
+  - name: opensearch
+    version: "2.20.0"
+    repository: "https://opensearch-project.github.io/helm-charts"
+    condition: opensearch.enabled
+
+  # Identity and access management
+  - name: keycloak
+    version: "21.4.4"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: keycloak.enabled
+
+  # Workflow orchestration
+  - name: temporal
+    version: "0.37.0"
+    repository: "https://go.temporal.io/helm-charts"
+    condition: temporal.enabled
+
+  # Distributed application runtime
+  - name: dapr
+    version: "1.13.7"
+    repository: "https://dapr.github.io/helm-charts"
+    condition: dapr.enabled

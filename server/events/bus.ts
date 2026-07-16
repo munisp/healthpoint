@@ -13,9 +13,37 @@
  */
 
 import { EventEmitter } from "events";
+import { Kafka, Producer, Partitioners, logLevel } from "kafkajs";
 import { getDb } from "../db";
 import { eventLog } from "../../drizzle/schema";
 import { publishNotification } from "../redis";
+
+// ── Kafka producer (optional — gracefully skipped if KAFKA_BROKERS not set) ────
+
+let _kafkaProducer: Producer | null = null;
+
+async function getKafkaProducer(): Promise<Producer | null> {
+  const brokers = process.env.KAFKA_BROKERS;
+  if (!brokers) return null;
+  if (_kafkaProducer) return _kafkaProducer;
+  try {
+    const kafka = new Kafka({
+      clientId: "idr-app",
+      brokers: brokers.split(","),
+      logLevel: logLevel.WARN,
+      retry: { initialRetryTime: 300, retries: 3 },
+    });
+    _kafkaProducer = kafka.producer({
+      createPartitioner: Partitioners.LegacyPartitioner,
+      allowAutoTopicCreation: true,
+    });
+    await _kafkaProducer.connect();
+    return _kafkaProducer;
+  } catch (err) {
+    console.warn("[EventBus] Kafka unavailable:", err);
+    return null;
+  }
+}
 
 // ── Event types ──────────────────────────────────────────────────────────────
 
@@ -128,7 +156,21 @@ class IDREventBus extends EventEmitter {
     this.emit(topic, event);
     this.emit("*", event);
 
-    // 3. Publish to Redis pub/sub for real-time UI (fire-and-forget)
+    // 3. Forward to Kafka for downstream services (Rust processor, Lakehouse, OpenSearch)
+    getKafkaProducer().then(p => {
+      if (!p) return;
+      const kafkaTopic = topic.startsWith("idr.") ? topic : `idr.${topic}`;
+      p.send({
+        topic: kafkaTopic,
+        messages: [{
+          key: aggregateId,
+          value: JSON.stringify(event),
+          headers: { "event-type": eventType, "source-service": "idr-app" },
+        }],
+      }).catch(() => {/* Kafka send failure — ignore */});
+    }).catch(() => {});
+
+    // 4. Publish to Redis pub/sub for real-time UI (fire-and-forget)
     publishNotification({
       type: eventType,
       disputeId: aggregateType === "dispute" ? aggregateId : undefined,

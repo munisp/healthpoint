@@ -1,0 +1,43 @@
+// HealthPoint IDR — Permify Authorization Schema
+// Zanzibar-style ReBAC for dispute access control
+
+entity user {}
+
+entity organization {
+  relation admin @user
+  relation member @user
+
+  permission manage = admin
+  permission view = admin or member
+}
+
+entity dispute {
+  relation owner @user              // provider who initiated the dispute
+  relation reviewer @user           // payer assigned to review
+  relation arbitrator @user         // IDR entity arbitrator
+  relation org_admin @organization#admin
+
+  // Permissions
+  permission read = owner or reviewer or arbitrator or org_admin
+  permission write = owner or reviewer
+  permission submit_offer = owner or reviewer
+  permission advance_step = owner or reviewer or arbitrator
+  permission admin = arbitrator or org_admin
+  permission delete = org_admin
+}
+
+entity document {
+  relation dispute @dispute
+  relation uploader @user
+
+  permission read = dispute.read
+  permission write = uploader or dispute.admin
+  permission delete = uploader or dispute.admin
+}
+
+entity payment {
+  relation dispute @dispute
+  relation payer @user
+  permission read = dispute.read
+  permission initiate = payer or dispute.admin
+}

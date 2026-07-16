@@ -1,0 +1,260 @@
+{{/* ── Permify ──────────────────────────────────────────────────────────────── */}}
+{{- if .Values.permify.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-permify
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: permify
+spec:
+  replicas: {{ .Values.permify.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: permify
+  template:
+    metadata:
+      labels:
+        {{- include "idr-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: permify
+    spec:
+      containers:
+        - name: permify
+          image: "{{ .Values.permify.image.repository }}:{{ .Values.permify.image.tag }}"
+          imagePullPolicy: {{ .Values.permify.image.pullPolicy }}
+          args:
+            - serve
+            - --database-engine=postgres
+            - --database-uri=$(DATABASE_URI)
+            - --http-port=3476
+            - --grpc-port=3478
+          ports:
+            - name: http
+              containerPort: 3476
+            - name: grpc
+              containerPort: 3478
+          env:
+            - name: DATABASE_URI
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: permify-database-uri
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-permify
+  namespace: {{ .Values.global.namespace }}
+spec:
+  type: {{ .Values.permify.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.permify.service.httpPort }}
+      targetPort: http
+    - name: grpc
+      port: {{ .Values.permify.service.grpcPort }}
+      targetPort: grpc
+  selector:
+    {{- include "idr-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: permify
+{{- end }}
+
+---
+
+{{/* ── TigerBeetle ─────────────────────────────────────────────────────────── */}}
+{{- if .Values.tigerbeetle.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-tigerbeetle
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tigerbeetle
+spec:
+  serviceName: {{ include "idr-platform.fullname" . }}-tigerbeetle
+  replicas: {{ .Values.tigerbeetle.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: tigerbeetle
+  template:
+    metadata:
+      labels:
+        {{- include "idr-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: tigerbeetle
+    spec:
+      initContainers:
+        - name: format
+          image: "{{ .Values.tigerbeetle.image.repository }}:{{ .Values.tigerbeetle.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              if [ ! -f /data/0_0.tigerbeetle ]; then
+                /tigerbeetle format --cluster=0 --replica=0 --replica-count={{ .Values.tigerbeetle.replicaCount }} /data/0_0.tigerbeetle
+              fi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: tigerbeetle
+          image: "{{ .Values.tigerbeetle.image.repository }}:{{ .Values.tigerbeetle.image.tag }}"
+          args:
+            - start
+            - --addresses=0.0.0.0:3000
+            - /data/0_0.tigerbeetle
+          ports:
+            - name: tb
+              containerPort: 3000
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.tigerbeetle.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.global.storageClass }}
+        resources:
+          requests:
+            storage: {{ .Values.tigerbeetle.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-tigerbeetle
+  namespace: {{ .Values.global.namespace }}
+spec:
+  type: {{ .Values.tigerbeetle.service.type }}
+  clusterIP: None  # Headless for StatefulSet
+  ports:
+    - name: tb
+      port: {{ .Values.tigerbeetle.service.port }}
+      targetPort: tb
+  selector:
+    {{- include "idr-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: tigerbeetle
+{{- end }}
+
+---
+
+{{/* ── Fluvio Streaming Cluster ─────────────────────────────────────────────── */}}
+{{- if .Values.fluvio.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-fluvio-sc
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fluvio-sc
+spec:
+  serviceName: {{ include "idr-platform.fullname" . }}-fluvio-sc
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: fluvio-sc
+  template:
+    metadata:
+      labels:
+        {{- include "idr-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: fluvio-sc
+    spec:
+      containers:
+        - name: fluvio-sc
+          image: "{{ .Values.fluvio.image.repository }}:{{ .Values.fluvio.image.tag }}"
+          args: ["run", "sc", "--local", "/data"]
+          ports:
+            - name: sc
+              containerPort: 9003
+            - name: sc-public
+              containerPort: 9004
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.global.storageClass }}
+        resources:
+          requests:
+            storage: {{ .Values.fluvio.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-fluvio-sc
+  namespace: {{ .Values.global.namespace }}
+spec:
+  clusterIP: None
+  ports:
+    - name: sc
+      port: 9003
+    - name: sc-public
+      port: 9004
+  selector:
+    {{- include "idr-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: fluvio-sc
+{{- end }}
+
+---
+
+{{/* ── Secrets placeholder (to be filled by sealed-secrets / external-secrets) */}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: idr-secrets
+  namespace: {{ .Values.global.namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+    # Replace with sealed-secrets or external-secrets operator in production
+type: Opaque
+data:
+  # Base64-encoded values — replace with real values before deploying
+  database-url: ""
+  jwt-secret: ""
+  keycloak-url: ""
+  keycloak-realm: ""
+  keycloak-client-id: ""
+  keycloak-client-secret: ""
+  redis-url: ""
+  kafka-brokers: ""
+  opensearch-url: ""
+  permify-url: ""
+  permify-database-uri: ""
+  temporal-host: ""
+  tigerbeetle-addresses: ""
+  mojaloop-hub-url: ""
+  minio-access-key: ""
+  minio-secret-key: ""
+
+---
+
+{{/* ── Namespace ────────────────────────────────────────────────────────────── */}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.global.namespace }}
+  labels:
+    name: {{ .Values.global.namespace }}

@@ -1,0 +1,380 @@
+# HealthPoint IDR Platform — Helm Values
+# Override any value with: helm install idr-platform ./helm/idr-platform -f my-values.yaml
+
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: "standard"
+  namespace: idr
+
+# ── IDR Application ───────────────────────────────────────────────────────────
+app:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: healthpoint/idr-app
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  env:
+    NODE_ENV: production
+    PORT: "3000"
+  envSecrets:
+    - name: DATABASE_URL
+      secretName: idr-secrets
+      secretKey: database-url
+    - name: JWT_SECRET
+      secretName: idr-secrets
+      secretKey: jwt-secret
+    - name: KEYCLOAK_URL
+      secretName: idr-secrets
+      secretKey: keycloak-url
+    - name: KEYCLOAK_REALM
+      secretName: idr-secrets
+      secretKey: keycloak-realm
+    - name: KEYCLOAK_CLIENT_ID
+      secretName: idr-secrets
+      secretKey: keycloak-client-id
+    - name: KEYCLOAK_CLIENT_SECRET
+      secretName: idr-secrets
+      secretKey: keycloak-client-secret
+    - name: REDIS_URL
+      secretName: idr-secrets
+      secretKey: redis-url
+    - name: KAFKA_BROKERS
+      secretName: idr-secrets
+      secretKey: kafka-brokers
+    - name: OPENSEARCH_URL
+      secretName: idr-secrets
+      secretKey: opensearch-url
+    - name: PERMIFY_URL
+      secretName: idr-secrets
+      secretKey: permify-url
+    - name: TEMPORAL_HOST
+      secretName: idr-secrets
+      secretKey: temporal-host
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# ── Go Services ───────────────────────────────────────────────────────────────
+goServices:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: healthpoint/idr-go-services
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8090
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# ── Rust Services ─────────────────────────────────────────────────────────────
+rustServices:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: healthpoint/idr-rust-services
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# ── Temporal Worker (Python) ──────────────────────────────────────────────────
+temporalWorker:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: healthpoint/idr-temporal-worker
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+# ── Lakehouse Pipeline (Python) ───────────────────────────────────────────────
+lakehousePipeline:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: healthpoint/idr-lakehouse
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "2000m"
+      memory: "8Gi"
+
+# ── PostgreSQL ────────────────────────────────────────────────────────────────
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: ""  # Set via secret
+    database: idr
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2000m"
+        memory: "4Gi"
+
+# ── Kafka ─────────────────────────────────────────────────────────────────────
+kafka:
+  enabled: true
+  replicaCount: 3
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+  zookeeper:
+    enabled: false
+  kraft:
+    enabled: true
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+redis:
+  enabled: true
+  architecture: replication
+  auth:
+    enabled: true
+    password: ""  # Set via secret
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
+  replica:
+    replicaCount: 2
+
+# ── OpenSearch ────────────────────────────────────────────────────────────────
+opensearch:
+  enabled: true
+  replicas: 3
+  persistence:
+    enabled: true
+    size: 30Gi
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+
+# ── Keycloak ──────────────────────────────────────────────────────────────────
+keycloak:
+  enabled: true
+  auth:
+    adminUser: admin
+    adminPassword: ""  # Set via secret
+  postgresql:
+    enabled: false  # Use the shared PostgreSQL instance
+  externalDatabase:
+    host: "{{ .Release.Name }}-postgresql"
+    port: 5432
+    database: keycloak
+    user: keycloak
+    password: ""  # Set via secret
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 80
+
+# ── Temporal ──────────────────────────────────────────────────────────────────
+temporal:
+  enabled: true
+  server:
+    replicaCount: 1
+  admintools:
+    enabled: true
+  web:
+    enabled: true
+  cassandra:
+    enabled: false
+  mysql:
+    enabled: false
+  postgresql:
+    enabled: false  # Use the shared PostgreSQL instance
+    host: "{{ .Release.Name }}-postgresql"
+    port: 5432
+    database: temporal
+    user: temporal
+    password: ""  # Set via secret
+
+# ── Permify ───────────────────────────────────────────────────────────────────
+permify:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ghcr.io/permify/permify
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    httpPort: 3476
+    grpcPort: 3478
+  database:
+    engine: postgres
+    uri: ""  # Set via secret
+
+# ── APISIX ────────────────────────────────────────────────────────────────────
+apisix:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: apache/apisix
+    tag: "3.9.1-debian"
+    pullPolicy: IfNotPresent
+  service:
+    type: LoadBalancer
+    port: 80
+    tlsPort: 443
+  admin:
+    enabled: true
+    port: 9180
+  etcd:
+    enabled: true
+    replicaCount: 3
+
+# ── OpenAppsec ────────────────────────────────────────────────────────────────
+openappsec:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: openappsec/nginx
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+
+# ── TigerBeetle ───────────────────────────────────────────────────────────────
+tigerbeetle:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: ghcr.io/tigerbeetle/tigerbeetle
+    tag: "0.16.11"
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 50Gi
+  service:
+    type: ClusterIP
+    port: 3000
+
+# ── Fluvio ────────────────────────────────────────────────────────────────────
+fluvio:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: infinyon/fluvio
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 20Gi
+
+# ── Mojaloop ──────────────────────────────────────────────────────────────────
+mojaloop:
+  enabled: false  # Enable when payment interoperability is needed
+  centralLedger:
+    enabled: true
+  centralSettlement:
+    enabled: true
+
+# ── Dapr ──────────────────────────────────────────────────────────────────────
+dapr:
+  enabled: true
+  global:
+    ha:
+      enabled: true
+  dapr_operator:
+    replicaCount: 2
+  dapr_sidecar_injector:
+    replicaCount: 2
+
+# ── MinIO (Lakehouse object storage) ─────────────────────────────────────────
+minio:
+  enabled: true
+  mode: distributed
+  replicas: 4
+  persistence:
+    enabled: true
+    size: 100Gi
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+
+# ── Ingress ───────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: idr.healthpoint.io
+      paths:
+        - path: /
+          pathType: Prefix
+          service: app
+        - path: /api/
+          pathType: Prefix
+          service: app
+  tls:
+    - secretName: idr-tls
+      hosts:
+        - idr.healthpoint.io
+
+# ── Monitoring ────────────────────────────────────────────────────────────────
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+  grafana:
+    enabled: true
+  serviceMonitor:
+    enabled: true

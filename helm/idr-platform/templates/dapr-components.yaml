@@ -1,0 +1,151 @@
+{{- if .Values.dapr.enabled }}
+# Dapr Pub/Sub component backed by Kafka
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: idr-pubsub
+  namespace: {{ .Values.global.namespace }}
+spec:
+  type: pubsub.kafka
+  version: v1
+  metadata:
+    - name: brokers
+      secretKeyRef:
+        name: idr-secrets
+        key: kafka-brokers
+    - name: consumerGroup
+      value: idr-dapr-consumer
+    - name: authRequired
+      value: "false"
+    - name: initialOffset
+      value: oldest
+    - name: maxMessageBytes
+      value: "1048576"
+
+---
+
+# Dapr State Store backed by Redis
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: idr-statestore
+  namespace: {{ .Values.global.namespace }}
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      secretKeyRef:
+        name: idr-secrets
+        key: redis-url
+    - name: redisPassword
+      secretKeyRef:
+        name: idr-secrets
+        key: redis-password
+    - name: keyPrefix
+      value: idr
+    - name: ttlInSeconds
+      value: "3600"
+
+---
+
+# Dapr Output Binding for OpenSearch indexing
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: idr-opensearch
+  namespace: {{ .Values.global.namespace }}
+spec:
+  type: bindings.http
+  version: v1
+  metadata:
+    - name: url
+      secretKeyRef:
+        name: idr-secrets
+        key: opensearch-url
+
+---
+
+# Dapr Subscription — dispute events
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: idr-dispute-events
+  namespace: {{ .Values.global.namespace }}
+spec:
+  topic: idr.dispute.events
+  routes:
+    default: /api/events/dispute
+  pubsubname: idr-pubsub
+  scopes:
+    - idr-app
+    - idr-go-services
+    - idr-rust-services
+
+---
+
+# Dapr Subscription — workflow events
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: idr-workflow-events
+  namespace: {{ .Values.global.namespace }}
+spec:
+  topic: idr.workflow.events
+  routes:
+    default: /api/events/workflow
+  pubsubname: idr-pubsub
+  scopes:
+    - idr-app
+    - idr-temporal-worker
+
+---
+
+# Dapr Subscription — payment events
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: idr-payment-events
+  namespace: {{ .Values.global.namespace }}
+spec:
+  topic: idr.payment.events
+  routes:
+    default: /api/events/payment
+  pubsubname: idr-pubsub
+  scopes:
+    - idr-go-services
+
+---
+
+# Dapr Resiliency policy
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: idr-resiliency
+  namespace: {{ .Values.global.namespace }}
+spec:
+  policies:
+    retries:
+      DefaultRetryPolicy:
+        policy: exponential
+        duration: 5s
+        maxInterval: 30s
+        maxRetries: 5
+    circuitBreakers:
+      DefaultCircuitBreaker:
+        maxRequests: 1
+        interval: 10s
+        timeout: 30s
+        trip: consecutiveFailures >= 5
+    timeouts:
+      DefaultTimeout: 30s
+  targets:
+    apps:
+      idr-app:
+        retry: DefaultRetryPolicy
+        circuitBreaker: DefaultCircuitBreaker
+        timeout: DefaultTimeout
+      idr-go-services:
+        retry: DefaultRetryPolicy
+        circuitBreaker: DefaultCircuitBreaker
+{{- end }}

@@ -23,6 +23,61 @@ import { eq, or, and } from "drizzle-orm";
 import { getDb } from "./db";
 import { disputes, disputeAccess } from "../drizzle/schema";
 
+// ── Permify REST client (optional — falls back to PostgreSQL when PERMIFY_URL not set) ──
+
+const PERMIFY_URL = process.env.PERMIFY_URL;
+const PERMIFY_TENANT = process.env.PERMIFY_TENANT || "t1";
+
+async function checkPermify(
+  entity: string,
+  entityId: string,
+  permission: string,
+  subjectId: string
+): Promise<boolean | null> {
+  if (!PERMIFY_URL) return null;
+  try {
+    const res = await fetch(`${PERMIFY_URL}/v1/tenants/${PERMIFY_TENANT}/permissions/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        metadata: { schema_version: "", snap_token: "", depth: 20 },
+        entity: { type: entity, id: entityId },
+        permission,
+        subject: { type: "user", id: subjectId },
+      }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { can?: string };
+    return data.can === "RESULT_ALLOWED";
+  } catch {
+    return null; // Permify unavailable — fall back to PostgreSQL
+  }
+}
+
+export async function writePermifyRelationship(
+  entity: string, entityId: string, relation: string, subjectId: string
+): Promise<void> {
+  if (!PERMIFY_URL) return;
+  try {
+    await fetch(`${PERMIFY_URL}/v1/tenants/${PERMIFY_TENANT}/relationships/write`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        metadata: { schema_version: "" },
+        tuples: [{ entity: { type: entity, id: entityId }, relation, subject: { type: "user", id: subjectId } }],
+      }),
+      signal: AbortSignal.timeout(3000),
+    });
+  } catch (err) {
+    console.warn("[authz] Permify write error:", err);
+  }
+}
+
+export async function registerDisputeOwner(disputeId: string, ownerId: string): Promise<void> {
+  await writePermifyRelationship("dispute", disputeId, "owner", ownerId);
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type AuthzPermission = "read" | "write" | "admin";
@@ -54,7 +109,12 @@ export async function canAccessDispute(
   // Admins have full access
   if (userRole === "admin") return true;
 
-  // For read/write: check ownership or explicit grant
+  // Try Permify first
+  const permifyPermission = permission === "read" ? "view" : permission === "write" ? "edit" : "manage";
+  const permifyResult = await checkPermify("dispute", disputeId, permifyPermission, userId);
+  if (permifyResult !== null) return permifyResult;
+
+  // Fall back to PostgreSQL
   const db = await getDb();
   if (!db) return false;
 
@@ -127,6 +187,11 @@ export async function grantDisputeAccess(
   const db = await getDb();
   if (!db) return;
 
+  // Write to Permify
+  const relation = permission === "read" ? "viewer" : permission === "write" ? "editor" : "admin";
+  await writePermifyRelationship("dispute", disputeId, relation, userId);
+
+  // Write to PostgreSQL fallback
   try {
     await db.insert(disputeAccess).values({
       disputeId,

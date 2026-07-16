@@ -1,0 +1,228 @@
+{{/* ── APISIX Routes (ApisixRoute CRDs) ────────────────────────────────────── */}}
+{{- if .Values.apisix.enabled }}
+# Main IDR app routes
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: idr-app-routes
+  namespace: {{ .Values.global.namespace }}
+spec:
+  http:
+    - name: api-trpc
+      match:
+        hosts:
+          - idr.healthpoint.io
+        paths:
+          - /api/trpc/*
+      backends:
+        - serviceName: {{ include "idr-platform.fullname" . }}-app
+          servicePort: 3000
+      plugins:
+        - name: jwt-auth
+          enable: true
+          config:
+            key: idr-jwt
+        - name: limit-req
+          enable: true
+          config:
+            rate: 100
+            burst: 50
+            key_type: var
+            key: remote_addr
+        - name: cors
+          enable: true
+          config:
+            allow_origins: "*"
+            allow_methods: "GET,POST,PUT,DELETE,OPTIONS"
+            allow_headers: "Authorization,Content-Type"
+
+    - name: api-auth
+      match:
+        hosts:
+          - idr.healthpoint.io
+        paths:
+          - /api/auth/*
+      backends:
+        - serviceName: {{ include "idr-platform.fullname" . }}-app
+          servicePort: 3000
+      plugins:
+        - name: limit-req
+          enable: true
+          config:
+            rate: 10
+            burst: 5
+            key_type: var
+            key: remote_addr
+
+    - name: go-services
+      match:
+        hosts:
+          - idr.healthpoint.io
+        paths:
+          - /internal/go/*
+      backends:
+        - serviceName: {{ include "idr-platform.fullname" . }}-go-services
+          servicePort: 8090
+      plugins:
+        - name: ip-restriction
+          enable: true
+          config:
+            whitelist:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+
+    - name: frontend
+      match:
+        hosts:
+          - idr.healthpoint.io
+        paths:
+          - /*
+      backends:
+        - serviceName: {{ include "idr-platform.fullname" . }}-app
+          servicePort: 3000
+
+---
+
+# APISIX Global Rule — WAF via OpenAppsec
+apiVersion: apisix.apache.org/v2
+kind: ApisixGlobalRule
+metadata:
+  name: idr-global-waf
+  namespace: {{ .Values.global.namespace }}
+spec:
+  plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        headers:
+          X-Real-IP: $remote_addr
+          X-Forwarded-For: $proxy_add_x_forwarded_for
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          X-Content-Type-Options: nosniff
+          X-Frame-Options: DENY
+          X-XSS-Protection: "1; mode=block"
+          Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+
+---
+
+# APISIX Upstream — IDR App
+apiVersion: apisix.apache.org/v2
+kind: ApisixUpstream
+metadata:
+  name: idr-app-upstream
+  namespace: {{ .Values.global.namespace }}
+spec:
+  loadbalancer:
+    type: roundrobin
+  healthCheck:
+    active:
+      type: http
+      httpPath: /api/trpc/system.health?input=%7B%22timestamp%22%3A0%7D
+      interval: 10
+      timeout: 5
+      successThreshold: 2
+      failureThreshold: 3
+{{- end }}
+
+---
+
+{{/* ── OpenAppsec WAF ConfigMap ─────────────────────────────────────────────── */}}
+{{- if .Values.openappsec.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openappsec-policy
+  namespace: {{ .Values.global.namespace }}
+data:
+  local_policy.yaml: |
+    practices:
+      - name: idr-waf-practice
+        web-attacks:
+          override-mode: prevent
+          max-body-size-kb: 10240
+          max-header-size-bytes: 102400
+          max-url-size-bytes: 32768
+          csrf-protection:
+            override-mode: prevent
+        snort-signatures:
+          override-mode: detect
+        open-api-schema:
+          override-mode: detect
+        trusted-sources:
+          - source-identifier: JWTToken
+            value: "idr-jwt"
+
+    triggers:
+      - name: idr-log-trigger
+        log:
+          verbosity: medium
+          response-body: false
+          http-level: headers
+        web-user-response:
+          return-details: false
+          response-code: 403
+          response-body: '{"error":"Request blocked by WAF"}'
+
+    rules:
+      - host: idr.healthpoint.io
+        practice: idr-waf-practice
+        trigger: idr-log-trigger
+        mode: prevent
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-openappsec
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openappsec
+spec:
+  replicas: {{ .Values.openappsec.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: openappsec
+  template:
+    metadata:
+      labels:
+        {{- include "idr-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: openappsec
+    spec:
+      containers:
+        - name: openappsec
+          image: "{{ .Values.openappsec.image.repository }}:{{ .Values.openappsec.image.tag }}"
+          imagePullPolicy: {{ .Values.openappsec.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          volumeMounts:
+            - name: policy
+              mountPath: /etc/cp/conf
+          env:
+            - name: UPSTREAM_HOST
+              value: "{{ include "idr-platform.fullname" . }}-app:3000"
+      volumes:
+        - name: policy
+          configMap:
+            name: openappsec-policy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-openappsec
+  namespace: {{ .Values.global.namespace }}
+spec:
+  type: {{ .Values.openappsec.service.type }}
+  ports:
+    - port: {{ .Values.openappsec.service.port }}
+      targetPort: http
+  selector:
+    {{- include "idr-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: openappsec
+{{- end }}

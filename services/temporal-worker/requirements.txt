@@ -1,0 +1,3 @@
+temporalio==1.6.0
+aiokafka==0.10.0
+aiohttp==3.9.5

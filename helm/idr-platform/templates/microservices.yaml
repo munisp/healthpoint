@@ -1,0 +1,241 @@
+{{/* ── Go Services ─────────────────────────────────────────────────────────── */}}
+{{- if .Values.goServices.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-go-services
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: go-services
+spec:
+  replicas: {{ .Values.goServices.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: go-services
+  template:
+    metadata:
+      labels:
+        {{- include "idr-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: go-services
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "idr-go-services"
+        dapr.io/app-port: "8090"
+    spec:
+      containers:
+        - name: go-services
+          image: "{{ .Values.goServices.image.repository }}:{{ .Values.goServices.image.tag }}"
+          imagePullPolicy: {{ .Values.goServices.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          env:
+            - name: PERMIFY_URL
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: permify-url
+            - name: TIGERBEETLE_ADDRESSES
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: tigerbeetle-addresses
+            - name: MOJALOOP_HUB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: mojaloop-hub-url
+            - name: KAFKA_BROKERS
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: kafka-brokers
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.goServices.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-go-services
+  namespace: {{ .Values.global.namespace }}
+spec:
+  type: {{ .Values.goServices.service.type }}
+  ports:
+    - port: {{ .Values.goServices.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "idr-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: go-services
+{{- end }}
+
+---
+
+{{/* ── Rust Services ───────────────────────────────────────────────────────── */}}
+{{- if .Values.rustServices.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-rust-services
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rust-services
+spec:
+  replicas: {{ .Values.rustServices.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rust-services
+  template:
+    metadata:
+      labels:
+        {{- include "idr-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rust-services
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "idr-rust-services"
+        dapr.io/app-port: "8091"
+    spec:
+      containers:
+        - name: rust-services
+          image: "{{ .Values.rustServices.image.repository }}:{{ .Values.rustServices.image.tag }}"
+          imagePullPolicy: {{ .Values.rustServices.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8091
+              protocol: TCP
+          env:
+            - name: KAFKA_BROKERS
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: kafka-brokers
+            - name: FLUVIO_SC_HOST
+              value: "{{ include "idr-platform.fullname" . }}-fluvio-sc"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.rustServices.resources | nindent 12 }}
+{{- end }}
+
+---
+
+{{/* ── Temporal Worker (Python) ─────────────────────────────────────────────── */}}
+{{- if .Values.temporalWorker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-temporal-worker
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-worker
+spec:
+  replicas: {{ .Values.temporalWorker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: temporal-worker
+  template:
+    metadata:
+      labels:
+        {{- include "idr-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal-worker
+    spec:
+      containers:
+        - name: temporal-worker
+          image: "{{ .Values.temporalWorker.image.repository }}:{{ .Values.temporalWorker.image.tag }}"
+          imagePullPolicy: {{ .Values.temporalWorker.image.pullPolicy }}
+          env:
+            - name: TEMPORAL_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: temporal-host
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: database-url
+            - name: KAFKA_BROKERS
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: kafka-brokers
+          resources:
+            {{- toYaml .Values.temporalWorker.resources | nindent 12 }}
+{{- end }}
+
+---
+
+{{/* ── Lakehouse Pipeline (Python) ─────────────────────────────────────────── */}}
+{{- if .Values.lakehousePipeline.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-lakehouse
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: lakehouse
+spec:
+  replicas: {{ .Values.lakehousePipeline.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: lakehouse
+  template:
+    metadata:
+      labels:
+        {{- include "idr-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: lakehouse
+    spec:
+      containers:
+        - name: lakehouse
+          image: "{{ .Values.lakehousePipeline.image.repository }}:{{ .Values.lakehousePipeline.image.tag }}"
+          imagePullPolicy: {{ .Values.lakehousePipeline.image.pullPolicy }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: database-url
+            - name: MINIO_ENDPOINT
+              value: "{{ include "idr-platform.fullname" . }}-minio:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: minio-access-key
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: minio-secret-key
+            - name: OPENSEARCH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: opensearch-url
+            - name: KAFKA_BROKERS
+              valueFrom:
+                secretKeyRef:
+                  name: idr-secrets
+                  key: kafka-brokers
+          resources:
+            {{- toYaml .Values.lakehousePipeline.resources | nindent 12 }}
+{{- end }}

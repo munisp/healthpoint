@@ -1,0 +1,17 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: idr-opensearch
+  namespace: default
+spec:
+  type: bindings.elasticsearch
+  version: v1
+  metadata:
+    - name: urls
+      value: "http://opensearch:9200"
+    - name: index
+      value: "idr-disputes"
+    - name: username
+      value: ""
+    - name: password
+      value: ""
