@@ -100,6 +100,7 @@ import {
   Stethoscope,
   Bot,
   Lock,
+  Sparkles,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useTheme } from "../contexts/ThemeContext";
@@ -196,6 +197,7 @@ const menuItems = [
   { icon: ClipboardCheck, label: "USCDI Completeness", path: "/uscdi-completeness" },
   { icon: Bot, label: "Ollama LLM Manager", path: "/ollama" },
   { icon: Brain, label: "Hermes AI Agent", path: "/hermes" },
+  { icon: Sparkles, label: "SmartForm Guide", path: "/smartform-guide" },
 ];
 
 const SIDEBAR_WIDTH_KEY = 'sidebar-width';
