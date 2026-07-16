@@ -1,0 +1,35 @@
+# OpenAppsec WAF Policy for HealthPoint IDR
+# Protects the APISIX gateway from OWASP Top 10 attacks
+
+default:
+  mode: prevent-learn
+
+specific-rules:
+  - hosts:
+      - "*"
+    mode: prevent-learn
+    practices:
+      - name: idr-waf-practice
+        type: WebApplication
+        web-attacks:
+          max-body-size-kb: 10240
+          max-header-size-bytes: 102400
+          max-url-size-bytes: 32768
+          override-mode: prevent
+        anti-bot:
+          injected-behavior: transparent
+          silent-behavior: allow
+        snort-signatures:
+          configmap: []
+          override-mode: prevent
+        openapi-schema-validation:
+          configmap: []
+          override-mode: detect
+
+# Trusted sources (internal services bypass WAF)
+trusted-sources:
+  - name: internal-services
+    sources-identifiers:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16

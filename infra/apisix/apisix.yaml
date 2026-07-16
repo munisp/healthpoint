@@ -1,0 +1,105 @@
+# APISIX declarative configuration for HealthPoint IDR
+# Routes all traffic through the gateway with auth, rate limiting, and logging
+
+upstreams:
+  - id: idr-app
+    type: roundrobin
+    nodes:
+      "app:3000": 1
+
+  - id: idr-ai-service
+    type: roundrobin
+    nodes:
+      "ai-service:8000": 1
+
+  - id: idr-go-services
+    type: roundrobin
+    nodes:
+      "go-services:8001": 1
+
+routes:
+  # ── Auth endpoints (public, no JWT required) ────────────────────────────
+  - id: auth-login
+    uri: /api/auth/login
+    methods: [GET]
+    upstream_id: idr-app
+    plugins:
+      limit-req:
+        rate: 10
+        burst: 20
+        key: remote_addr
+        rejected_code: 429
+
+  - id: auth-callback
+    uri: /api/auth/callback
+    methods: [GET]
+    upstream_id: idr-app
+
+  - id: auth-logout
+    uri: /api/auth/logout
+    methods: [GET]
+    upstream_id: idr-app
+
+  # ── tRPC API (protected, JWT required) ──────────────────────────────────
+  - id: trpc-api
+    uri: /api/trpc/*
+    methods: [GET, POST, OPTIONS]
+    upstream_id: idr-app
+    plugins:
+      cors:
+        allow_origins: "${ALLOWED_ORIGINS:-http://localhost:3000}"
+        allow_methods: "GET,POST,OPTIONS"
+        allow_headers: "Content-Type,Authorization,X-Correlation-ID"
+        max_age: 3600
+      limit-count:
+        count: 1000
+        time_window: 60
+        key: remote_addr
+        rejected_code: 429
+      request-id:
+        header_name: X-Correlation-ID
+        include_in_response: true
+      kafka-logger:
+        broker_list:
+          kafka:9092: 1
+        kafka_topic: idr.audit
+        timeout: 3
+        required_acks: 1
+
+  # ── AI service endpoints ─────────────────────────────────────────────────
+  - id: ai-analyze
+    uri: /api/ai/*
+    methods: [POST, GET]
+    upstream_id: idr-ai-service
+    plugins:
+      limit-count:
+        count: 100
+        time_window: 60
+        key: remote_addr
+        rejected_code: 429
+
+  # ── Go services (ledger, authz, payments) ───────────────────────────────
+  - id: go-services
+    uri: /internal/*
+    methods: [GET, POST, PUT, DELETE]
+    upstream_id: idr-go-services
+    plugins:
+      ip-restriction:
+        whitelist:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+          - "127.0.0.1"
+
+  # ── Static assets and frontend ──────────────────────────────────────────
+  - id: frontend
+    uri: /*
+    methods: [GET, HEAD]
+    upstream_id: idr-app
+    plugins:
+      gzip:
+        min_length: 1024
+        comp_level: 6
+        types: "text/html text/css application/javascript application/json"
+
+#END

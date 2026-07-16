@@ -14,9 +14,102 @@
  */
 
 import Fuse from "fuse.js";
+import { Client as OpenSearchClient } from "@opensearch-project/opensearch";
 import { getDb } from "./db";
 import { disputes, disputeDocuments, auditLog } from "../drizzle/schema";
 import { desc } from "drizzle-orm";
+
+// ── OpenSearch client (optional — falls back to Fuse.js when OPENSEARCH_URL not set) ──
+
+let _osClient: OpenSearchClient | null = null;
+
+function getOpenSearchClient(): OpenSearchClient | null {
+  const url = process.env.OPENSEARCH_URL;
+  if (!url) return null;
+  if (_osClient) return _osClient;
+  try {
+    _osClient = new OpenSearchClient({
+      node: url,
+      auth: process.env.OPENSEARCH_USER
+        ? { username: process.env.OPENSEARCH_USER, password: process.env.OPENSEARCH_PASSWORD || "" }
+        : undefined,
+      ssl: { rejectUnauthorized: false },
+    });
+    return _osClient;
+  } catch {
+    return null;
+  }
+}
+
+async function searchOpenSearch(
+  q: string,
+  entityTypes: SearchEntityType[],
+  limit: number
+): Promise<SearchResult | null> {
+  const client = getOpenSearchClient();
+  if (!client) return null;
+  try {
+    const indices: string[] = [];
+    if (entityTypes.includes("dispute")) indices.push("idr-disputes");
+    if (entityTypes.includes("audit")) indices.push("idr-audit");
+    if (!indices.length) return null;
+    const start = Date.now();
+    const response = await client.search({
+      index: indices.join(","),
+      body: {
+        size: limit,
+        query: {
+          multi_match: {
+            query: q,
+            fields: ["disputeId^2", "description^1.5", "notes", "status", "action", "resourceType"],
+            type: "best_fields",
+            fuzziness: "AUTO",
+          },
+        },
+        highlight: { fields: { description: {}, notes: {} } },
+      },
+    });
+    const rawHits = (response.body.hits?.hits || []) as Array<Record<string, unknown>>;
+    const hits: SearchHit[] = rawHits.map(h => ({
+      id: (h._id as string) || "",
+      entityType: ((h._index as string).includes("audit") ? "audit" : "dispute") as SearchEntityType,
+      score: (h._score as number) || 0,
+      item: (h._source as Record<string, unknown>) || {},
+      highlights: (h.highlight as Record<string, string[]>) || {},
+    }));
+    return {
+      total: (typeof response.body.hits?.total === 'object' ? (response.body.hits.total as { value: number }).value : response.body.hits?.total as number) || hits.length,
+      hits,
+      query: q,
+      entityTypes,
+      took: Date.now() - start,
+    };
+  } catch (err) {
+    console.warn("[search] OpenSearch error, falling back to Fuse.js:", err);
+    return null;
+  }
+}
+
+/**
+ * Index a single dispute document into OpenSearch.
+ * Called from dispute mutation procedures to keep the index current.
+ */
+export async function indexDispute(
+  disputeId: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  const client = getOpenSearchClient();
+  if (!client) return;
+  try {
+    await client.index({
+      index: "idr-disputes",
+      id: disputeId,
+      body: { disputeId, ...payload, updatedAt: new Date().toISOString() },
+    });
+  } catch (err) {
+    console.warn("[search] OpenSearch index error:", err);
+  }
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -206,6 +299,11 @@ export async function search(query: SearchQuery): Promise<SearchResult> {
     return { total: 0, hits: [], query: q, entityTypes, took: 0 };
   }
 
+  // Try OpenSearch first
+  const osResult = await searchOpenSearch(q, entityTypes, limit);
+  if (osResult) return osResult;
+
+  // Fall back to Fuse.js
   const index = await getIndex();
   const hits: SearchHit[] = [];
 

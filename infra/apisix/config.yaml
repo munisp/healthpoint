@@ -1,0 +1,104 @@
+apisix:
+  node_listen: 9080
+  enable_ipv6: false
+  enable_admin: true
+  admin_listen:
+    ip: 0.0.0.0
+    port: 9092
+  admin_key:
+    - name: "admin"
+      key: "edd1c9f034335f136f87ad84b625c8f1"
+      role: admin
+  ssl:
+    enable: false
+
+deployment:
+  admin:
+    allow_admin:
+      - 127.0.0.0/24
+      - 0.0.0.0/0
+
+etcd:
+  host:
+    - "http://etcd:2379"
+  prefix: "/apisix"
+  timeout: 30
+
+plugin_attr:
+  opentelemetry:
+    resource:
+      service.name: idr-apisix-gateway
+  prometheus:
+    export_uri: /apisix/prometheus/metrics
+    enable_export_server: true
+    export_addr:
+      ip: "0.0.0.0"
+      port: 9091
+
+plugins:
+  - real-ip
+  - client-control
+  - proxy-control
+  - request-id
+  - zipkin
+  - ext-plugin-pre-req
+  - fault-injection
+  - mocking
+  - serverless-pre-function
+  - cors
+  - ip-restriction
+  - ua-restriction
+  - referer-restriction
+  - csrf
+  - uri-blocker
+  - request-validation
+  - openid-connect
+  - authz-keycloak
+  - wolf-rbac
+  - ldap-auth
+  - hmac-auth
+  - basic-auth
+  - jwt-auth
+  - key-auth
+  - consumer-restriction
+  - attach-consumer-label
+  - forward-auth
+  - opa
+  - authz-casbin
+  - authz-casdoor
+  - multi-auth
+  - body-transformer
+  - ai-proxy
+  - proxy-mirror
+  - proxy-cache
+  - proxy-rewrite
+  - api-breaker
+  - limit-conn
+  - limit-count
+  - limit-req
+  - gzip
+  - degzip
+  - server-info
+  - traffic-split
+  - redirect
+  - response-rewrite
+  - kafka-logger
+  - http-logger
+  - splunk-hec-logging
+  - skywalking-logger
+  - google-cloud-logging
+  - sls-logger
+  - tcp-logger
+  - udp-logger
+  - file-logger
+  - clickhouse-logger
+  - tencent-cloud-cls
+  - inspect
+  - example-plugin
+  - aws-lambda
+  - azure-functions
+  - openwhisk
+  - openfunction
+  - serverless-post-function
+  - ext-plugin-post-req
+  - ext-plugin-post-resp

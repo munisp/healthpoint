@@ -1,0 +1,176 @@
+{{/* ── Ingress ───────────────────────────────────────────────────────────────── */}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "idr-platform.fullname" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- toYaml .Values.ingress.tls | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "idr-platform.fullname" $ }}-{{ .service }}
+                port:
+                  number: 3000
+          {{- end }}
+    {{- end }}
+{{- end }}
+
+---
+
+{{/* ── NetworkPolicy — zero-trust inter-service communication ─────────────── */}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: idr-app-netpol
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: app
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from APISIX gateway
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: apisix
+      ports:
+        - protocol: TCP
+          port: 3000
+    # Allow traffic from OpenAppsec WAF
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: openappsec
+      ports:
+        - protocol: TCP
+          port: 3000
+    # Allow Dapr sidecar
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dapr-sidecar-injector
+  egress:
+    # Allow DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+    # Allow PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Allow Kafka
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: kafka
+      ports:
+        - protocol: TCP
+          port: 9092
+    # Allow Keycloak
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow Permify
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: permify
+      ports:
+        - protocol: TCP
+          port: 3476
+        - protocol: TCP
+          port: 3478
+    # Allow OpenSearch
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: opensearch
+      ports:
+        - protocol: TCP
+          port: 9200
+    # Allow Temporal
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: temporal-frontend
+      ports:
+        - protocol: TCP
+          port: 7233
+
+---
+
+{{/* ── Prometheus ServiceMonitor ────────────────────────────────────────────── */}}
+{{- if .Values.monitoring.enabled }}
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-app
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-go-services
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: go-services
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+{{- end }}
+{{- end }}

@@ -1,0 +1,23 @@
+[package]
+name = "idr-rust-services"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "idr-rust-services"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rdkafka = { version = "0.36", features = ["cmake-build", "ssl"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

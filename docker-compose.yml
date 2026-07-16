@@ -1,604 +1,651 @@
-version: '3.8'
+###############################################################################
+# HealthPoint IDR Platform — Full Infrastructure Stack
+# docker compose up -d
+###############################################################################
+version: "3.9"
 
-services:
-  # Database Services
-  postgres:
-    image: postgres:15-alpine
-    container_name: healthcare-postgres
-    environment:
-      POSTGRES_DB: healthcare_platform
-      POSTGRES_USER: healthuser
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-healthpass123}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U healthuser -d healthcare_platform"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    networks:
-      - healthcare-network
-
-  redis:
-    image: redis:7-alpine
-    container_name: healthcare-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    networks:
-      - healthcare-network
-
-  # ─── MinIO S3-compatible artifact store ─────────────────────────────────────
-  minio:
-    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
-    container_name: healthcare-minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    networks:
-      - healthcare-network
-
-  # ─── MinIO bucket initialisation (runs once then exits) ──────────────────────
-  minio-init:
-    image: minio/mc:RELEASE.2024-01-16T16-06-34Z
-    container_name: healthcare-minio-init
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-        mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin} &&
-        mc mb --ignore-existing local/mlflow &&
-        mc mb --ignore-existing local/healthpoint-models &&
-        mc anonymous set download local/healthpoint-models &&
-        echo 'MinIO buckets ready' &&
-        exit 0
-      "
-    networks:
-      - healthcare-network
-    restart: "no"
-
-  # ─── MLflow Tracking Server (backed by PostgreSQL + MinIO/S3) ────────────────
-  mlflow:
-    image: python:3.11-slim
-    container_name: healthcare-mlflow
-    working_dir: /mlflow
-    environment:
-      MLFLOW_BACKEND_STORE_URI: postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      MLFLOW_DEFAULT_ARTIFACT_ROOT: s3://mlflow/
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-    ports:
-      - "5000:5000"
-    command: >
-      bash -c "
-        pip install --quiet mlflow psycopg2-binary boto3 &&
-        mlflow server
-          --host 0.0.0.0
-          --port 5000
-          --backend-store-uri postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-          --default-artifact-root s3://mlflow/
-      "
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 30s
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-    networks:
-      - healthcare-network
-
-  # ─── Model Registration init container (runs once after MLflow is healthy) ───
-  model-registration:
-    image: python:3.11-slim
-    container_name: healthcare-model-registration
-    working_dir: /app
-    environment:
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-    volumes:
-      - ./scripts:/app/scripts:ro
-      - ./ai-ml-dl-implementation/models:/app/models/ai-ml-dl:ro
-      - ./backend/core-services/predictive-analytics-service/models:/app/models/analytics:ro
-    command: >
-      bash -c "
-        pip install --quiet mlflow scikit-learn torch boto3 joblib &&
-        python scripts/register_models.py
-          --mlflow-uri http://mlflow:5000
-          --ai-models-dir /app/models/ai-ml-dl
-          --analytics-models-dir /app/models/analytics
-          --stage Production
-      "
-    depends_on:
-      mlflow:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-    restart: "no"
-
-  # API Gateway
-  api-gateway:
-    build:
-      context: ./api-gateway-service
-    container_name: healthcare-api-gateway
-    ports:
-      - "8025:8025"
-    depends_on:
-      - gfe_management
-      - x12_edi_processing
-      - cms_portal_automation
-      - idr_entity_integration
-      - data_transformation
-      - security_authentication
-    networks:
-      - healthcare-network
-
-  # AI Fraud Detection Service
-  ai-fraud-detection:
-    build:
-      context: .
-      dockerfile: Dockerfile.ai-fraud
-    container_name: healthcare-ai-fraud
-    ports:
-      - "8001:8001"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
-      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER:-minioadmin}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
-    volumes:
-      - ai_models:/app/models
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      model-registration:
-        condition: service_completed_successfully
-    networks:
-      - healthcare-network
-
-  # Claims Processing Service
-  claims-processing:
-    build:
-      context: .
-      dockerfile: Dockerfile.claims
-    container_name: healthcare-claims
-    ports:
-      - "8002:8002"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Provider Management Service
-  provider-management:
-    build:
-      context: .
-      dockerfile: Dockerfile.provider
-    container_name: healthcare-provider
-    ports:
-      - "8003:8003"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Patient Management Service
-  patient-management:
-    build:
-      context: .
-      dockerfile: Dockerfile.patient
-    container_name: healthcare-patient
-    ports:
-      - "8004:8004"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Audit & Compliance Service
-  audit-compliance:
-    build:
-      context: .
-      dockerfile: Dockerfile.audit
-    container_name: healthcare-audit
-    ports:
-      - "8005:8005"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Notification Service
-  notification:
-    build:
-      context: .
-      dockerfile: Dockerfile.notification
-    container_name: healthcare-notification
-    ports:
-      - "8006:8006"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
-      - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER}
-      - SMTP_PASSWORD=${SMTP_PASSWORD}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Analytics & Reporting Service
-  analytics-reporting:
-    build:
-      context: .
-      dockerfile: Dockerfile.analytics
-    container_name: healthcare-analytics
-    ports:
-      - "8007:8007"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      mlflow:
-        condition: service_started
-    networks:
-      - healthcare-network
-
-  # User Management Service
-  user-management:
-    build:
-      context: .
-      dockerfile: Dockerfile.user
-    container_name: healthcare-user
-    ports:
-      - "8008:8008"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Document Management Service
-  document-management:
-    build:
-      context: .
-      dockerfile: Dockerfile.document
-    container_name: healthcare-document
-    ports:
-      - "8009:8009"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-      - STORAGE_PATH=/app/storage
-    volumes:
-      - document_storage:/app/storage
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Integration Service
-  integration:
-    build:
-      context: .
-      dockerfile: Dockerfile.integration
-    container_name: healthcare-integration
-    ports:
-      - "8010:8010"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Workflow Engine
-  workflow-engine:
-    build:
-      context: .
-      dockerfile: Dockerfile.workflow
-    container_name: healthcare-workflow
-    ports:
-      - "8011:8011"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Configuration Service
-  configuration:
-    build:
-      context: .
-      dockerfile: Dockerfile.configuration
-    container_name: healthcare-configuration
-    ports:
-      - "8012:8012"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Monitoring Service
-  monitoring:
-    build:
-      context: .
-      dockerfile: Dockerfile.monitoring
-    container_name: healthcare-monitoring
-    ports:
-      - "8013:8013"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Backup Service
-  backup:
-    build:
-      context: .
-      dockerfile: Dockerfile.backup
-    container_name: healthcare-backup
-    ports:
-      - "8014:8014"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-      - BACKUP_PATH=/app/backups
-    volumes:
-      - backup_storage:/app/backups
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Security Service
-  security:
-    build:
-      context: .
-      dockerfile: Dockerfile.security
-    container_name: healthcare-security
-    ports:
-      - "8015:8015"
-    environment:
-      - DATABASE_URL=postgresql://healthuser:${POSTGRES_PASSWORD:-healthpass123}@postgres:5432/healthcare_platform
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Frontend Application
-  frontend:
-    build:
-      context: ./healthcare-platform-ui
-      dockerfile: Dockerfile
-    container_name: healthcare-frontend
-    ports:
-      - "3000:3000"
-    environment:
-      - REACT_APP_API_BASE_URL=http://localhost:8000
-      - REACT_APP_ENVIRONMENT=production
-    depends_on:
-      - api-gateway
-    networks:
-      - healthcare-network
-
-  # Nginx Reverse Proxy
-  nginx:
-    image: nginx:alpine
-    container_name: healthcare-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-      - ./nginx/ssl:/etc/nginx/ssl
-    depends_on:
-      - frontend
-      - api-gateway
-    networks:
-      - healthcare-network
-
-  # Admin Fee Management Service
-  admin-fee-management:
-    build:
-      context: .
-      dockerfile: Dockerfile.admin-fee
-    container_name: healthcare-admin-fee
-    ports:
-      - "8026:8026"
-    environment:
-      - DATABASE_URL=postgresql://user:password@postgres:5432/nsa_idr_db
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - healthcare-network
-
-  # Admin Fee Management Dashboard
-  admin-fee-dashboard:
-    build:
-      context: ./admin-fee-dashboard-enhanced
-      dockerfile: Dockerfile
-    container_name: healthcare-admin-fee-dashboard
-    ports:
-      - "3001:3001"
-    environment:
-      - REACT_APP_API_BASE_URL=http://localhost:8026
-      - REACT_APP_ENVIRONMENT=production
-    depends_on:
-      - admin-fee-management
-    networks:
-      - healthcare-network
-
-  gfe_management:
-    build: ./gfe-management-service
-    ports:
-      - "8027:8027"
-    networks:
-      - healthcare-network
-
-  x12_edi_processing:
-    build: ./x12-edi-processing-service
-    ports:
-      - "8028:8028"
-    networks:
-      - healthcare-network
-
-  cms_portal_automation:
-    build: ./cms-portal-automation-service
-    ports:
-      - "8029:8029"
-    networks:
-      - healthcare-network
-
-  idr_entity_integration:
-    build: ./idr-entity-integration-service
-    ports:
-      - "8030:8030"
-    networks:
-      - healthcare-network
-
-  data_transformation:
-    build: ./data-transformation-service
-    ports:
-      - "8031:8031"
-    networks:
-      - healthcare-network
-
-  security_authentication:
-    build: ./security-authentication-service
-    ports:
-      - "8032:8032"
-    networks:
-      - healthcare-network
+networks:
+  idr-net:
+    driver: bridge
 
 volumes:
   postgres_data:
-    driver: local
   redis_data:
-    driver: local
-  mlflow_artifacts:
-    driver: local
+  kafka_data:
+  zookeeper_data:
+  opensearch_data:
+  temporal_data:
   minio_data:
-    driver: local
-  ai_models:
-    driver: local
-  document_storage:
-    driver: local
-  backup_storage:
-    driver: local
+  tigerbeetle_data:
+  fluvio_data:
+  permify_data:
 
-networks:
-  healthcare-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
+###############################################################################
+# CORE DATA STORES
+###############################################################################
+services:
 
+  # ── PostgreSQL 16 (primary OLTP) ──────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks: [idr-net]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-idr_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-idr_pass123}
+      POSTGRES_DB: ${POSTGRES_DB:-idr_demo}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-idr_user} -d ${POSTGRES_DB:-idr_demo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis 7 (cache, sessions, distributed locks, pub/sub) ─────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [idr-net]
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_pass123} --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_pass123}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+###############################################################################
+# MESSAGING / STREAMING
+###############################################################################
+
+  # ── Zookeeper (Kafka dependency) ──────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    restart: unless-stopped
+    networks: [idr-net]
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Kafka 3.7 (event backbone) ────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    ports:
+      - "29092:29092"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── Kafka topic initializer ───────────────────────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    networks: [idr-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      "
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.disputes --partitions 6 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.disputes.state_changes --partitions 6 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.documents --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.offers --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.notifications --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.audit --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.users --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.payments --partitions 6 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.lakehouse.ingest --partitions 3 --replication-factor 1
+      echo 'Kafka topics created.'
+      "
+    restart: on-failure
+
+  # ── Fluvio (edge real-time stream processing) ─────────────────────────────
+  fluvio-sc:
+    image: infinyon/fluvio:latest
+    restart: unless-stopped
+    networks: [idr-net]
+    command: fluvio-run sc --local
+    environment:
+      RUST_LOG: info
+    volumes:
+      - fluvio_data:/var/lib/fluvio
+    ports:
+      - "9003:9003"
+    healthcheck:
+      test: ["CMD-SHELL", "fluvio cluster status 2>/dev/null || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  fluvio-spu:
+    image: infinyon/fluvio:latest
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on: [fluvio-sc]
+    command: fluvio-run spu -i 5001 -p fluvio-spu:9010 -v fluvio-spu:9011 --sc-addr fluvio-sc:9004
+    environment:
+      RUST_LOG: info
+    ports:
+      - "9010:9010"
+
+###############################################################################
+# WORKFLOW ORCHESTRATION
+###############################################################################
+
+  # ── Temporal server (durable workflow engine) ─────────────────────────────
+  temporal:
+    image: temporalio/auto-setup:1.24.2
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgresql
+      DB_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-idr_user}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-idr_pass123}
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/config/dynamicconfig/development-sql.yaml
+    volumes:
+      - ./infra/temporal/dynamicconfig:/etc/temporal/config/dynamicconfig
+    ports:
+      - "7233:7233"
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health 2>/dev/null | grep SERVING || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  temporal-ui:
+    image: temporalio/ui:2.26.2
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on: [temporal]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8088:8080"
+
+  temporal-admin-tools:
+    image: temporalio/admin-tools:1.24.2
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on: [temporal]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      "sleep 15 && tctl --namespace default namespace register --retention 30 2>/dev/null || true && tail -f /dev/null"
+
+###############################################################################
+# IDENTITY & AUTHORIZATION
+###############################################################################
+
+  # ── Keycloak 26 (OIDC identity provider) ─────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2.5
+    restart: unless-stopped
+    networks: [idr-net]
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-admin}
+      KC_DB: dev-mem
+      KC_HTTP_PORT: 8080
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/realms/healthpoint/.well-known/openid-configuration | grep issuer"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+
+  # ── Permify (fine-grained ReBAC authorization) ────────────────────────────
+  permify:
+    image: ghcr.io/permify/permify:latest
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: serve
+    environment:
+      PERMIFY_DATABASE_ENGINE: postgres
+      PERMIFY_DATABASE_URI: "postgres://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}?sslmode=disable"
+      PERMIFY_DATABASE_POOL_MAX: 20
+      PERMIFY_SERVER_PORT: 3476
+      PERMIFY_SERVER_GRPC_PORT: 3478
+      PERMIFY_LOG_LEVEL: info
+    volumes:
+      - permify_data:/var/lib/permify
+      - ./infra/permify/schema.perm:/etc/permify/schema.perm:ro
+    ports:
+      - "3476:3476"   # HTTP
+      - "3478:3478"   # gRPC
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3476/healthz | grep SERVING"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+###############################################################################
+# SEARCH & ANALYTICS
+###############################################################################
+
+  # ── OpenSearch 2.x (full-text search + analytics) ─────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:2.14.0
+    restart: unless-stopped
+    networks: [idr-net]
+    environment:
+      cluster.name: idr-cluster
+      node.name: opensearch-node1
+      discovery.type: single-node
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      DISABLE_SECURITY_PLUGIN: "true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -E 'green|yellow'"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.14.0
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - "5601:5601"
+
+###############################################################################
+# FINANCIAL LEDGER
+###############################################################################
+
+  # ── TigerBeetle (double-entry financial ledger) ───────────────────────────
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    restart: unless-stopped
+    networks: [idr-net]
+    volumes:
+      - tigerbeetle_data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      if [ ! -f /data/0_0.tigerbeetle ]; then
+        /tigerbeetle format --cluster=0 --replica=0 --replica-count=1 /data/0_0.tigerbeetle
+      fi
+      /tigerbeetle start --addresses=0.0.0.0:3000 /data/0_0.tigerbeetle
+      "
+    ports:
+      - "3002:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 3000 && echo ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+###############################################################################
+# OBJECT STORAGE (Lakehouse)
+###############################################################################
+
+  # ── MinIO (S3-compatible object storage for Lakehouse) ────────────────────
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    networks: [idr-net]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minio_secret123}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    networks: [idr-net]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-minio_admin} ${MINIO_SECRET_KEY:-minio_secret123}
+      mc mb --ignore-existing local/idr-lakehouse
+      mc mb --ignore-existing local/idr-documents
+      mc mb --ignore-existing local/idr-exports
+      mc anonymous set download local/idr-exports
+      echo 'MinIO buckets created.'
+      "
+    restart: on-failure
+
+###############################################################################
+# API GATEWAY & SECURITY
+###############################################################################
+
+  # ── etcd (APISIX dependency) ──────────────────────────────────────────────
+  etcd:
+    image: bitnami/etcd:3.5
+    restart: unless-stopped
+    networks: [idr-net]
+    environment:
+      ALLOW_NONE_AUTHENTICATION: "yes"
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+    ports:
+      - "2379:2379"
+    healthcheck:
+      test: ["CMD-SHELL", "etcdctl endpoint health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── APISIX 3.x (API gateway) ──────────────────────────────────────────────
+  apisix:
+    image: apache/apisix:3.9.1-debian
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      etcd:
+        condition: service_healthy
+    volumes:
+      - ./infra/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./infra/apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+    ports:
+      - "9080:9080"   # HTTP gateway
+      - "9443:9443"   # HTTPS gateway
+      - "9092:9092"   # Admin API
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9080/apisix/status | grep ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ── APISIX Dashboard ──────────────────────────────────────────────────────
+  apisix-dashboard:
+    image: apache/apisix-dashboard:3.0.1-alpine
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on: [apisix]
+    volumes:
+      - ./infra/apisix/dashboard.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
+    ports:
+      - "9000:9000"
+
+  # ── OpenAppsec WAF (NGINX-based) ──────────────────────────────────────────
+  openappsec:
+    image: openappsec/nginx:latest
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on: [apisix]
+    volumes:
+      - ./infra/openappsec/local_policy.yaml:/ext/appsec/local_policy.yaml:ro
+      - ./infra/openappsec/nginx.conf:/etc/nginx/nginx.conf:ro
+    environment:
+      OPENAPPSEC_UPSTREAM: "http://apisix:9080"
+      OPENAPPSEC_MODE: prevent-learn
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+###############################################################################
+# DAPR SIDECAR INFRASTRUCTURE
+###############################################################################
+
+  # ── Dapr placement service ────────────────────────────────────────────────
+  dapr-placement:
+    image: daprio/dapr:1.13.4
+    restart: unless-stopped
+    networks: [idr-net]
+    command: ["./placement", "--port", "50006", "--log-level", "info"]
+    ports:
+      - "50006:50006"
+
+  # ── Dapr sidecar for the main app ─────────────────────────────────────────
+  dapr-sidecar:
+    image: daprio/daprd:1.13.4
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      - dapr-placement
+      - redis
+      - kafka
+    command:
+      - "./daprd"
+      - "--app-id=idr-app"
+      - "--app-port=3000"
+      - "--dapr-http-port=3500"
+      - "--dapr-grpc-port=50001"
+      - "--placement-host-address=dapr-placement:50006"
+      - "--components-path=/components"
+      - "--log-level=info"
+    volumes:
+      - ./infra/dapr/components:/components:ro
+    ports:
+      - "3500:3500"   # Dapr HTTP API
+      - "50001:50001" # Dapr gRPC API
+
+###############################################################################
+# PAYMENT INTEROPERABILITY
+###############################################################################
+
+  # ── Mojaloop simulator (payment hub) ─────────────────────────────────────
+  mojaloop-simulator:
+    image: mojaloop/simulator:latest
+    restart: unless-stopped
+    networks: [idr-net]
+    environment:
+      SIMULATOR_ENDPOINT: http://mojaloop-simulator:3003
+      LOG_LEVEL: info
+    ports:
+      - "3003:3003"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3003/health | grep ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+###############################################################################
+# APPLICATION SERVICES
+###############################################################################
+
+  # ── Main HealthPoint Node.js app ──────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-redis_pass123}@redis:6379"
+      KAFKA_BROKERS: "kafka:9092"
+      KEYCLOAK_URL: "http://keycloak:8080"
+      PERMIFY_GRPC_URL: "permify:3478"
+      OPENSEARCH_URL: "http://opensearch:9200"
+      TEMPORAL_ADDRESS: "temporal:7233"
+      TIGERBEETLE_ADDRESS: "tigerbeetle:3000"
+      MOJALOOP_URL: "http://mojaloop-simulator:3003"
+      DAPR_HTTP_ENDPOINT: "http://dapr-sidecar:3500"
+      S3_ENDPOINT: "http://minio:9000"
+      S3_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minio_admin}"
+      S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
+      S3_BUCKET: "idr-documents"
+    ports:
+      - "3000:3000"
+
+  # ── Python AI service (LangGraph agents) ─────────────────────────────────
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      - kafka
+      - opensearch
+    environment:
+      AI_SERVICE_PORT: "8000"
+      KAFKA_BROKERS: "kafka:9092"
+      OPENSEARCH_URL: "http://opensearch:9200"
+      LLM_API_URL: "${LLM_API_URL:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+    ports:
+      - "8000:8000"
+
+  # ── Python Lakehouse ingestion pipeline ───────────────────────────────────
+  lakehouse-worker:
+    build:
+      context: ./services/lakehouse
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      - kafka
+      - minio
+      - opensearch
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      S3_ENDPOINT: "http://minio:9000"
+      S3_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minio_admin}"
+      S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
+      OPENSEARCH_URL: "http://opensearch:9200"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+
+  # ── Python Temporal workflow workers ──────────────────────────────────────
+  temporal-worker:
+    build:
+      context: ./services/temporal-worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      temporal:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: "temporal:7233"
+      TEMPORAL_NAMESPACE: "default"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+      KAFKA_BROKERS: "kafka:9092"
+
+  # ── Go services (Permify client, Mojaloop connector, TigerBeetle ledger) ──
+  go-services:
+    build:
+      context: ./services/go
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      - permify
+      - tigerbeetle
+      - kafka
+    environment:
+      PERMIFY_GRPC_URL: "permify:3478"
+      TIGERBEETLE_ADDRESS: "tigerbeetle:3000"
+      KAFKA_BROKERS: "kafka:9092"
+      MOJALOOP_URL: "http://mojaloop-simulator:3003"
+      GO_SERVICES_PORT: "8001"
+    ports:
+      - "8001:8001"
+
+  # ── Rust services (Fluvio processor, high-perf event handlers) ────────────
+  rust-services:
+    build:
+      context: ./services/rust
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      - kafka
+      - fluvio-sc
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      FLUVIO_SC_ADDR: "fluvio-sc:9003"
+      RUST_LOG: "info"
+      RUST_SERVICES_PORT: "8002"
+    ports:
+      - "8002:8002"
