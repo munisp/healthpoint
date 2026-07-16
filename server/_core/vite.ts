@@ -7,16 +7,26 @@ import { createServer as createViteServer } from "vite";
 import viteConfig from "../../vite.config";
 
 export async function setupVite(app: Express, server: Server) {
+  // Merge the viteConfig.server.hmr settings (clientPort, protocol) with the
+  // middleware-mode requirement (server handle) so HMR WebSocket works correctly
+  // behind the proxied preview URL (wss on port 443).
+  const baseHmr = typeof viteConfig.server?.hmr === "object" ? viteConfig.server.hmr : {};
   const serverOptions = {
     middlewareMode: true,
-    hmr: { server },
     allowedHosts: true as const,
+    hmr: {
+      ...baseHmr,
+      server,
+    },
   };
 
   const vite = await createViteServer({
     ...viteConfig,
     configFile: false,
-    server: serverOptions,
+    server: {
+      ...viteConfig.server,
+      ...serverOptions,
+    },
     appType: "custom",
   });
 
