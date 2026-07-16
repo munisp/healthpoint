@@ -547,3 +547,15 @@
 - [x] /api/ollama/pull-stream SSE endpoint added to server/_core/index.ts
 - [x] TypeScript: 0 errors
 - [x] Tests: 40/40 passing
+
+## Session 50 — Fix Sign In / Sign Up (Broken Auth)
+
+- [x] Revert auth from Keycloak OIDC back to Manus OAuth
+- [x] server/_core/index.ts — import registerOAuthRoutes from ./oauth instead of registerKeycloakRoutes from ./keycloak
+- [x] server/_core/context.ts — use sdk.authenticateRequest instead of keycloak.authenticateRequest
+- [x] client/src/const.ts — getLoginUrl/getRegisterUrl now point to Manus OAuth portal (VITE_OAUTH_PORTAL_URL + VITE_APP_ID)
+- [x] client/src/_core/hooks/useAuth.ts — logout redirects to / instead of /api/auth/logout (Keycloak end-session)
+- [x] server/routers.ts — auth.logout no longer returns logoutUrl (Keycloak end-session removed)
+- [x] client/src/pages/Onboarding.tsx — redirect to login uses getLoginUrl() instead of /api/auth/login
+- [x] server/routers.test.ts — removed keycloakUrl/keycloakRealm/keycloakClientId assertions (no longer needed)
+- [x] TypeScript: 0 errors | Tests: 132/132 passing

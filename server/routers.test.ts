@@ -287,9 +287,6 @@ describe("Environment configuration validation", () => {
     const { ENV } = await import("./_core/env");
     expect(ENV).toHaveProperty("cookieSecret");
     expect(ENV).toHaveProperty("databaseUrl");
-    expect(ENV).toHaveProperty("keycloakUrl");
-    expect(ENV).toHaveProperty("keycloakRealm");
-    expect(ENV).toHaveProperty("keycloakClientId");
     expect(ENV).toHaveProperty("appUrl");
     expect(ENV).toHaveProperty("resendApiKey");
     expect(ENV).toHaveProperty("isProduction");
@@ -300,9 +297,9 @@ describe("Environment configuration validation", () => {
     expect(ENV.isProduction).toBe(false);
   });
 
-  it("keycloakUrl has a valid URL format", async () => {
+  it("appUrl has a valid URL format", async () => {
     const { ENV } = await import("./_core/env");
-    expect(ENV.keycloakUrl).toMatch(/^https?:\/\//);
+    expect(ENV.appUrl).toMatch(/^https?:\/\//);
   });
 
   it("appUrl defaults to localhost in development", async () => {

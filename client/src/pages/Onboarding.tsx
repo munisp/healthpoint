@@ -14,6 +14,7 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -126,7 +127,7 @@ export default function Onboarding() {
   // Redirect to login if not authenticated
   useEffect(() => {
     if (!loading && !isAuthenticated) {
-      window.location.href = `/api/auth/login?redirectTo=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+      window.location.href = getLoginUrl(window.location.pathname + window.location.search);
     }
   }, [loading, isAuthenticated]);
 
