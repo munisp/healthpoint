@@ -60,7 +60,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     };
     textFields.forEach(assignNullable);
     if (user.lastSignedIn !== undefined) { values.lastSignedIn = user.lastSignedIn; updateSet.lastSignedIn = user.lastSignedIn; }
-    if (user.role === undefined && user.id === ENV.ownerId) { user.role = 'admin'; values.role = 'admin'; updateSet.role = 'admin'; }
+    // Admin role is managed via Keycloak realm roles — no owner ID override needed
     if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
     await db.insert(users).values(values).onConflictDoUpdate({ target: users.id, set: updateSet });
   } catch (error) { console.error("[Database] Failed to upsert user:", error); throw error; }
@@ -71,6 +71,20 @@ export async function getUser(id: string) {
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function countUsers(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const result = await db.select({ value: count() }).from(users);
+  return result[0]?.value ?? 0;
 }
 
 // ─── Business day calculation ─────────────────────────────────────────────────
