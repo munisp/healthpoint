@@ -304,3 +304,56 @@ export function disputeVisibilityFilter(userId: string, userRole: "user" | "admi
   if (userRole === "admin") return undefined; // no filter — see all
   return eq(disputes.initiatingPartyId, userId);
 }
+
+// ── Permify schema bootstrap ──────────────────────────────────────────────────
+
+const PERMIFY_SCHEMA = `
+entity user {}
+
+entity dispute {
+  relation owner @user
+  relation reviewer @user
+  relation viewer @user
+
+  action view   = owner or reviewer or viewer
+  action edit   = owner
+  action review = reviewer
+  action delete = owner
+}
+
+entity document {
+  relation owner @user
+  relation viewer @user
+
+  action view   = owner or viewer
+  action upload = owner
+  action delete = owner
+}
+`;
+
+/**
+ * Bootstrap the Permify authorization schema on server startup.
+ * Safe to call repeatedly — Permify is idempotent on schema writes.
+ */
+export async function bootstrapPermifySchema(): Promise<void> {
+  if (!PERMIFY_URL) {
+    console.info("[authz] PERMIFY_URL not set — schema bootstrap skipped");
+    return;
+  }
+  try {
+    const res = await fetch(`${PERMIFY_URL}/v1/tenants/${PERMIFY_TENANT}/schemas/write`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schema: PERMIFY_SCHEMA }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (res.ok) {
+      console.info("[authz] Permify schema bootstrapped successfully");
+    } else {
+      const text = await res.text();
+      console.warn(`[authz] Permify schema bootstrap returned ${res.status}: ${text}`);
+    }
+  } catch (err) {
+    console.warn("[authz] Permify schema bootstrap failed (non-fatal):", err);
+  }
+}

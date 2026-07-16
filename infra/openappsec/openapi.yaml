@@ -1,0 +1,131 @@
+openapi: "3.0.3"
+info:
+  title: HealthPoint IDR Platform API
+  version: "1.0.0"
+  description: Independent Dispute Resolution platform API — protected by OpenAppsec WAF
+
+servers:
+  - url: /api
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200": { description: OK }
+
+  /auth/login:
+    get:
+      summary: Initiate Keycloak OIDC login
+      responses:
+        "302": { description: Redirect to Keycloak }
+
+  /auth/callback:
+    get:
+      summary: Keycloak OIDC callback
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "302": { description: Redirect to app }
+
+  /auth/logout:
+    get:
+      summary: Logout and end Keycloak session
+      responses:
+        "302": { description: Redirect to login }
+
+  /trpc/{procedure}:
+    post:
+      summary: tRPC procedure call
+      parameters:
+        - name: procedure
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200": { description: tRPC response }
+        "400": { description: Bad request }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden }
+        "500": { description: Internal server error }
+
+  /events/dispute:
+    post:
+      summary: Dapr dispute event subscription handler
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data: { type: object }
+      responses:
+        "200": { description: SUCCESS }
+
+  /events/payment:
+    post:
+      summary: Dapr payment event subscription handler
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200": { description: SUCCESS }
+
+  /mojaloop/callbacks/transfers:
+    post:
+      summary: Mojaloop FSPIOP transfer callback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                transferId: { type: string }
+                transferState: { type: string }
+                completedTimestamp: { type: string }
+      responses:
+        "200": { description: received }
+
+  /scheduled/deadline-check:
+    post:
+      summary: Scheduled deadline check heartbeat
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: OK }
+
+  /scheduled/weekly-digest:
+    post:
+      summary: Scheduled weekly digest heartbeat
+      security:
+        - BearerAuth: []
+      responses:
+        "200": { description: OK }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: idr_session

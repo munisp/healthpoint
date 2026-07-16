@@ -13,7 +13,8 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
   DollarSign, TrendingUp, TrendingDown, BookOpen, ArrowRightLeft,
-  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download, Layers, List, ChevronDown
+  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download, Layers, List, ChevronDown,
+  Zap, CheckCircle2, Clock, XCircle
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -818,7 +819,95 @@ export default function FinancialLedger() {
             </Card>
           </>
         )}
+
+        {/* ── Mojaloop Transfer Status ── */}
+        {selectedDisputeId && (
+          <MojaloopPanel disputeId={selectedDisputeId} />
+        )}
       </div>
     </DashboardLayout>
+  );
+}
+
+// ── Mojaloop panel ────────────────────────────────────────────────────────────
+function MojaloopPanel({ disputeId }: { disputeId: string }) {
+  const transfersQuery = trpc.mojaloop.listByDispute.useQuery(
+    { disputeId },
+    { enabled: !!disputeId, refetchInterval: 15_000 }
+  );
+
+  const transfers = (transfersQuery.data ?? []) as Array<{
+    referenceId?: string | null;
+    entryType: string;
+    amountCents: number;
+    createdAt: Date | null;
+    description?: string | null;
+  }>;
+
+  const statusBadge = (ref: string) => {
+    if (ref.includes("COMP")) return <Badge className="text-xs bg-emerald-500">Completed</Badge>;
+    if (ref.includes("FAIL")) return <Badge variant="destructive" className="text-xs">Failed</Badge>;
+    return <Badge variant="outline" className="text-xs">Pending</Badge>;
+  };
+
+  const statusIcon = (ref: string) => {
+    if (ref.includes("COMP")) return <CheckCircle2 className="h-4 w-4 text-emerald-500" />;
+    if (ref.includes("FAIL")) return <XCircle className="h-4 w-4 text-destructive" />;
+    return <Clock className="h-4 w-4 text-amber-500" />;
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Zap className="h-5 w-5 text-primary" />
+          Mojaloop Transfer Status
+          {transfersQuery.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground ml-1" />}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {transfersQuery.isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading Mojaloop transfers...
+          </div>
+        ) : transfers.length === 0 ? (
+          <div className="text-sm text-muted-foreground py-6 text-center">
+            No Mojaloop transfers found for this dispute.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Transfer ID</th>
+                  <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Type</th>
+                  <th className="text-right py-2 pr-4 font-medium text-muted-foreground">Amount</th>
+                  <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Status</th>
+                  <th className="text-left py-2 font-medium text-muted-foreground">Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transfers.map((t, i) => (
+                  <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
+                    <td className="py-2.5 pr-4">
+                      <div className="flex items-center gap-1.5">
+                        {statusIcon(t.referenceId ?? "")}
+                        <span className="font-mono text-xs truncate max-w-[160px]">{t.referenceId ?? "—"}</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 pr-4 capitalize text-xs">{t.entryType.replace(/_/g, " ")}</td>
+                    <td className="py-2.5 pr-4 text-right font-medium">{fmt(t.amountCents / 100)}</td>
+                    <td className="py-2.5 pr-4">{statusBadge(t.referenceId ?? "")}</td>
+                    <td className="py-2.5 text-muted-foreground text-xs">
+                      {t.createdAt ? new Date(t.createdAt).toLocaleString() : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

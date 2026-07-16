@@ -441,3 +441,141 @@ export async function generateLakehouseExport(
     tables: exportedTables,
   };
 }
+
+// ── OpenSearch index bootstrap ────────────────────────────────────────────────
+
+const INDEX_MAPPINGS: Record<string, object> = {
+  "idr-disputes": {
+    mappings: {
+      properties: {
+        disputeId:    { type: "keyword" },
+        status:       { type: "keyword" },
+        currentStep:  { type: "keyword" },
+        serviceType:  { type: "keyword" },
+        description:  { type: "text", analyzer: "english" },
+        notes:        { type: "text", analyzer: "english" },
+        providerName: { type: "text", fields: { keyword: { type: "keyword" } } },
+        payerName:    { type: "text", fields: { keyword: { type: "keyword" } } },
+        billedAmount: { type: "float" },
+        createdAt:    { type: "date" },
+        updatedAt:    { type: "date" },
+        suggest: {
+          type: "completion",
+          analyzer: "simple",
+          preserve_separators: true,
+          preserve_position_increments: true,
+          max_input_length: 50,
+        },
+      },
+    },
+    settings: { number_of_shards: 1, number_of_replicas: 1 },
+  },
+  "idr-audit": {
+    mappings: {
+      properties: {
+        action:       { type: "keyword" },
+        entityType:   { type: "keyword" },
+        entityId:     { type: "keyword" },
+        userId:       { type: "keyword" },
+        description:  { type: "text", analyzer: "english" },
+        createdAt:    { type: "date" },
+        suggest: {
+          type: "completion",
+          analyzer: "simple",
+          max_input_length: 50,
+        },
+      },
+    },
+    settings: { number_of_shards: 1, number_of_replicas: 1 },
+  },
+};
+
+/**
+ * Bootstrap OpenSearch indices with proper mappings on server startup.
+ * Safe to call repeatedly — skips indices that already exist.
+ */
+export async function bootstrapOpenSearchIndices(): Promise<void> {
+  const client = getOpenSearchClient();
+  if (!client) return;
+  for (const [indexName, body] of Object.entries(INDEX_MAPPINGS)) {
+    try {
+      const exists = await client.indices.exists({ index: indexName });
+      if (!exists.body) {
+        await client.indices.create({ index: indexName, body });
+        console.info(`[search] Created OpenSearch index: ${indexName}`);
+      }
+    } catch (err) {
+      console.warn(`[search] Failed to bootstrap index ${indexName}:`, err);
+    }
+  }
+}
+
+// ── Autocomplete / Suggest ────────────────────────────────────────────────────
+
+export interface SuggestResult {
+  text: string;
+  score: number;
+  entityType: SearchEntityType;
+}
+
+/**
+ * OpenSearch completion suggester for real-time autocomplete.
+ * Falls back to a prefix-match on the in-memory Fuse.js index when
+ * OpenSearch is not available.
+ */
+export async function suggest(
+  prefix: string,
+  limit = 8
+): Promise<SuggestResult[]> {
+  if (!prefix || prefix.trim().length < 2) return [];
+
+  const client = getOpenSearchClient();
+  if (client) {
+    try {
+      const response = await client.search({
+        index: "idr-disputes,idr-audit",
+        body: {
+          suggest: {
+            dispute_suggest: {
+              prefix: prefix.trim(),
+              completion: {
+                field: "suggest",
+                size: limit,
+                skip_duplicates: true,
+                fuzzy: { fuzziness: "AUTO" },
+              },
+            },
+          },
+        },
+      });
+      const options = (
+        response.body.suggest?.dispute_suggest?.[0]?.options || []
+      ) as Array<{ text: string; _score: number; _index: string }>;
+      if (options.length > 0) {
+        return options.map(o => ({
+          text: o.text,
+          score: o._score || 0,
+          entityType: (o._index?.includes("audit") ? "audit" : "dispute") as SearchEntityType,
+        }));
+      }
+    } catch {
+      // Fall through to Fuse.js prefix fallback
+    }
+  }
+
+  // Fuse.js prefix fallback
+  const index = await getIndex();
+  const lower = prefix.toLowerCase().trim();
+  const results: SuggestResult[] = [];
+  const seen = new Set<string>();
+
+  for (const d of (index.disputes as unknown as { _docs: Record<string, unknown>[] })._docs?.slice(0, 500) ?? []) {
+    const label = ((d.referenceNumber || d.id || "") as string).slice(0, 80);
+    if (label.toLowerCase().startsWith(lower) && !seen.has(label)) {
+      seen.add(label);
+      results.push({ text: label, score: 1, entityType: "dispute" });
+    }
+    if (results.length >= limit) break;
+  }
+  return results;
+}

@@ -27,8 +27,27 @@ import { parse as parseCookieHeader } from "cookie";
 import type { User } from "../../drizzle/schema";
 import { ForbiddenError } from "@shared/_core/errors";
 
-// ─── PKCE state store (in-memory; replace with Redis for multi-instance) ─────
-const pkceStore = new Map<string, { codeVerifier: string; redirectTo: string }>();
+// ─── PKCE state store backed by Redis (falls back to in-memory) ─────────────
+import { cacheGet, cacheSet, cacheDel } from "../redis";
+
+const _memPkceStore = new Map<string, { codeVerifier: string; redirectTo: string }>();
+
+async function pkceSet(state: string, data: { codeVerifier: string; redirectTo: string }): Promise<void> {
+  await cacheSet(`pkce:${state}`, data, 600); // 10 min TTL
+  _memPkceStore.set(state, data);
+  setTimeout(() => _memPkceStore.delete(state), 10 * 60 * 1000);
+}
+
+async function pkceGet(state: string): Promise<{ codeVerifier: string; redirectTo: string } | null> {
+  const cached = await cacheGet<{ codeVerifier: string; redirectTo: string }>(`pkce:${state}`);
+  if (cached) return cached;
+  return _memPkceStore.get(state) ?? null;
+}
+
+async function pkceDelete(state: string): Promise<void> {
+  await cacheDel(`pkce:${state}`);
+  _memPkceStore.delete(state);
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -60,18 +79,26 @@ function getSessionSecret(): Uint8Array {
 
 export async function createSessionToken(userId: string, name: string, email: string): Promise<string> {
   const expiresAt = Math.floor((Date.now() + ONE_YEAR_MS) / 1000);
-  return new SignJWT({ sub: userId, name, email, type: "session" })
+  const jti = crypto.randomUUID();
+  return new SignJWT({ sub: userId, name, email, type: "session", jti })
     .setProtectedHeader({ alg: "HS256" })
     .setExpirationTime(expiresAt)
+    .setJti(jti)
     .sign(getSessionSecret());
 }
 
-export async function verifySessionToken(token: string): Promise<{ sub: string; name: string; email: string } | null> {
+export async function verifySessionToken(token: string): Promise<{ sub: string; name: string; email: string; jti?: string } | null> {
   try {
     const { payload } = await jwtVerify(token, getSessionSecret(), { algorithms: ["HS256"] });
-    const { sub, name, email } = payload as Record<string, unknown>;
+    const { sub, name, email, jti } = payload as Record<string, unknown>;
     if (typeof sub !== "string" || !sub) return null;
-    return { sub, name: String(name || ""), email: String(email || "") };
+    // Check Redis token revocation list (graceful: if Redis is down, allow through)
+    if (typeof jti === "string" && jti) {
+      const { isTokenRevoked } = await import("../redis");
+      const revoked = await isTokenRevoked(jti).catch(() => false);
+      if (revoked) return null;
+    }
+    return { sub, name: String(name || ""), email: String(email || ""), jti: typeof jti === "string" ? jti : undefined };
   } catch {
     return null;
   }
@@ -123,10 +150,8 @@ export function registerKeycloakRoutes(app: Express) {
       const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
       const state = client.randomState();
 
-      // Store PKCE verifier keyed by state
-      pkceStore.set(state, { codeVerifier, redirectTo });
-      // Clean up after 10 minutes
-      setTimeout(() => pkceStore.delete(state), 10 * 60 * 1000);
+      // Store PKCE verifier keyed by state (Redis + in-memory fallback)
+      await pkceSet(state, { codeVerifier, redirectTo });
 
       const callbackUrl = getCallbackUrl(req);
       const authUrl = client.buildAuthorizationUrl(config, {
@@ -156,8 +181,7 @@ export function registerKeycloakRoutes(app: Express) {
       const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
       const state = client.randomState();
 
-      pkceStore.set(state, { codeVerifier, redirectTo: `${redirectTo}?role=${role}` });
-      setTimeout(() => pkceStore.delete(state), 10 * 60 * 1000);
+      await pkceSet(state, { codeVerifier, redirectTo: `${redirectTo}?role=${role}` });
 
       const callbackUrl = getCallbackUrl(req);
       // Keycloak supports ?kc_action=register to go directly to registration
@@ -182,7 +206,7 @@ export function registerKeycloakRoutes(app: Express) {
   // GET /api/auth/callback — exchange code for tokens, set session cookie
   app.get("/api/auth/callback", async (req: Request, res: Response) => {
     const state = req.query.state as string;
-    const stored = pkceStore.get(state);
+    const stored = await pkceGet(state);
 
     if (!stored) {
       console.error("[Keycloak] Unknown or expired state:", state);
@@ -190,7 +214,7 @@ export function registerKeycloakRoutes(app: Express) {
       return;
     }
 
-    pkceStore.delete(state);
+    await pkceDelete(state);
 
     try {
       const issuerUrl = new URL(getIssuerUrl());

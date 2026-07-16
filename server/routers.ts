@@ -34,10 +34,10 @@ import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDispu
 import { eventBus } from "./events/bus";
 import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, addBusinessDays, daysUntilDeadline } from "./workflow/idr-workflow";
 import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
-import { search, generateLakehouseExport, invalidateSearchIndex } from "./search";
+import { search, generateLakehouseExport, invalidateSearchIndex, suggest } from "./search";
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
-import { getDb } from "./db";
+import { getDb, checkDbHealth } from "./db";
 import { eq, and } from "drizzle-orm";
 import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
@@ -109,7 +109,11 @@ export const appRouter = router({
   system: router({
     health: publicProcedure
       .input(z.object({ timestamp: z.number().min(0) }))
-      .query(() => ({ ok: true })),
+      .query(async () => ({
+        ok: true,
+        db: await checkDbHealth(),
+        ts: Date.now(),
+      })),
   }),
 
   auth: router({
@@ -2384,6 +2388,107 @@ Based on NSA IDR historical data and legal precedent, provide:
           userId: ctx.user.id,
           userRole: ctx.user.role,
         });
+      }),
+    suggest: protectedProcedure
+      .input(z.object({
+        prefix: z.string().min(1).max(100),
+        limit: z.number().int().min(1).max(20).default(8),
+      }))
+      .query(async ({ input }) => {
+        return suggest(input.prefix, input.limit);
+      }),
+  }),
+  // ── Mojaloop payment status ───────────────────────────────────────────────────────────
+  mojaloop: router({
+    transferStatus: protectedProcedure
+      .input(z.object({ transferId: z.string() }))
+      .query(async ({ input }) => {
+        const goServicesUrl = process.env.GO_SERVICES_URL || "http://localhost:8001";
+        try {
+          const res = await fetch(`${goServicesUrl}/mojaloop/transfers/${input.transferId}`, {
+            signal: AbortSignal.timeout(5_000),
+          });
+          if (!res.ok) return { status: "unknown", transferId: input.transferId };
+          return res.json() as Promise<{ status: string; transferId: string; amount?: number; currency?: string; completedAt?: string }>;
+        } catch {
+          return { status: "unavailable", transferId: input.transferId };
+        }
+      }),
+    listByDispute: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
+        // Fetch ledger entries with mojaloop reference IDs (ML- prefix)
+        const entries = await getDisputeLedgerHistory(input.disputeId);
+        return (entries as Array<{ referenceId?: string | null }>).filter(e => e.referenceId?.startsWith('ML-') ?? false);
+      }),
+  }),
+  // ── Temporal workflow run status ──────────────────────────────────────────────────
+  temporal: router({
+    workflowStatus: protectedProcedure
+      .input(z.object({ disputeId: z.string() }))
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
+        const temporalUrl = process.env.TEMPORAL_UI_URL || "http://localhost:8088";
+        try {
+          const res = await fetch(
+            `${temporalUrl}/api/v1/namespaces/idr/workflows?query=DisputeId%3D%22${encodeURIComponent(input.disputeId)}%22`,
+            { signal: AbortSignal.timeout(5_000) }
+          );
+          if (!res.ok) throw new Error(`Temporal API ${res.status}`);
+          const data = await res.json() as { executions?: Array<{ workflowId: string; runId: string; status: string; startTime: string; closeTime?: string }> };
+          return data.executions ?? [];
+        } catch {
+          // Temporal not running — return workflow progress from DB
+          const dispute = await getDisputeById(input.disputeId);
+          if (!dispute) return [];
+          return [{
+            workflowId: `idr-${input.disputeId}`,
+            runId: "local",
+            status: dispute.status,
+            startTime: dispute.createdAt?.toISOString() ?? new Date().toISOString(),
+            closeTime: dispute.status === 'closed' ? dispute.updatedAt?.toISOString() : undefined,
+            currentStep: dispute.currentStep,
+          }];
+        }
+      }),
+    allWorkflows: protectedProcedure
+      .input(z.object({
+        status: z.enum(['RUNNING', 'COMPLETED', 'FAILED', 'CANCELED', 'TERMINATED']).optional(),
+        limit: z.number().int().min(1).max(100).default(20),
+      }))
+      .query(async ({ ctx, input }) => {
+        if (ctx.user.role !== 'admin') throw new TRPCError({ code: 'FORBIDDEN', message: 'Admin only' });
+        const temporalUrl = process.env.TEMPORAL_UI_URL || "http://localhost:8088";
+        try {
+          const statusFilter = input.status ? `&status=${input.status}` : '';
+          const res = await fetch(
+            `${temporalUrl}/api/v1/namespaces/idr/workflows?pageSize=${input.limit}${statusFilter}`,
+            { signal: AbortSignal.timeout(5_000) }
+          );
+          if (!res.ok) throw new Error(`Temporal API ${res.status}`);
+          const data = await res.json() as { executions?: unknown[] };
+          return data.executions ?? [];
+        } catch {
+          // Fallback: return disputes as pseudo-workflow runs
+          const db = await getDb();
+          if (!db) return [];
+          const rows = await db.select({
+            id: disputesTable.id,
+            status: disputesTable.status,
+            currentStep: disputesTable.currentStep,
+            createdAt: disputesTable.createdAt,
+            updatedAt: disputesTable.updatedAt,
+          }).from(disputesTable).limit(input.limit);
+          return rows.map(r => ({
+            workflowId: `idr-${r.id}`,
+            runId: "local",
+            status: r.status,
+            currentStep: r.currentStep,
+            startTime: r.createdAt?.toISOString() ?? '',
+            closeTime: r.status === 'closed' ? r.updatedAt?.toISOString() : undefined,
+          }));
+        }
       }),
   }),
 
