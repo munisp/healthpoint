@@ -1,5 +1,6 @@
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
+import { hermesRouter } from "./routers/hermes";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { ENV } from "./_core/env";
@@ -3687,6 +3688,8 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         return { success: true };
       }),
   }),
+
+  hermes: hermesRouter,
 });
 export type AppRouter = typeof appRouter;
 

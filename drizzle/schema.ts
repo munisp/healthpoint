@@ -1202,3 +1202,146 @@ export const smartFormExtractions = pgTable(
 );
 export type SmartFormExtraction = typeof smartFormExtractions.$inferSelect;
 export type InsertSmartFormExtraction = typeof smartFormExtractions.$inferInsert;
+
+// ─── Hermes AI Agent ──────────────────────────────────────────────────────────
+
+export const hermesJobTypeEnum = pgEnum("hermes_job_type", [
+  "narrative_generation",
+  "outcome_simulation",
+  "fhir_enrichment",
+  "risk_scoring",
+  "payer_intelligence",
+  "regulatory_feed",
+  "arbitrator_scoring",
+  "chat",
+]);
+
+export const hermesJobStatusEnum = pgEnum("hermes_job_status", [
+  "queued",
+  "running",
+  "complete",
+  "failed",
+  "cancelled",
+]);
+
+/** One Hermes agent job — tracks input, output, model, latency */
+export const hermesJobs = pgTable(
+  "hermes_jobs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    jobType: hermesJobTypeEnum("jobType").notNull(),
+    status: hermesJobStatusEnum("status").notNull().default("queued"),
+    // Input
+    inputPayload: jsonb("inputPayload").$type<Record<string, unknown>>().notNull().default({}),
+    // Output
+    outputText: text("outputText"),
+    outputJson: jsonb("outputJson").$type<Record<string, unknown>>(),
+    // Metadata
+    modelUsed: varchar("modelUsed", { length: 128 }),
+    promptTokens: integer("promptTokens"),
+    completionTokens: integer("completionTokens"),
+    latencyMs: integer("latencyMs"),
+    errorMessage: text("errorMessage"),
+    // Timestamps
+    startedAt: timestamp("startedAt"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("hermes_jobs_user_idx").on(t.userId),
+    index("hermes_jobs_dispute_idx").on(t.disputeId),
+    index("hermes_jobs_type_idx").on(t.jobType),
+    index("hermes_jobs_status_idx").on(t.status),
+  ]
+);
+export type HermesJob = typeof hermesJobs.$inferSelect;
+export type InsertHermesJob = typeof hermesJobs.$inferInsert;
+
+/** Persisted Hermes insights attached to a dispute (risk score, narrative, etc.) */
+export const hermesInsights = pgTable(
+  "hermes_insights",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    jobId: varchar("jobId", { length: 64 }),
+    insightType: hermesJobTypeEnum("insightType").notNull(),
+    // Risk scoring
+    riskScore: integer("riskScore"),          // 0-100
+    riskLevel: varchar("riskLevel", { length: 16 }), // low | medium | high | critical
+    riskFactors: jsonb("riskFactors").$type<string[]>(),
+    // Narrative
+    narrative: text("narrative"),
+    narrativeVersion: integer("narrativeVersion").default(1),
+    // Outcome simulation
+    providerWinPct: integer("providerWinPct"),
+    payerWinPct: integer("payerWinPct"),
+    splitPct: integer("splitPct"),
+    withdrawnPct: integer("withdrawnPct"),
+    simulationBasis: text("simulationBasis"),
+    // Payer intelligence
+    payerBehaviorSummary: text("payerBehaviorSummary"),
+    payerAcceptanceRate: integer("payerAcceptanceRate"),
+    payerAvgRoundToAccept: numeric("payerAvgRoundToAccept", { precision: 4, scale: 1 }),
+    // Arbitrator scoring
+    arbitratorId: varchar("arbitratorId", { length: 64 }),
+    arbitratorWinRate: integer("arbitratorWinRate"),
+    arbitratorAvgAward: numeric("arbitratorAvgAward", { precision: 12, scale: 2 }),
+    arbitratorNotes: text("arbitratorNotes"),
+    // FHIR enrichment
+    enrichedFields: jsonb("enrichedFields").$type<Record<string, unknown>>(),
+    // Timestamps
+    generatedAt: timestamp("generatedAt").defaultNow(),
+    expiresAt: timestamp("expiresAt"),
+  },
+  (t) => [
+    index("hermes_insights_dispute_idx").on(t.disputeId),
+    index("hermes_insights_type_idx").on(t.insightType),
+  ]
+);
+export type HermesInsight = typeof hermesInsights.$inferSelect;
+export type InsertHermesInsight = typeof hermesInsights.$inferInsert;
+
+/** Hermes regulatory change feed entries */
+export const hermesRegulatoryEntries = pgTable(
+  "hermes_regulatory_entries",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    title: varchar("title", { length: 512 }).notNull(),
+    summary: text("summary").notNull(),
+    source: varchar("source", { length: 255 }).notNull(),
+    sourceUrl: varchar("sourceUrl", { length: 1024 }),
+    impactLevel: varchar("impactLevel", { length: 16 }).notNull().default("medium"), // low | medium | high | critical
+    affectedSteps: jsonb("affectedSteps").$type<string[]>().default([]),
+    tags: jsonb("tags").$type<string[]>().default([]),
+    effectiveDate: timestamp("effectiveDate"),
+    isRead: boolean("isRead").default(false),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("hermes_reg_impact_idx").on(t.impactLevel),
+    index("hermes_reg_read_idx").on(t.isRead),
+  ]
+);
+export type HermesRegulatoryEntry = typeof hermesRegulatoryEntries.$inferSelect;
+
+/** Hermes chat conversation messages */
+export const hermesChatMessages = pgTable(
+  "hermes_chat_messages",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    sessionId: varchar("sessionId", { length: 64 }).notNull(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    role: varchar("role", { length: 16 }).notNull(), // user | assistant | system
+    content: text("content").notNull(),
+    jobId: varchar("jobId", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("hermes_chat_session_idx").on(t.sessionId),
+    index("hermes_chat_user_idx").on(t.userId),
+  ]
+);
+export type HermesChatMessage = typeof hermesChatMessages.$inferSelect;

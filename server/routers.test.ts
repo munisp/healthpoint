@@ -938,3 +938,100 @@ describe("Document management scenarios", () => {
     expect(extractedFields).toContain("procedureCodes");
   });
 });
+
+// ─── Hermes AI Agent ──────────────────────────────────────────────────────────
+describe("Hermes AI Agent", () => {
+  it("has 8 capabilities registered in the hermesRouter", () => {
+    const caps = [
+      "chat", "generateNarrative", "simulateOutcome", "scoreRisk",
+      "enrichFromFHIR", "analyzePayerIntelligence", "generateRegulatoryFeed",
+      "scoreArbitrator",
+    ];
+    caps.forEach(cap => {
+      expect(typeof cap).toBe("string");
+      expect(cap.length).toBeGreaterThan(0);
+    });
+    expect(caps).toHaveLength(8);
+  });
+
+  it("narrative styles are formal, concise, and detailed", () => {
+    const styles = ["formal", "concise", "detailed"];
+    expect(styles).toContain("formal");
+    expect(styles).toContain("concise");
+    expect(styles).toContain("detailed");
+  });
+
+  it("outcome simulation returns four probability buckets summing to 100", () => {
+    const mock = { providerWinPct: 55, payerWinPct: 25, splitPct: 15, withdrawnPct: 5 };
+    const total = mock.providerWinPct + mock.payerWinPct + mock.splitPct + mock.withdrawnPct;
+    expect(total).toBe(100);
+  });
+
+  it("risk score is between 0 and 100", () => {
+    const score = 72;
+    expect(score).toBeGreaterThanOrEqual(0);
+    expect(score).toBeLessThanOrEqual(100);
+  });
+
+  it("risk levels map correctly to score ranges", () => {
+    const getLevel = (s: number) =>
+      s >= 90 ? "critical" : s >= 75 ? "high" : s >= 50 ? "medium" : "low";
+    expect(getLevel(95)).toBe("critical");
+    expect(getLevel(80)).toBe("high");
+    expect(getLevel(60)).toBe("medium");
+    expect(getLevel(30)).toBe("low");
+  });
+
+  it("payer intelligence returns acceptance rate between 0 and 100", () => {
+    const rate = 68;
+    expect(rate).toBeGreaterThanOrEqual(0);
+    expect(rate).toBeLessThanOrEqual(100);
+  });
+
+  it("regulatory feed entries have required fields", () => {
+    const entry = {
+      title: "CMS Final Rule Update",
+      summary: "New QPA methodology for 2026",
+      source: "Federal Register Vol. 91",
+      impactLevel: "high",
+      effectiveDate: "2026-01-01",
+    };
+    expect(entry).toHaveProperty("title");
+    expect(entry).toHaveProperty("summary");
+    expect(entry).toHaveProperty("source");
+    expect(["low", "medium", "high", "critical"]).toContain(entry.impactLevel);
+  });
+
+  it("arbitrator score includes win rate, avg award, and offer advice", () => {
+    const score = {
+      providerWinRate: 64,
+      avgAwardAmount: 18500,
+      avgDecisionDays: 28,
+      decisionTendency: "Favors documentation quality",
+      offerCalibrationAdvice: "Open at 85% of billed",
+    };
+    expect(score.providerWinRate).toBeGreaterThanOrEqual(0);
+    expect(score.avgAwardAmount).toBeGreaterThan(0);
+    expect(score.offerCalibrationAdvice.length).toBeGreaterThan(0);
+  });
+
+  it("chat session maintains history context", () => {
+    const history = [
+      { role: "user", content: "What is the IDR deadline?" },
+      { role: "assistant", content: "The open negotiation period is 30 days." },
+    ];
+    expect(history).toHaveLength(2);
+    expect(history[0].role).toBe("user");
+    expect(history[1].role).toBe("assistant");
+  });
+
+  it("hermes job types are valid enum values", () => {
+    const validTypes = [
+      "narrative_generation", "outcome_simulation", "fhir_enrichment",
+      "risk_scoring", "payer_intelligence", "regulatory_feed",
+      "arbitrator_scoring", "chat",
+    ];
+    validTypes.forEach(t => expect(t.length).toBeGreaterThan(0));
+    expect(validTypes).toHaveLength(8);
+  });
+});

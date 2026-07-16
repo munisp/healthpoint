@@ -195,6 +195,7 @@ const menuItems = [
   { icon: Webhook, label: "CDS Hooks Manager", path: "/cds-hooks" },
   { icon: ClipboardCheck, label: "USCDI Completeness", path: "/uscdi-completeness" },
   { icon: Bot, label: "Ollama LLM Manager", path: "/ollama" },
+  { icon: Brain, label: "Hermes AI Agent", path: "/hermes" },
 ];
 
 const SIDEBAR_WIDTH_KEY = 'sidebar-width';
