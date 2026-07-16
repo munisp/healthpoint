@@ -11,7 +11,7 @@ import hpp from "hpp";
 import morgan from "morgan";
 import { v4 as uuidv4 } from "uuid";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes } from "./oauth";
+import { registerKeycloakRoutes } from "./keycloak";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -214,7 +214,7 @@ async function startServer() {
   });
 
   // ── Keycloak OIDC routes ──────────────────────────────────────────────────────
-  registerOAuthRoutes(app);
+  registerKeycloakRoutes(app);
 
   // ── Scheduled heartbeat endpoints (auth-guarded in production) ───────────
   app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
