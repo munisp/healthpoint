@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SmartForm AI Extraction Guide — HealthPoint IDR</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      animation: {
+        'progress': 'progress 1.8s ease-in-out infinite',
+        'fade-in': 'fadeIn 0.3s ease-out',
+      },
+      keyframes: {
+        progress: { '0%,100%': { opacity: '1' }, '50%': { opacity: '0.5' } },
+        fadeIn: { from: { opacity: '0', transform: 'translateY(8px)' }, to: { opacity: '1', transform: 'translateY(0)' } },
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  .tab-btn { transition: all 0.2s; }
+  .tab-btn.active { background: #2563eb; color: white; }
+  .tab-btn:not(.active) { background: white; color: #374151; border: 1px solid #e5e7eb; }
+  .tab-btn:not(.active):hover { background: #f9fafb; }
+  .step-card { transition: all 0.2s; }
+  .step-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .progress-bar { transition: width 0.15s ease; }
+  .field-row { transition: background 0.15s; }
+  .field-row:hover { background: #f8fafc; }
+  .chip { cursor: pointer; transition: all 0.15s; }
+  .chip:hover { transform: translateY(-1px); box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .accordion-body { overflow: hidden; transition: max-height 0.3s ease, opacity 0.3s ease; max-height: 0; opacity: 0; }
+  .accordion-body.open { max-height: 600px; opacity: 1; }
+  .badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; border-radius: 9999px; font-size: 11px; font-weight: 600; border: 1px solid; }
+  .confidence-high { background: #dcfce7; color: #15803d; border-color: #86efac; }
+  .confidence-mid { background: #fef9c3; color: #a16207; border-color: #fde047; }
+  .confidence-low { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
+  .edited-badge { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; animation: fadeIn 0.25s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body class="bg-slate-50 min-h-screen">
+
+<!-- Header -->
+<div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-10">
+  <div class="max-w-5xl mx-auto">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-lg">✦</div>
+      <span class="text-xs font-semibold bg-white/20 px-3 py-1 rounded-full">Hermes AI · SmartForm</span>
+    </div>
+    <h1 class="text-3xl font-bold mb-2">SmartForm AI Extraction</h1>
+    <p class="text-blue-100 text-lg max-w-2xl">
+      How Hermes transforms unstructured medical documents into structured, validated dispute data in under 10 seconds.
+    </p>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="max-w-5xl mx-auto px-6 py-8">
+  <div class="flex gap-2 mb-8 flex-wrap">
+    <button class="tab-btn active px-5 py-2 rounded-lg font-medium text-sm" onclick="switchTab('flow', this)">📋 Pipeline Flow</button>
+    <button class="tab-btn px-5 py-2 rounded-lg font-medium text-sm" onclick="switchTab('features', this)">⚡ Feature Guide</button>
+    <button class="tab-btn px-5 py-2 rounded-lg font-medium text-sm" onclick="switchTab('simulation', this)">🧪 Live Simulation</button>
+  </div>
+
+  <!-- ══════════════════ FLOW TAB ══════════════════ -->
+  <div id="tab-flow" class="tab-content active space-y-3">
+    <p class="text-slate-500 text-sm text-center mb-4">Click any step to expand its details</p>
+
+    <div id="flow-steps"></div>
+
+    <div class="mt-6 bg-blue-50 border border-blue-200 rounded-xl p-5 flex gap-4">
+      <span class="text-blue-600 text-xl flex-shrink-0">ℹ</span>
+      <div>
+        <p class="font-semibold text-blue-800 mb-1">End-to-end in under 10 seconds</p>
+        <p class="text-sm text-blue-700">From document upload to populated form fields, the entire pipeline — ingestion, LLM extraction, confidence scoring, and field preview — completes in under 10 seconds on average. Manual review and editing add only the time the user needs.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════ FEATURES TAB ══════════════════ -->
+  <div id="tab-features" class="tab-content">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8" id="feature-cards"></div>
+
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <h3 class="font-semibold text-slate-800 mb-4">Form Target Coverage</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-slate-200">
+              <th class="text-left py-2 pr-4 font-semibold text-slate-600">Target Form</th>
+              <th class="text-left py-2 pr-4 font-semibold text-slate-600">Page</th>
+              <th class="text-left py-2 font-semibold text-slate-600">Fields Mapped</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr>
+              <td class="py-2 pr-4"><code class="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded">dispute</code></td>
+              <td class="py-2 pr-4 text-slate-700">New Dispute</td>
+              <td class="py-2 text-slate-500 text-xs">patientName, DOB, memberId, providerName, NPI, payerName, claimNumber, serviceDate, billedAmount, CPT codes</td>
+            </tr>
+            <tr>
+              <td class="py-2 pr-4"><code class="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded">offer</code></td>
+              <td class="py-2 pr-4 text-slate-700">Offer / Counter Wizard</td>
+              <td class="py-2 text-slate-500 text-xs">offerAmount, rationale</td>
+            </tr>
+            <tr>
+              <td class="py-2 pr-4"><code class="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded">mobile_dispute</code></td>
+              <td class="py-2 pr-4 text-slate-700">Mobile Dispute Wizard</td>
+              <td class="py-2 text-slate-500 text-xs">providerName, payerName, serviceDate, billedAmount, cptCodes</td>
+            </tr>
+            <tr>
+              <td class="py-2 pr-4"><code class="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded">emr_onboarding</code></td>
+              <td class="py-2 pr-4 text-slate-700">EMR Onboarding</td>
+              <td class="py-2 text-slate-500 text-xs">fhirBaseUrl, clientId, facilityId</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════ SIMULATION TAB ══════════════════ -->
+  <div id="tab-simulation" class="tab-content space-y-6">
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <h3 class="font-semibold text-slate-800 mb-1 flex items-center gap-2">
+        <span class="text-purple-600">✦</span> Interactive Simulation — paste a document and watch Hermes extract it
+      </h3>
+      <p class="text-sm text-slate-500 mb-4">Edit the text below then click Run AI Extraction to see the pipeline in action.</p>
+      <textarea id="doc-input" rows="8" class="w-full font-mono text-xs border border-slate-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-purple-400 resize-none">Patient Name: Jane Doe
+Date of Birth: 1985-03-22
+Member ID: HP-2024-88821
+Provider Name: Mountain View Emergency Physicians
+NPI: 1234567890
+Payer: BlueCross BlueShield of Texas
+Claim Number: CLM-2024-00441
+Service Date: 2024-11-14
+Billed Amount: $12,450.00
+CPT Codes: 99285, 36415
+Diagnosis: R07.9 (Chest pain, unspecified)</textarea>
+      <div class="flex items-center gap-3 mt-4">
+        <button id="run-btn" onclick="runSimulation()" class="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2 rounded-lg font-medium text-sm flex items-center gap-2 transition-colors">
+          <span id="run-icon">🧠</span>
+          <span id="run-label">Run AI Extraction</span>
+        </button>
+        <span id="success-msg" class="hidden text-sm text-emerald-600 font-medium">✓ 11 fields extracted</span>
+      </div>
+      <!-- Progress bar -->
+      <div id="progress-wrap" class="hidden mt-4 space-y-1">
+        <div class="flex justify-between text-xs text-slate-500">
+          <span>Hermes is reading your document...</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="h-2 bg-slate-200 rounded-full overflow-hidden">
+          <div id="progress-fill" class="h-full bg-gradient-to-r from-purple-500 to-blue-500 rounded-full progress-bar" style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Extracted fields -->
+    <div id="fields-panel" class="hidden bg-white border border-slate-200 rounded-xl p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-semibold text-slate-800">Extracted Fields Preview</h3>
+        <div class="flex items-center gap-3 text-xs text-slate-500">
+          <button onclick="selectAll()" class="text-blue-600 hover:underline">Select All</button>
+          <span>·</span>
+          <button onclick="deselectAll()" class="text-slate-500 hover:underline">Deselect All</button>
+          <span>·</span>
+          <button id="revert-all-btn" onclick="revertAll()" class="hidden text-blue-600 hover:underline flex items-center gap-1">↺ Revert All</button>
+        </div>
+      </div>
+      <div id="fields-list" class="space-y-2"></div>
+      <div class="mt-4 pt-4 border-t border-slate-200 flex items-center justify-between">
+        <p class="text-sm text-slate-500" id="apply-summary">11 of 11 fields selected</p>
+        <button onclick="applyFields()" id="apply-btn" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-lg font-medium text-sm flex items-center gap-2 transition-colors">
+          ✓ Apply 11 Fields
+        </button>
+      </div>
+    </div>
+
+    <!-- Warning -->
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3">
+      <span class="text-amber-600 flex-shrink-0">⚠</span>
+      <p class="text-sm text-amber-800">
+        This is a <strong>client-side simulation</strong> using pre-defined sample data to demonstrate the UI flow. In production, extraction is performed by the Hermes LLM engine via <code class="text-xs bg-amber-100 px-1 rounded">trpc.smartForm.extract</code> and returns real AI-generated values with live confidence scores.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="fixed bottom-6 right-6 hidden z-50">
+  <div class="bg-slate-800 text-white px-4 py-3 rounded-xl shadow-xl text-sm font-medium max-w-xs"></div>
+</div>
+
+<script>
+// ─── Data ─────────────────────────────────────────────────────────────────────
+
+const FLOW_STEPS = [
+  { id:1, emoji:'📤', color:'bg-blue-500', lightBg:'bg-blue-50', border:'border-blue-200', textColor:'text-blue-700', badge:'Input', title:'Document Ingestion', subtitle:'Multi-format input',
+    description:'Users upload an EOB, CMS-1500, FHIR Bundle, or plain text paste. The SmartFormPanel accepts drag-and-drop or file picker input and validates the MIME type before sending.',
+    details:['PDF, PNG, JPEG, DOCX, TXT, JSON (FHIR)','Drag-and-drop or file picker','MIME-type validation before upload','Max 10 MB per document'] },
+  { id:2, emoji:'🧠', color:'bg-purple-500', lightBg:'bg-purple-50', border:'border-purple-200', textColor:'text-purple-700', badge:'AI', title:'LLM Extraction', subtitle:'Hermes AI engine',
+    description:'The document content is sent to the Hermes AI engine via trpc.smartForm.extract. The LLM uses a structured JSON schema to extract every field with a value, confidence score (0–100), and source citation.',
+    details:['Structured JSON schema output — no hallucinated fields','Per-field confidence score (0–100)','Source citation (e.g. "header section", "claim line 3")','Supports 4 form targets: dispute, offer, mobile_dispute, emr_onboarding'] },
+  { id:3, emoji:'👁', color:'bg-emerald-500', lightBg:'bg-emerald-50', border:'border-emerald-200', textColor:'text-emerald-700', badge:'Review', title:'Confidence Preview', subtitle:'Color-coded review',
+    description:'Every extracted field is shown with a color-coded confidence badge. Users can see at a glance which fields the AI is certain about and which need review.',
+    details:['Green badge: ≥ 85% confidence — high certainty','Amber badge: 60–84% — review recommended','Red badge: < 60% — manual verification required','Source citation shown below each value'] },
+  { id:4, emoji:'✏️', color:'bg-orange-500', lightBg:'bg-orange-50', border:'border-orange-200', textColor:'text-orange-700', badge:'Edit', title:'Inline Editing', subtitle:'Manual correction',
+    description:'Any field can be clicked to enter edit mode. The original AI value is preserved and shown as a strikethrough below the edited value. A blue "Edited" badge replaces the confidence badge.',
+    details:['Click pencil icon to enter edit mode','Enter or ✓ to commit, Escape or ✗ to discard','Original AI value shown with strikethrough','Per-field Revert button restores AI value'] },
+  { id:5, emoji:'⇄', color:'bg-indigo-500', lightBg:'bg-indigo-50', border:'border-indigo-200', textColor:'text-indigo-700', badge:'Compare', title:'Compare View', subtitle:'Side-by-side diff',
+    description:'When edits exist, a Compare toggle reveals a side-by-side diff table showing the original AI value next to the manual edit for every changed field.',
+    details:['Compare toggle appears when ≥ 1 field is edited','3-column layout: AI value → arrow → your edit','Per-row Revert button in the diff table','Revert All with confirmation dialog'] },
+  { id:6, emoji:'✅', color:'bg-teal-500', lightBg:'bg-teal-50', border:'border-teal-200', textColor:'text-teal-700', badge:'Apply', title:'Selective Apply', subtitle:'Field-level control',
+    description:'Users choose exactly which fields to apply using checkboxes. Select All / Deselect All shortcuts are available. The Apply button populates the parent form with only the selected fields.',
+    details:['Per-field checkbox selection','Select All / Deselect All shortcuts','Apply toast reports count + manual edit count','Extraction ID stored for audit trail'] },
+  { id:7, emoji:'🕐', color:'bg-rose-500', lightBg:'bg-rose-50', border:'border-rose-200', textColor:'text-rose-700', badge:'History', title:'History & Reuse', subtitle:'Past extractions',
+    description:'The View History modal shows the last 50 extractions with search and date filters. Any past extraction can be reused — loading it back into the preview panel for re-review and re-apply.',
+    details:['Search by document name','Date From / Date To range filter','Expandable field preview per entry','Reuse button loads extraction back into panel'] },
+  { id:8, emoji:'⬇️', color:'bg-slate-600', lightBg:'bg-slate-50', border:'border-slate-200', textColor:'text-slate-700', badge:'Export', title:'Export', subtitle:'JSON or CSV',
+    description:'The final reviewed data — including AI values overridden by manual edits — can be downloaded as a structured JSON file or a flat CSV, with edited and selected flags on every field.',
+    details:['JSON: nested structure with metadata + fields array','CSV: Field, Value, Confidence, Source, Edited, Selected','Filename includes form type and timestamp','Reflects final state after all edits'] },
+];
+
+const FEATURES = [
+  { emoji:'⚡', title:'10-Second Auto-Fill', desc:'From raw EOB PDF to fully pre-populated dispute form in under 10 seconds. No manual data entry.', bg:'bg-yellow-50', color:'text-yellow-600' },
+  { emoji:'🛡', title:'Confidence Scoring', desc:'Every field carries a 0–100 confidence score so reviewers know exactly where to focus attention.', bg:'bg-blue-50', color:'text-blue-600' },
+  { emoji:'🎯', title:'4 Form Targets', desc:'Dispute initiation, offer/counter, mobile wizard, and EMR onboarding — each with tailored field mappings.', bg:'bg-purple-50', color:'text-purple-600' },
+  { emoji:'✏️', title:'Inline Correction', desc:'Edit any AI value in-place. Original preserved as strikethrough. Per-field and bulk revert available.', bg:'bg-orange-50', color:'text-orange-600' },
+  { emoji:'⇄', title:'Side-by-Side Compare', desc:'Toggle a diff view to see original AI values vs. manual edits across all changed fields at once.', bg:'bg-indigo-50', color:'text-indigo-600' },
+  { emoji:'🕐', title:'Extraction History', desc:'Search and filter past extractions. Reuse any previous result without re-uploading the document.', bg:'bg-rose-50', color:'text-rose-600' },
+  { emoji:'📋', title:'Audit Trail', desc:'Every extraction is persisted with job ID, model, latency, and which fields were applied.', bg:'bg-teal-50', color:'text-teal-600' },
+  { emoji:'⬇️', title:'JSON / CSV Export', desc:'Download the final reviewed data with edited and selected flags for downstream processing.', bg:'bg-slate-50', color:'text-slate-600' },
+];
+
+const SAMPLE_FIELDS = [
+  { key:'Patient Name', value:'Jane Doe', confidence:98, source:'header section' },
+  { key:'Date of Birth', value:'1985-03-22', confidence:95, source:'patient demographics' },
+  { key:'Member ID', value:'HP-2024-88821', confidence:97, source:'insurance section' },
+  { key:'Provider Name', value:'Mountain View Emergency Physicians', confidence:94, source:'provider block' },
+  { key:'NPI', value:'1234567890', confidence:99, source:'provider block' },
+  { key:'Payer Name', value:'BlueCross BlueShield of Texas', confidence:96, source:'payer section' },
+  { key:'Claim Number', value:'CLM-2024-00441', confidence:99, source:'claim header' },
+  { key:'Service Date', value:'2024-11-14', confidence:97, source:'service line 1' },
+  { key:'Billed Amount', value:'$12,450.00', confidence:98, source:'totals section' },
+  { key:'CPT Codes', value:'99285, 36415', confidence:91, source:'procedure codes' },
+  { key:'Diagnosis Codes', value:'R07.9', confidence:88, source:'diagnosis section' },
+];
+
+// ─── State ────────────────────────────────────────────────────────────────────
+
+let selectedFields = new Set(SAMPLE_FIELDS.map((_,i)=>i));
+let editedFields = {};
+let simState = 'idle'; // idle | extracting | done
+
+// ─── Tab switching ────────────────────────────────────────────────────────────
+
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ─── Build Flow Steps ─────────────────────────────────────────────────────────
+
+function buildFlow() {
+  const container = document.getElementById('flow-steps');
+  FLOW_STEPS.forEach((step, idx) => {
+    const div = document.createElement('div');
+    div.innerHTML = `
+      <div class="step-card bg-white border border-slate-200 rounded-xl overflow-hidden cursor-pointer hover:border-slate-300" onclick="toggleStep(${step.id})">
+        <div class="flex items-center gap-4 px-5 py-4">
+          <div class="w-10 h-10 rounded-xl ${step.color} flex items-center justify-center text-white text-lg flex-shrink-0">${step.emoji}</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-0.5">
+              <span class="text-xs font-mono text-slate-400">Step ${step.id}</span>
+              <span class="badge ${step.textColor}" style="border-color:currentColor;background:transparent;font-size:10px">${step.badge}</span>
+            </div>
+            <p class="font-semibold text-slate-800">${step.title}</p>
+            <p class="text-sm text-slate-500">${step.subtitle}</p>
+          </div>
+          <span id="chevron-${step.id}" class="text-slate-400 transition-transform duration-200">›</span>
+        </div>
+        <div id="step-body-${step.id}" class="accordion-body">
+          <div class="px-5 pb-5 border-t ${step.border} ${step.lightBg}">
+            <p class="text-sm text-slate-700 mt-4 mb-3">${step.description}</p>
+            <ul class="space-y-1.5">
+              ${step.details.map(d => `<li class="flex items-start gap-2 text-sm text-slate-600"><span class="${step.textColor} flex-shrink-0">✓</span>${d}</li>`).join('')}
+            </ul>
+          </div>
+        </div>
+      </div>
+      ${idx < FLOW_STEPS.length - 1 ? '<div class="flex justify-center py-1"><span class="text-slate-300 text-lg">↓</span></div>' : ''}
+    `;
+    container.appendChild(div);
+  });
+}
+
+function toggleStep(id) {
+  const body = document.getElementById('step-body-' + id);
+  const chevron = document.getElementById('chevron-' + id);
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  chevron.style.transform = isOpen ? '' : 'rotate(90deg)';
+}
+
+// ─── Build Feature Cards ──────────────────────────────────────────────────────
+
+function buildFeatures() {
+  const container = document.getElementById('feature-cards');
+  FEATURES.forEach(f => {
+    const div = document.createElement('div');
+    div.className = 'bg-white border border-slate-200 rounded-xl p-5 hover:shadow-md transition-shadow';
+    div.innerHTML = `
+      <div class="w-10 h-10 rounded-xl ${f.bg} flex items-center justify-center text-xl mb-3">${f.emoji}</div>
+      <p class="font-semibold text-slate-800 mb-1">${f.title}</p>
+      <p class="text-sm text-slate-500">${f.desc}</p>
+    `;
+    container.appendChild(div);
+  });
+}
+
+// ─── Simulation ───────────────────────────────────────────────────────────────
+
+function runSimulation() {
+  if (simState === 'extracting') return;
+  simState = 'extracting';
+  editedFields = {};
+  selectedFields = new Set(SAMPLE_FIELDS.map((_,i)=>i));
+  document.getElementById('fields-panel').classList.add('hidden');
+  document.getElementById('success-msg').classList.add('hidden');
+  document.getElementById('run-label').textContent = 'Extracting...';
+  document.getElementById('run-icon').textContent = '⏳';
+  document.getElementById('progress-wrap').classList.remove('hidden');
+
+  let p = 0;
+  const interval = setInterval(() => {
+    p += Math.random() * 18 + 5;
+    if (p >= 100) {
+      p = 100;
+      clearInterval(interval);
+      setTimeout(() => {
+        simState = 'done';
+        document.getElementById('run-label').textContent = 'Re-run Extraction';
+        document.getElementById('run-icon').textContent = '🔄';
+        document.getElementById('progress-wrap').classList.add('hidden');
+        document.getElementById('success-msg').classList.remove('hidden');
+        renderFields();
+        document.getElementById('fields-panel').classList.remove('hidden');
+      }, 300);
+    }
+    document.getElementById('progress-fill').style.width = Math.min(p,100) + '%';
+    document.getElementById('progress-pct').textContent = Math.round(Math.min(p,100)) + '%';
+  }, 120);
+}
+
+function confidenceBadgeClass(c) {
+  if (c >= 85) return 'confidence-high';
+  if (c >= 60) return 'confidence-mid';
+  return 'confidence-low';
+}
+
+function renderFields() {
+  const list = document.getElementById('fields-list');
+  list.innerHTML = '';
+  SAMPLE_FIELDS.forEach((f, i) => {
+    const isEdited = i in editedFields;
+    const displayValue = editedFields[i] ?? f.value;
+    const isSelected = selectedFields.has(i);
+    const row = document.createElement('div');
+    row.id = 'field-row-' + i;
+    row.className = `field-row flex items-start gap-3 p-3 rounded-lg border transition-colors ${
+      isEdited ? 'bg-blue-50 border-l-4 border-blue-300' : isSelected ? 'bg-white border-slate-200' : 'bg-slate-50 border-slate-200 opacity-60'
+    }`;
+    row.innerHTML = `
+      <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleField(${i})" class="mt-1 accent-blue-600 flex-shrink-0" />
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-0.5">
+          <span class="text-xs font-semibold text-slate-600">${f.key}</span>
+          ${isEdited
+            ? `<span class="badge edited-badge">✏ Edited</span>`
+            : `<span class="badge ${confidenceBadgeClass(f.confidence)}">${f.confidence}%</span>`}
+        </div>
+        <div id="value-display-${i}">
+          <span class="${isEdited ? 'text-sm font-medium text-blue-700' : 'text-sm font-medium text-slate-800'}">${displayValue}</span>
+          ${isEdited ? `<div class="text-xs text-slate-400 line-through mt-0.5">AI: ${f.value}</div>` : ''}
+        </div>
+        <div id="value-edit-${i}" class="hidden flex items-center gap-2">
+          <input id="edit-input-${i}" value="${displayValue}" class="flex-1 text-sm border border-blue-400 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            onkeydown="handleEditKey(event,${i})" />
+          <button onclick="commitEdit(${i})" class="text-blue-600 hover:text-blue-800 text-sm font-bold">✓</button>
+          <button onclick="cancelEdit(${i})" class="text-slate-400 hover:text-slate-600 text-sm">✗</button>
+        </div>
+        <p class="text-xs text-slate-400 mt-0.5">Source: ${f.source}</p>
+      </div>
+      <div class="flex items-center gap-1 flex-shrink-0">
+        <button onclick="startEdit(${i})" class="p-1 rounded hover:bg-blue-100 text-slate-400 hover:text-blue-600 transition-colors" title="Edit">✏</button>
+        ${isEdited ? `<button onclick="revertField(${i})" class="p-1 rounded hover:bg-slate-100 text-blue-400 hover:text-blue-600 transition-colors" title="Revert">↺</button>` : ''}
+      </div>
+    `;
+    list.appendChild(row);
+  });
+  updateApplySummary();
+  updateRevertAllBtn();
+}
+
+function startEdit(i) {
+  document.getElementById('value-display-' + i).classList.add('hidden');
+  document.getElementById('value-edit-' + i).classList.remove('hidden');
+  document.getElementById('edit-input-' + i).focus();
+}
+
+function handleEditKey(e, i) {
+  if (e.key === 'Enter') commitEdit(i);
+  if (e.key === 'Escape') cancelEdit(i);
+}
+
+function commitEdit(i) {
+  const val = document.getElementById('edit-input-' + i).value;
+  if (val !== SAMPLE_FIELDS[i].value) {
+    editedFields[i] = val;
+  } else {
+    delete editedFields[i];
+  }
+  renderFields();
+  showToast(`"${SAMPLE_FIELDS[i].key}" updated`);
+}
+
+function cancelEdit(i) {
+  document.getElementById('value-display-' + i).classList.remove('hidden');
+  document.getElementById('value-edit-' + i).classList.add('hidden');
+}
+
+function revertField(i) {
+  delete editedFields[i];
+  renderFields();
+  showToast(`"${SAMPLE_FIELDS[i].key}" reverted to AI value`);
+}
+
+function revertAll() {
+  if (!confirm(`Revert all ${Object.keys(editedFields).length} manual edit(s)? This cannot be undone.`)) return;
+  const count = Object.keys(editedFields).length;
+  editedFields = {};
+  renderFields();
+  showToast(`Reverted ${count} manual edit(s) — AI values restored`);
+}
+
+function toggleField(i) {
+  if (selectedFields.has(i)) selectedFields.delete(i); else selectedFields.add(i);
+  renderFields();
+}
+
+function selectAll() { selectedFields = new Set(SAMPLE_FIELDS.map((_,i)=>i)); renderFields(); }
+function deselectAll() { selectedFields = new Set(); renderFields(); }
+
+function updateApplySummary() {
+  const n = selectedFields.size;
+  const editCount = Object.keys(editedFields).length;
+  document.getElementById('apply-summary').innerHTML =
+    `${n} of ${SAMPLE_FIELDS.length} fields selected${editCount > 0 ? ` · <span class="text-blue-600">${editCount} manually edited</span>` : ''}`;
+  const btn = document.getElementById('apply-btn');
+  btn.textContent = `✓ Apply ${n} Field${n !== 1 ? 's' : ''}`;
+  btn.disabled = n === 0;
+}
+
+function updateRevertAllBtn() {
+  const btn = document.getElementById('revert-all-btn');
+  if (Object.keys(editedFields).length > 0) btn.classList.remove('hidden');
+  else btn.classList.add('hidden');
+}
+
+function applyFields() {
+  const n = selectedFields.size;
+  const editCount = Object.keys(editedFields).length;
+  showToast(`✓ Applied ${n} field${n!==1?'s':''}${editCount > 0 ? ` (${editCount} manually edited)` : ''} to form`);
+}
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+
+let toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.querySelector('div').textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add('hidden'), 3000);
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+
+buildFlow();
+buildFeatures();
+</script>
+</body>
+</html>
