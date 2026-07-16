@@ -22,22 +22,60 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
-const LOCAL_PG_URL = "postgresql://idr_user:idr_pass123@localhost:5432/idr_demo";
+const LOCAL_PG_URL = process.env.DATABASE_URL ?? "postgresql://idr_user:idr_pass123@localhost:5432/idr_demo";
 
 let _db: ReturnType<typeof drizzle> | null = null;
+let _pgClient: ReturnType<typeof postgres> | null = null;
 
 export async function getDb() {
   if (!_db) {
-    try {
-      const connectionString = LOCAL_PG_URL;
-      const client = postgres(connectionString, { max: 10 });
-      _db = drizzle(client);
-    } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
-      _db = null;
+    const connectionString = LOCAL_PG_URL;
+    if (!connectionString) {
+      console.warn("[Database] DATABASE_URL not set — running without database");
+      return null;
+    }
+    let attempts = 0;
+    const maxAttempts = 5;
+    while (attempts < maxAttempts) {
+      try {
+        _pgClient = postgres(connectionString, {
+          max: 20,                  // connection pool size
+          idle_timeout: 30,         // seconds before idle connection is closed
+          connect_timeout: 10,      // seconds to wait for a connection
+          max_lifetime: 1800,       // seconds before connection is recycled
+          onnotice: () => {},       // suppress NOTICE messages
+        });
+        _db = drizzle(_pgClient);
+        // Verify connectivity with a lightweight query
+        await _pgClient`SELECT 1`;
+        console.info(`[Database] Connected to PostgreSQL (pool max=20)`);
+        break;
+      } catch (error) {
+        attempts++;
+        _db = null;
+        _pgClient = null;
+        if (attempts >= maxAttempts) {
+          console.error(`[Database] Failed to connect after ${maxAttempts} attempts:`, error);
+        } else {
+          const delay = Math.min(1000 * 2 ** attempts, 30000);
+          console.warn(`[Database] Connection attempt ${attempts} failed, retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
     }
   }
   return _db;
+}
+
+/** Health check — returns true if the database is reachable */
+export async function checkDbHealth(): Promise<boolean> {
+  try {
+    if (!_pgClient) return false;
+    await _pgClient`SELECT 1`;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ─── User helpers ─────────────────────────────────────────────────────────────

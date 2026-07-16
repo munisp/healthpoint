@@ -12,6 +12,9 @@ import morgan from "morgan";
 import { v4 as uuidv4 } from "uuid";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerKeycloakRoutes } from "./keycloak";
+import { bootstrapOpenSearchIndices } from "../search";
+import { startKafkaConsumer } from "../events/kafka-consumer";
+import { bootstrapPermifySchema } from "../authz";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -216,6 +219,44 @@ async function startServer() {
   // ── Keycloak OIDC routes ──────────────────────────────────────────────────────
   registerKeycloakRoutes(app);
 
+  // ── Dapr pub/sub subscription discovery + event handlers ─────────────────
+  app.get("/dapr/subscribe", (_req: Request, res: Response) => {
+    res.json([
+      { pubsubname: "idr-pubsub", topic: "idr.dispute.events", route: "/api/events/dispute" },
+      { pubsubname: "idr-pubsub", topic: "idr.payments",        route: "/api/events/payment" },
+      { pubsubname: "idr-pubsub", topic: "idr.audit",           route: "/api/events/audit" },
+    ]);
+  });
+  app.post("/api/events/dispute", express.json(), (req: Request, res: Response) => {
+    const event = (req.body as Record<string, unknown>)?.data ?? req.body;
+    console.info("[Dapr] dispute event:", (event as Record<string, unknown>)?.eventType ?? "unknown");
+    res.status(200).json({ status: "SUCCESS" });
+  });
+  app.post("/api/events/payment", express.json(), (req: Request, res: Response) => {
+    const event = (req.body as Record<string, unknown>)?.data ?? req.body;
+    console.info("[Dapr] payment event:", (event as Record<string, unknown>)?.type ?? "unknown");
+    res.status(200).json({ status: "SUCCESS" });
+  });
+  app.post("/api/events/audit", express.json(), (_req: Request, res: Response) => {
+    res.status(200).json({ status: "SUCCESS" });
+  });
+
+  // ── Mojaloop FSPIOP transfer callback receiver ────────────────────────────
+  app.post("/api/mojaloop/callbacks/transfers", express.json(), (req: Request, res: Response) => {
+    const body = req.body as Record<string, unknown>;
+    console.info("[Mojaloop] transfer callback:", body?.transferId ?? "unknown");
+    import("../events/bus").then(({ eventBus }) => {
+      eventBus.publish(
+        "dispute.offer_submitted",
+        (body?.transferId as string) ?? "unknown",
+        "payment",
+        { mojaloopCallback: body },
+        { userId: "system", timestamp: new Date().toISOString() }
+      ).catch(() => {});
+    }).catch(() => {});
+    res.status(200).json({ status: "received" });
+  });
+
   // ── Scheduled heartbeat endpoints (auth-guarded in production) ───────────
   app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
@@ -334,6 +375,17 @@ async function startServer() {
   } else {
     serveStatic(app);
   }
+
+  // ── Background startup tasks (non-blocking) ─────────────────────────────
+  bootstrapOpenSearchIndices().catch(err =>
+    console.warn("[startup] OpenSearch bootstrap failed (non-fatal):", err)
+  );
+  bootstrapPermifySchema().catch(err =>
+    console.warn("[startup] Permify schema bootstrap failed (non-fatal):", err)
+  );
+  startKafkaConsumer().catch(err =>
+    console.warn("[startup] Kafka consumer failed to start (non-fatal):", err)
+  );
 
   // ── Port binding ──────────────────────────────────────────────────────────
   const preferredPort = parseInt(process.env.PORT || "3000");

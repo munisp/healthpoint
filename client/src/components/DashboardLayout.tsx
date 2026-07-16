@@ -101,6 +101,8 @@ import {
   Bot,
   Lock,
   Sparkles,
+  Workflow,
+  Receipt,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useTheme } from "../contexts/ThemeContext";
@@ -198,6 +200,8 @@ const menuItems = [
   { icon: Bot, label: "Ollama LLM Manager", path: "/ollama" },
   { icon: Brain, label: "Hermes AI Agent", path: "/hermes" },
   { icon: Sparkles, label: "SmartForm Guide", path: "/smartform-guide" },
+  { icon: Workflow, label: "Workflow Monitor", path: "/workflow-monitor" },
+  { icon: Receipt, label: "Transaction History", path: "/transactions" },
 ];
 
 const SIDEBAR_WIDTH_KEY = 'sidebar-width';
