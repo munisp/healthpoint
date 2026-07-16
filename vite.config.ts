@@ -22,7 +22,12 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "client", "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
       "@assets": path.resolve(import.meta.dirname, "attached_assets"),
+      // Force all packages to use the same React instance to prevent
+      // "Cannot read properties of null (reading 'useState')" errors
+      "react": path.resolve(import.meta.dirname, "node_modules/react"),
+      "react-dom": path.resolve(import.meta.dirname, "node_modules/react-dom"),
     },
+    dedupe: ["react", "react-dom", "@tanstack/react-query"],
   },
   envDir: path.resolve(import.meta.dirname),
   root: path.resolve(import.meta.dirname, "client"),
@@ -42,6 +47,11 @@ export default defineConfig({
       "localhost",
       "127.0.0.1",
     ],
+    // Fix HMR WebSocket for proxied preview URLs
+    hmr: {
+      clientPort: 443,
+      protocol: "wss",
+    },
     fs: {
       strict: true,
       deny: ["**/.*"],
