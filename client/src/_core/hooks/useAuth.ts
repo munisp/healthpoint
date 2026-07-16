@@ -11,12 +11,10 @@ export function useAuth() {
   });
 
   const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: (data) => {
+    onSuccess: () => {
       utils.auth.me.setData(undefined, null);
-      // Redirect to Keycloak end-session endpoint to fully sign out
-      if (data?.logoutUrl) {
-        window.location.href = data.logoutUrl;
-      }
+      // Manus OAuth: just redirect to home after clearing session cookie
+      window.location.href = "/";
     },
   });
 
@@ -28,8 +26,8 @@ export function useAuth() {
         error instanceof TRPCClientError &&
         error.data?.code === "UNAUTHORIZED"
       ) {
-        // Already logged out — redirect to Keycloak logout anyway
-        window.location.href = "/api/auth/logout";
+        // Already logged out — just go home
+        window.location.href = "/";
         return;
       }
       throw error;

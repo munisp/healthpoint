@@ -7,17 +7,20 @@ export const APP_LOGO =
   "https://d2xsxph8kpxj0f.cloudfront.net/114501028/Ko6TiyjsXLeVjoMLkkxz58/healthpoint-logo-KHkgbr4JATo4FJnvK2noam.png";
 
 /**
- * Keycloak OIDC — all auth flows go through the server-side routes.
- * The server handles PKCE, state, and cookie creation.
+ * Manus OAuth — all auth flows go through the Manus OAuth portal.
+ * The server handles the callback at /api/oauth/callback.
  */
 
-/** Redirect the browser to the Keycloak sign-in page */
-export const getLoginUrl = (redirectTo = "/") =>
-  `/api/auth/login?redirectTo=${encodeURIComponent(redirectTo)}`;
+const OAUTH_PORTAL_URL = import.meta.env.VITE_OAUTH_PORTAL_URL || "https://manus.im";
+const APP_ID = import.meta.env.VITE_APP_ID || "";
 
-/** Redirect the browser to the Keycloak registration page */
-export const getRegisterUrl = (role = "", redirectTo = "/") =>
-  `/api/auth/register?redirectTo=${encodeURIComponent(redirectTo)}&role=${encodeURIComponent(role)}`;
+/** Redirect the browser to the Manus OAuth sign-in page */
+export const getLoginUrl = (redirectTo = "/dashboard") =>
+  `${OAUTH_PORTAL_URL}/login?app_id=${APP_ID}&redirect_uri=${encodeURIComponent(window.location.origin + "/api/oauth/callback?redirectTo=" + encodeURIComponent(redirectTo))}`;
 
-/** Redirect the browser to Keycloak end-session */
-export const getLogoutUrl = () => `/api/auth/logout`;
+/** Redirect the browser to the Manus OAuth sign-in page (registration uses same flow) */
+export const getRegisterUrl = (_role = "", redirectTo = "/dashboard") =>
+  getLoginUrl(redirectTo);
+
+/** Clear local session cookie and redirect to home */
+export const getLogoutUrl = () => `/`;

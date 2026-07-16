@@ -116,15 +116,14 @@ export const appRouter = router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: protectedProcedure.mutation(opts => {
       const { ctx } = opts;
-      // Clear the internal session cookie; Keycloak end-session is handled
-      // by redirecting the browser to /api/auth/logout after this mutation.
+      // Clear the internal session cookie (Manus OAuth — no external end-session needed)
       ctx.res.clearCookie(COOKIE_NAME, {
         httpOnly: true,
         sameSite: "lax",
         secure: ENV.isProduction,
         path: "/",
       });
-      return { success: true, logoutUrl: "/api/auth/logout" } as const;
+      return { success: true } as const;
     }),
   }),
 
