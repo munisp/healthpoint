@@ -101,6 +101,7 @@ import FHIRCacheViewer from "@/pages/FHIRCacheViewer";
 import SMARTTokenManager from "@/pages/SMARTTokenManager";
 import DisputeAccessControl from "@/pages/DisputeAccessControl";
 import HermesAssistant from "@/pages/HermesAssistant";
+import SmartFormVisualization from "@/pages/SmartFormVisualization";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 /** Helper: wraps a component in ProtectedRoute */
@@ -216,6 +217,7 @@ function Router() {
       <Route path="/smart-tokens" component={() => <P component={SMARTTokenManager} />} />
       <Route path="/access-control" component={() => <P component={DisputeAccessControl} />} />
       <Route path="/hermes" component={() => <P component={HermesAssistant} />} />
+      <Route path="/smartform-guide" component={() => <P component={SmartFormVisualization} />} />
 
       {/* Admin-only routes */}
       <Route path="/admin/leads" component={() => <P component={LeadsManager} admin />} />

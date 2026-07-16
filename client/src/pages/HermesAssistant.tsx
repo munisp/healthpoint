@@ -103,6 +103,56 @@ const CAPABILITIES = [
   },
 ];
 
+// ─── Suggested Prompts ──────────────────────────────────────────────────────
+
+const SUGGESTED_PROMPTS = [
+  {
+    category: "Workflow",
+    color: "bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100",
+    prompts: [
+      "What are the NSA IDR deadlines I need to know?",
+      "Walk me through the 19-step IDR workflow",
+      "What happens if the open negotiation period expires?",
+    ],
+  },
+  {
+    category: "Narrative",
+    color: "bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100",
+    prompts: [
+      "Draft a formal IDR narrative for a cardiology claim",
+      "How do I cite the QPA in my submission narrative?",
+      "What evidence strengthens an IDR narrative?",
+    ],
+  },
+  {
+    category: "Strategy",
+    color: "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100",
+    prompts: [
+      "How should I calibrate my opening offer?",
+      "What payer tactics should I watch out for?",
+      "When is it better to settle vs. proceed to IDR?",
+    ],
+  },
+  {
+    category: "Regulatory",
+    color: "bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100",
+    prompts: [
+      "What are the latest CMS rule changes affecting IDR?",
+      "Explain the QPA methodology under 45 CFR §149.510",
+      "What state surprise billing laws override the NSA?",
+    ],
+  },
+  {
+    category: "Technical",
+    color: "bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100",
+    prompts: [
+      "How does FHIR R4 data get used in dispute enrichment?",
+      "What SMART on FHIR scopes are needed for EMR access?",
+      "Explain the Da Vinci PAS transaction flow",
+    ],
+  },
+];
+
 // ─── Chat Panel ───────────────────────────────────────────────────────────────
 
 function ChatPanel({ disputeId }: { disputeId?: string }) {
@@ -155,6 +205,18 @@ function ChatPanel({ disputeId }: { disputeId?: string }) {
     navigator.clipboard.writeText(content);
     toast.success("Copied to clipboard");
   };
+
+  const sendPrompt = useCallback((text: string) => {
+    if (chatMutation.isPending) return;
+    setMessages(prev => [...prev, { id: nanoid(), role: "user", content: text, timestamp: new Date() }]);
+    const history = messages
+      .filter(m => m.id !== "welcome")
+      .slice(-20)
+      .map(m => ({ role: m.role, content: m.content }));
+    chatMutation.mutate({ sessionId, message: text, disputeId, history });
+  }, [chatMutation, messages, sessionId, disputeId]);
+
+  const showSuggestions = messages.length === 1 && messages[0].id === "welcome" && !chatMutation.isPending;
 
   const renderContent = (content: string) => {
     // Basic markdown-like rendering
@@ -227,6 +289,32 @@ function ChatPanel({ disputeId }: { disputeId?: string }) {
           )}
         </div>
       </ScrollArea>
+
+      {showSuggestions && (
+        <div className="border-t px-4 pt-3 pb-1 bg-muted/20">
+          <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
+            <Sparkles className="w-3 h-3" /> Suggested prompts — click to ask
+          </p>
+          <div className="space-y-2">
+            {SUGGESTED_PROMPTS.map((group) => (
+              <div key={group.category}>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">{group.category}</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {group.prompts.map((prompt) => (
+                    <button
+                      key={prompt}
+                      onClick={() => sendPrompt(prompt)}
+                      className={`text-xs px-2.5 py-1 rounded-full border cursor-pointer transition-colors ${group.color}`}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="border-t p-4">
         <div className="flex gap-2">

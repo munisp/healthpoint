@@ -46,6 +46,56 @@ const STATUS_COLORS: Record<string, string> = {
 
 const PAGE_SIZE = 20;
 
+// ─── Hermes Risk Badge (client-side heuristic model) ─────────────────────────
+function computeRisk(d: {
+  status?: string | null;
+  billedAmount?: string | number | null;
+  createdAt?: Date | string | null;
+  serviceType?: string | null;
+}): { score: number; level: "low" | "medium" | "high" | "critical"; factors: string[] } {
+  let score = 0;
+  const factors: string[] = [];
+  const age = d.createdAt ? Math.floor((Date.now() - new Date(d.createdAt).getTime()) / 86400000) : 0;
+  if (age > 60) { score += 30; factors.push("Overdue (60+ days)"); }
+  else if (age > 30) { score += 15; factors.push("Aging (30+ days)"); }
+  const amount = Number(d.billedAmount) || 0;
+  if (amount > 50000) { score += 25; factors.push("High value claim"); }
+  else if (amount > 20000) { score += 12; factors.push("Significant claim value"); }
+  const statusRisk: Record<string, number> = {
+    offer_submission: 20, under_arbitration: 25, appealed: 30, eligibility_review: 15, idr_entity_selection: 10,
+  };
+  const statusScore = statusRisk[d.status ?? ""] ?? 0;
+  if (statusScore > 0) { score += statusScore; factors.push(`Status: ${(d.status ?? "").replace(/_/g, " ")}`); }
+  const serviceRisk: Record<string, number> = {
+    air_ambulance: 20, neonatology: 15, anesthesiology: 10, emergency_medicine: 8,
+  };
+  const svcScore = serviceRisk[d.serviceType ?? ""] ?? 0;
+  if (svcScore > 0) { score += svcScore; factors.push(`High-risk service: ${(d.serviceType ?? "").replace(/_/g, " ")}`); }
+  const level = score >= 70 ? "critical" : score >= 45 ? "high" : score >= 20 ? "medium" : "low";
+  return { score: Math.min(score, 100), level, factors };
+}
+
+const RISK_CONFIG = {
+  critical: { badge: "bg-red-100 text-red-700 border-red-300", dot: "bg-red-500 animate-pulse", label: "Critical" },
+  high:     { badge: "bg-orange-100 text-orange-700 border-orange-300", dot: "bg-orange-500", label: "High" },
+  medium:   { badge: "bg-yellow-100 text-yellow-700 border-yellow-300", dot: "bg-yellow-400", label: "Medium" },
+  low:      { badge: "bg-green-100 text-green-700 border-green-300", dot: "bg-green-400", label: "Low" },
+};
+
+function RiskBadge({ dispute }: { dispute: any }) {
+  const { score, level, factors } = computeRisk(dispute);
+  const cfg = RISK_CONFIG[level];
+  return (
+    <span
+      title={`Risk score: ${score}\n${factors.join("\n") || "No risk factors"}`}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border cursor-help ${cfg.badge}`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cfg.dot}`} />
+      {cfg.label}
+    </span>
+  );
+}
+
 const SERVICE_TYPES = [
   { value: "all", label: "All Service Types" },
   { value: "emergency_medicine", label: "Emergency Medicine" },
@@ -473,7 +523,7 @@ export default function DisputesList() {
                           className="border-slate-300"
                         />
                       </th>
-                      {["Reference #", "Initiating Party", "Responding Party", "Service Type", "Billed Amount", "QPA", "Status", "Step", "Created", ""].map(h => (
+                      {["Reference #", "Initiating Party", "Responding Party", "Service Type", "Billed Amount", "QPA", "Risk", "Status", "Step", "Created", ""].map(h => (
                         <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>
                       ))}
                     </tr>
@@ -506,6 +556,9 @@ export default function DisputesList() {
                           <td className="px-4 py-3 text-sm text-slate-600 capitalize">{d.serviceType?.replace(/_/g, " ")}</td>
                           <td className="px-4 py-3 text-sm font-semibold text-slate-800">${Number(d.billedAmount).toLocaleString()}</td>
                           <td className="px-4 py-3 text-sm text-slate-600">{d.qpaAmount ? `$${Number(d.qpaAmount).toLocaleString()}` : <span className="text-slate-400">—</span>}</td>
+                          <td className="px-4 py-3">
+                            <RiskBadge dispute={d} />
+                          </td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status] ?? "bg-slate-100 text-slate-600"}`}>
                               {d.status?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
