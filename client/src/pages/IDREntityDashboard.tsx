@@ -297,8 +297,11 @@ export default function IDREntityDashboard() {
           <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600">
             Disputes
           </button>
-          <span className="text-sm text-slate-600">{user?.name}</span>
-          <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
+          <span className="text-sm text-slate-600 hidden md:block">{user?.name}</span>
+          <Button variant="outline" size="sm" onClick={logout} className="flex items-center gap-1.5">
+            <LogOut size={14} />
+            <span className="hidden sm:inline">Sign Out</span>
+          </Button>
         </nav>
       </header>
 

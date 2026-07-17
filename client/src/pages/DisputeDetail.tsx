@@ -261,8 +261,12 @@ export default function DisputeDetail() {
         </div>
         <nav className="flex items-center gap-4">
           <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600">← Disputes</button>
-          <span className="text-sm text-slate-600">{user?.name}</span>
-          <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
+          <button onClick={() => navigate("/idr-entities")} className="text-sm text-slate-600 hover:text-blue-600 hidden sm:block">IDR Entities</button>
+          <span className="text-sm text-slate-600 hidden md:block">{user?.name}</span>
+          <Button variant="outline" size="sm" onClick={logout} className="flex items-center gap-1.5">
+            <LogOut size={14} />
+            <span className="hidden sm:inline">Sign Out</span>
+          </Button>
         </nav>
       </header>
 
@@ -292,12 +296,24 @@ export default function DisputeDetail() {
                 dispute.status === "determination_issued" ? "bg-teal-100 text-teal-700" :
                 "bg-blue-100 text-blue-700"
               }`}>
-                {dispute.status?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                {{
+                  open_negotiation: "Open Negotiation",
+                  idr_initiated: "IDR Initiated",
+                  idr_entity_selection: "IDR Entity Selection",
+                  eligibility_review: "Eligibility Review",
+                  offer_submission: "Offer Submission",
+                  under_arbitration: "Under Arbitration",
+                  determination_issued: "Determination Issued",
+                  payment_pending: "Payment Pending",
+                  closed: "Closed",
+                  appealed: "Appealed",
+                  ineligible: "Ineligible",
+                }[dispute.status] ?? dispute.status?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
               </span>
             </div>
             <p className="text-sm text-slate-500 ml-7">
               {dispute.initiatingPartyName} vs {dispute.respondingPartyName ?? "TBD"} ·{" "}
-              {dispute.serviceType?.replace(/_/g, " ")} · Filed {dispute.createdAt ? new Date(dispute.createdAt as unknown as string).toLocaleDateString() : "—"}
+              {dispute.serviceType?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} · Filed {dispute.createdAt ? new Date(dispute.createdAt as unknown as string).toLocaleDateString() : "—"}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">

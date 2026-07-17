@@ -44,6 +44,20 @@ const STATUS_COLORS: Record<string, string> = {
   ineligible: "bg-slate-100 text-slate-600",
 };
 
+const STATUS_LABELS: Record<string, string> = {
+  open_negotiation: "Open Negotiation",
+  idr_initiated: "IDR Initiated",
+  idr_entity_selection: "IDR Entity Selection",
+  eligibility_review: "Eligibility Review",
+  offer_submission: "Offer Submission",
+  under_arbitration: "Under Arbitration",
+  determination_issued: "Determination Issued",
+  payment_pending: "Payment Pending",
+  closed: "Closed",
+  appealed: "Appealed",
+  ineligible: "Ineligible",
+};
+
 const PAGE_SIZE = 20;
 
 // ─── Hermes Risk Badge (client-side heuristic model) ─────────────────────────
@@ -332,11 +346,15 @@ export default function DisputesList() {
         </div>
         <nav className="flex items-center gap-4">
           <button onClick={() => navigate("/dashboard")} className="text-sm text-slate-600 hover:text-blue-600">Dashboard</button>
+          <button onClick={() => navigate("/idr-entities")} className="text-sm text-slate-600 hover:text-blue-600 hidden sm:block">IDR Entities</button>
           <button onClick={() => navigate("/disputes/new")} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
             <Plus size={14} />New Dispute
           </button>
-          <span className="text-sm text-slate-600">{user?.name}</span>
-          <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
+          <span className="text-sm text-slate-600 hidden md:block">{user?.name}</span>
+          <Button variant="outline" size="sm" onClick={logout} className="flex items-center gap-1.5">
+            <LogOut size={14} />
+            <span className="hidden sm:inline">Sign Out</span>
+          </Button>
         </nav>
       </header>
 
@@ -553,7 +571,7 @@ export default function DisputesList() {
                           <td className="px-4 py-3 text-sm font-mono font-semibold text-blue-600">{d.referenceNumber}</td>
                           <td className="px-4 py-3 text-sm text-slate-700 max-w-[140px] truncate">{d.initiatingPartyName}</td>
                           <td className="px-4 py-3 text-sm text-slate-600 max-w-[140px] truncate">{d.respondingPartyName ?? <span className="text-slate-400">TBD</span>}</td>
-                          <td className="px-4 py-3 text-sm text-slate-600 capitalize">{d.serviceType?.replace(/_/g, " ")}</td>
+                          <td className="px-4 py-3 text-sm text-slate-600">{d.serviceType?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}</td>
                           <td className="px-4 py-3 text-sm font-semibold text-slate-800">${Number(d.billedAmount).toLocaleString()}</td>
                           <td className="px-4 py-3 text-sm text-slate-600">{d.qpaAmount ? `$${Number(d.qpaAmount).toLocaleString()}` : <span className="text-slate-400">—</span>}</td>
                           <td className="px-4 py-3">
@@ -561,11 +579,11 @@ export default function DisputesList() {
                           </td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status] ?? "bg-slate-100 text-slate-600"}`}>
-                              {d.status?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                              {STATUS_LABELS[d.status] ?? d.status?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-xs text-slate-500 max-w-[120px] truncate">
-                            {d.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ").toLowerCase()}
+                            {d.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
                           </td>
                           <td className="px-4 py-3 text-sm text-slate-500">{new Date(d.createdAt).toLocaleDateString()}</td>
                           <td className="px-4 py-3">
