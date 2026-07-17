@@ -6,6 +6,10 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
+import LoginPage from "./pages/LoginPage";
+import { SessionExpiryWarning } from "./components/SessionExpiryWarning";
+import { useSessionExpiry } from "./hooks/useSessionExpiry";
+import { useAuth } from "./_core/hooks/useAuth";
 import Onboarding from "./pages/Onboarding";
 import IDREntityDashboard from "@/pages/IDREntityDashboard";
 import Notifications from "@/pages/Notifications";
@@ -118,6 +122,7 @@ function Router() {
     <Switch>
       {/* Public routes */}
       <Route path={"/"} component={Home} />
+      <Route path={"/login"} component={LoginPage} />
       <Route path={"/404"} component={NotFound} />
       <Route path={"/changelog"} component={Changelog} />
       <Route path={"/help"} component={HelpCenter} />
@@ -229,14 +234,30 @@ function Router() {
   );
 }
 
-function App() {
+function AppInner() {
   useNetworkStatus();
+  const { isAuthenticated } = useAuth();
+  const { showWarning, warningRemainingMs, onSessionExtended } = useSessionExpiry(isAuthenticated);
+
+  return (
+    <>
+      <Router />
+      <SessionExpiryWarning
+        open={showWarning}
+        remainingMs={warningRemainingMs}
+        onExtended={onSessionExtended}
+      />
+    </>
+  );
+}
+
+function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light" switchable>
         <TooltipProvider>
           <Toaster />
-          <Router />
+          <AppInner />
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
