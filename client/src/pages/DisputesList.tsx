@@ -338,29 +338,10 @@ export default function DisputesList() {
   const handleDeselectAll = () => setSelectedIds(new Set());
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
-          <span className="text-lg font-bold text-slate-800">{APP_TITLE}</span>
-        </div>
-        <nav className="flex items-center gap-4">
-          <button onClick={() => navigate("/dashboard")} className="text-sm text-slate-600 hover:text-blue-600">Dashboard</button>
-          <button onClick={() => navigate("/idr-entities")} className="text-sm text-slate-600 hover:text-blue-600 hidden sm:block">IDR Entities</button>
-          <button onClick={() => navigate("/disputes/new")} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
-            <Plus size={14} />New Dispute
-          </button>
-          <span className="text-sm text-slate-600 hidden md:block">{user?.name}</span>
-          <Button variant="outline" size="sm" onClick={logout} className="flex items-center gap-1.5">
-            <LogOut size={14} />
-            <span className="hidden sm:inline">Sign Out</span>
-          </Button>
-        </nav>
-      </header>
-
+    <div className="space-y-6">
       {/* Bulk-action sticky toolbar — appears when items are selected */}
       {selectedIds.size > 0 && (
-        <div className="sticky top-14 z-20 bg-blue-600 text-white px-6 py-2.5 flex items-center gap-3 shadow-md border-b border-blue-700">
+        <div className="sticky top-0 z-20 bg-blue-600 text-white px-6 py-2.5 flex items-center gap-3 shadow-md border-b border-blue-700 -mx-6 -mt-6">
           <div className="flex items-center gap-2 flex-1">
             <CheckSquare size={16} className="text-blue-200" />
             <span className="text-sm font-semibold">
@@ -407,8 +388,7 @@ export default function DisputesList() {
         </div>
       )}
 
-      <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-800">IDR Disputes</h1>
             <p className="text-sm text-slate-500 mt-0.5">{total.toLocaleString()} total disputes</p>
@@ -614,7 +594,6 @@ export default function DisputesList() {
             </div>
           </div>
         )}
-      </main>
     </div>
   );
 }

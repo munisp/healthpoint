@@ -334,14 +334,14 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid md:grid-cols-2 gap-12 items-center">
             <div>
-              <span className="text-sky-400 font-semibold text-sm uppercase tracking-wider">Agentic AI Engine</span>
-              <h2 className="text-4xl font-extrabold mt-2 mb-6">LangGraph ReAct Agent with 7 Specialized Tools</h2>
+              <span className="text-sky-400 font-semibold text-sm uppercase tracking-wider">AI-Powered Workflow</span>
+              <h2 className="text-4xl font-extrabold mt-2 mb-6">Built-in AI Engine with 4 Specialized Capabilities</h2>
               <div className="space-y-4">
                 {[
-                  { icon: Brain, title: "NSA Regulatory Intelligence", desc: "Real-time 45 CFR Part 149 lookup, eligibility screening, and compliance checks" },
-                  { icon: FileText, title: "Document Analysis Agent", desc: "Extracts EOBs, remittances, and clinical records; validates completeness; classifies evidence" },
-                  { icon: Zap, title: "CMS Submission Automation", desc: "5-layer validation pipeline, auto-fix remediations, and direct portal submission" },
-                  { icon: Scale, title: "QPA Benchmarking", desc: "Calculates Qualifying Payment Amounts, benchmarks offers, and optimizes dispute strategy" },
+                  { icon: Brain, title: "NSA Regulatory Intelligence", desc: "Real-time 45 CFR Part 149 eligibility screening, compliance checks, and regulatory guidance" },
+                  { icon: FileText, title: "Document Analysis", desc: "Extracts EOBs, remittances, and clinical records; validates completeness; classifies evidence" },
+                  { icon: Zap, title: "CMS Submission Drafting", desc: "Multi-layer validation, auto-fix suggestions, and structured submission narrative generation" },
+                  { icon: Scale, title: "QPA Benchmarking", desc: "Calculates Qualifying Payment Amounts, benchmarks offers against market data, and optimizes strategy" },
                 ].map(f => (
                   <div key={f.title} className="flex gap-4">
                     <div className="w-10 h-10 rounded-lg bg-sky-500/20 border border-sky-500/30 flex items-center justify-center flex-shrink-0">
@@ -361,7 +361,7 @@ export default function Home() {
                 <div className="w-3 h-3 rounded-full bg-red-500" />
                 <div className="w-3 h-3 rounded-full bg-yellow-500" />
                 <div className="w-3 h-3 rounded-full bg-green-500" />
-                <span className="ml-2 text-slate-400 text-xs font-mono">IDR Assistant — ReAct Agent</span>
+                <span className="ml-2 text-slate-400 text-xs font-mono">IDR Assistant — AI Analysis</span>
               </div>
               <div className="p-5 font-mono text-xs space-y-2 text-slate-300">
                 <p><span className="text-sky-400">user@healthpoint</span><span className="text-slate-500">:~$</span> <span className="text-white">analyze_dispute --id HP-2024-0847</span></p>
@@ -450,7 +450,7 @@ export default function Home() {
           <div className="text-center mb-14">
             <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Transparent Pricing</span>
             <h2 className="text-4xl font-extrabold text-slate-900 mt-2 mb-4">Plans for Every Organization</h2>
-            <p className="text-slate-600">All plans include Keycloak SSO, 99.9% uptime SLA, and HIPAA-compliant infrastructure.</p>
+            <p className="text-slate-600">All plans include Keycloak SSO, deadline tracking, and HIPAA-compliant infrastructure.</p>
           </div>
           <div className="grid md:grid-cols-3 gap-8 items-start">
             {PRICING.map(p => (
@@ -635,7 +635,7 @@ export default function Home() {
           </div>
           <div className="border-t border-slate-800 pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
             <p>© 2026 HealthPoint. Built for NSA/IDR Compliance · 45 CFR Part 149 · HIPAA-compliant infrastructure.</p>
-            <p className="text-slate-600">Keycloak SSO · SOC 2 Type II · FHIR R4 Compatible</p>
+            <p className="text-slate-600">Keycloak SSO · FHIR R4 Ready · HIPAA-Compliant Infrastructure</p>
           </div>
         </div>
       </footer>

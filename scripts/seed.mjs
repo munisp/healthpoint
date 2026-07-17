@@ -202,7 +202,15 @@ const IDR_ENTITIES = [
   },
 ];
 
-// 28 scenarios spread across all 19 steps
+// QPA multipliers per service type (QPA ≈ median contracted rate, typically 55-75% of billed)
+const QPA_RATIO = {
+  emergency_medicine: 0.62, anesthesiology: 0.58, radiology: 0.65,
+  pathology: 0.70, neonatology: 0.55, assistant_surgeon: 0.60,
+  hospitalist: 0.68, intensivist: 0.57, air_ambulance: 0.48,
+  ground_ambulance: 0.66, other: 0.63,
+};
+
+// 40 scenarios spread across all 19 steps — more closed disputes for analytics
 const SCENARIOS = [
   { step: "STEP_01_OPEN_NEGOTIATION_INITIATED", daysOld: 1,  svc: "emergency_medicine" },
   { step: "STEP_01_OPEN_NEGOTIATION_INITIATED", daysOld: 2,  svc: "anesthesiology" },
@@ -229,7 +237,20 @@ const SCENARIOS = [
   { step: "STEP_14_PAYMENT_DETERMINATION",      daysOld: 28, svc: "emergency_medicine" },
   { step: "STEP_15_PAYMENT_MADE",               daysOld: 30, svc: "neonatology" },
   { step: "STEP_16_ADMINISTRATIVE_FEE_PAID",    daysOld: 32, svc: "anesthesiology" },
+  // 12 fully-closed disputes for analytics charts
   { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 45, svc: "radiology" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 50, svc: "emergency_medicine" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 55, svc: "anesthesiology" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 60, svc: "neonatology" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 65, svc: "air_ambulance" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 70, svc: "hospitalist" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 75, svc: "assistant_surgeon" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 80, svc: "intensivist" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 85, svc: "emergency_medicine" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 90, svc: "anesthesiology" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld: 95, svc: "radiology" },
+  { step: "STEP_17_DISPUTE_CLOSED",             daysOld:100, svc: "neonatology" },
+  // Appeals
   { step: "STEP_18_APPEAL_FILED",               daysOld: 38, svc: "air_ambulance" },
   { step: "STEP_19_APPEAL_RESOLVED",            daysOld: 52, svc: "hospitalist" },
 ];
@@ -300,10 +321,19 @@ async function seed() {
     const determDeadline     = addBizDays(createdAt, 30);
     const payDeadline        = addBizDays(createdAt, 35);
 
+    // QPA — disclosed at Step 10+, based on service-type median contracted rate
+    const hasQpa = stepIdx >= IDR_STEPS.indexOf("STEP_10_QPA_DISCLOSURE");
+    const qpaRatio = QPA_RATIO[svc] ?? 0.63;
+    const qpa = hasQpa ? (parseFloat(billed) * (qpaRatio + (Math.random() - 0.5) * 0.08)).toFixed(2) : null;
+
     // Determination for late-stage disputes
     const hasDetermination = stepIdx >= IDR_STEPS.indexOf("STEP_13_DETERMINATION_ISSUED");
+    // Determination: IDR entity picks the offer closest to QPA (45 CFR §149.510)
+    // Provider typically wins ~60% of the time when their offer is closer to QPA
+    const providerWins = Math.random() < 0.60;
     const detAmount = hasDetermination
-      ? (parseFloat(billed) * (0.45 + Math.random() * 0.35)).toFixed(2)
+      ? (qpa ? (parseFloat(qpa) * (providerWins ? (1.05 + Math.random() * 0.25) : (0.80 + Math.random() * 0.15))).toFixed(2)
+             : (parseFloat(billed) * (0.45 + Math.random() * 0.35)).toFixed(2))
       : null;
 
     await sql`
@@ -318,7 +348,7 @@ async function seed() {
         "entitySelectionDeadline", "eligibilityDeadline",
         "offerSubmissionDeadline", "additionalInfoDeadline",
         "determinationDeadline", "paymentDeadline",
-        "determinationAmount", "determinationBasis",
+        "qpaAmount", "determinationAmount", "determinationBasis",
         "isEligible", "createdBy", "createdAt", "updatedAt"
       ) VALUES (
         ${id}, ${ref}, ${status}::dispute_status, ${sc.step}::idr_step,
@@ -333,13 +363,13 @@ async function seed() {
         ${entitySelDeadline}, ${eligDeadline},
         ${offerDeadline}, ${addlInfoDeadline},
         ${determDeadline}, ${payDeadline},
-        ${detAmount}, ${hasDetermination ? "IDR entity selected offer closest to QPA per 45 CFR §149.510(c)(4)" : null},
+        ${qpa}, ${detAmount}, ${hasDetermination ? "IDR entity selected offer closest to QPA per 45 CFR §149.510(c)(4)" : null},
         ${stepIdx >= IDR_STEPS.indexOf("STEP_08_ELIGIBILITY_REVIEW") ? true : null},
         ${adminId}, ${createdAt}, ${createdAt}
       )
     `;
 
-    seeded.push({ id, ref, billed, svc, stepIdx, status, createdAt, entity });
+    seeded.push({ id, ref, billed, qpa, svc, stepIdx, status, createdAt, entity, providerWins: hasDetermination ? providerWins : null });
   }
   console.log(`✓ Seeded ${SCENARIOS.length} disputes`);
 
@@ -368,12 +398,17 @@ async function seed() {
   // Offers for disputes in offer_submission stage or later
   let offerCount = 0;
   const offerStartIdx = IDR_STEPS.indexOf("STEP_09_OFFER_SUBMISSION");
-  for (const { id, billed, stepIdx } of seeded) {
+  for (const { id, billed, qpa, stepIdx, providerWins } of seeded) {
     if (stepIdx < offerStartIdx) continue;
     const b = parseFloat(billed);
-    const provOffer = (b * (0.60 + Math.random() * 0.30)).toFixed(2);
-    const payerOffer = (b * (0.30 + Math.random() * 0.25)).toFixed(2);
-    const isAccepted = stepIdx >= IDR_STEPS.indexOf("STEP_13_DETERMINATION_ISSUED");
+    const q = qpa ? parseFloat(qpa) : b * 0.63;
+    // Provider offers slightly above QPA; payer offers slightly below
+    const provOffer = (q * (1.08 + Math.random() * 0.18)).toFixed(2);
+    const payerOffer = (q * (0.82 + Math.random() * 0.14)).toFixed(2);
+    const hasDet = stepIdx >= IDR_STEPS.indexOf("STEP_13_DETERMINATION_ISSUED");
+    // Accepted offer is the one the IDR entity selected
+    const provAccepted = hasDet && providerWins === true;
+    const payerAccepted = hasDet && providerWins === false;
 
     await sql`
       INSERT INTO dispute_offers (
@@ -381,8 +416,8 @@ async function seed() {
         rationale, "isAccepted", "submittedAt"
       ) VALUES (
         ${randomUUID()}, ${id}, 'initiating_party'::offer_type, ${provOffer},
-        'Provider offer based on market rates, complexity of care, and regional benchmark data. Supporting documentation includes operative notes and facility overhead analysis.',
-        ${isAccepted && Math.random() > 0.5}, NOW()
+        ${'Provider offer based on market rates, complexity of care, and regional benchmark data. Supporting documentation includes operative notes and facility overhead analysis.'},
+        ${provAccepted}, NOW()
       )
     `;
     if (stepIdx >= IDR_STEPS.indexOf("STEP_10_QPA_DISCLOSURE")) {
@@ -392,8 +427,8 @@ async function seed() {
           rationale, "isAccepted", "submittedAt"
         ) VALUES (
           ${randomUUID()}, ${id}, 'responding_party'::offer_type, ${payerOffer},
-          'Payer offer based on the Qualifying Payment Amount (QPA) as the presumptive correct amount per 45 CFR §149.510. QPA reflects the median contracted rate for this service in this geographic area.',
-          ${isAccepted && Math.random() <= 0.5}, NOW()
+          ${'Payer offer based on the Qualifying Payment Amount (QPA) as the presumptive correct amount per 45 CFR §149.510. QPA reflects the median contracted rate for this service in this geographic area.'},
+          ${payerAccepted}, NOW()
         )
       `;
     }

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { APP_LOGO, APP_TITLE } from "@/const";
 import { toast } from "sonner";
 import {
@@ -120,6 +121,7 @@ export default function DisputeDetail() {
   // Advance state
   const [advanceDescription, setAdvanceDescription] = useState("");
   const [determinationBasis, setDeterminationBasis] = useState("");
+  const [showAdvanceConfirm, setShowAdvanceConfirm] = useState(false);
 
   // Queries
   const { data: timelineData, isLoading } = trpc.disputes.getTimeline.useQuery({ disputeId: id! });
@@ -242,34 +244,26 @@ export default function DisputeDetail() {
 
   const handleAdvance = () => {
     if (!nextStep) return;
+    setShowAdvanceConfirm(true);
+  };
+
+  const confirmAdvance = () => {
+    if (!nextStep) return;
     const desc = advanceDescription || `Advanced to ${nextStep.step.replace(/^STEP_\d+_/, "").replace(/_/g, " ")}`;
-    advanceMutation.mutate({
-      disputeId: dispute.id,
-      newStep: nextStep.step as any,
-      newStatus: nextStep.status as any,
-      description: desc,
-      ...(determinationBasis ? { determinationBasis } : {}),
-    });
+    advanceMutation.mutate(
+      {
+        disputeId: dispute.id,
+        newStep: nextStep.step as any,
+        newStatus: nextStep.status as any,
+        description: desc,
+        ...(determinationBasis ? { determinationBasis } : {}),
+      },
+      { onSuccess: () => setShowAdvanceConfirm(false) }
+    );
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
-          <span className="text-lg font-bold text-slate-800">{APP_TITLE}</span>
-        </div>
-        <nav className="flex items-center gap-4">
-          <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600">← Disputes</button>
-          <button onClick={() => navigate("/idr-entities")} className="text-sm text-slate-600 hover:text-blue-600 hidden sm:block">IDR Entities</button>
-          <span className="text-sm text-slate-600 hidden md:block">{user?.name}</span>
-          <Button variant="outline" size="sm" onClick={logout} className="flex items-center gap-1.5">
-            <LogOut size={14} />
-            <span className="hidden sm:inline">Sign Out</span>
-          </Button>
-        </nav>
-      </header>
-
+    <div className="space-y-6">
       {/* Deadline countdown banner — shows when ≤ 3 business days remain */}
       {dispute && (dispute as any).deadlineDays !== undefined && (
         <DeadlineCountdownBanner
@@ -280,8 +274,6 @@ export default function DisputeDetail() {
           deadlineDate={(dispute as any).deadlineDate}
         />
       )}
-
-      <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
         {/* Page header */}
         <div className="flex items-start justify-between">
           <div>
@@ -654,7 +646,6 @@ export default function DisputeDetail() {
             <DisputeComments disputeId={dispute.id} />
           </div>
         </div>
-      </main>
 
       {/* ── Offer Submission Modal ─────────────────────────────────────── */}
       {showOfferModal && (
@@ -836,6 +827,44 @@ export default function DisputeDetail() {
           </div>
         </div>
       )}
+
+      {/* ── Step Advance Confirmation Dialog ──────────────────────────── */}
+      <Dialog open={showAdvanceConfirm} onOpenChange={setShowAdvanceConfirm}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ChevronRight size={18} className="text-blue-600" />
+              Confirm Step Advancement
+            </DialogTitle>
+          </DialogHeader>
+          <div className="text-sm text-slate-600 space-y-3">
+            <p>You are about to advance this dispute from:</p>
+            <div className="bg-slate-50 rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-slate-500 w-16">FROM</span>
+                <span className="font-medium text-slate-700">{dispute?.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ")}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-slate-500 w-16">TO</span>
+                <span className="font-semibold text-blue-700">{nextStep?.label}</span>
+              </div>
+            </div>
+            <p className="text-slate-500 text-xs">This action will be recorded in the dispute timeline and cannot be reversed without admin intervention.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAdvanceConfirm(false)}>Cancel</Button>
+            <Button
+              onClick={confirmAdvance}
+              disabled={advanceMutation.isPending}
+              className="flex items-center gap-2"
+            >
+              {advanceMutation.isPending
+                ? <><span className="animate-spin">⟳</span> Advancing...</>
+                : <><ChevronRight size={14} /> {nextStep?.label}</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

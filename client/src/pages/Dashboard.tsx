@@ -159,40 +159,7 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
-          <span className="text-lg font-bold text-slate-800">{APP_TITLE}</span>
-          <span className="hidden sm:block text-slate-400 text-sm">|</span>
-          <span className="hidden sm:block text-slate-500 text-sm">NSA/IDR Workflow</span>
-        </div>
-        <nav className="flex items-center gap-4">
-          <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600 font-medium">Disputes</button>
-          <button onClick={() => navigate("/idr-entities")} className="text-sm text-slate-600 hover:text-blue-600 font-medium">IDR Entities</button>
-          <button onClick={() => navigate("/disputes/new")} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
-            <Plus size={14} />New Dispute
-          </button>
-          <div className="relative">
-            <Bell size={18} className="text-slate-500 cursor-pointer hover:text-blue-600" />
-            {(stats?.unreadNotifications ?? 0) > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                {stats!.unreadNotifications}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-slate-600 hidden md:block">{user?.name}</span>
-            <Button variant="outline" size="sm" onClick={logout} className="flex items-center gap-1.5">
-              <LogOut size={14} />
-              <span className="hidden sm:inline">Sign Out</span>
-            </Button>
-          </div>
-        </nav>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+    <div className="space-y-8">
         {/* Page title */}
         <div className="flex items-center justify-between">
           <div>
@@ -573,7 +540,6 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
-      </main>
     </div>
   );
 }

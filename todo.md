@@ -576,3 +576,10 @@
 - [x] Improve Deadline Alerts empty state — shows hint about SLA Monitor when overdue SLAs exist
 - [x] Add labeled "Sign Out" button text to all page navs (Dashboard, DisputesList, DisputeDetail, IDREntityDashboard)
 - [x] Add IDR Entities nav link to DisputesList and DisputeDetail pages for consistent navigation
+
+## 5-Issue Fix Sprint (Jul 17, 2026)
+- [x] Skeleton loader on IDR Entity Dashboard KPI cards — animated pulse placeholders while data loads
+- [x] Seed data update — 40 disputes (12 fully closed), QPA values on all disputes, win/loss outcomes for analytics charts; Reseed Demo Data button in Admin panel with confirmation dialog
+- [x] Step-advance confirmation dialog — DisputeDetail now shows a shadcn AlertDialog before calling advanceStep mutation; prevents accidental step advancement
+- [x] Left sidebar navigation — all 87 authenticated routes now wrapped in DashboardLayout via PL() helper in App.tsx; duplicate page-level headers removed from Dashboard, DisputesList, DisputeDetail, IDREntityDashboard, Admin
+- [x] Landing page accuracy audit — removed "LangGraph ReAct Agent" claim (actual: invokeLLM structured prompts); updated AI section to "Built-in AI Engine with 4 Specialized Capabilities"; removed "SOC 2 Type II" and "99.9% uptime SLA" from footer/pricing; corrected "FHIR R4 Compatible" → "FHIR R4 Ready"
