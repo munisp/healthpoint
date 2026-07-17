@@ -855,6 +855,16 @@ export const appRouter = router({
         }).where(eq(users.id, input.userId));
         return { success: true };
       }),
+
+    reseedDemoData: adminProcedure.mutation(async ({ ctx }) => {
+      try {
+        const { runDemoSeed } = await import("./seed-demo");
+        const result = await runDemoSeed(ctx.user.id);
+        return { success: true, ...result };
+      } catch (err: any) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: err?.message ?? "Seed failed" });
+      }
+    }),
   }),
 
   // --- Agentic AI Layer (proxied to Python LangGraph microservice) ------------------

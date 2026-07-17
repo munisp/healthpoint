@@ -283,29 +283,7 @@ export default function IDREntityDashboard() {
   const overallUtilisation = totalCapacity > 0 ? Math.round((totalActive / totalCapacity) * 100) : 0;
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
-          <span className="text-lg font-bold text-slate-800">{APP_TITLE}</span>
-        </div>
-        <nav className="flex items-center gap-4">
-          <button onClick={() => navigate("/dashboard")} className="text-sm text-slate-600 hover:text-blue-600">
-            ← Dashboard
-          </button>
-          <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600">
-            Disputes
-          </button>
-          <span className="text-sm text-slate-600 hidden md:block">{user?.name}</span>
-          <Button variant="outline" size="sm" onClick={logout} className="flex items-center gap-1.5">
-            <LogOut size={14} />
-            <span className="hidden sm:inline">Sign Out</span>
-          </Button>
-        </nav>
-      </header>
-
-      <main className="max-w-6xl mx-auto px-6 py-8">
+    <div>
         {/* Page title */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
@@ -332,24 +310,38 @@ export default function IDREntityDashboard() {
         </div>
 
         {/* Summary KPI bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
-          {[
-            { label: "Certified Entities", value: totalEntities, icon: Shield, color: "text-blue-600" },
-            { label: "Total Active Cases", value: totalActive, icon: TrendingUp, color: "text-slate-700" },
-            { label: "Total Capacity", value: totalCapacity, icon: Users, color: "text-slate-700" },
-            { label: "Overall Utilisation", value: `${overallUtilisation}%`, icon: TrendingUp, color: overallUtilisation >= 90 ? "text-red-600" : overallUtilisation >= 75 ? "text-amber-600" : "text-green-600" },
-            { label: "Overdue Cases", value: totalOverdue, icon: Clock, color: totalOverdue > 0 ? "text-red-600" : "text-slate-700" },
-            { label: "At/Over Capacity", value: atOrOverCapacity, icon: AlertTriangle, color: atOrOverCapacity > 0 ? "text-orange-600" : "text-slate-700" },
-          ].map(({ label, value, icon: Icon, color }) => (
-            <Card key={label} className="border-slate-200">
-              <CardContent className="p-4 text-center">
-                <Icon size={16} className={`mx-auto mb-1.5 ${color}`} />
-                <div className={`text-2xl font-bold ${color}`}>{value}</div>
-                <div className="text-xs text-slate-500 mt-0.5">{label}</div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        {isLoading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Card key={i} className="border-slate-200 animate-pulse">
+                <CardContent className="p-4 text-center">
+                  <div className="w-4 h-4 bg-slate-200 rounded-full mx-auto mb-2" />
+                  <div className="h-7 w-10 bg-slate-200 rounded mx-auto mb-1.5" />
+                  <div className="h-3 w-20 bg-slate-100 rounded mx-auto" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+            {[
+              { label: "Certified Entities", value: totalEntities, icon: Shield, color: "text-blue-600" },
+              { label: "Total Active Cases", value: totalActive, icon: TrendingUp, color: "text-slate-700" },
+              { label: "Total Capacity", value: totalCapacity, icon: Users, color: "text-slate-700" },
+              { label: "Overall Utilisation", value: `${overallUtilisation}%`, icon: TrendingUp, color: overallUtilisation >= 90 ? "text-red-600" : overallUtilisation >= 75 ? "text-amber-600" : "text-green-600" },
+              { label: "Overdue Cases", value: totalOverdue, icon: Clock, color: totalOverdue > 0 ? "text-red-600" : "text-slate-700" },
+              { label: "At/Over Capacity", value: atOrOverCapacity, icon: AlertTriangle, color: atOrOverCapacity > 0 ? "text-orange-600" : "text-slate-700" },
+            ].map(({ label, value, icon: Icon, color }) => (
+              <Card key={label} className="border-slate-200">
+                <CardContent className="p-4 text-center">
+                  <Icon size={16} className={`mx-auto mb-1.5 ${color}`} />
+                  <div className={`text-2xl font-bold ${color}`}>{value}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">{label}</div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
 
         {/* Capacity alerts */}
         {atOrOverCapacity > 0 && (
@@ -410,7 +402,6 @@ export default function IDREntityDashboard() {
           parties must jointly select a certified IDR entity within 4 business days of IDR initiation.
           Entities at capacity may decline new assignments.
         </div>
-      </main>
     </div>
   );
 }
