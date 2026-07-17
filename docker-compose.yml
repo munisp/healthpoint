@@ -19,6 +19,8 @@ volumes:
   tigerbeetle_data:
   fluvio_data:
   permify_data:
+  caddy_data:
+  caddy_config:
 
 ###############################################################################
 # CORE DATA STORES
@@ -437,7 +439,8 @@ services:
     ports:
       - "9000:9000"
 
-  # ── OpenAppsec WAF (NGINX-based) ──────────────────────────────────────────
+  # ── OpenAppsec WAF (NGINX-based ML WAF) ─────────────────────────────────
+  # Sits between Caddy and APISIX: Caddy → OpenAppsec → APISIX → App
   openappsec:
     image: openappsec/nginx:latest
     restart: unless-stopped
@@ -446,17 +449,66 @@ services:
     volumes:
       - ./infra/openappsec/local_policy.yaml:/ext/appsec/local_policy.yaml:ro
       - ./infra/openappsec/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infra/openappsec/openapi.yaml:/etc/nginx/openapi.yaml:ro
     environment:
       OPENAPPSEC_UPSTREAM: "http://apisix:9080"
       OPENAPPSEC_MODE: prevent-learn
-    ports:
-      - "80:80"
-      - "443:443"
+    # No direct port exposure — traffic arrives from Caddy only
+    expose:
+      - "80"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
+
+###############################################################################
+# EDGE LAYER — CADDY
+###############################################################################
+
+  # ── Caddy (TLS termination, HTTP/3, Coraza WAF, Keycloak forward_auth) ──────
+  # Traffic flow: Internet → Caddy → OpenAppsec → APISIX → App
+  # Layer 4:       Clients → Caddy (mTLS) → Kafka/Temporal/TigerBeetle/Redis
+  caddy:
+    build:
+      context: ./infra/caddy
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [idr-net]
+    depends_on:
+      openappsec:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/caddy/layer4.json:/etc/caddy/layer4.json:ro
+      - ./infra/caddy/certs:/etc/caddy/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      # Override the domain for local dev (uses localhost with self-signed cert)
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-localhost}
+      # Optional: Cloudflare API token for ACME DNS challenge (wildcard certs)
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+    ports:
+      - "80:80"         # HTTP → HTTPS redirect
+      - "443:443"       # HTTPS (HTTP/1.1 + HTTP/2)
+      - "443:443/udp"   # HTTP/3 (QUIC)
+      - "2019:2019"     # Caddy Admin API (localhost only in production)
+      # Layer 4 TLS-terminated TCP ports
+      - "9093:9093"     # Kafka (mTLS)
+      - "7234:7234"     # Temporal gRPC (mTLS)
+      - "3001:3001"     # TigerBeetle (mTLS via go-services)
+      - "6380:6380"     # Redis (mTLS)
+      - "9201:9201"     # OpenSearch (mTLS)
+      - "9004:9004"     # Fluvio (mTLS)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:2019/config/ | grep -q '.' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
 ###############################################################################
 # DAPR SIDECAR INFRASTRUCTURE

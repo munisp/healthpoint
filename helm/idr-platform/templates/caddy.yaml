@@ -1,0 +1,418 @@
+{{- if .Values.caddy.enabled }}
+###############################################################################
+# Caddy Edge Layer — TLS termination, HTTP/3, Coraza WAF, L4 TCP routing
+# Traffic flow: Internet → Caddy → OpenAppsec → APISIX → App
+###############################################################################
+
+# ── ConfigMap: Caddyfile ──────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-caddyfile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+data:
+  Caddyfile: |
+    {
+      admin 0.0.0.0:2019
+      email {{ .Values.caddy.adminEmail }}
+
+      # HTTP/3 (QUIC) — enabled by default in Caddy 2.9+
+      servers {
+        protocols h1 h2 h3
+      }
+
+      # Coraza WAF (OWASP Core Rule Set)
+      order coraza_waf first
+    }
+
+    # ── HTTP → HTTPS redirect ────────────────────────────────────────────────
+    http:// {
+      redir https://{host}{uri} permanent
+    }
+
+    # ── Main HTTPS site ──────────────────────────────────────────────────────
+    {{ .Values.caddy.domain }} {
+      tls {
+        {{- if .Values.caddy.acmeDnsProvider }}
+        dns {{ .Values.caddy.acmeDnsProvider }} {env.CLOUDFLARE_API_TOKEN}
+        {{- end }}
+      }
+
+      # Coraza WAF with OWASP CRS
+      coraza_waf {
+        load_owasp_crs
+        directives `
+          SecRuleEngine On
+          SecRequestBodyAccess On
+          SecResponseBodyAccess On
+          SecResponseBodyMimeType text/plain text/html application/json
+          SecAuditEngine RelevantOnly
+          SecAuditLog /var/log/caddy/coraza-audit.log
+        `
+      }
+
+      # Keycloak forward_auth — validate session before reaching app
+      forward_auth http://{{ include "idr-platform.fullname" . }}-keycloak:8080/realms/{{ .Values.caddy.keycloakRealm }}/protocol/openid-connect/userinfo {
+        uri /realms/{{ .Values.caddy.keycloakRealm }}/protocol/openid-connect/userinfo
+        header_up Authorization {http.request.header.Authorization}
+        copy_headers X-Auth-User X-Auth-Email X-Auth-Roles
+      }
+
+      # Security headers
+      header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        -Server
+      }
+
+      # Rate limiting (requires caddy-ratelimit module)
+      rate_limit {
+        zone dynamic {
+          key {remote_host}
+          events 100
+          window 1m
+        }
+      }
+
+      # Proxy to OpenAppsec WAF → APISIX → App
+      reverse_proxy http://{{ include "idr-platform.fullname" . }}-openappsec:80 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto https
+        health_uri /healthz
+        health_interval 10s
+        lb_policy round_robin
+      }
+    }
+
+    # ── Keycloak direct access (OIDC callbacks) ──────────────────────────────
+    auth.{{ .Values.caddy.domain }} {
+      tls {
+        {{- if .Values.caddy.acmeDnsProvider }}
+        dns {{ .Values.caddy.acmeDnsProvider }} {env.CLOUDFLARE_API_TOKEN}
+        {{- end }}
+      }
+      reverse_proxy http://{{ include "idr-platform.fullname" . }}-keycloak:8080
+    }
+
+    # ── OpenSearch Dashboards ────────────────────────────────────────────────
+    search.{{ .Values.caddy.domain }} {
+      tls {
+        {{- if .Values.caddy.acmeDnsProvider }}
+        dns {{ .Values.caddy.acmeDnsProvider }} {env.CLOUDFLARE_API_TOKEN}
+        {{- end }}
+      }
+      reverse_proxy http://{{ include "idr-platform.fullname" . }}-opensearch-dashboards:5601
+    }
+
+    # ── Temporal Web UI ──────────────────────────────────────────────────────
+    workflow.{{ .Values.caddy.domain }} {
+      tls {
+        {{- if .Values.caddy.acmeDnsProvider }}
+        dns {{ .Values.caddy.acmeDnsProvider }} {env.CLOUDFLARE_API_TOKEN}
+        {{- end }}
+      }
+      reverse_proxy http://{{ include "idr-platform.fullname" . }}-temporal-ui:8080
+    }
+
+  layer4.json: |
+    {
+      "apps": {
+        "layer4": {
+          "servers": {
+            "kafka_mtls": {
+              "listen": ["0.0.0.0:9093"],
+              "routes": [{
+                "match": [{"tls": {"sni": ["kafka.{{ .Values.caddy.domain }}"]}}],
+                "handle": [{
+                  "handler": "tls",
+                  "certificate_selection": {"any_tag": ["internal"]}
+                }, {
+                  "handler": "proxy",
+                  "upstreams": [{"dial": ["{{ include "idr-platform.fullname" . }}-kafka:9092"]}]
+                }]
+              }]
+            },
+            "temporal_grpc_mtls": {
+              "listen": ["0.0.0.0:7234"],
+              "routes": [{
+                "match": [{"tls": {"sni": ["temporal.{{ .Values.caddy.domain }}"]}}],
+                "handle": [{
+                  "handler": "tls",
+                  "certificate_selection": {"any_tag": ["internal"]}
+                }, {
+                  "handler": "proxy",
+                  "upstreams": [{"dial": ["{{ include "idr-platform.fullname" . }}-temporal:7233"]}]
+                }]
+              }]
+            },
+            "tigerbeetle_mtls": {
+              "listen": ["0.0.0.0:3001"],
+              "routes": [{
+                "handle": [{
+                  "handler": "tls",
+                  "certificate_selection": {"any_tag": ["internal"]}
+                }, {
+                  "handler": "proxy",
+                  "upstreams": [{"dial": ["{{ include "idr-platform.fullname" . }}-go-services:8001"]}]
+                }]
+              }]
+            },
+            "redis_mtls": {
+              "listen": ["0.0.0.0:6380"],
+              "routes": [{
+                "handle": [{
+                  "handler": "tls",
+                  "certificate_selection": {"any_tag": ["internal"]}
+                }, {
+                  "handler": "proxy",
+                  "upstreams": [{"dial": ["{{ include "idr-platform.fullname" . }}-redis:6379"]}]
+                }]
+              }]
+            },
+            "opensearch_mtls": {
+              "listen": ["0.0.0.0:9201"],
+              "routes": [{
+                "handle": [{
+                  "handler": "tls",
+                  "certificate_selection": {"any_tag": ["internal"]}
+                }, {
+                  "handler": "proxy",
+                  "upstreams": [{"dial": ["{{ include "idr-platform.fullname" . }}-opensearch:9200"]}]
+                }]
+              }]
+            },
+            "fluvio_mtls": {
+              "listen": ["0.0.0.0:9004"],
+              "routes": [{
+                "handle": [{
+                  "handler": "tls",
+                  "certificate_selection": {"any_tag": ["internal"]}
+                }, {
+                  "handler": "proxy",
+                  "upstreams": [{"dial": ["{{ include "idr-platform.fullname" . }}-fluvio-sc:9003"]}]
+                }]
+              }]
+            }
+          }
+        }
+      }
+    }
+
+---
+# ── PersistentVolumeClaim: ACME certificate storage ──────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-caddy-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.caddy.persistence.size }}
+
+---
+# ── Deployment ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-caddy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: caddy
+spec:
+  replicas: {{ .Values.caddy.replicas }}
+  selector:
+    matchLabels:
+      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: caddy
+  template:
+    metadata:
+      labels:
+        {{- include "idr-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: caddy
+      annotations:
+        # Force pod restart when Caddyfile changes
+        checksum/config: {{ include (print $.Template.BasePath "/caddy.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: caddy
+          image: "{{ .Values.caddy.image.repository }}:{{ .Values.caddy.image.tag }}"
+          imagePullPolicy: {{ .Values.caddy.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+            - name: https
+              containerPort: 443
+              protocol: TCP
+            - name: https-udp
+              containerPort: 443
+              protocol: UDP
+            - name: admin
+              containerPort: 2019
+              protocol: TCP
+            - name: kafka-mtls
+              containerPort: 9093
+              protocol: TCP
+            - name: temporal-mtls
+              containerPort: 7234
+              protocol: TCP
+            - name: tb-mtls
+              containerPort: 3001
+              protocol: TCP
+            - name: redis-mtls
+              containerPort: 6380
+              protocol: TCP
+            - name: os-mtls
+              containerPort: 9201
+              protocol: TCP
+            - name: fluvio-mtls
+              containerPort: 9004
+              protocol: TCP
+          env:
+            - name: CLOUDFLARE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "idr-platform.fullname" . }}-secrets
+                  key: CLOUDFLARE_API_TOKEN
+                  optional: true
+          volumeMounts:
+            - name: caddyfile
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+            - name: caddyfile
+              mountPath: /etc/caddy/layer4.json
+              subPath: layer4.json
+            - name: caddy-data
+              mountPath: /data
+            - name: caddy-config
+              mountPath: /config
+            - name: internal-ca
+              mountPath: /etc/caddy/certs
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /config/
+              port: 2019
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /config/
+              port: 2019
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.caddy.resources | nindent 12 }}
+      volumes:
+        - name: caddyfile
+          configMap:
+            name: {{ include "idr-platform.fullname" . }}-caddyfile
+        - name: caddy-data
+          persistentVolumeClaim:
+            claimName: {{ include "idr-platform.fullname" . }}-caddy-data
+        - name: caddy-config
+          emptyDir: {}
+        - name: internal-ca
+          secret:
+            secretName: {{ .Values.caddy.internalCaSecret }}
+            optional: true
+
+---
+# ── Service: LoadBalancer for all external ports ──────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-caddy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: caddy
+  annotations:
+    # Preserve client IPs through the load balancer
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    {{- include "idr-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: caddy
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: 443
+      protocol: TCP
+    - name: https-udp
+      port: 443
+      targetPort: 443
+      protocol: UDP
+    - name: kafka-mtls
+      port: {{ .Values.caddy.layer4.kafka.port }}
+      targetPort: 9093
+      protocol: TCP
+    - name: temporal-mtls
+      port: {{ .Values.caddy.layer4.temporal.port }}
+      targetPort: 7234
+      protocol: TCP
+    - name: tigerbeetle-mtls
+      port: {{ .Values.caddy.layer4.tigerBeetle.port }}
+      targetPort: 3001
+      protocol: TCP
+    - name: redis-mtls
+      port: {{ .Values.caddy.layer4.redis.port }}
+      targetPort: 6380
+      protocol: TCP
+    - name: opensearch-mtls
+      port: {{ .Values.caddy.layer4.opensearch.port }}
+      targetPort: 9201
+      protocol: TCP
+    - name: fluvio-mtls
+      port: {{ .Values.caddy.layer4.fluvio.port }}
+      targetPort: 9004
+      protocol: TCP
+
+---
+# ── HorizontalPodAutoscaler ───────────────────────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "idr-platform.fullname" . }}-caddy-hpa
+  namespace: {{ .Release.Namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "idr-platform.fullname" . }}-caddy
+  minReplicas: {{ .Values.caddy.replicas }}
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+{{- end }}
