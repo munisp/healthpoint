@@ -565,3 +565,14 @@
 - [x] client/src/pages/Onboarding.tsx — redirect to login uses getLoginUrl() instead of /api/auth/login
 - [x] server/routers.test.ts — removed keycloakUrl/keycloakRealm/keycloakClientId assertions (no longer needed)
 - [x] TypeScript: 0 errors | Tests: 132/132 passing
+
+## Site Review Fixes (Jul 17, 2026)
+
+- [x] Fix WorkflowTimeline progress % — was showing 0% when step 1 is current; now counts current step in progressStepCount
+- [x] Fix WorkflowTimeline footer "Remaining" count — was off by 1 when current step active
+- [x] Fix status badge labels — "Idr Initiated" → "IDR Initiated", "Idr Entity Selection" → "IDR Entity Selection" in Dashboard.tsx, DisputesList.tsx, DisputeDetail.tsx
+- [x] Fix service type display — now Title Cased in DisputesList and DisputeDetail (was lowercase)
+- [x] Fix step column in disputes table — now Title Cased (was all-lowercase)
+- [x] Improve Deadline Alerts empty state — shows hint about SLA Monitor when overdue SLAs exist
+- [x] Add labeled "Sign Out" button text to all page navs (Dashboard, DisputesList, DisputeDetail, IDREntityDashboard)
+- [x] Add IDR Entities nav link to DisputesList and DisputeDetail pages for consistent navigation

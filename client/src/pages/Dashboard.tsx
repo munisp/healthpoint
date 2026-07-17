@@ -73,7 +73,7 @@ function Sparkline({ data, color = "#3b82f6", metricLabel }: { data: { v: number
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
+  const colorMap: Record<string, string> = {
     open_negotiation: "bg-blue-100 text-blue-700",
     idr_initiated: "bg-purple-100 text-purple-700",
     idr_entity_selection: "bg-indigo-100 text-indigo-700",
@@ -86,8 +86,21 @@ function StatusBadge({ status }: { status: string }) {
     appealed: "bg-rose-100 text-rose-700",
     ineligible: "bg-slate-100 text-slate-600",
   };
-  const label = status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${map[status] ?? "bg-slate-100 text-slate-600"}`}>{label}</span>;
+  const labelMap: Record<string, string> = {
+    open_negotiation: "Open Negotiation",
+    idr_initiated: "IDR Initiated",
+    idr_entity_selection: "IDR Entity Selection",
+    eligibility_review: "Eligibility Review",
+    offer_submission: "Offer Submission",
+    under_arbitration: "Under Arbitration",
+    determination_issued: "Determination Issued",
+    payment_pending: "Payment Pending",
+    closed: "Closed",
+    appealed: "Appealed",
+    ineligible: "Ineligible",
+  };
+  const label = labelMap[status] ?? status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${colorMap[status] ?? "bg-slate-100 text-slate-600"}`}>{label}</span>;
 }
 
 export default function Dashboard() {
@@ -170,8 +183,11 @@ export default function Dashboard() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-slate-600">{user?.name}</span>
-            <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
+            <span className="text-sm text-slate-600 hidden md:block">{user?.name}</span>
+            <Button variant="outline" size="sm" onClick={logout} className="flex items-center gap-1.5">
+              <LogOut size={14} />
+              <span className="hidden sm:inline">Sign Out</span>
+            </Button>
           </div>
         </nav>
       </header>
@@ -411,9 +427,14 @@ export default function Dashboard() {
               </CardHeader>
               <CardContent className="p-0">
                 {!notifications?.length ? (
-                  <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                  <div className="flex flex-col items-center justify-center py-10 text-slate-400 px-4 text-center">
                     <CheckCircle2 size={28} className="mb-2 opacity-30" />
-                    <p className="text-sm">No pending alerts</p>
+                    <p className="text-sm">No unread alerts</p>
+                    {(stats?.overdue ?? 0) > 0 && (
+                      <p className="text-xs mt-1.5 text-amber-600">
+                        {stats!.overdue} overdue SLA{stats!.overdue !== 1 ? "s" : ""} — see SLA Monitor below
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
