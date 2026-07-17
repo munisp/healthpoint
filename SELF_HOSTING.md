@@ -266,3 +266,131 @@ Browser → trpc.auth.logout (clears session cookie)
        → Keycloak clears SSO session
        → Redirect to /
 ```
+
+---
+
+## Caddy Edge Layer
+
+Caddy acts as the **outermost edge** of the HealthPoint platform. It is the only component directly internet-facing. All other services (OpenAppsec, APISIX, the Node.js app) are internal and reachable only through Caddy.
+
+### Traffic Architecture
+
+```
+Internet
+   │
+   ▼
+Caddy :443  (TLS termination, HTTP/3, Coraza WAF, Keycloak forward_auth)
+   │
+   ▼
+OpenAppsec :80  (ML-based WAF, OWASP CRS behavioural analysis)
+   │
+   ▼
+APISIX :9080  (API gateway — JWT validation, rate limiting, routing)
+   │
+   ▼
+Node.js App :3000  (tRPC + Express)
+```
+
+For non-HTTP protocols, Caddy routes TCP/UDP directly via the Layer 4 module:
+
+```
+Kafka clients  → Caddy :9093 (mTLS) → Kafka :9092
+Temporal gRPC  → Caddy :7234 (mTLS) → Temporal :7233
+TigerBeetle    → Caddy :3001 (mTLS) → Go services :8001
+Redis          → Caddy :6380 (mTLS) → Redis :6379
+OpenSearch     → Caddy :9201 (mTLS) → OpenSearch :9200
+Fluvio         → Caddy :9004 (mTLS) → Fluvio SC :9003
+```
+
+### What Caddy Provides
+
+| Feature | Detail |
+|---|---|
+| **Automatic TLS** | Let's Encrypt / ZeroSSL via ACME HTTP or DNS challenge. Zero manual certificate management. |
+| **HTTP/3 + QUIC** | Enabled by default in Caddy 2.9. Reduces latency 20–40% on mobile/lossy connections. |
+| **Coraza WAF** | Embedded Go WAF using OWASP Core Rule Set. Runs in-process — no nginx dependency. |
+| **Keycloak forward_auth** | Every request validated against the Keycloak userinfo endpoint before reaching the app. |
+| **Layer 4 TCP/UDP routing** | Routes Kafka, Temporal gRPC, TigerBeetle, Redis, OpenSearch, and Fluvio over mTLS. |
+| **mTLS for internal services** | Internal CA certificates (from `gen-internal-certs.sh`) used for all Layer 4 routes. |
+| **Rate limiting** | Per-IP and per-user rate limiting via the `caddy-ratelimit` module. |
+| **Security headers** | HSTS, X-Frame-Options, CSP, Referrer-Policy injected on all responses. |
+
+### Building the Custom Caddy Image
+
+The `infra/caddy/Dockerfile` builds Caddy with these additional modules:
+
+```
+caddy-coraza-waf      — OWASP Coraza WAF (Go-native, replaces ModSecurity)
+caddy-l4              — Layer 4 TCP/UDP routing
+caddy-dns/cloudflare  — DNS challenge for wildcard certificates
+caddy-ratelimit       — Per-IP and per-user rate limiting
+```
+
+Build and push:
+
+```bash
+cd infra/caddy
+docker build -t healthpoint/caddy:2.9 .
+docker push healthpoint/caddy:2.9
+```
+
+### Local Development (Docker Compose)
+
+For local development, Caddy uses a self-signed certificate for `localhost`. No DNS challenge is needed.
+
+```bash
+# Generate internal CA and mTLS certificates
+bash infra/caddy/gen-internal-certs.sh
+
+# Start all services including Caddy
+docker compose up -d
+
+# Caddy Admin API (inspect loaded config)
+curl http://localhost:2019/config/ | jq .
+```
+
+Caddy is available at:
+
+| Endpoint | Service |
+|---|---|
+| `https://localhost` | Main app (self-signed cert — accept browser warning in dev) |
+| `http://localhost:2019` | Caddy Admin API |
+| `localhost:9093` | Kafka (mTLS) |
+| `localhost:7234` | Temporal gRPC (mTLS) |
+| `localhost:6380` | Redis (mTLS) |
+| `localhost:9201` | OpenSearch (mTLS) |
+
+### Production (Kubernetes / Helm)
+
+```bash
+# Create Cloudflare API token secret (for DNS challenge)
+kubectl create secret generic caddy-cloudflare \
+  --from-literal=CLOUDFLARE_API_TOKEN=<your-token> \
+  -n idr-platform
+
+# Create internal CA secret
+kubectl create secret generic caddy-internal-ca \
+  --from-file=ca.crt=infra/caddy/certs/ca.crt \
+  --from-file=tls.crt=infra/caddy/certs/server.crt \
+  --from-file=tls.key=infra/caddy/certs/server.key \
+  -n idr-platform
+
+# Deploy with Helm
+helm upgrade --install idr-platform ./helm/idr-platform \
+  --set caddy.domain=idr.healthpoint.io \
+  --set caddy.adminEmail=admin@healthpoint.io \
+  -n idr-platform
+```
+
+### Disabling Caddy
+
+If you prefer a different edge proxy (Traefik, nginx), set `caddy.enabled: false` in `values.yaml` and re-enable `ingress.enabled: true`. You will need to handle TLS, WAF, and Layer 4 routing separately.
+
+```yaml
+# values.yaml
+caddy:
+  enabled: false
+ingress:
+  enabled: true
+  className: nginx
+```

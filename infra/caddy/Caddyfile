@@ -1,0 +1,238 @@
+# HealthPoint IDR Platform — Caddy Edge Layer
+# Handles: automatic TLS, HTTP/3, Coraza WAF, Keycloak forward_auth, reverse proxy to APISIX
+#
+# Build Caddy with required modules:
+#   xcaddy build \
+#     --with github.com/corazawaf/coraza-caddy/v2 \
+#     --with github.com/mholt/caddy-ratelimit \
+#     --with github.com/mholt/caddy-l4 \
+#     --with github.com/caddy-dns/cloudflare   # or your DNS provider for wildcard certs
+
+{
+    # Global options
+    email admin@healthpoint.internal
+
+    # Enable HTTP/3 (QUIC) globally
+    servers {
+        protocols h1 h2 h3
+    }
+
+    # ACME DNS challenge for wildcard certs (works behind firewalls, no port 80 needed)
+    # Replace with your DNS provider module if not using Cloudflare
+    # acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+
+    # Admin API — restricted to localhost only
+    admin localhost:2019
+
+    # Coraza WAF must run first in the middleware chain
+    order coraza_waf first
+
+    # Rate limiter runs after WAF, before routing
+    order rate_limit after coraza_waf
+
+    # Structured JSON access logs (feeds OpenSearch + Lakehouse)
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 100mb
+            roll_keep 10
+        }
+        format json {
+            time_format iso8601
+        }
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HTTPS entry point — all public traffic
+# ─────────────────────────────────────────────────────────────────────────────
+healthpoint.example.com {
+
+    # ── TLS ──────────────────────────────────────────────────────────────────
+    tls {
+        protocols tls1.2 tls1.3
+        ciphers TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+        curves x25519 secp384r1
+    }
+
+    # ── Security headers ─────────────────────────────────────────────────────
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' wss:; font-src 'self';"
+        # Remove server fingerprinting headers
+        -Server
+        -X-Powered-By
+    }
+
+    # ── Coraza WAF (OWASP Core Rule Set) ─────────────────────────────────────
+    coraza_waf {
+        load_owasp_crs
+        directives `
+            Include @coraza.conf-recommended
+            Include @crs-setup.conf.example
+            Include @owasp_crs/*.conf
+
+            # Enable the WAF engine
+            SecRuleEngine On
+
+            # Tune for healthcare/financial API — reduce false positives
+            SecRequestBodyLimit 10485760
+            SecRequestBodyNoFilesLimit 1048576
+            SecResponseBodyLimit 10485760
+
+            # Paranoia level 2 — balanced for financial APIs
+            SecAction "id:900000,phase:1,nolog,pass,t:none,setvar:tx.paranoia_level=2"
+            SecAction "id:900001,phase:1,nolog,pass,t:none,setvar:tx.executing_paranoia_level=2"
+
+            # Allow Keycloak OIDC callback (contains base64 encoded state)
+            SecRule REQUEST_URI "@beginsWith /api/auth/callback" \
+                "id:1001,phase:1,pass,nolog,ctl:ruleRemoveById=942100-942999"
+
+            # Allow Dapr event subscription endpoint
+            SecRule REQUEST_URI "@beginsWith /api/events/" \
+                "id:1002,phase:1,pass,nolog,ctl:ruleRemoveById=942100-942999"
+
+            # Allow Mojaloop callback (FSPIOP headers contain non-standard chars)
+            SecRule REQUEST_URI "@beginsWith /api/mojaloop/" \
+                "id:1003,phase:1,pass,nolog,ctl:ruleRemoveById=920000-920999"
+
+            # Log blocked requests to structured output
+            SecAuditLog /var/log/caddy/coraza-audit.log
+            SecAuditLogFormat JSON
+            SecAuditEngine RelevantOnly
+        `
+    }
+
+    # ── Per-IP rate limiting ──────────────────────────────────────────────────
+    rate_limit {
+        zone dynamic {
+            key    {remote_host}
+            events 200
+            window 1m
+        }
+        zone api_burst {
+            key    {remote_host}
+            events 20
+            window 1s
+        }
+    }
+
+    # ── Keycloak forward authentication ──────────────────────────────────────
+    # All routes except public endpoints require a valid Keycloak session
+    @protected {
+        not path /api/auth/* /api/health /api/trpc/system.health /.well-known/*
+        not method OPTIONS
+    }
+
+    forward_auth @protected keycloak:8080 {
+        uri /realms/healthpoint/protocol/openid-connect/userinfo
+        copy_headers X-User-Id X-User-Email X-User-Name X-User-Roles
+        header_up Authorization {http.request.header.Authorization}
+    }
+
+    # ── CORS preflight passthrough ────────────────────────────────────────────
+    @options method OPTIONS
+    respond @options 204
+
+    # ── Reverse proxy to OpenAppsec → APISIX chain ───────────────────────────
+    reverse_proxy openappsec:80 {
+        # Pass real client IP through the proxy chain
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {host}
+
+        # Health check on the upstream
+        health_uri /healthz
+        health_interval 10s
+        health_timeout 3s
+        health_status 200
+
+        # Connection pool tuning
+        transport http {
+            keepalive 30s
+            keepalive_idle_conns 100
+            dial_timeout 5s
+            response_header_timeout 30s
+        }
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Keycloak admin console — separate subdomain, no WAF bypass
+# ─────────────────────────────────────────────────────────────────────────────
+keycloak.healthpoint.example.com {
+    tls {
+        protocols tls1.2 tls1.3
+    }
+
+    # Restrict Keycloak admin to internal networks only
+    @internal {
+        remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.1
+    }
+    @external {
+        not remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.1
+    }
+
+    # Block external access to admin console
+    respond @external "Access denied" 403
+
+    reverse_proxy @internal keycloak:8080 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OpenSearch Dashboards — internal analytics UI
+# ─────────────────────────────────────────────────────────────────────────────
+dashboards.healthpoint.example.com {
+    tls {
+        protocols tls1.2 tls1.3
+    }
+
+    @internal {
+        remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.1
+    }
+
+    forward_auth @internal keycloak:8080 {
+        uri /realms/healthpoint/protocol/openid-connect/userinfo
+        copy_headers X-User-Roles
+    }
+
+    reverse_proxy opensearch-dashboards:5601 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Temporal Web UI
+# ─────────────────────────────────────────────────────────────────────────────
+temporal.healthpoint.example.com {
+    tls {
+        protocols tls1.2 tls1.3
+    }
+
+    @internal {
+        remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.1
+    }
+
+    respond @external "Access denied" 403
+
+    reverse_proxy @internal temporal-ui:8080 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HTTP → HTTPS redirect (catches all other HTTP traffic)
+# ─────────────────────────────────────────────────────────────────────────────
+http:// {
+    redir https://{host}{uri} 301
+}

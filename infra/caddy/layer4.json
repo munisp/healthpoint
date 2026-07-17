@@ -1,0 +1,219 @@
+{
+  "apps": {
+    "layer4": {
+      "servers": {
+
+        "kafka_tls": {
+          "listen": ["0.0.0.0:9093"],
+          "routes": [
+            {
+              "match": [
+                {
+                  "tls": {}
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "tls",
+                  "connection_policies": [
+                    {
+                      "certificate_selection": {
+                        "any_tag": ["kafka_internal"]
+                      },
+                      "client_authentication": {
+                        "mode": "require_and_verify",
+                        "trusted_ca_certs_pem_files": ["/etc/caddy/certs/internal-ca.pem"]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "handler": "proxy",
+                  "upstreams": [
+                    { "dial": ["kafka:9092"] }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+
+        "tigerbeetle_tls": {
+          "listen": ["0.0.0.0:3001"],
+          "routes": [
+            {
+              "match": [
+                {
+                  "tls": {}
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "tls",
+                  "connection_policies": [
+                    {
+                      "certificate_selection": {
+                        "any_tag": ["tigerbeetle_internal"]
+                      },
+                      "client_authentication": {
+                        "mode": "require_and_verify",
+                        "trusted_ca_certs_pem_files": ["/etc/caddy/certs/internal-ca.pem"]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "handler": "proxy",
+                  "upstreams": [
+                    { "dial": ["go-services:3001"] }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+
+        "temporal_grpc_tls": {
+          "listen": ["0.0.0.0:7234"],
+          "routes": [
+            {
+              "match": [
+                {
+                  "tls": {}
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "tls",
+                  "connection_policies": [
+                    {
+                      "certificate_selection": {
+                        "any_tag": ["temporal_internal"]
+                      },
+                      "client_authentication": {
+                        "mode": "require_and_verify",
+                        "trusted_ca_certs_pem_files": ["/etc/caddy/certs/internal-ca.pem"]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "handler": "proxy",
+                  "upstreams": [
+                    { "dial": ["temporal:7233"] }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+
+        "redis_tls": {
+          "listen": ["0.0.0.0:6380"],
+          "routes": [
+            {
+              "match": [
+                {
+                  "tls": {}
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "tls",
+                  "connection_policies": [
+                    {
+                      "certificate_selection": {
+                        "any_tag": ["redis_internal"]
+                      },
+                      "client_authentication": {
+                        "mode": "require_and_verify",
+                        "trusted_ca_certs_pem_files": ["/etc/caddy/certs/internal-ca.pem"]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "handler": "proxy",
+                  "upstreams": [
+                    { "dial": ["redis:6379"] }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+
+        "opensearch_tls": {
+          "listen": ["0.0.0.0:9201"],
+          "routes": [
+            {
+              "match": [
+                {
+                  "tls": {}
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "tls",
+                  "connection_policies": [
+                    {
+                      "certificate_selection": {
+                        "any_tag": ["opensearch_internal"]
+                      },
+                      "client_authentication": {
+                        "mode": "require_and_verify",
+                        "trusted_ca_certs_pem_files": ["/etc/caddy/certs/internal-ca.pem"]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "handler": "proxy",
+                  "upstreams": [
+                    { "dial": ["opensearch:9200"] }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+
+        "fluvio_tls": {
+          "listen": ["0.0.0.0:9004"],
+          "routes": [
+            {
+              "match": [
+                {
+                  "tls": {}
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "tls",
+                  "connection_policies": [
+                    {
+                      "certificate_selection": {
+                        "any_tag": ["fluvio_internal"]
+                      },
+                      "client_authentication": {
+                        "mode": "require_and_verify",
+                        "trusted_ca_certs_pem_files": ["/etc/caddy/certs/internal-ca.pem"]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "handler": "proxy",
+                  "upstreams": [
+                    { "dial": ["fluvio-sc:9003"] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+
+      }
+    }
+  }
+}
