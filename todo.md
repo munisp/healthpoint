@@ -141,6 +141,12 @@
 - [x] Keycloak OIDC integration — replace Manus OAuth with Keycloak Authorization Code + PKCE flow
 - [x] server/_core/keycloak.ts — /api/auth/login, /api/auth/register, /api/auth/callback, /api/auth/logout
 - [x] New-user detection in callback — first-time logins redirect to /onboarding with role param
+- [x] returnTo redirect-back-after-login — ProtectedRoute passes current path to getLoginUrl(); Keycloak callback honors stored.redirectTo
+- [x] LoginPage (/login) — loading state, auth_error display, Sign In / Create Account buttons with redirectTo param
+- [x] SessionExpiryWarning modal — live countdown, Stay Signed In (calls /api/auth/refresh), Sign Out Now
+- [x] useSessionExpiry hook — polls /api/auth/session every 60s, triggers warning 5 min before expiry, handles tab visibility
+- [x] /api/auth/session endpoint — returns remainingMs + expiresAt for frontend TTL polling
+- [x] /api/auth/refresh endpoint — silently re-issues 8h session cookie without Keycloak round-trip
 - [x] Onboarding page (/onboarding) — 4-step wizard: role selection, org details, feature tour, done
 - [x] Role-based redirect after onboarding — providers/facilities → /disputes, IDR entities → /idr-entities
 - [x] client/src/const.ts — getLoginUrl, getRegisterUrl, getLogoutUrl helpers for Keycloak
@@ -315,7 +321,7 @@
 - [ ] #08 Deadline countdown banner — sticky warning banner on DisputeDetail when deadline ≤ 3 business days
 - [ ] #09 Document version history — track revisions, show diff, restore previous version
 - [ ] #10 Role-based nav guards — redirect unauthorized users from admin-only routes
-- [ ] #11 Session timeout warning — modal 2 min before JWT expiry with Stay Logged In button
+- [x] #11 Session timeout warning — modal 5 min before JWT expiry with Stay Logged In button (useSessionExpiry hook + SessionExpiryWarning modal, /api/auth/session + /api/auth/refresh endpoints)
 - [ ] #12 Responsive mobile layout — sidebar collapses to hamburger on mobile
 
 #### Batch 3: Analytics & Intelligence

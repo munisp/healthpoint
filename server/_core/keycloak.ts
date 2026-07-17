@@ -19,7 +19,7 @@
 
 import type { Express, Request, Response } from "express";
 import * as client from "openid-client";
-import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { COOKIE_NAME, ONE_YEAR_MS, SESSION_DURATION_MS } from "@shared/const";
 import * as db from "../db";
 import { ENV } from "./env";
 import { SignJWT, jwtVerify } from "jose";
@@ -78,7 +78,7 @@ function getSessionSecret(): Uint8Array {
 // ─── Session JWT (internal, not Keycloak token) ───────────────────────────────
 
 export async function createSessionToken(userId: string, name: string, email: string): Promise<string> {
-  const expiresAt = Math.floor((Date.now() + ONE_YEAR_MS) / 1000);
+  const expiresAt = Math.floor((Date.now() + SESSION_DURATION_MS) / 1000);
   const jti = crypto.randomUUID();
   return new SignJWT({ sub: userId, name, email, type: "session", jti })
     .setProtectedHeader({ alg: "HS256" })
@@ -258,7 +258,7 @@ export function registerKeycloakRoutes(app: Express) {
         httpOnly: true,
         sameSite: "lax",
         secure: isSecure,
-        maxAge: ONE_YEAR_MS,
+        maxAge: SESSION_DURATION_MS,
         path: "/",
       });
 
@@ -297,6 +297,72 @@ export function registerKeycloakRoutes(app: Express) {
       // Fallback: just redirect home if end-session endpoint is unavailable
       res.redirect(302, "/");
     }
+  });
+
+  // GET /api/auth/session — returns session TTL info for the frontend expiry warning
+  app.get("/api/auth/session", async (req: Request, res: Response) => {
+    const cookies = req.cookies as Record<string, string>;
+    const sessionCookie = cookies[COOKIE_NAME];
+    if (!sessionCookie) {
+      res.status(401).json({ authenticated: false });
+      return;
+    }
+    const session = await verifySessionToken(sessionCookie).catch(() => null);
+    if (!session) {
+      res.status(401).json({ authenticated: false });
+      return;
+    }
+    // Decode JWT payload to read exp without re-verifying (already verified above)
+    let exp = 0;
+    try {
+      const parts = sessionCookie.split(".");
+      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+      exp = payload.exp as number;
+    } catch {
+      exp = Math.floor((Date.now() + SESSION_DURATION_MS) / 1000);
+    }
+    const nowSec = Math.floor(Date.now() / 1000);
+    const remainingMs = Math.max(0, (exp - nowSec) * 1000);
+    res.json({
+      authenticated: true,
+      expiresAt: exp * 1000,   // ms epoch
+      remainingMs,
+      userId: session.sub,
+    });
+  });
+
+  // GET /api/auth/refresh — silently re-issue a fresh session cookie if current one is valid
+  app.get("/api/auth/refresh", async (req: Request, res: Response) => {
+    const cookies = req.cookies as Record<string, string>;
+    const sessionCookie = cookies[COOKIE_NAME];
+    if (!sessionCookie) {
+      res.status(401).json({ refreshed: false, reason: "no_session" });
+      return;
+    }
+    const session = await verifySessionToken(sessionCookie).catch(() => null);
+    if (!session) {
+      res.status(401).json({ refreshed: false, reason: "invalid_session" });
+      return;
+    }
+    // Re-issue a fresh 8-hour JWT — no Keycloak round-trip needed for internal sessions
+    const user = await db.getUser(session.sub).catch(() => null);
+    const name = user?.name || session.name || "";
+    const email = user?.email || session.email || "";
+    const newToken = await createSessionToken(session.sub, name, email);
+    const isSecure = req.get("x-forwarded-proto") === "https" || req.protocol === "https";
+    res.cookie(COOKIE_NAME, newToken, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: isSecure,
+      maxAge: SESSION_DURATION_MS,
+      path: "/",
+    });
+    const exp = Math.floor((Date.now() + SESSION_DURATION_MS) / 1000);
+    res.json({
+      refreshed: true,
+      expiresAt: exp * 1000,
+      remainingMs: SESSION_DURATION_MS,
+    });
   });
 
   // Keep legacy /api/oauth/callback as a redirect alias for backwards compatibility

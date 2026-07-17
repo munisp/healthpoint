@@ -109,7 +109,6 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useLocation } from "wouter";
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal";
 import OnboardingTour from "./OnboardingTour";
-import SessionTimeoutWarning from "./SessionTimeoutWarning";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
@@ -381,7 +380,6 @@ function DashboardLayoutContent({
 
       <KeyboardShortcutsModal />
       <OnboardingTour />
-      <SessionTimeoutWarning />
       <SidebarInset>
         {/* Top bar with notification bell + dark mode + command palette */}
         <div className="h-14 border-b flex items-center justify-end px-6 gap-3 bg-background">

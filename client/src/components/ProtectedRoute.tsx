@@ -13,7 +13,8 @@ interface ProtectedRouteProps {
 /**
  * Wraps any page that requires authentication.
  * - While auth is loading: shows a full-page spinner.
- * - If unauthenticated: redirects to Manus OAuth login.
+ * - If unauthenticated: redirects to Keycloak login, preserving the current path
+ *   as a `redirectTo` query parameter so the user lands back here after sign-in.
  * - If adminOnly and user is not admin: shows an Access Denied screen.
  */
 export default function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
@@ -29,8 +30,9 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
   }
 
   if (!isAuthenticated) {
-    // Redirect to OAuth login immediately
-    window.location.href = getLoginUrl();
+    // Preserve the current path so Keycloak callback can redirect back after login
+    const returnTo = window.location.pathname + window.location.search;
+    window.location.href = getLoginUrl(returnTo);
     return null;
   }
 
