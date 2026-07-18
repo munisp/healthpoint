@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { Shield, CheckCircle2, AlertTriangle, Info, Download, RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
+import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 interface ChecklistItem {
   id: string;
@@ -22,6 +25,7 @@ interface ChecklistSection {
   items: ChecklistItem[];
 }
 
+// Static checklist content (labels/descriptions) — state is DB-backed
 const CHECKLIST: ChecklistSection[] = [
   {
     id: "eligibility",
@@ -81,45 +85,70 @@ const CHECKLIST: ChecklistSection[] = [
   },
 ];
 
-const STORAGE_KEY = "healthpoint_nsa_checklist";
-
-function loadChecked(): Record<string, boolean> {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}"); } catch { return {}; }
-}
-
 export default function NSAComplianceChecklist() {
-  const [checked, setChecked] = useState<Record<string, boolean>>(loadChecked);
+  const { isAuthenticated } = useAuth();
+  const [localChecked, setLocalChecked] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(CHECKLIST.map(s => [s.id, true]))
   );
 
+  const utils = trpc.useUtils();
+
+  // Load persisted state from DB
+  const { data: dbState, isLoading } = trpc.compliance.list.useQuery({}, { enabled: isAuthenticated });
+
+  // Sync DB state into local state once loaded
+  // DB key = sectionKey + ":" + itemKey, status "compliant" = checked
+  useEffect(() => {
+    if (dbState) {
+      const map: Record<string, boolean> = {};
+      dbState.forEach(row => { map[`${row.sectionKey}:${row.itemKey}`] = row.status === "compliant"; });
+      setLocalChecked(map);
+    }
+  }, [dbState]);
+
+  const upsertMutation = trpc.compliance.upsert.useMutation({
+    onError: (e) => toast.error(`Failed to save: ${e.message}`),
+    onSuccess: () => utils.compliance.list.invalidate({}),
+  });
+
+  const resetMutation = trpc.compliance.reset.useMutation({
+    onSuccess: () => {
+      setLocalChecked({});
+      utils.compliance.list.invalidate({});
+      toast.success("Checklist reset");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // id is the item's short id (e.g. "e1"). We need to find its section to build the DB key.
   const toggle = (id: string) => {
-    setChecked(prev => {
-      const next = { ...prev, [id]: !prev[id] };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
+    const section = CHECKLIST.find(s => s.items.some(i => i.id === id));
+    if (!section) return;
+    const dbKey = `${section.id}:${id}`;
+    const next = !localChecked[dbKey];
+    setLocalChecked(prev => ({ ...prev, [dbKey]: next }));
+    upsertMutation.mutate({ sectionKey: section.id, itemKey: id, status: next ? "compliant" : "pending_review" });
   };
 
   const toggleSection = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
   const allItems = CHECKLIST.flatMap(s => s.items);
   const requiredItems = allItems.filter(i => i.required);
-  const completedRequired = requiredItems.filter(i => checked[i.id]).length;
-  const completedAll = allItems.filter(i => checked[i.id]).length;
-  const progress = requiredItems.length > 0 ? Math.round((completedRequired / requiredItems.length) * 100) : 0;
-
-  const resetAll = () => {
-    setChecked({});
-    localStorage.removeItem(STORAGE_KEY);
-    toast.success("Checklist reset");
+  // Build DB key for each item to check completion
+  const getDbKey = (item: ChecklistItem) => {
+    const section = CHECKLIST.find(s => s.items.some(si => si.id === item.id));
+    return section ? `${section.id}:${item.id}` : item.id;
   };
+  const completedRequired = requiredItems.filter(i => localChecked[getDbKey(i)]).length;
+  const completedAll = allItems.filter(i => localChecked[getDbKey(i)]).length;
+  const progress = requiredItems.length > 0 ? Math.round((completedRequired / requiredItems.length) * 100) : 0;
 
   const exportCSV = () => {
     const rows = [["Section", "Item", "Required", "Status", "Reference"]];
     CHECKLIST.forEach(section => {
       section.items.forEach(item => {
-        rows.push([section.title, item.label, item.required ? "Yes" : "No", checked[item.id] ? "Complete" : "Pending", item.reference]);
+        rows.push([section.title, item.label, item.required ? "Yes" : "No", localChecked[item.id] ? "Complete" : "Pending", item.reference]);
       });
     });
     const csv = rows.map(r => r.map(c => `"${c}"`).join(",")).join("\n");
@@ -140,14 +169,14 @@ export default function NSAComplianceChecklist() {
             NSA Compliance Checklist
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Track regulatory compliance for No Surprises Act IDR disputes
+            Track regulatory compliance for No Surprises Act IDR disputes — progress saved to your account
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={exportCSV}>
+          <Button variant="outline" size="sm" onClick={exportCSV} disabled={isLoading}>
             <Download className="h-4 w-4 mr-2" />Export CSV
           </Button>
-          <Button variant="outline" size="sm" onClick={resetAll}>
+          <Button variant="outline" size="sm" onClick={() => resetMutation.mutate({})} disabled={resetMutation.isPending}>
             <RefreshCw className="h-4 w-4 mr-2" />Reset
           </Button>
         </div>
@@ -156,30 +185,36 @@ export default function NSAComplianceChecklist() {
       {/* Progress summary */}
       <Card>
         <CardContent className="pt-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              {progress === 100 ? (
-                <CheckCircle2 className="h-5 w-5 text-green-500" />
-              ) : (
-                <AlertTriangle className="h-5 w-5 text-amber-500" />
-              )}
-              <span className="font-semibold">
-                {progress === 100 ? "All required items complete" : `${completedRequired} of ${requiredItems.length} required items complete`}
-              </span>
-            </div>
-            <div className="flex items-center gap-3 text-sm text-muted-foreground">
-              <span>{completedAll}/{allItems.length} total</span>
-              <Badge variant={progress === 100 ? "default" : "secondary"}>{progress}%</Badge>
-            </div>
-          </div>
-          <Progress value={progress} className="h-2" />
+          {isLoading ? (
+            <Skeleton className="h-8 w-full" />
+          ) : (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  {progress === 100 ? (
+                    <CheckCircle2 className="h-5 w-5 text-green-500" />
+                  ) : (
+                    <AlertTriangle className="h-5 w-5 text-amber-500" />
+                  )}
+                  <span className="font-semibold">
+                    {progress === 100 ? "All required items complete" : `${completedRequired} of ${requiredItems.length} required items complete`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                  <span>{completedAll}/{allItems.length} total</span>
+                  <Badge variant={progress === 100 ? "default" : "secondary"}>{progress}%</Badge>
+                </div>
+              </div>
+              <Progress value={progress} className="h-2" />
+            </>
+          )}
         </CardContent>
       </Card>
 
       {/* Sections */}
       {CHECKLIST.map(section => {
         const sectionItems = section.items;
-        const sectionCompleted = sectionItems.filter(i => checked[i.id]).length;
+        const sectionCompleted = sectionItems.filter(i => localChecked[`${section.id}:${i.id}`]).length;
         const isExpanded = expanded[section.id];
 
         return (
@@ -198,28 +233,32 @@ export default function NSAComplianceChecklist() {
             </CardHeader>
             {isExpanded && (
               <CardContent className="space-y-3 pt-0">
-                {sectionItems.map(item => (
-                  <div key={item.id} className={`flex items-start gap-3 p-3 rounded-lg border ${checked[item.id] ? "bg-green-50 dark:bg-green-950/10 border-green-200 dark:border-green-800" : "bg-card"}`}>
-                    <Checkbox
-                      id={item.id}
-                      checked={!!checked[item.id]}
-                      onCheckedChange={() => toggle(item.id)}
-                      className="mt-0.5"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <label htmlFor={item.id} className="flex items-center gap-2 cursor-pointer font-medium text-sm">
-                        {item.label}
-                        {item.required && <Badge variant="destructive" className="text-xs">Required</Badge>}
-                        {checked[item.id] && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />}
-                      </label>
-                      <p className="text-xs text-muted-foreground mt-0.5">{item.description}</p>
-                      <div className="flex items-center gap-1 mt-1">
-                        <Info className="h-3 w-3 text-blue-400" />
-                        <span className="text-xs text-blue-600 dark:text-blue-400">{item.reference}</span>
+                {isLoading ? (
+                  Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)
+                ) : (
+                  sectionItems.map(item => (
+                    <div key={item.id} className={`flex items-start gap-3 p-3 rounded-lg border ${localChecked[`${section.id}:${item.id}`] ? "bg-green-50 dark:bg-green-950/10 border-green-200 dark:border-green-800" : "bg-card"}`}>
+                      <Checkbox
+                        id={item.id}
+                        checked={!!localChecked[`${section.id}:${item.id}`]}
+                        onCheckedChange={() => toggle(item.id)}
+                        className="mt-0.5"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <label htmlFor={item.id} className="flex items-center gap-2 cursor-pointer font-medium text-sm">
+                          {item.label}
+                          {item.required && <Badge variant="destructive" className="text-xs">Required</Badge>}
+                          {localChecked[`${section.id}:${item.id}`] && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />}
+                        </label>
+                        <p className="text-xs text-muted-foreground mt-0.5">{item.description}</p>
+                        <div className="flex items-center gap-1 mt-1">
+                          <Info className="h-3 w-3 text-blue-400" />
+                          <span className="text-xs text-blue-600 dark:text-blue-400">{item.reference}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </CardContent>
             )}
           </Card>

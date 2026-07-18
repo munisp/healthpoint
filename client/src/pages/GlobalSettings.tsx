@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -6,8 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Settings, Bell, Shield, Database, Globe, Save, RotateCcw } from "lucide-react";
+import { Settings, Bell, Shield, Database, Globe, Save, RotateCcw, Loader2 } from "lucide-react";
+import { trpc } from "@/lib/trpc";
 
 const SETTING_SECTIONS = [
   { id: "general", label: "General", icon: Settings },
@@ -18,7 +20,7 @@ const SETTING_SECTIONS = [
 ];
 
 export default function GlobalSettings() {
-  const { user } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [activeSection, setActiveSection] = useState("general");
   const [dirty, setDirty] = useState(false);
 
@@ -46,16 +48,77 @@ export default function GlobalSettings() {
   const [autoExportEnabled, setAutoExportEnabled] = useState(false);
   const [exportFormat, setExportFormat] = useState("csv");
 
+  const { data: saved, isLoading } = trpc.orgSettings.get.useQuery(undefined, { enabled: isAuthenticated });
+  const utils = trpc.useUtils();
+  const upsertMutation = trpc.orgSettings.upsert.useMutation({
+    onSuccess: () => {
+      toast.success("Settings saved successfully");
+      setDirty(false);
+      utils.orgSettings.get.invalidate();
+    },
+    onError: (e) => toast.error(`Failed to save: ${e.message}`),
+  });
+
+  // Populate form from DB on first load
+  useEffect(() => {
+    if (!saved) return;
+    if (saved.orgName) setOrgName(saved.orgName);
+    if (saved.timezone) setTimezone(saved.timezone);
+    if (saved.dateFormat) setDateFormat(saved.dateFormat);
+    if (saved.defaultPageSize) setDefaultPageSize(String(saved.defaultPageSize));
+    if (saved.emailDeadlineWarning !== null && saved.emailDeadlineWarning !== undefined) setEmailDeadlineWarning(saved.emailDeadlineWarning);
+    if (saved.emailStepAdvanced !== null && saved.emailStepAdvanced !== undefined) setEmailStepAdvanced(saved.emailStepAdvanced);
+    if (saved.emailDetermination !== null && saved.emailDetermination !== undefined) setEmailDetermination(saved.emailDetermination);
+    if (saved.inAppNotifications !== null && saved.inAppNotifications !== undefined) setInAppNotifications(saved.inAppNotifications);
+    if (saved.deadlineWarningDays) setDeadlineWarningDays(String(saved.deadlineWarningDays));
+    if (saved.sessionTimeoutMinutes) setSessionTimeout(String(saved.sessionTimeoutMinutes));
+    if (saved.requireMFA !== null && saved.requireMFA !== undefined) setRequireMFA(saved.requireMFA);
+    if (saved.auditAllActions !== null && saved.auditAllActions !== undefined) setAuditAllActions(saved.auditAllActions);
+    if (saved.ipAllowlist) setIpAllowlist(saved.ipAllowlist);
+    if (saved.retentionDays) setRetentionDays(String(saved.retentionDays));
+    if (saved.autoExportEnabled !== null && saved.autoExportEnabled !== undefined) setAutoExportEnabled(saved.autoExportEnabled);
+    if (saved.exportFormat) setExportFormat(saved.exportFormat);
+  }, [saved]);
+
   const mark = () => setDirty(true);
 
   function handleSave() {
-    toast.success("Settings saved successfully");
-    setDirty(false);
+    upsertMutation.mutate({
+      orgName,
+      timezone,
+      dateFormat,
+      defaultPageSize: parseInt(defaultPageSize),
+      emailDeadlineWarning,
+      emailStepAdvanced,
+      emailDetermination,
+      inAppNotifications,
+      deadlineWarningDays: parseInt(deadlineWarningDays),
+      sessionTimeoutMinutes: parseInt(sessionTimeout),
+      requireMFA,
+      auditAllActions,
+      ipAllowlist,
+      retentionDays: parseInt(retentionDays),
+      autoExportEnabled,
+      exportFormat: exportFormat as "csv" | "xlsx" | "json",
+    });
   }
 
   function handleReset() {
+    if (saved) {
+      if (saved.orgName) setOrgName(saved.orgName);
+      if (saved.timezone) setTimezone(saved.timezone);
+    }
     setDirty(false);
     toast.info("Settings reset to last saved values");
+  }
+
+  if (isLoading) {
+    return (
+      <div className="p-6 space-y-4">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
   }
 
   return (
@@ -72,11 +135,12 @@ export default function GlobalSettings() {
         </div>
         {dirty && (
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={handleReset}>
+            <Button variant="outline" size="sm" onClick={handleReset} disabled={upsertMutation.isPending}>
               <RotateCcw className="h-4 w-4 mr-2" />Reset
             </Button>
-            <Button size="sm" onClick={handleSave}>
-              <Save className="h-4 w-4 mr-2" />Save Changes
+            <Button size="sm" onClick={handleSave} disabled={upsertMutation.isPending}>
+              {upsertMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+              Save Changes
             </Button>
           </div>
         )}
@@ -184,7 +248,7 @@ export default function GlobalSettings() {
                   <label className="text-sm font-medium">Session timeout (minutes)</label>
                   <Input type="number" min="5" max="480" value={sessionTimeout}
                     onChange={e => { setSessionTimeout(e.target.value); mark(); }} className="w-32" />
-                  <p className="text-xs text-muted-foreground">Users will be warned 2 minutes before expiry</p>
+                  <p className="text-xs text-muted-foreground">Users will be warned 5 minutes before expiry</p>
                 </div>
                 <div className="flex items-center justify-between py-2">
                   <div>
@@ -236,8 +300,8 @@ export default function GlobalSettings() {
                       <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="csv">CSV</SelectItem>
-                        <SelectItem value="ndjson">NDJSON (Iceberg-compatible)</SelectItem>
-                        <SelectItem value="parquet">Parquet (Spark-compatible)</SelectItem>
+                        <SelectItem value="json">JSON</SelectItem>
+                        <SelectItem value="xlsx">XLSX</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

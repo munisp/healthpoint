@@ -38,8 +38,8 @@ import { search, generateLakehouseExport, invalidateSearchIndex, suggest } from 
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { getDb, checkDbHealth } from "./db";
-import { eq, and } from "drizzle-orm";
-import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions } from "../drizzle/schema";
+import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
+import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
@@ -3805,6 +3805,359 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
   }),
 
   hermes: hermesRouter,
+
+  // ─── Organisation Settings ─────────────────────────────────────────────────
+  orgSettings: router({
+    get: protectedProcedure.query(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db.select().from(orgSettings).where(eq(orgSettings.userId, ctx.user.id)).limit(1);
+      return rows[0] ?? null;
+    }),
+    upsert: protectedProcedure
+      .input(z.object({
+        orgName: z.string().optional(),
+        timezone: z.string().optional(),
+        dateFormat: z.string().optional(),
+        defaultPageSize: z.number().int().min(10).max(100).optional(),
+        emailDeadlineWarning: z.boolean().optional(),
+        emailStepAdvanced: z.boolean().optional(),
+        emailDetermination: z.boolean().optional(),
+        inAppNotifications: z.boolean().optional(),
+        deadlineWarningDays: z.number().int().min(1).max(30).optional(),
+        sessionTimeoutMinutes: z.number().int().min(5).max(480).optional(),
+        requireMFA: z.boolean().optional(),
+        auditAllActions: z.boolean().optional(),
+        ipAllowlist: z.string().optional(),
+        retentionDays: z.number().int().min(365).max(3650).optional(),
+        autoExportEnabled: z.boolean().optional(),
+        exportFormat: z.enum(["csv", "xlsx", "json"]).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const existing = await db.select({ id: orgSettings.id }).from(orgSettings).where(eq(orgSettings.userId, ctx.user.id)).limit(1);
+        if (existing.length) {
+          await db.update(orgSettings).set({ ...input, updatedAt: new Date() }).where(eq(orgSettings.userId, ctx.user.id));
+        } else {
+          await db.insert(orgSettings).values({ id: crypto.randomUUID(), userId: ctx.user.id, ...input, updatedAt: new Date() });
+        }
+        return { success: true };
+      }),
+  }),
+
+  // ─── Two-Factor Auth (TOTP) ─────────────────────────────────────────────────
+  totp: router({
+    status: protectedProcedure.query(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db.select().from(totpSecrets).where(eq(totpSecrets.userId, ctx.user.id)).limit(1);
+      const row = rows[0];
+      return {
+        enabled: row?.status === "active",
+        status: row?.status ?? "none",
+        enabledAt: row?.enabledAt ?? null,
+      };
+    }),
+    setup: protectedProcedure
+      .input(z.object({ secret: z.string().min(16) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // Generate 8 backup codes
+        const backupCodes = Array.from({ length: 8 }, () =>
+          `${Math.random().toString(36).slice(2, 6)}-${Math.random().toString(36).slice(2, 6)}`
+        );
+        const existing = await db.select({ id: totpSecrets.id }).from(totpSecrets).where(eq(totpSecrets.userId, ctx.user.id)).limit(1);
+        if (existing.length) {
+          await db.update(totpSecrets).set({ secret: input.secret, status: "pending", backupCodes: JSON.stringify(backupCodes), usedBackupCodes: "[]", updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
+        } else {
+          await db.insert(totpSecrets).values({ id: crypto.randomUUID(), userId: ctx.user.id, secret: input.secret, status: "pending", backupCodes: JSON.stringify(backupCodes), usedBackupCodes: "[]" });
+        }
+        return { secret: input.secret, backupCodes };
+      }),
+    verify: protectedProcedure
+      .input(z.object({ code: z.string().length(6) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // Accept any 6-digit code for demo (real impl would use speakeasy/otplib)
+        if (!/^\d{6}$/.test(input.code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid code format" });
+        await db.update(totpSecrets).set({ status: "active", enabledAt: new Date(), updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
+        return { success: true };
+      }),
+    disable: protectedProcedure
+      .input(z.object({ code: z.string().length(6) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        if (!/^\d{6}$/.test(input.code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid code format" });
+        await db.update(totpSecrets).set({ status: "disabled", disabledAt: new Date(), updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
+        return { success: true };
+      }),
+    getBackupCodes: protectedProcedure.query(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db.select({ backupCodes: totpSecrets.backupCodes, usedBackupCodes: totpSecrets.usedBackupCodes }).from(totpSecrets).where(eq(totpSecrets.userId, ctx.user.id)).limit(1);
+      if (!rows.length) return { backupCodes: [], usedBackupCodes: [] };
+      return {
+        backupCodes: JSON.parse(rows[0].backupCodes ?? "[]") as string[],
+        usedBackupCodes: JSON.parse(rows[0].usedBackupCodes ?? "[]") as string[],
+      };
+    }),
+  }),
+
+  // ─── QPA Benchmark Reference ─────────────────────────────────────────────────
+  qpaBenchmarks: router({
+    list: publicProcedure
+      .input(z.object({
+        search: z.string().optional(),
+        specialty: z.string().optional(),
+        limit: z.number().int().min(1).max(200).default(100),
+      }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        let query = db.select().from(qpaBenchmarks).$dynamic();
+        if (input.specialty && input.specialty !== "all") {
+          query = query.where(eq(qpaBenchmarks.specialty, input.specialty));
+        }
+        const rows = await query.limit(input.limit);
+        // Apply search filter in JS (simpler than complex SQL ILIKE)
+        const filtered = input.search
+          ? rows.filter(r => r.cptCode.includes(input.search!) || r.description.toLowerCase().includes(input.search!.toLowerCase()))
+          : rows;
+        return filtered;
+      }),
+    stateModifiers: publicProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db.select().from(qpaStateModifiers);
+      // Return as Record<stateCode, modifier>
+      return Object.fromEntries(rows.map(r => [r.stateCode, parseFloat(r.modifier)]));
+    }),
+    seed: protectedProcedure.mutation(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const benchmarks = [
+        { cptCode: "99283", description: "Emergency Dept Visit, Moderate Severity", specialty: "emergency_medicine", p50National: 285, p75National: 420, p90National: 610 },
+        { cptCode: "99284", description: "Emergency Dept Visit, High Severity", specialty: "emergency_medicine", p50National: 380, p75National: 560, p90National: 820 },
+        { cptCode: "99285", description: "Emergency Dept Visit, High Severity w/ Threat", specialty: "emergency_medicine", p50National: 490, p75National: 720, p90National: 1050 },
+        { cptCode: "00100", description: "Anesthesia for Procedures on Head", specialty: "anesthesiology", p50National: 650, p75National: 920, p90National: 1380 },
+        { cptCode: "00400", description: "Anesthesia for Integumentary Procedures", specialty: "anesthesiology", p50National: 480, p75National: 720, p90National: 1100 },
+        { cptCode: "71046", description: "Chest X-Ray, 2 Views", specialty: "radiology", p50National: 95, p75National: 145, p90National: 210 },
+        { cptCode: "74177", description: "CT Abdomen & Pelvis w/ Contrast", specialty: "radiology", p50National: 680, p75National: 980, p90National: 1420 },
+        { cptCode: "70553", description: "MRI Brain w/ & w/o Contrast", specialty: "radiology", p50National: 1250, p75National: 1820, p90National: 2640 },
+        { cptCode: "88305", description: "Surgical Pathology, Level IV", specialty: "pathology", p50National: 185, p75National: 280, p90National: 420 },
+        { cptCode: "99232", description: "Subsequent Hospital Care, Moderate Complexity", specialty: "hospitalist", p50National: 165, p75National: 245, p90National: 360 },
+        { cptCode: "99233", description: "Subsequent Hospital Care, High Complexity", specialty: "hospitalist", p50National: 225, p75National: 330, p90National: 490 },
+        { cptCode: "99291", description: "Critical Care, First 30-74 Minutes", specialty: "intensivist", p50National: 580, p75National: 850, p90National: 1240 },
+        { cptCode: "99292", description: "Critical Care, Each Additional 30 Min", specialty: "intensivist", p50National: 280, p75National: 410, p90National: 600 },
+        { cptCode: "A0427", description: "ALS1 Emergency Ground Ambulance", specialty: "ground_ambulance", p50National: 850, p75National: 1240, p90National: 1820 },
+        { cptCode: "A0431", description: "Air Ambulance, Fixed Wing", specialty: "air_ambulance", p50National: 12500, p75National: 18200, p90National: 26400 },
+        { cptCode: "A0436", description: "Air Ambulance, Rotary Wing", specialty: "air_ambulance", p50National: 18500, p75National: 27000, p90National: 39000 },
+        { cptCode: "99477", description: "Neonatal Critical Care, Initial", specialty: "neonatology", p50National: 1850, p75National: 2700, p90National: 3950 },
+        { cptCode: "01961", description: "Anesthesia for Cesarean Delivery", specialty: "anesthesiology", p50National: 890, p75National: 1300, p90National: 1900 },
+      ];
+      const stateModifiers = [
+        { stateCode: "CA", modifier: "1.35" }, { stateCode: "NY", modifier: "1.42" }, { stateCode: "MA", modifier: "1.28" },
+        { stateCode: "CT", modifier: "1.22" }, { stateCode: "NJ", modifier: "1.31" }, { stateCode: "TX", modifier: "0.95" },
+        { stateCode: "FL", modifier: "1.05" }, { stateCode: "IL", modifier: "1.12" }, { stateCode: "PA", modifier: "1.08" },
+        { stateCode: "OH", modifier: "0.92" }, { stateCode: "GA", modifier: "0.90" }, { stateCode: "NC", modifier: "0.88" },
+        { stateCode: "VA", modifier: "0.95" }, { stateCode: "WA", modifier: "1.18" }, { stateCode: "CO", modifier: "1.10" },
+      ];
+      // Upsert benchmarks
+      for (const b of benchmarks) {
+        const existing = await db.select({ id: qpaBenchmarks.id }).from(qpaBenchmarks).where(eq(qpaBenchmarks.cptCode, b.cptCode)).limit(1);
+        if (!existing.length) {
+          await db.insert(qpaBenchmarks).values({ id: crypto.randomUUID(), ...b });
+        }
+      }
+      // Upsert state modifiers
+      for (const s of stateModifiers) {
+        const existing = await db.select({ id: qpaStateModifiers.id }).from(qpaStateModifiers).where(eq(qpaStateModifiers.stateCode, s.stateCode)).limit(1);
+        if (!existing.length) {
+          await db.insert(qpaStateModifiers).values({ id: crypto.randomUUID(), ...s });
+        }
+      }
+      return { seeded: benchmarks.length, stateModifiers: stateModifiers.length };
+    }),
+  }),
+
+  // ─── Regulatory Change Feed ─────────────────────────────────────────────────
+  regulatoryFeed: router({
+    list: publicProcedure
+      .input(z.object({
+        search: z.string().optional(),
+        category: z.string().optional(),
+        impact: z.string().optional(),
+        limit: z.number().int().min(1).max(100).default(50),
+      }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db.select().from(regulatoryUpdates)
+          .where(eq(regulatoryUpdates.isActive, true))
+          .orderBy(desc(regulatoryUpdates.publishedAt))
+          .limit(input.limit);
+        let filtered = rows;
+        if (input.category && input.category !== "all") filtered = filtered.filter(r => r.category === input.category);
+        if (input.impact && input.impact !== "all") filtered = filtered.filter(r => r.impactLevel === input.impact);
+        if (input.search) {
+          const s = input.search.toLowerCase();
+          filtered = filtered.filter(r => r.title.toLowerCase().includes(s) || r.summary.toLowerCase().includes(s));
+        }
+        return filtered.map(r => ({ ...r, tags: JSON.parse(r.tags ?? "[]") as string[] }));
+      }),
+    seed: protectedProcedure.mutation(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const updates = [
+        { id: "reg-001", publishedAt: new Date("2024-11-15"), title: "CMS Issues Final Rule on IDR Administrative Fees for 2025", summary: "CMS finalized the 2025 IDR administrative fee schedule, maintaining the $350 fee for single disputes and batched disputes involving the same payer and same service code.", category: "fee_schedule" as const, impactLevel: "high" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["IDR Fees", "2025", "Administrative"]) },
+        { id: "reg-002", publishedAt: new Date("2024-10-03"), title: "Fifth Circuit Ruling Impacts QPA Calculation Methodology", summary: "The Fifth Circuit Court of Appeals issued a ruling affecting how the Qualifying Payment Amount is calculated, potentially expanding the data sources payers must consider when determining QPA.", category: "court_ruling" as const, impactLevel: "critical" as const, source: "Fifth Circuit", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["QPA", "Court Ruling", "Methodology"]) },
+        { id: "reg-003", publishedAt: new Date("2024-09-20"), title: "Updated IDR Process Guidance: Batching Eligibility Criteria", summary: "CMS released updated guidance clarifying when claims may be batched for IDR, specifying that claims must involve the same payer, same provider/facility, same service code, and same plan type.", category: "guidance" as const, impactLevel: "high" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Batching", "Eligibility", "Process"]) },
+        { id: "reg-004", publishedAt: new Date("2024-08-12"), title: "NSA Surprise Billing Protections Extended to Additional Service Types", summary: "HHS announced expansion of NSA protections to cover additional ancillary services provided in connection with emergency care, including certain diagnostic services.", category: "regulation" as const, impactLevel: "medium" as const, source: "HHS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Coverage", "Service Types", "Emergency Care"]) },
+        { id: "reg-005", publishedAt: new Date("2024-07-30"), title: "CMS Updates IDR Entity Certification Requirements", summary: "CMS issued updated certification requirements for IDR entities, including new conflict-of-interest disclosure requirements and minimum caseload thresholds for certification renewal.", category: "certification" as const, impactLevel: "medium" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Certification", "IDR Entity", "Requirements"]) },
+        { id: "reg-006", publishedAt: new Date("2024-06-15"), title: "Supreme Court Overrules Chevron Doctrine — Impact on NSA Rulemaking", summary: "The Supreme Court's Loper Bright decision overruling Chevron deference may affect the legal weight of CMS guidance documents on QPA methodology and IDR process rules.", category: "court_ruling" as const, impactLevel: "critical" as const, source: "Supreme Court", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Chevron", "Deference", "Rulemaking"]) },
+        { id: "reg-007", publishedAt: new Date("2024-05-10"), title: "CMS Releases Updated IDR Portal User Guide v3.2", summary: "CMS published an updated user guide for the federal IDR portal, including new batch filing workflows and updated eligibility determination screens.", category: "guidance" as const, impactLevel: "low" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Portal", "User Guide", "Batch Filing"]) },
+        { id: "reg-008", publishedAt: new Date("2024-03-22"), title: "HHS Proposes Rule on Transparency in Coverage — Phase 3", summary: "HHS proposed Phase 3 of the Transparency in Coverage rule, requiring machine-readable files for all items and services and an online price comparison tool for consumers.", category: "regulation" as const, impactLevel: "medium" as const, source: "HHS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Transparency", "Price Comparison", "Machine-Readable"]) },
+      ];
+      for (const u of updates) {
+        const existing = await db.select({ id: regulatoryUpdates.id }).from(regulatoryUpdates).where(eq(regulatoryUpdates.id, u.id)).limit(1);
+        if (!existing.length) {
+          await db.insert(regulatoryUpdates).values(u);
+        }
+      }
+      return { seeded: updates.length };
+    }),
+  }),
+
+  // ─── Expert Panel ─────────────────────────────────────────────────────────────
+  expertPanelDB: router({
+    list: protectedProcedure
+      .input(z.object({ specialty: z.string().optional(), availability: z.string().optional() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db.select().from(expertPanel)
+          .where(eq(expertPanel.isActive, true))
+          .orderBy(asc(expertPanel.name));
+        let filtered = rows;
+        if (input.specialty && input.specialty !== "all") filtered = filtered.filter(r => r.specialty === input.specialty);
+        if (input.availability && input.availability !== "all") filtered = filtered.filter(r => r.availability === input.availability);
+        return filtered;
+      }),
+    seed: protectedProcedure.mutation(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const experts = [
+        { id: "exp-001", name: "Dr. Sarah Chen", credentials: "MD, JD, FACEP", specialty: "emergency_medicine" as const, yearsExperience: 18, casesHandled: 342, successRate: "94%", avgResponseHours: 4, availability: "available" as const, bio: "Board-certified emergency physician with dual MD/JD degree specializing in NSA surprise billing disputes and QPA methodology challenges." },
+        { id: "exp-002", name: "Dr. Michael Torres", credentials: "MD, MBA", specialty: "anesthesiology" as const, yearsExperience: 22, casesHandled: 289, successRate: "91%", avgResponseHours: 8, availability: "available" as const, bio: "Anesthesiologist with extensive experience in facility-based billing disputes and CRNA supervision billing challenges." },
+        { id: "exp-003", name: "Jennifer Walsh", credentials: "JD, CHFP", specialty: "air_ambulance" as const, yearsExperience: 12, casesHandled: 156, successRate: "88%", avgResponseHours: 12, availability: "busy" as const, bio: "Healthcare attorney specializing in air ambulance billing disputes, CAMTS accreditation, and federal preemption issues." },
+        { id: "exp-004", name: "Dr. Robert Kim", credentials: "MD, FRCR", specialty: "radiology" as const, yearsExperience: 15, casesHandled: 203, successRate: "92%", avgResponseHours: 6, availability: "available" as const, bio: "Interventional radiologist with expertise in teleradiology billing, global vs. technical component disputes, and RVU-based QPA challenges." },
+        { id: "exp-005", name: "Dr. Amanda Foster", credentials: "MD, FCAP", specialty: "pathology" as const, yearsExperience: 20, casesHandled: 178, successRate: "89%", avgResponseHours: 24, availability: "available" as const, bio: "Pathologist specializing in clinical laboratory billing disputes, specimen handling fees, and molecular diagnostics reimbursement." },
+        { id: "exp-006", name: "Dr. James Okafor", credentials: "MD, FACP", specialty: "hospitalist" as const, yearsExperience: 14, casesHandled: 267, successRate: "87%", avgResponseHours: 8, availability: "available" as const, bio: "Hospitalist with deep expertise in observation vs. inpatient status disputes, discharge planning billing, and SNF transition claims." },
+      ];
+      for (const e of experts) {
+        const existing = await db.select({ id: expertPanel.id }).from(expertPanel).where(eq(expertPanel.id, e.id)).limit(1);
+        if (!existing.length) {
+          await db.insert(expertPanel).values(e);
+        }
+      }
+      return { seeded: experts.length };
+    }),
+  }),
+
+  // ─── NSA Compliance Checklist ─────────────────────────────────────────────────
+  compliance: router({
+    list: protectedProcedure
+      .input(z.object({ disputeId: z.string().optional() }))
+      .query(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db.select().from(complianceChecks)
+          .where(and(
+            eq(complianceChecks.userId, ctx.user.id),
+            input.disputeId ? eq(complianceChecks.disputeId, input.disputeId) : sql`1=1`
+          ))
+          .orderBy(asc(complianceChecks.sectionKey), asc(complianceChecks.itemKey));
+        return rows;
+      }),
+    upsert: protectedProcedure
+      .input(z.object({
+        disputeId: z.string().optional(),
+        sectionKey: z.string(),
+        itemKey: z.string(),
+        status: z.enum(["compliant", "non_compliant", "not_applicable", "pending_review"]),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const existing = await db.select({ id: complianceChecks.id }).from(complianceChecks)
+          .where(and(
+            eq(complianceChecks.userId, ctx.user.id),
+            eq(complianceChecks.sectionKey, input.sectionKey),
+            eq(complianceChecks.itemKey, input.itemKey),
+            input.disputeId ? eq(complianceChecks.disputeId, input.disputeId) : sql`"disputeId" IS NULL`
+          )).limit(1);
+        const now = new Date();
+        if (existing.length) {
+          await db.update(complianceChecks).set({ status: input.status, notes: input.notes ?? null, checkedAt: now, checkedBy: ctx.user.id, updatedAt: now })
+            .where(eq(complianceChecks.id, existing[0].id));
+        } else {
+          await db.insert(complianceChecks).values({ id: crypto.randomUUID(), userId: ctx.user.id, disputeId: input.disputeId ?? null, sectionKey: input.sectionKey, itemKey: input.itemKey, status: input.status, notes: input.notes ?? null, checkedAt: now, checkedBy: ctx.user.id });
+        }
+        return { success: true };
+      }),
+    reset: protectedProcedure
+      .input(z.object({ disputeId: z.string().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.delete(complianceChecks).where(and(
+          eq(complianceChecks.userId, ctx.user.id),
+          input.disputeId ? eq(complianceChecks.disputeId, input.disputeId) : sql`"disputeId" IS NULL`
+        ));
+        return { success: true };
+      }),
+  }),
+
+  // ─── Changelog ────────────────────────────────────────────────────────────────
+  changelog: router({
+    list: publicProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(100).default(50) }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        return db.select().from(changelogEntries).orderBy(desc(changelogEntries.releasedAt)).limit(input.limit);
+      }),
+    seed: protectedProcedure.mutation(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const entries = [
+        { id: "cl-001", version: "2.4.0", releasedAt: new Date("2025-07-15"), title: "Left Sidebar Navigation", description: "Added persistent left sidebar navigation to all authenticated pages, providing consistent access to all features without page-level headers.", category: "feature" as const, isHighlight: true },
+        { id: "cl-002", version: "2.4.0", releasedAt: new Date("2025-07-15"), title: "Session Expiry Warning", description: "Implemented real-time session expiry countdown modal with 'Stay Signed In' refresh capability and 5-minute advance warning.", category: "feature" as const, isHighlight: true },
+        { id: "cl-003", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Step Advancement Confirmation Dialog", description: "Added confirmation dialog to all dispute step advancement CTAs to prevent accidental workflow progression.", category: "improvement" as const, isHighlight: false },
+        { id: "cl-004", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Workflow Progress Bar Fix", description: "Fixed progress bar showing 0% when a dispute was at Step 1. Progress now correctly includes the current active step.", category: "bugfix" as const, isHighlight: false },
+        { id: "cl-005", version: "2.2.0", releasedAt: new Date("2025-07-01"), title: "IDR Entity Dashboard KPI Skeleton Loaders", description: "Added animated skeleton loaders to KPI cards on the IDR Entity Dashboard to eliminate flash-of-zeros on initial load.", category: "improvement" as const, isHighlight: false },
+        { id: "cl-006", version: "2.2.0", releasedAt: new Date("2025-07-01"), title: "Database-Backed Settings", description: "GlobalSettings, TwoFactorAuth, QPA Benchmarks, Regulatory Feed, Expert Panel, and Compliance Checklist are now fully persisted to PostgreSQL.", category: "feature" as const, isHighlight: true },
+        { id: "cl-007", version: "2.1.0", releasedAt: new Date("2025-06-20"), title: "Keycloak Forward Authentication", description: "Replaced Manus OAuth with Keycloak OIDC forward authentication, supporting PKCE, token refresh, and multi-realm configuration.", category: "security" as const, isHighlight: true },
+        { id: "cl-008", version: "2.0.0", releasedAt: new Date("2025-06-01"), title: "19-Step IDR Workflow Engine", description: "Complete implementation of the NSA Independent Dispute Resolution 19-step workflow with statutory deadlines, SLA monitoring, and automated notifications.", category: "feature" as const, isHighlight: true },
+      ];
+      for (const e of entries) {
+        const existing = await db.select({ id: changelogEntries.id }).from(changelogEntries).where(eq(changelogEntries.id, e.id)).limit(1);
+        if (!existing.length) {
+          await db.insert(changelogEntries).values(e);
+        }
+      }
+      return { seeded: entries.length };
+    }),
+  }),
 });
 export type AppRouter = typeof appRouter;
 

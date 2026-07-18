@@ -4,7 +4,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import DashboardLayout from "@/components/DashboardLayout";
+// DashboardLayout now provided globally via App.tsx
 import { toast } from "sonner";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -25,50 +25,8 @@ const REPORT_TYPES = [
   { id: "emr", label: "EMR Integration", icon: CheckCircle2, description: "Data pull success rates and field extraction quality" },
 ];
 
-// Mock report data — in production these would come from tRPC procedures
-const MOCK_VOLUME_DATA = [
-  { month: "Jan", open_negotiation: 12, idr_active: 8, closed: 15, ineligible: 3 },
-  { month: "Feb", open_negotiation: 15, idr_active: 11, closed: 18, ineligible: 2 },
-  { month: "Mar", open_negotiation: 9, idr_active: 14, closed: 22, ineligible: 4 },
-  { month: "Apr", open_negotiation: 18, idr_active: 9, closed: 19, ineligible: 1 },
-  { month: "May", open_negotiation: 21, idr_active: 16, closed: 25, ineligible: 3 },
-  { month: "Jun", open_negotiation: 17, idr_active: 13, closed: 28, ineligible: 2 },
-];
-
-const MOCK_FINANCIAL_DATA = [
-  { serviceType: "Emergency", avgBilled: 4200, avgQPA: 2800, avgDetermination: 3100 },
-  { serviceType: "Anesthesiology", avgBilled: 6800, avgQPA: 4200, avgDetermination: 4900 },
-  { serviceType: "Air Ambulance", avgBilled: 38000, avgQPA: 22000, avgDetermination: 26500 },
-  { serviceType: "Radiology", avgBilled: 2100, avgQPA: 1400, avgDetermination: 1650 },
-  { serviceType: "Pathology", avgBilled: 1800, avgQPA: 1100, avgDetermination: 1300 },
-];
-
-const MOCK_OUTCOME_DATA = [
-  { month: "Jan", winRate: 0.72, determinationRate: 0.85, appealRate: 0.08 },
-  { month: "Feb", winRate: 0.68, determinationRate: 0.82, appealRate: 0.11 },
-  { month: "Mar", winRate: 0.75, determinationRate: 0.88, appealRate: 0.07 },
-  { month: "Apr", winRate: 0.71, determinationRate: 0.84, appealRate: 0.09 },
-  { month: "May", winRate: 0.79, determinationRate: 0.91, appealRate: 0.06 },
-  { month: "Jun", winRate: 0.77, determinationRate: 0.89, appealRate: 0.07 },
-];
-
-const MOCK_TIMELINE_DATA = [
-  { step: "Open Neg.", statutory: 30, actual: 24, onTime: 0.88 },
-  { step: "IDR Init.", statutory: 4, actual: 3.2, onTime: 0.94 },
-  { step: "Entity Sel.", statutory: 4, actual: 3.8, onTime: 0.91 },
-  { step: "Eligibility", statutory: 3, actual: 2.9, onTime: 0.97 },
-  { step: "Offer Sub.", statutory: 10, actual: 8.4, onTime: 0.93 },
-  { step: "Determination", statutory: 30, actual: 26, onTime: 0.89 },
-];
-
-const MOCK_SERVICE_PIE = [
-  { name: "Emergency Medicine", value: 34 },
-  { name: "Anesthesiology", value: 22 },
-  { name: "Air Ambulance", value: 18 },
-  { name: "Radiology", value: 12 },
-  { name: "Pathology", value: 8 },
-  { name: "Other", value: 6 },
-];
+// All chart data is now DB-driven via trpc.reports.summary and trpc.dashboard.*
+// Empty arrays are shown when no data is available yet (seed via Admin panel)
 
 export default function Reports() {
   const { isAuthenticated } = useAuth();
@@ -89,7 +47,12 @@ export default function Reports() {
   // Build live service-type pie data from report summary
   const livePieData = reportSummary?.byServiceType?.length
     ? reportSummary.byServiceType.map((item: { type: string; count: number }) => ({ name: item.type.replace(/_/g, " "), value: item.count }))
-    : MOCK_SERVICE_PIE;
+    : [];
+
+  const volumeData = reportSummary?.byMonth ?? [];
+  const financialData = reportSummary?.financialByServiceType ?? [];
+  const outcomeChartData = (reportSummary?.outcomeByMonth ?? []).map((r: { month: string; won: number; lost: number; pending: number }) => ({ month: r.month, winRate: (r.won + r.lost) > 0 ? r.won / (r.won + r.lost) : 0, determinationRate: (r.won + r.lost + r.pending) > 0 ? (r.won + r.lost) / (r.won + r.lost + r.pending) : 0, appealRate: 0 }));
+  const timelineData = (reportSummary?.avgDaysByStep ?? []).map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 }));
 
   const handleExport = (format: "csv" | "pdf") => {
     toast.success(`Exporting ${activeReport} report as ${format.toUpperCase()}…`);
@@ -98,8 +61,7 @@ export default function Reports() {
   if (!isAuthenticated) return null;
 
   return (
-    <DashboardLayout>
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
@@ -178,7 +140,7 @@ export default function Reports() {
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={reportSummary?.byMonth?.length ? reportSummary.byMonth : MOCK_VOLUME_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <BarChart data={volumeData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                     <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 11 }} />
@@ -228,7 +190,7 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={reportSummary?.financialByServiceType?.length ? reportSummary.financialByServiceType : MOCK_FINANCIAL_DATA} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <BarChart data={financialData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="serviceType" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}k`} />
@@ -250,7 +212,7 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={320}>
-                <LineChart data={reportSummary?.outcomeByMonth?.length ? reportSummary.outcomeByMonth.map((r: { month: string; won: number; lost: number; pending: number }) => ({ month: r.month, winRate: (r.won + r.lost) > 0 ? r.won / (r.won + r.lost) : 0, determinationRate: (r.won + r.lost + r.pending) > 0 ? (r.won + r.lost) / (r.won + r.lost + r.pending) : 0, appealRate: 0 })) : MOCK_OUTCOME_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <LineChart data={outcomeChartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
@@ -272,7 +234,7 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={reportSummary?.avgDaysByStep?.length ? reportSummary.avgDaysByStep.map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 })) : MOCK_TIMELINE_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <BarChart data={timelineData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="step" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
@@ -283,7 +245,7 @@ export default function Reports() {
                 </BarChart>
               </ResponsiveContainer>
               <div className="mt-4 grid grid-cols-3 md:grid-cols-6 gap-3">
-                {(reportSummary?.avgDaysByStep?.length ? reportSummary.avgDaysByStep.map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 })) : MOCK_TIMELINE_DATA).map(row => (
+                {timelineData.map(row => (
                   <div key={row.step} className="text-center">
                     <div className={`text-sm font-bold ${row.onTime >= 0.95 ? "text-green-600" : row.onTime >= 0.85 ? "text-amber-600" : "text-red-600"}`}>
                       {Math.round(row.onTime * 100)}%
@@ -316,6 +278,5 @@ export default function Reports() {
           </div>
         )}
       </div>
-    </DashboardLayout>
   );
 }
