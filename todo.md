@@ -596,3 +596,10 @@
 - [x] Wire Changelog.tsx to trpc.changelog.list (DB-backed, grouped by version, search/filter)
 - [x] Remove DashboardLayout wrapper from Reports.tsx and ExpertReview.tsx (provided globally)
 - [x] Add Reseed Demo Data button to Admin panel with confirmation dialog
+
+## Reports Export Feature (Jul 18, 2026)
+- [x] reports.exportCSV tRPC procedure — all disputes with full fields, respects active date range filter
+- [x] reports.exportPDF tRPC procedure — generates a multi-section PDF with KPI summary, all 4 chart data tables, and dispute list (server/reports-export.ts)
+- [x] Reports page: Export CSV button — triggers download of real dispute data as CSV blob
+- [x] Reports page: Export PDF button — triggers download of formatted PDF report
+- [x] Reports page: export progress indicator — loading spinner on export buttons during generation
