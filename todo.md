@@ -584,22 +584,13 @@
 - [x] Left sidebar navigation — all 87 authenticated routes now wrapped in DashboardLayout via PL() helper in App.tsx; duplicate page-level headers removed from Dashboard, DisputesList, DisputeDetail, IDREntityDashboard, Admin
 - [x] Landing page accuracy audit — removed "LangGraph ReAct Agent" claim (actual: invokeLLM structured prompts); updated AI section to "Built-in AI Engine with 4 Specialized Capabilities"; removed "SOC 2 Type II" and "99.9% uptime SLA" from footer/pricing; corrected "FHIR R4 Compatible" → "FHIR R4 Ready"
 
-## DB Migration Sprint (Jul 17-18, 2026)
-- [x] Add 8 new PostgreSQL tables: org_settings, totp_secrets, qpa_benchmarks, regulatory_updates, expert_panel, compliance_checks, changelog_entries (migration 0017)
-- [x] Wire GlobalSettings.tsx to trpc.orgSettings.get/upsert (DB-backed)
-- [x] Wire TwoFactorAuth.tsx to trpc.totp.status/setup/verify/disable/getBackupCodes (DB-backed)
-- [x] Wire QPABenchmarkLookup.tsx to trpc.qpaBenchmarks.list/stateModifiers (DB-backed)
-- [x] Wire RegulatoryChangeFeed.tsx to trpc.regulatoryFeed.list (DB-backed)
-- [x] Wire NSAComplianceChecklist.tsx to trpc.compliance.list/upsert/reset (DB-backed, per-user)
-- [x] Wire ExpertReview.tsx EXPERT_PANEL to trpc.expertPanelDB.list (DB-backed, skeleton loader)
-- [x] Wire Reports.tsx — remove all MOCK_VOLUME/FINANCIAL/OUTCOME/TIMELINE/SERVICE_PIE constants, use trpc.reports.summary exclusively
-- [x] Wire Changelog.tsx to trpc.changelog.list (DB-backed, grouped by version, search/filter)
-- [x] Remove DashboardLayout wrapper from Reports.tsx and ExpertReview.tsx (provided globally)
-- [x] Add Reseed Demo Data button to Admin panel with confirmation dialog
-
-## Reports Export Feature (Jul 18, 2026)
-- [x] reports.exportCSV tRPC procedure — all disputes with full fields, respects active date range filter
-- [x] reports.exportPDF tRPC procedure — generates a multi-section PDF with KPI summary, all 4 chart data tables, and dispute list (server/reports-export.ts)
-- [x] Reports page: Export CSV button — triggers download of real dispute data as CSV blob
-- [x] Reports page: Export PDF button — triggers download of formatted PDF report
-- [x] Reports page: export progress indicator — loading spinner on export buttons during generation
+## AI Executive Summary on Reports Page (Jul 18, 2026)
+- [x] reports.generateExecutiveSummary tRPC procedure — calls invokeLLM with structured report metrics (disputes, win rate, avg determination, financial totals), returns 3-paragraph professional executive summary
+- [x] reports-export.ts — generateReportsPDF accepts optional executiveSummary + generatedAt; renders it as a dedicated first page with blue header bar, metadata block, and body text
+- [x] generateReportsCSV — prepends EXECUTIVE SUMMARY section before data tables when summary is present
+- [x] reports.exportCSV tRPC procedure — passes executiveSummary to CSV generator
+- [x] reports.exportPDF tRPC procedure — passes executiveSummary + executiveSummaryGeneratedAt to PDF generator
+- [x] Reports page: AI Executive Summary panel — Generate Summary button (Sparkles icon), live display with generatedAt timestamp, Regenerate button, loading spinner, empty-state description
+- [x] Reports page: date range change clears stale summary (setAiSummary(null) on dateRange change)
+- [x] Reports page: all MOCK_ fallback constants removed — replaced with proper empty states
+- [x] TypeScript: 0 errors | Tests: 132/132 passing
