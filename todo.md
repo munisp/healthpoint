@@ -583,3 +583,16 @@
 - [x] Step-advance confirmation dialog — DisputeDetail now shows a shadcn AlertDialog before calling advanceStep mutation; prevents accidental step advancement
 - [x] Left sidebar navigation — all 87 authenticated routes now wrapped in DashboardLayout via PL() helper in App.tsx; duplicate page-level headers removed from Dashboard, DisputesList, DisputeDetail, IDREntityDashboard, Admin
 - [x] Landing page accuracy audit — removed "LangGraph ReAct Agent" claim (actual: invokeLLM structured prompts); updated AI section to "Built-in AI Engine with 4 Specialized Capabilities"; removed "SOC 2 Type II" and "99.9% uptime SLA" from footer/pricing; corrected "FHIR R4 Compatible" → "FHIR R4 Ready"
+
+## DB Migration Sprint (Jul 17-18, 2026)
+- [x] Add 8 new PostgreSQL tables: org_settings, totp_secrets, qpa_benchmarks, regulatory_updates, expert_panel, compliance_checks, changelog_entries (migration 0017)
+- [x] Wire GlobalSettings.tsx to trpc.orgSettings.get/upsert (DB-backed)
+- [x] Wire TwoFactorAuth.tsx to trpc.totp.status/setup/verify/disable/getBackupCodes (DB-backed)
+- [x] Wire QPABenchmarkLookup.tsx to trpc.qpaBenchmarks.list/stateModifiers (DB-backed)
+- [x] Wire RegulatoryChangeFeed.tsx to trpc.regulatoryFeed.list (DB-backed)
+- [x] Wire NSAComplianceChecklist.tsx to trpc.compliance.list/upsert/reset (DB-backed, per-user)
+- [x] Wire ExpertReview.tsx EXPERT_PANEL to trpc.expertPanelDB.list (DB-backed, skeleton loader)
+- [x] Wire Reports.tsx — remove all MOCK_VOLUME/FINANCIAL/OUTCOME/TIMELINE/SERVICE_PIE constants, use trpc.reports.summary exclusively
+- [x] Wire Changelog.tsx to trpc.changelog.list (DB-backed, grouped by version, search/filter)
+- [x] Remove DashboardLayout wrapper from Reports.tsx and ExpertReview.tsx (provided globally)
+- [x] Add Reseed Demo Data button to Admin panel with confirmation dialog
