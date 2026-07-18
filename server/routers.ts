@@ -37,6 +37,7 @@ import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recor
 import { search, generateLakehouseExport, invalidateSearchIndex, suggest } from "./search";
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
+import { generateReportsPDF, generateReportsCSV } from "./reports-export";
 import { getDb, checkDbHealth } from "./db";
 import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
 import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries } from "../drizzle/schema";
@@ -1848,10 +1849,95 @@ export const appRouter = router({
           step: step.replace("STEP_", "Step "),
           avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a, b) => a + b, 0) / stepDayMap[step].length) : 0,
         }));
-        return { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
+                return { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
+      }),
+
+    exportCSV: protectedProcedure
+      .input(z.object({
+        startDate: z.string().optional(),
+        dateRangeLabel: z.string().default("All time"),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // Fetch summary for all sections
+        const startFilter = input.startDate ? new Date(input.startDate) : undefined;
+        const allDisputes = await db.select().from(disputesTable).orderBy(desc(disputesTable.createdAt)).limit(10000);
+        const filtered = startFilter ? allDisputes.filter(d => d.createdAt && d.createdAt >= startFilter) : allDisputes;
+        // Build summary (reuse same logic as summary procedure)
+        const closed = filtered.filter(d => d.status === "closed");
+        const won = closed.filter(d => Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0));
+        const totalAmount = filtered.reduce((s, d) => s + Number(d.billedAmount ?? 0), 0);
+        const avgDetermination = closed.length ? closed.reduce((s, d) => s + Number(d.determinationAmount ?? 0), 0) / closed.length : 0;
+        const avgDaysToClose = closed.length ? closed.reduce((s, d) => {
+          const ms = (d.closedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now());
+          return s + ms / 86400000;
+        }, 0) / closed.length : 0;
+        const byServiceType = Object.entries(filtered.reduce<Record<string,number>>((acc, d) => { const t = d.serviceType ?? "unknown"; acc[t] = (acc[t] ?? 0) + 1; return acc; }, {})).map(([type, count]) => ({ type, count }));
+        const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        const monthMap: Record<string, { open_negotiation: number; idr_active: number; closed: number; ineligible: number }> = {};
+        for (const d of filtered) { const dt = d.createdAt ?? new Date(); const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`; if (!monthMap[key]) monthMap[key] = { open_negotiation: 0, idr_active: 0, closed: 0, ineligible: 0 }; if (d.status === "closed") monthMap[key].closed++; else if (d.status === "ineligible") monthMap[key].ineligible++; else if (["idr_initiated","entity_selected","offer_submitted","determination_issued"].includes(d.status ?? "")) monthMap[key].idr_active++; else monthMap[key].open_negotiation++; }
+        const byMonth = Object.entries(monthMap).map(([month, counts]) => ({ month: month.split(" ")[0]!, ...counts }));
+        const finMap: Record<string, { billed: number[]; qpa: number[]; det: number[] }> = {};
+        for (const d of filtered) { const k = d.serviceType ?? "unknown"; if (!finMap[k]) finMap[k] = { billed: [], qpa: [], det: [] }; finMap[k].billed.push(Number(d.billedAmount ?? 0)); finMap[k].qpa.push(Number(d.qpaAmount ?? 0)); finMap[k].det.push(Number(d.determinationAmount ?? 0)); }
+        const financialByServiceType = Object.entries(finMap).map(([serviceType, vals]) => ({ serviceType: serviceType.replace(/_/g, " "), avgBilled: vals.billed.length ? Math.round(vals.billed.reduce((a,b)=>a+b,0)/vals.billed.length) : 0, avgQPA: vals.qpa.length ? Math.round(vals.qpa.reduce((a,b)=>a+b,0)/vals.qpa.length) : 0, avgDetermination: vals.det.filter(v=>v>0).length ? Math.round(vals.det.filter(v=>v>0).reduce((a,b)=>a+b,0)/vals.det.filter(v=>v>0).length) : 0 }));
+        const outcomeMap: Record<string, { month: string; won: number; lost: number; pending: number }> = {};
+        for (const d of filtered) { const dt = d.createdAt ?? new Date(); const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`; const label = MONTHS[dt.getMonth()]!; if (!outcomeMap[key]) outcomeMap[key] = { month: label, won: 0, lost: 0, pending: 0 }; if (d.status === "closed") { if (Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0)) outcomeMap[key].won++; else outcomeMap[key].lost++; } else { outcomeMap[key].pending++; } }
+        const outcomeByMonth = Object.values(outcomeMap);
+        const IDR_STEPS = ["STEP_1","STEP_2","STEP_3","STEP_4","STEP_5","STEP_6","STEP_7","STEP_8","STEP_9","STEP_10"] as const;
+        const stepDayMap: Record<string, number[]> = {};
+        for (const d of filtered) { const step = d.currentStep ?? "STEP_1"; if (!stepDayMap[step]) stepDayMap[step] = []; const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); stepDayMap[step].push(ms / 86400000); }
+        const avgDaysByStep = IDR_STEPS.map(step => ({ step: step.replace("STEP_", "Step "), avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a,b)=>a+b,0)/stepDayMap[step].length) : 0 }));
+        const summary = { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
+        const csv = generateReportsCSV(summary, filtered as any, input.dateRangeLabel);
+        return {
+          csv,
+          filename: `HealthPoint-IDR-Report-${new Date().toISOString().slice(0, 10)}.csv`,
+          rowCount: filtered.length,
+        };
+      }),
+
+    exportPDF: protectedProcedure
+      .input(z.object({
+        startDate: z.string().optional(),
+        dateRangeLabel: z.string().default("All time"),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const startFilter = input.startDate ? new Date(input.startDate) : undefined;
+        const allDisputes = await db.select().from(disputesTable).orderBy(desc(disputesTable.createdAt)).limit(10000);
+        const filtered = startFilter ? allDisputes.filter(d => d.createdAt && d.createdAt >= startFilter) : allDisputes;
+        const closed = filtered.filter(d => d.status === "closed");
+        const won = closed.filter(d => Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0));
+        const totalAmount = filtered.reduce((s, d) => s + Number(d.billedAmount ?? 0), 0);
+        const avgDetermination = closed.length ? closed.reduce((s, d) => s + Number(d.determinationAmount ?? 0), 0) / closed.length : 0;
+        const avgDaysToClose = closed.length ? closed.reduce((s, d) => { const ms = (d.closedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); return s + ms / 86400000; }, 0) / closed.length : 0;
+        const byServiceType = Object.entries(filtered.reduce<Record<string,number>>((acc, d) => { const t = d.serviceType ?? "unknown"; acc[t] = (acc[t] ?? 0) + 1; return acc; }, {})).map(([type, count]) => ({ type, count }));
+        const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        const monthMap: Record<string, { open_negotiation: number; idr_active: number; closed: number; ineligible: number }> = {};
+        for (const d of filtered) { const dt = d.createdAt ?? new Date(); const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`; if (!monthMap[key]) monthMap[key] = { open_negotiation: 0, idr_active: 0, closed: 0, ineligible: 0 }; if (d.status === "closed") monthMap[key].closed++; else if (d.status === "ineligible") monthMap[key].ineligible++; else if (["idr_initiated","entity_selected","offer_submitted","determination_issued"].includes(d.status ?? "")) monthMap[key].idr_active++; else monthMap[key].open_negotiation++; }
+        const byMonth = Object.entries(monthMap).map(([month, counts]) => ({ month: month.split(" ")[0]!, ...counts }));
+        const finMap: Record<string, { billed: number[]; qpa: number[]; det: number[] }> = {};
+        for (const d of filtered) { const k = d.serviceType ?? "unknown"; if (!finMap[k]) finMap[k] = { billed: [], qpa: [], det: [] }; finMap[k].billed.push(Number(d.billedAmount ?? 0)); finMap[k].qpa.push(Number(d.qpaAmount ?? 0)); finMap[k].det.push(Number(d.determinationAmount ?? 0)); }
+        const financialByServiceType = Object.entries(finMap).map(([serviceType, vals]) => ({ serviceType: serviceType.replace(/_/g, " "), avgBilled: vals.billed.length ? Math.round(vals.billed.reduce((a,b)=>a+b,0)/vals.billed.length) : 0, avgQPA: vals.qpa.length ? Math.round(vals.qpa.reduce((a,b)=>a+b,0)/vals.qpa.length) : 0, avgDetermination: vals.det.filter(v=>v>0).length ? Math.round(vals.det.filter(v=>v>0).reduce((a,b)=>a+b,0)/vals.det.filter(v=>v>0).length) : 0 }));
+        const outcomeMap: Record<string, { month: string; won: number; lost: number; pending: number }> = {};
+        for (const d of filtered) { const dt = d.createdAt ?? new Date(); const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`; const label = MONTHS[dt.getMonth()]!; if (!outcomeMap[key]) outcomeMap[key] = { month: label, won: 0, lost: 0, pending: 0 }; if (d.status === "closed") { if (Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0)) outcomeMap[key].won++; else outcomeMap[key].lost++; } else { outcomeMap[key].pending++; } }
+        const outcomeByMonth = Object.values(outcomeMap);
+        const IDR_STEPS = ["STEP_1","STEP_2","STEP_3","STEP_4","STEP_5","STEP_6","STEP_7","STEP_8","STEP_9","STEP_10"] as const;
+        const stepDayMap: Record<string, number[]> = {};
+        for (const d of filtered) { const step = d.currentStep ?? "STEP_1"; if (!stepDayMap[step]) stepDayMap[step] = []; const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); stepDayMap[step].push(ms / 86400000); }
+        const avgDaysByStep = IDR_STEPS.map(step => ({ step: step.replace("STEP_", "Step "), avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a,b)=>a+b,0)/stepDayMap[step].length) : 0 }));
+        const summary = { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
+        const pdfBuffer = await generateReportsPDF(summary, filtered as any, input.dateRangeLabel);
+        return {
+          base64: pdfBuffer.toString("base64"),
+          filename: `HealthPoint-IDR-Report-${new Date().toISOString().slice(0, 10)}.pdf`,
+          contentType: "application/pdf",
+          pageCount: Math.ceil(filtered.length / 30) + 5,
+        };
       }),
   }),
-
   // ─── Audit Trail ─────────────────────────────────────────────────────────────
   audit: router({
     list: protectedProcedure

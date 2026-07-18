@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import {
   BarChart2, Download, RefreshCw, TrendingUp, DollarSign,
-  Clock, CheckCircle2, AlertTriangle, FileText
+  Clock, CheckCircle2, AlertTriangle, FileText, Loader2
 } from "lucide-react";
 
 const COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16"];
@@ -54,8 +54,41 @@ export default function Reports() {
   const outcomeChartData = (reportSummary?.outcomeByMonth ?? []).map((r: { month: string; won: number; lost: number; pending: number }) => ({ month: r.month, winRate: (r.won + r.lost) > 0 ? r.won / (r.won + r.lost) : 0, determinationRate: (r.won + r.lost + r.pending) > 0 ? (r.won + r.lost) / (r.won + r.lost + r.pending) : 0, appealRate: 0 }));
   const timelineData = (reportSummary?.avgDaysByStep ?? []).map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 }));
 
+  const dateRangeLabel = dateRange === "3m" ? "Last 3 months" : dateRange === "6m" ? "Last 6 months" : dateRange === "ytd" ? "Year to date" : "Last 12 months";
+
+  const exportCSV = trpc.reports.exportCSV.useMutation({
+    onSuccess: (data) => {
+      const blob = new Blob([data.csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = data.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`CSV exported — ${data.rowCount} disputes`);
+    },
+    onError: (err) => toast.error(`CSV export failed: ${err.message}`),
+  });
+
+  const exportPDF = trpc.reports.exportPDF.useMutation({
+    onSuccess: (data) => {
+      const bytes = Uint8Array.from(atob(data.base64), c => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = data.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`PDF exported — ${data.pageCount} pages`);
+    },
+    onError: (err) => toast.error(`PDF export failed: ${err.message}`),
+  });
+
   const handleExport = (format: "csv" | "pdf") => {
-    toast.success(`Exporting ${activeReport} report as ${format.toUpperCase()}…`);
+    const input = { startDate, dateRangeLabel };
+    if (format === "csv") exportCSV.mutate(input);
+    else exportPDF.mutate(input);
   };
 
   if (!isAuthenticated) return null;
@@ -84,11 +117,23 @@ export default function Reports() {
               <option value="12m">Last 12 months</option>
               <option value="ytd">Year to date</option>
             </select>
-            <Button size="sm" variant="outline" onClick={() => handleExport("csv")}>
-              <Download size={13} className="mr-1.5" />CSV
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handleExport("csv")}
+              disabled={exportCSV.isPending || exportPDF.isPending}
+            >
+              {exportCSV.isPending ? <Loader2 size={13} className="mr-1.5 animate-spin" /> : <Download size={13} className="mr-1.5" />}
+              Export CSV
             </Button>
-            <Button size="sm" variant="outline" onClick={() => handleExport("pdf")}>
-              <FileText size={13} className="mr-1.5" />PDF
+            <Button
+              size="sm"
+              onClick={() => handleExport("pdf")}
+              disabled={exportCSV.isPending || exportPDF.isPending}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              {exportPDF.isPending ? <Loader2 size={13} className="mr-1.5 animate-spin" /> : <FileText size={13} className="mr-1.5" />}
+              Export PDF
             </Button>
           </div>
         </div>
