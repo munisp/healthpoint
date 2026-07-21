@@ -617,6 +617,6 @@
 - [x] Keyboard shortcuts in advance dialog — Enter to confirm (skips select/textarea), Escape to cancel, visible kbd hint in dialog footer
 
 ## Next Steps Sprint 2 (Jul 21 2026)
-- [ ] Pinned disputes — pin icon on dispute list rows and detail page, sidebar Pinned section above Recent, localStorage persistence via usePinnedDisputes hook
-- [ ] Bulk keyboard shortcuts on disputes list — N opens New Dispute wizard, / focuses search bar, E exports current filtered view to CSV
-- [ ] Dark mode chart colour polish — replace hardcoded hex fills in all Recharts charts with CSS variable references so charts adapt to dark/light theme
+- [x] Pinned disputes — pin icon on dispute list rows and detail page, sidebar Pinned section above Recent, localStorage persistence via usePinnedDisputes hook
+- [x] Bulk keyboard shortcuts on disputes list — N opens New Dispute wizard, / focuses search bar, E exports current filtered view to CSV
+- [x] Dark mode chart colour polish — replace hardcoded hex fills in all Recharts charts with CSS variable references so charts adapt to dark/light theme
