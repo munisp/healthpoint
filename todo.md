@@ -607,9 +607,9 @@
 
 ## Next Steps Sprint (Jul 21 2026)
 
-- [ ] Enable switchable dark mode — set ThemeProvider to switchable, add .dark CSS variables in index.css
-- [ ] Add Recent Disputes quick-access section to sidebar (top of nav, last 5 viewed, localStorage)
-- [ ] Add keyboard shortcuts to dispute advance dialog (Enter to confirm, Escape to cancel)
+- [x] Enable switchable dark mode — set ThemeProvider to switchable, add .dark CSS variables in index.css
+- [x] Add Recent Disputes quick-access section to sidebar (top of nav, last 5 viewed, localStorage)
+- [x] Add keyboard shortcuts to dispute advance dialog (Enter to confirm, Escape to cancel)
 
 ## Next Steps Sprint (Jul 21 2026)
 - [x] Dark mode — ThemeProvider already set to switchable; dark CSS variables confirmed complete; DarkModeToggle in top bar is live
