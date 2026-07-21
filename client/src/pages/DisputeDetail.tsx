@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useParams, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -19,6 +19,7 @@ import WorkflowTimeline from "@/components/WorkflowTimeline";
 import DeadlineCountdownBanner from "@/components/DeadlineCountdownBanner";
 import OutcomePredictionGauge from "@/components/OutcomePredictionGauge";
 import DisputeComments from "@/components/DisputeComments";
+import { useRecentDisputes } from "@/hooks/useRecentDisputes";
 
 const IDR_STEPS = [
   { key: "STEP_01_OPEN_NEGOTIATION_INITIATED", label: "Open Negotiation Initiated", description: "Party sends open negotiation notice per NSA §2799A-1", days: "Day 0" },
@@ -175,6 +176,9 @@ export default function DisputeDetail() {
   const [determinationWinner, setDeterminationWinner] = useState<"initiating_party" | "responding_party" | "">("");
   const [showAdvanceConfirm, setShowAdvanceConfirm] = useState(false);
 
+  // Recent disputes tracking
+  const { recordVisit } = useRecentDisputes();
+
   // Queries
   const { data: timelineData, isLoading } = trpc.disputes.getTimeline.useQuery({ disputeId: id! });
   // Fallback: load basic dispute data when getTimeline returns nothing (e.g. newly created dispute)
@@ -287,6 +291,20 @@ export default function DisputeDetail() {
 
   // Use full timeline data if available, fall back to basic dispute data
   const dispute = timelineData?.dispute ?? basicDispute!;
+
+  // Track this dispute as recently visited
+  useEffect(() => {
+    if (dispute?.id && dispute?.referenceNumber) {
+      recordVisit({
+        id: dispute.id,
+        referenceNumber: dispute.referenceNumber,
+        status: dispute.status ?? "open_negotiation",
+        currentStep: dispute.currentStep ?? "",
+        serviceType: dispute.serviceType ?? "",
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispute?.id]);
   const timeline = timelineData?.timeline ?? [];
   const { dispute: _d, timeline: _t, ...timelineRest } = timelineData ?? {}; // keep offers etc.
   const offers = (timelineData as any).offers ?? [];
@@ -873,7 +891,24 @@ export default function DisputeDetail() {
 
       {/* ── Step Advance Confirmation Dialog ──────────────────────────── */}
       <Dialog open={showAdvanceConfirm} onOpenChange={setShowAdvanceConfirm}>
-        <DialogContent className="max-w-md">
+        <DialogContent
+          className="max-w-md"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              setShowAdvanceConfirm(false);
+            }
+            if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+              // Only fire Enter-to-confirm when not inside a select/textarea
+              const tag = (e.target as HTMLElement).tagName.toLowerCase();
+              if (tag === "select" || tag === "textarea") return;
+              e.preventDefault();
+              const isWinnerRequired = nextStep?.step === "STEP_13_DETERMINATION_ISSUED";
+              if (isWinnerRequired && !determinationWinner) return;
+              if (!advanceMutation.isPending) confirmAdvance();
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ChevronRight size={18} className="text-blue-600" />
@@ -909,7 +944,12 @@ export default function DisputeDetail() {
               </div>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:items-center">
+            <span className="text-[11px] text-muted-foreground mr-auto hidden sm:block">
+              <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono text-[10px]">Enter</kbd> to confirm
+              {" · "}
+              <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono text-[10px]">Esc</kbd> to cancel
+            </span>
             <Button variant="outline" onClick={() => setShowAdvanceConfirm(false)}>Cancel</Button>
             <Button
               onClick={confirmAdvance}

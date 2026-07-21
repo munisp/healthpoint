@@ -108,6 +108,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useLocation } from "wouter";
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal";
 import OnboardingTour from "./OnboardingTour";
+import { useRecentDisputes } from "../hooks/useRecentDisputes";
 
 // ─── Navigation structure ────────────────────────────────────────────────────
 // Each group has a label, icon, default-open state, and list of items.
@@ -424,6 +425,7 @@ function DashboardLayoutContent({
   }, [isResizing, setSidebarWidth]);
 
   const isAdmin = user?.role === "admin";
+  const { recent: recentDisputes } = useRecentDisputes();
 
   return (
     <>
@@ -448,6 +450,49 @@ function DashboardLayoutContent({
           <SidebarContent className="gap-0">
             <ScrollArea className="flex-1">
               <div className="py-2 px-2 space-y-0.5">
+                {/* ── Recent Disputes quick-access ── */}
+                {!isCollapsed && recentDisputes.length > 0 && (
+                  <div className="mb-1">
+                    <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                      <History className="h-3 w-3 shrink-0" />
+                      <span>Recent</span>
+                    </div>
+                    <SidebarMenu className="gap-0">
+                      {recentDisputes.map((d) => (
+                        <SidebarMenuItem key={d.id}>
+                          <SidebarMenuButton
+                            isActive={location === `/disputes/${d.id}`}
+                            onClick={() => setLocation(`/disputes/${d.id}`)}
+                            className={`h-8 text-xs transition-all ${
+                              location === `/disputes/${d.id}`
+                                ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground shadow-sm"
+                                : "text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            <FileWarning className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                            <span className="flex-1 truncate font-mono text-[11px]">{d.referenceNumber}</span>
+                            <span
+                              className={`text-[9px] px-1 rounded font-medium shrink-0 ${
+                                d.status === "closed"
+                                  ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                                  : d.status === "ineligible"
+                                  ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+                                  : "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400"
+                              }`}
+                            >
+                              {d.status === "open_negotiation" ? "NEGO"
+                                : d.status === "idr_active" ? "IDR"
+                                : d.status === "closed" ? "DONE"
+                                : d.status === "ineligible" ? "INELIG"
+                                : d.status.toUpperCase().slice(0, 4)}
+                            </span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      ))}
+                    </SidebarMenu>
+                    <div className="mx-2 my-1 border-t border-border/50" />
+                  </div>
+                )}
                 {NAV_GROUPS.map((group) => {
                   // Hide admin-only groups from non-admins
                   if (group.adminOnly && !isAdmin) return null;

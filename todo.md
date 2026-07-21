@@ -604,3 +604,14 @@
 - [x] Tests: 132/132 passing
 - [x] Checkpoint saved
 - [x] GitHub push
+
+## Next Steps Sprint (Jul 21 2026)
+
+- [ ] Enable switchable dark mode — set ThemeProvider to switchable, add .dark CSS variables in index.css
+- [ ] Add Recent Disputes quick-access section to sidebar (top of nav, last 5 viewed, localStorage)
+- [ ] Add keyboard shortcuts to dispute advance dialog (Enter to confirm, Escape to cancel)
+
+## Next Steps Sprint (Jul 21 2026)
+- [x] Dark mode — ThemeProvider already set to switchable; dark CSS variables confirmed complete; DarkModeToggle in top bar is live
+- [x] Recent Disputes quick-access — useRecentDisputes hook (localStorage, max 5), sidebar "Recent" section with status badges, recordVisit useEffect in DisputeDetail
+- [x] Keyboard shortcuts in advance dialog — Enter to confirm (skips select/textarea), Escape to cancel, visible kbd hint in dialog footer
