@@ -34,17 +34,19 @@ function useInView(threshold = 0.2) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    // Check if already in viewport on mount (handles above-fold elements)
-    const rect = el.getBoundingClientRect();
-    if (rect.top < window.innerHeight && rect.bottom > 0) {
-      setInView(true);
-      return;
-    }
-    const obs = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) { setInView(true); obs.disconnect(); }
-    }, { threshold });
-    obs.observe(el);
-    return () => obs.disconnect();
+    // Use a short delay so layout is settled before checking viewport position
+    const timer = setTimeout(() => {
+      const rect = el.getBoundingClientRect();
+      if (rect.top < window.innerHeight && rect.bottom > 0) {
+        setInView(true);
+        return;
+      }
+      const obs = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting) { setInView(true); obs.disconnect(); }
+      }, { threshold });
+      obs.observe(el);
+    }, 100);
+    return () => clearTimeout(timer);
   }, [threshold]);
   return { ref, inView };
 }
