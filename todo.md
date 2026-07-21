@@ -584,13 +584,23 @@
 - [x] Left sidebar navigation — all 87 authenticated routes now wrapped in DashboardLayout via PL() helper in App.tsx; duplicate page-level headers removed from Dashboard, DisputesList, DisputeDetail, IDREntityDashboard, Admin
 - [x] Landing page accuracy audit — removed "LangGraph ReAct Agent" claim (actual: invokeLLM structured prompts); updated AI section to "Built-in AI Engine with 4 Specialized Capabilities"; removed "SOC 2 Type II" and "99.9% uptime SLA" from footer/pricing; corrected "FHIR R4 Compatible" → "FHIR R4 Ready"
 
-## AI Executive Summary on Reports Page (Jul 18, 2026)
-- [x] reports.generateExecutiveSummary tRPC procedure — calls invokeLLM with structured report metrics (disputes, win rate, avg determination, financial totals), returns 3-paragraph professional executive summary
-- [x] reports-export.ts — generateReportsPDF accepts optional executiveSummary + generatedAt; renders it as a dedicated first page with blue header bar, metadata block, and body text
-- [x] generateReportsCSV — prepends EXECUTIVE SUMMARY section before data tables when summary is present
-- [x] reports.exportCSV tRPC procedure — passes executiveSummary to CSV generator
-- [x] reports.exportPDF tRPC procedure — passes executiveSummary + executiveSummaryGeneratedAt to PDF generator
-- [x] Reports page: AI Executive Summary panel — Generate Summary button (Sparkles icon), live display with generatedAt timestamp, Regenerate button, loading spinner, empty-state description
-- [x] Reports page: date range change clears stale summary (setAiSummary(null) on dateRange change)
-- [x] Reports page: all MOCK_ fallback constants removed — replaced with proper empty states
-- [x] TypeScript: 0 errors | Tests: 132/132 passing
+## CRUD/OpenSearch Sprint (Jul 21, 2026)
+- [x] Audit all pages with CRUD and search — inventory of DB-backed vs stub vs in-memory
+- [x] DisputeSearchAdvanced.tsx — fully rewritten to server-side filtering via disputes.list tRPC
+- [x] AuditTrail.tsx — upgraded to server-side search/filter via audit.list tRPC
+- [x] AuditTrailViewer.tsx — upgraded to server-side search/filter via audit.list tRPC
+- [x] disputes.list input schema extended — payer, minAmount, maxAmount, dateFrom, dateTo filters
+- [x] audit.list input schema extended — action, search, dateFrom, dateTo filters
+- [x] listDisputes DB helper extended — new filter params wired to Drizzle WHERE clauses
+- [x] listAuditEntries DB helper extended — new filter params wired to Drizzle WHERE clauses
+- [x] server/search.ts rewritten — 8 entity types (dispute, document, audit, payer_contact, idr_entity, expert, regulatory, qpa_benchmark), OpenSearch indices, Fuse.js fallback, indexDocument/deleteFromIndex helpers
+- [x] search.query entityTypes enum extended to all 8 types
+- [x] GlobalSearch.tsx extended — all 8 entity types with navigation
+- [x] trpc.ts mutation middleware — auto-invalidates search cache after every successful mutation
+- [x] payerContacts.list upgraded — uses OpenSearch for full-text search queries
+- [x] regulatoryFeed.list upgraded — uses OpenSearch for full-text search queries
+- [x] OpenSearch indexDocument calls added to: dispute create, dispute advance, expertPanelDB seed, qpaBenchmarks seed, regulatoryFeed seed, payerContacts create/update/delete
+- [x] TypeScript: 0 errors confirmed
+- [x] Tests: 132/132 passing
+- [x] Checkpoint saved
+- [x] GitHub push

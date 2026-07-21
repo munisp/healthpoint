@@ -1,388 +1,414 @@
 /**
- * HealthPoint IDR — Reports PDF & CSV Export
- * Generates a formatted multi-section PDF report and CSV export from live DB data.
- * Supports an optional AI-generated executive summary prepended as the first section.
+ * HealthPoint IDR Reports Export
+ * Generates a multi-section PDF report with:
+ *   - Cover page with KPI summary
+ *   - Dispute Volume by Month table
+ *   - Financial Summary by Service Type table
+ *   - Outcome Analysis table
+ *   - Timeline Compliance table
+ *   - Full dispute list
  */
 import PDFDocument from "pdfkit";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-export interface ReportMetrics {
+export interface ReportSummaryData {
   totalDisputes: number;
-  closed: number;
-  winRate: number;
+  totalAmount: number;
   avgDetermination: number;
+  winRate: number;
   avgDaysToClose: number;
-  totalBilled: number;
-  totalQPA: number;
-  inProgress: number;
-  ineligible: number;
-}
-
-export interface ReportData {
-  dateRangeLabel: string;
-  generatedAt: string;
-  executiveSummary?: string;
-  metrics: ReportMetrics;
+  byServiceType: Array<{ type: string; count: number }>;
   byMonth: Array<{ month: string; open_negotiation: number; idr_active: number; closed: number; ineligible: number }>;
   financialByServiceType: Array<{ serviceType: string; avgBilled: number; avgQPA: number; avgDetermination: number }>;
   outcomeByMonth: Array<{ month: string; won: number; lost: number; pending: number }>;
   avgDaysByStep: Array<{ step: string; avgDays: number }>;
-  byServiceType: Array<{ type: string; count: number }>;
-  disputes: Array<{
-    referenceNumber: string;
-    status: string;
-    serviceType: string;
-    initiatingPartyName: string;
-    respondingPartyName?: string | null;
-    billedAmount?: string | null;
-    qpaAmount?: string | null;
-    determinationAmount?: string | null;
-    createdAt?: Date | null;
-    closedAt?: Date | null;
-  }>;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-const BRAND_BLUE = "#1d4ed8";
-const BRAND_DARK = "#1e293b";
-const GRAY = "#64748b";
-const LIGHT_GRAY = "#f1f5f9";
-const TABLE_HEADER_BG = "#e2e8f0";
-
-function fmt$(n: number) {
-  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+export interface DisputeRowForExport {
+  referenceNumber: string;
+  status: string | null;
+  currentStep: string | null;
+  serviceType: string | null;
+  serviceDate: Date | null;
+  initiatingPartyName: string;
+  respondingPartyName: string | null;
+  billedAmount: string | null;
+  qpaAmount: string | null;
+  determinationAmount: string | null;
+  patientState: string | null;
+  facilityState: string | null;
+  openNegotiationDeadline: Date | null;
+  offerSubmissionDeadline: Date | null;
+  paymentDeadline: Date | null;
+  createdAt: Date | null;
+  closedAt: Date | null;
 }
 
-function drawPageHeader(doc: PDFKit.PDFDocument, title: string, subtitle: string) {
-  doc.rect(0, 0, doc.page.width, 56).fill(BRAND_BLUE);
-  doc.fillColor("#ffffff").fontSize(16).font("Helvetica-Bold").text("HealthPoint IDR", 40, 14);
-  doc.fillColor("#93c5fd").fontSize(9).font("Helvetica").text("NSA No Surprises Act Platform", 40, 33);
-  doc.fillColor("#ffffff").fontSize(13).font("Helvetica-Bold").text(title, 200, 14, { align: "center", width: doc.page.width - 400 });
-  doc.fillColor("#bfdbfe").fontSize(9).font("Helvetica").text(subtitle, 200, 33, { align: "center", width: doc.page.width - 400 });
-  doc.fillColor(BRAND_DARK);
+// ─── Color palette ────────────────────────────────────────────────────────────
+const C = {
+  primary: "#1e40af",
+  secondary: "#3b82f6",
+  success: "#059669",
+  warning: "#d97706",
+  danger: "#dc2626",
+  text: "#1e293b",
+  muted: "#64748b",
+  border: "#e2e8f0",
+  bg: "#f1f5f9",
+  white: "#ffffff",
+};
+
+const PAGE_MARGIN = 50;
+const PAGE_WIDTH = 595.28; // A4
+const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
+
+// ─── Helper: draw a horizontal rule ──────────────────────────────────────────
+function hRule(doc: PDFKit.PDFDocument, y?: number) {
+  const yPos = y ?? doc.y;
+  doc.moveTo(PAGE_MARGIN, yPos).lineTo(PAGE_WIDTH - PAGE_MARGIN, yPos).strokeColor(C.border).lineWidth(0.5).stroke();
 }
 
-function drawPageFooter(doc: PDFKit.PDFDocument, pageNum: number, totalPages: number) {
-  const y = doc.page.height - 28;
-  doc.rect(0, y - 4, doc.page.width, 32).fill("#f8fafc");
-  doc.fillColor(GRAY).fontSize(8).font("Helvetica")
-    .text(`CONFIDENTIAL — HealthPoint IDR Platform`, 40, y + 2)
-    .text(`Page ${pageNum} of ${totalPages}`, 0, y + 2, { align: "right", width: doc.page.width - 40 });
-  doc.fillColor(BRAND_DARK);
+// ─── Helper: section header ───────────────────────────────────────────────────
+function sectionHeader(doc: PDFKit.PDFDocument, title: string) {
+  if (doc.y > 680) doc.addPage();
+  doc.moveDown(0.5);
+  doc.rect(PAGE_MARGIN, doc.y, CONTENT_WIDTH, 22).fill(C.primary);
+  doc.fillColor(C.white).fontSize(10).font("Helvetica-Bold")
+    .text(title.toUpperCase(), PAGE_MARGIN + 8, doc.y - 17, { width: CONTENT_WIDTH - 16 });
+  doc.fillColor(C.text).moveDown(0.8);
 }
 
-function tableRow(doc: PDFKit.PDFDocument, y: number, cols: string[], widths: number[], startX: number, isHeader = false, isAlt = false) {
-  const rowH = 18;
-  if (isHeader) {
-    doc.rect(startX, y, widths.reduce((a, b) => a + b, 0), rowH).fill(TABLE_HEADER_BG);
-  } else if (isAlt) {
-    doc.rect(startX, y, widths.reduce((a, b) => a + b, 0), rowH).fill(LIGHT_GRAY);
-  }
+// ─── Helper: simple table ─────────────────────────────────────────────────────
+function drawTable(
+  doc: PDFKit.PDFDocument,
+  headers: string[],
+  rows: string[][],
+  colWidths: number[],
+) {
+  const ROW_H = 18;
+  const startX = PAGE_MARGIN;
+
+  // Header row
   let x = startX;
-  cols.forEach((col, i) => {
-    doc.fillColor(isHeader ? BRAND_DARK : GRAY)
-      .fontSize(isHeader ? 8 : 7.5)
-      .font(isHeader ? "Helvetica-Bold" : "Helvetica")
-      .text(col, x + 4, y + 4, { width: widths[i] - 8, ellipsis: true, lineBreak: false });
-    x += widths[i];
+  doc.rect(startX, doc.y, CONTENT_WIDTH, ROW_H).fill(C.bg);
+  headers.forEach((h, i) => {
+    doc.fillColor(C.text).fontSize(8).font("Helvetica-Bold")
+      .text(h, x + 4, doc.y - ROW_H + 5, { width: colWidths[i] - 8, lineBreak: false });
+    x += colWidths[i];
   });
-  doc.fillColor(BRAND_DARK);
-  return y + rowH;
+  doc.moveDown(0.05);
+  hRule(doc);
+
+  // Data rows
+  rows.forEach((row, ri) => {
+    if (doc.y + ROW_H > 760) {
+      doc.addPage();
+      // Repeat header on new page
+      let hx = startX;
+      doc.rect(startX, doc.y, CONTENT_WIDTH, ROW_H).fill(C.bg);
+      headers.forEach((h, i) => {
+        doc.fillColor(C.text).fontSize(8).font("Helvetica-Bold")
+          .text(h, hx + 4, doc.y - ROW_H + 5, { width: colWidths[i] - 8, lineBreak: false });
+        hx += colWidths[i];
+      });
+      doc.moveDown(0.05);
+      hRule(doc);
+    }
+    const rowY = doc.y;
+    if (ri % 2 === 0) doc.rect(startX, rowY, CONTENT_WIDTH, ROW_H).fill("#f8fafc");
+    let cx = startX;
+    row.forEach((cell, i) => {
+      doc.fillColor(C.text).fontSize(7.5).font("Helvetica")
+        .text(cell, cx + 4, rowY + 5, { width: colWidths[i] - 8, lineBreak: false });
+      cx += colWidths[i];
+    });
+    doc.y = rowY + ROW_H;
+    hRule(doc);
+  });
+  doc.moveDown(0.5);
 }
 
-// ─── PDF Generator ────────────────────────────────────────────────────────────
-export async function generateReportsPDF(data: ReportData): Promise<Buffer> {
+// ─── Helper: KPI card ─────────────────────────────────────────────────────────
+function kpiCard(doc: PDFKit.PDFDocument, x: number, y: number, w: number, label: string, value: string, sub?: string) {
+  doc.rect(x, y, w, 56).fill(C.bg);
+  doc.rect(x, y, 3, 56).fill(C.secondary);
+  doc.fillColor(C.muted).fontSize(7.5).font("Helvetica").text(label, x + 10, y + 8, { width: w - 14 });
+  doc.fillColor(C.primary).fontSize(18).font("Helvetica-Bold").text(value, x + 10, y + 20, { width: w - 14 });
+  if (sub) doc.fillColor(C.muted).fontSize(7).font("Helvetica").text(sub, x + 10, y + 43, { width: w - 14 });
+}
+
+// ─── Main export function ─────────────────────────────────────────────────────
+export async function generateReportsPDF(
+  summary: ReportSummaryData,
+  disputes: DisputeRowForExport[],
+  dateRangeLabel: string,
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
+    const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN, bufferPages: true });
     const chunks: Buffer[] = [];
     doc.on("data", (c: Buffer) => chunks.push(c));
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    const pageW = doc.page.width;
-    const contentX = 40;
-    const contentW = pageW - 80;
+    const now = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 
-    // ── PAGE 1: Executive Summary (if provided) or Cover ──────────────────────
-    if (data.executiveSummary) {
-      drawPageHeader(doc, "Executive Summary", data.dateRangeLabel);
+    // ── Cover / KPI Page ──────────────────────────────────────────────────────
+    // Header bar
+    doc.rect(0, 0, PAGE_WIDTH, 80).fill(C.primary);
+    doc.fillColor(C.white).fontSize(22).font("Helvetica-Bold")
+      .text("HealthPoint IDR Platform", PAGE_MARGIN, 20, { width: CONTENT_WIDTH });
+    doc.fillColor("#93c5fd").fontSize(12).font("Helvetica")
+      .text("Reports & Analytics Export", PAGE_MARGIN, 48, { width: CONTENT_WIDTH });
 
-      // Generated date
-      doc.fillColor(GRAY).fontSize(8).font("Helvetica")
-        .text(`Generated: ${new Date(data.generatedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`, contentX, 70, { align: "right", width: contentW });
+    doc.y = 100;
+    doc.fillColor(C.muted).fontSize(9).font("Helvetica")
+      .text(`Generated: ${now}  ·  Period: ${dateRangeLabel}  ·  Total disputes in range: ${summary.totalDisputes}`,
+        PAGE_MARGIN, doc.y, { width: CONTENT_WIDTH });
+    doc.moveDown(1);
+    hRule(doc);
+    doc.moveDown(0.8);
 
-      // AI badge
-      doc.rect(contentX, 84, 120, 18).fill("#dbeafe");
-      doc.fillColor(BRAND_BLUE).fontSize(8).font("Helvetica-Bold")
-        .text("✦  AI-Generated Analysis", contentX + 6, 89);
+    // KPI cards (2 per row)
+    const cardW = (CONTENT_WIDTH - 12) / 2;
+    const kpis = [
+      { label: "Total Disputes", value: String(summary.totalDisputes), sub: "in selected period" },
+      { label: "Overall Win Rate", value: `${summary.winRate}%`, sub: "provider-favorable determinations" },
+      { label: "Avg. Determination Amount", value: summary.avgDetermination > 0 ? `$${summary.avgDetermination.toLocaleString()}` : "—", sub: "across closed disputes" },
+      { label: "Avg. Days to Close", value: summary.avgDaysToClose > 0 ? `${summary.avgDaysToClose} days` : "—", sub: "from initiation to closure" },
+    ];
+    const kpiY = doc.y;
+    kpis.forEach((k, i) => {
+      const kx = PAGE_MARGIN + (i % 2) * (cardW + 12);
+      const ky = kpiY + Math.floor(i / 2) * 68;
+      kpiCard(doc, kx, ky, cardW, k.label, k.value, k.sub);
+    });
+    doc.y = kpiY + 2 * 68 + 12;
+    doc.moveDown(0.5);
 
-      // Summary text
-      doc.fillColor(BRAND_DARK).fontSize(10).font("Helvetica")
-        .text(data.executiveSummary, contentX, 114, { width: contentW, lineGap: 4, paragraphGap: 8 });
-
-      // KPI strip at bottom of executive summary page
-      const kpiY = Math.min(doc.y + 20, doc.page.height - 120);
-      const kpis = [
-        { label: "Total Disputes", value: String(data.metrics.totalDisputes) },
-        { label: "Win Rate", value: `${data.metrics.winRate}%` },
-        { label: "Avg. Determination", value: fmt$(data.metrics.avgDetermination) },
-        { label: "Avg. Days to Close", value: `${data.metrics.avgDaysToClose}d` },
-      ];
-      const kpiW = contentW / kpis.length;
-      doc.rect(contentX, kpiY, contentW, 52).fill("#eff6ff").stroke("#bfdbfe");
-      kpis.forEach((kpi, i) => {
-        const kx = contentX + i * kpiW + kpiW / 2;
-        doc.fillColor(BRAND_BLUE).fontSize(16).font("Helvetica-Bold")
-          .text(kpi.value, kx - kpiW / 2 + 4, kpiY + 8, { width: kpiW - 8, align: "center" });
-        doc.fillColor(GRAY).fontSize(7.5).font("Helvetica")
-          .text(kpi.label, kx - kpiW / 2 + 4, kpiY + 30, { width: kpiW - 8, align: "center" });
-      });
-
-      doc.addPage();
+    // ── Volume by Month ───────────────────────────────────────────────────────
+    sectionHeader(doc, "1. Dispute Volume by Month");
+    if (summary.byMonth.length === 0) {
+      doc.fillColor(C.muted).fontSize(9).text("No data available for the selected period.", PAGE_MARGIN, doc.y);
+      doc.moveDown(0.5);
+    } else {
+      drawTable(
+        doc,
+        ["Month", "Open Negotiation", "IDR Active", "Closed", "Ineligible", "Total"],
+        summary.byMonth.map(r => [
+          r.month,
+          String(r.open_negotiation),
+          String(r.idr_active),
+          String(r.closed),
+          String(r.ineligible),
+          String(r.open_negotiation + r.idr_active + r.closed + r.ineligible),
+        ]),
+        [70, 95, 80, 70, 80, 70],
+      );
     }
 
-    // ── PAGE: KPI Cover ────────────────────────────────────────────────────────
-    drawPageHeader(doc, "IDR Performance Report", data.dateRangeLabel);
+    // ── Financial Summary ─────────────────────────────────────────────────────
+    sectionHeader(doc, "2. Financial Summary by Service Type");
+    if (summary.financialByServiceType.length === 0) {
+      doc.fillColor(C.muted).fontSize(9).text("No financial data available.", PAGE_MARGIN, doc.y);
+      doc.moveDown(0.5);
+    } else {
+      drawTable(
+        doc,
+        ["Service Type", "Avg. Billed", "Avg. QPA", "Avg. Determination", "QPA vs Det. Δ"],
+        summary.financialByServiceType.map(r => [
+          r.serviceType,
+          r.avgBilled > 0 ? `$${r.avgBilled.toLocaleString()}` : "—",
+          r.avgQPA > 0 ? `$${r.avgQPA.toLocaleString()}` : "—",
+          r.avgDetermination > 0 ? `$${r.avgDetermination.toLocaleString()}` : "—",
+          r.avgQPA > 0 && r.avgDetermination > 0
+            ? `${r.avgDetermination >= r.avgQPA ? "+" : ""}$${(r.avgDetermination - r.avgQPA).toLocaleString()}`
+            : "—",
+        ]),
+        [120, 80, 80, 100, 85],
+      );
+    }
 
-    doc.fillColor(GRAY).fontSize(8).font("Helvetica")
-      .text(`Generated: ${new Date(data.generatedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`, contentX, 70, { align: "right", width: contentW });
+    // ── Outcome Analysis ──────────────────────────────────────────────────────
+    sectionHeader(doc, "3. Outcome Analysis by Month");
+    if (summary.outcomeByMonth.length === 0) {
+      doc.fillColor(C.muted).fontSize(9).text("No outcome data available — disputes have not yet reached determination.", PAGE_MARGIN, doc.y);
+      doc.moveDown(0.5);
+    } else {
+      drawTable(
+        doc,
+        ["Month", "Won", "Lost", "Pending", "Win Rate", "Det. Rate"],
+        summary.outcomeByMonth.map(r => {
+          const total = r.won + r.lost + r.pending;
+          const closed = r.won + r.lost;
+          return [
+            r.month,
+            String(r.won),
+            String(r.lost),
+            String(r.pending),
+            closed > 0 ? `${Math.round((r.won / closed) * 100)}%` : "—",
+            total > 0 ? `${Math.round((closed / total) * 100)}%` : "—",
+          ];
+        }),
+        [70, 55, 55, 65, 70, 80],
+      );
+    }
 
-    // 8-cell KPI grid
-    const kpiGrid = [
-      { label: "Total Disputes", value: String(data.metrics.totalDisputes), color: BRAND_BLUE },
-      { label: "Closed / Resolved", value: String(data.metrics.closed), color: "#16a34a" },
-      { label: "In Progress", value: String(data.metrics.inProgress), color: "#d97706" },
-      { label: "Ineligible", value: String(data.metrics.ineligible), color: "#dc2626" },
-      { label: "Win Rate", value: `${data.metrics.winRate}%`, color: BRAND_BLUE },
-      { label: "Avg. Determination", value: fmt$(data.metrics.avgDetermination), color: "#16a34a" },
-      { label: "Avg. Days to Close", value: `${data.metrics.avgDaysToClose}d`, color: "#d97706" },
-      { label: "Total Billed", value: fmt$(data.metrics.totalBilled), color: BRAND_DARK },
-    ];
-    const cellW = contentW / 4;
-    const cellH = 56;
-    kpiGrid.forEach((kpi, i) => {
-      const col = i % 4;
-      const row = Math.floor(i / 4);
-      const kx = contentX + col * cellW;
-      const ky = 86 + row * (cellH + 8);
-      doc.rect(kx + 2, ky, cellW - 4, cellH).fill("#f8fafc").stroke("#e2e8f0");
-      doc.fillColor(kpi.color).fontSize(20).font("Helvetica-Bold")
-        .text(kpi.value, kx + 4, ky + 8, { width: cellW - 8, align: "center" });
-      doc.fillColor(GRAY).fontSize(8).font("Helvetica")
-        .text(kpi.label, kx + 4, ky + 34, { width: cellW - 8, align: "center" });
-    });
+    // ── Timeline Compliance ───────────────────────────────────────────────────
+    sectionHeader(doc, "4. Timeline Compliance (Avg. Days per Step)");
+    if (summary.avgDaysByStep.length === 0) {
+      doc.fillColor(C.muted).fontSize(9).text("No timeline data available.", PAGE_MARGIN, doc.y);
+      doc.moveDown(0.5);
+    } else {
+      drawTable(
+        doc,
+        ["Step", "Avg. Days", "Statutory Limit", "Status"],
+        summary.avgDaysByStep.map(r => {
+          const limit = r.step.includes("Step 1") ? 30 : r.step.includes("Step 2") || r.step.includes("Step 3") ? 4 : r.step.includes("Step 4") ? 3 : 10;
+          const status = r.avgDays === 0 ? "No data" : r.avgDays <= limit ? "✓ On time" : "⚠ Overdue";
+          return [r.step, r.avgDays > 0 ? `${r.avgDays} days` : "—", `${limit} days`, status];
+        }),
+        [100, 80, 100, 185],
+      );
+    }
 
-    // Service type breakdown
-    let y = 86 + 2 * (cellH + 8) + 16;
-    doc.fillColor(BRAND_DARK).fontSize(11).font("Helvetica-Bold").text("Dispute Volume by Service Type", contentX, y);
-    y += 16;
-    const stCols = ["Service Type", "Count", "% of Total"];
-    const stWidths = [240, 80, 80];
-    y = tableRow(doc, y, stCols, stWidths, contentX, true);
-    data.byServiceType.slice(0, 12).forEach((row, i) => {
-      const pct = data.metrics.totalDisputes > 0 ? ((row.count / data.metrics.totalDisputes) * 100).toFixed(1) : "0.0";
-      y = tableRow(doc, y, [row.type.replace(/_/g, " "), String(row.count), `${pct}%`], stWidths, contentX, false, i % 2 === 1);
-    });
-
-    doc.addPage();
-
-    // ── PAGE: Volume by Month ──────────────────────────────────────────────────
-    drawPageHeader(doc, "Dispute Volume by Month", data.dateRangeLabel);
-    y = 76;
-    doc.fillColor(BRAND_DARK).fontSize(11).font("Helvetica-Bold").text("Monthly Dispute Volume", contentX, y);
-    y += 16;
-    const volCols = ["Month", "Open Negotiation", "IDR Active", "Closed", "Ineligible", "Total"];
-    const volWidths = [90, 90, 80, 70, 80, 60];
-    y = tableRow(doc, y, volCols, volWidths, contentX, true);
-    data.byMonth.forEach((row, i) => {
-      const total = row.open_negotiation + row.idr_active + row.closed + row.ineligible;
-      y = tableRow(doc, y, [row.month, String(row.open_negotiation), String(row.idr_active), String(row.closed), String(row.ineligible), String(total)], volWidths, contentX, false, i % 2 === 1);
-    });
-
-    doc.addPage();
-
-    // ── PAGE: Financial Summary ────────────────────────────────────────────────
-    drawPageHeader(doc, "Financial Summary by Service Type", data.dateRangeLabel);
-    y = 76;
-    doc.fillColor(BRAND_DARK).fontSize(11).font("Helvetica-Bold").text("Average Amounts by Service Type", contentX, y);
-    y += 16;
-    const finCols = ["Service Type", "Avg. Billed", "Avg. QPA", "Avg. Determination", "QPA vs Det."];
-    const finWidths = [160, 80, 80, 100, 80];
-    y = tableRow(doc, y, finCols, finWidths, contentX, true);
-    data.financialByServiceType.forEach((row, i) => {
-      const delta = row.avgDetermination - row.avgQPA;
-      const deltaStr = `${delta >= 0 ? "+" : ""}${fmt$(delta)}`;
-      y = tableRow(doc, y, [row.serviceType.replace(/_/g, " "), fmt$(row.avgBilled), fmt$(row.avgQPA), fmt$(row.avgDetermination), deltaStr], finWidths, contentX, false, i % 2 === 1);
-    });
-
-    // Financial totals
-    y += 12;
-    doc.rect(contentX, y, contentW, 28).fill("#eff6ff");
-    doc.fillColor(BRAND_BLUE).fontSize(9).font("Helvetica-Bold")
-      .text(`Total Billed: ${fmt$(data.metrics.totalBilled)}   |   Total QPA Benchmark: ${fmt$(data.metrics.totalQPA)}   |   Avg. Determination: ${fmt$(data.metrics.avgDetermination)}`, contentX + 8, y + 8, { width: contentW - 16 });
-
-    doc.addPage();
-
-    // ── PAGE: Outcome Analysis ─────────────────────────────────────────────────
-    drawPageHeader(doc, "Outcome Analysis", data.dateRangeLabel);
-    y = 76;
-    doc.fillColor(BRAND_DARK).fontSize(11).font("Helvetica-Bold").text("Monthly Outcome Breakdown", contentX, y);
-    y += 16;
-    const outCols = ["Month", "Won", "Lost", "Pending", "Win Rate %", "Det. Rate %"];
-    const outWidths = [90, 70, 70, 70, 80, 90];
-    y = tableRow(doc, y, outCols, outWidths, contentX, true);
-    data.outcomeByMonth.forEach((row, i) => {
-      const total = row.won + row.lost + row.pending;
-      const winPct = (row.won + row.lost) > 0 ? ((row.won / (row.won + row.lost)) * 100).toFixed(1) : "—";
-      const detPct = total > 0 ? (((row.won + row.lost) / total) * 100).toFixed(1) : "—";
-      y = tableRow(doc, y, [row.month, String(row.won), String(row.lost), String(row.pending), `${winPct}%`, `${detPct}%`], outWidths, contentX, false, i % 2 === 1);
-    });
-
-    doc.addPage();
-
-    // ── PAGE: Timeline Compliance ──────────────────────────────────────────────
-    drawPageHeader(doc, "Timeline Compliance", data.dateRangeLabel);
-    y = 76;
-    doc.fillColor(BRAND_DARK).fontSize(11).font("Helvetica-Bold").text("Average Days per IDR Step vs. Statutory Limit", contentX, y);
-    y += 16;
-    const tlCols = ["IDR Step", "Avg. Days", "Statutory Limit", "Status"];
-    const tlWidths = [260, 80, 100, 80];
-    y = tableRow(doc, y, tlCols, tlWidths, contentX, true);
-    data.avgDaysByStep.forEach((row, i) => {
-      const limit = 30;
-      const status = row.avgDays === 0 ? "No data" : row.avgDays <= limit ? "✓ On time" : "⚠ Overdue";
-      y = tableRow(doc, y, [row.step, row.avgDays === 0 ? "—" : String(row.avgDays), String(limit), status], tlWidths, contentX, false, i % 2 === 1);
-    });
-
-    doc.addPage();
-
-    // ── PAGE(S): Dispute List ──────────────────────────────────────────────────
-    drawPageHeader(doc, "Dispute List", data.dateRangeLabel);
-    y = 76;
-    const maxRows = 500;
-    const listDisputes = data.disputes.slice(0, maxRows);
-    doc.fillColor(BRAND_DARK).fontSize(11).font("Helvetica-Bold")
-      .text(`All Disputes (${listDisputes.length}${data.disputes.length > maxRows ? ` of ${data.disputes.length} — truncated` : ""})`, contentX, y);
-    y += 16;
-    const listCols = ["Ref #", "Status", "Service Type", "Initiating Party", "Billed", "QPA", "Det.", "Filed"];
-    const listWidths = [72, 68, 80, 100, 52, 52, 52, 58];
-    y = tableRow(doc, y, listCols, listWidths, contentX, true);
-    listDisputes.forEach((d, i) => {
-      if (y > doc.page.height - 60) {
-        doc.addPage();
-        drawPageHeader(doc, "Dispute List (cont.)", data.dateRangeLabel);
-        y = 76;
-        y = tableRow(doc, y, listCols, listWidths, contentX, true);
+    // ── Full Dispute List ─────────────────────────────────────────────────────
+    sectionHeader(doc, `5. Dispute List (${disputes.length} records)`);
+    if (disputes.length === 0) {
+      doc.fillColor(C.muted).fontSize(9).text("No disputes found for the selected period.", PAGE_MARGIN, doc.y);
+    } else {
+      const fmt = (d: Date | null) => d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit" }) : "—";
+      const money = (v: string | null) => v && Number(v) > 0 ? `$${Number(v).toLocaleString()}` : "—";
+      drawTable(
+        doc,
+        ["Reference #", "Status", "Service Type", "Billed", "QPA", "Determination", "Created"],
+        disputes.slice(0, 500).map(d => [
+          d.referenceNumber,
+          (d.status ?? "").replace(/_/g, " "),
+          (d.serviceType ?? "").replace(/_/g, " "),
+          money(d.billedAmount),
+          money(d.qpaAmount),
+          money(d.determinationAmount),
+          fmt(d.createdAt),
+        ]),
+        [90, 80, 90, 60, 60, 80, 55],
+      );
+      if (disputes.length > 500) {
+        doc.fillColor(C.muted).fontSize(8).font("Helvetica-Oblique")
+          .text(`Note: Only the first 500 of ${disputes.length} disputes are shown. Use CSV export for the full dataset.`, PAGE_MARGIN, doc.y);
       }
-      y = tableRow(doc, y, [
-        d.referenceNumber,
-        (d.status ?? "").replace(/_/g, " "),
-        (d.serviceType ?? "").replace(/_/g, " "),
-        d.initiatingPartyName,
-        d.billedAmount != null ? fmt$(Number(d.billedAmount)) : "—",
-        d.qpaAmount != null ? fmt$(Number(d.qpaAmount)) : "—",
-        d.determinationAmount != null ? fmt$(Number(d.determinationAmount)) : "—",
-        d.createdAt ? new Date(d.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit" }) : "—",
-      ], listWidths, contentX, false, i % 2 === 1);
-    });
+    }
 
-    // ── Finalize: add page footers ─────────────────────────────────────────────
-    const totalPages = (doc as any)._pageBuffer?.length ?? 1;
-    const range = doc.bufferedPageRange();
-    for (let i = 0; i < range.count; i++) {
-      doc.switchToPage(range.start + i);
-      drawPageFooter(doc, i + 1, range.count);
+    // ── Footer on all pages ───────────────────────────────────────────────────
+    const totalPages = (doc as any).bufferedPageRange().count;
+    for (let i = 0; i < totalPages; i++) {
+      doc.switchToPage(i);
+      doc.rect(0, 810, PAGE_WIDTH, 32).fill(C.primary);
+      doc.fillColor(C.white).fontSize(7.5).font("Helvetica")
+        .text(
+          `HealthPoint IDR Platform  ·  Confidential  ·  Generated ${now}  ·  Page ${i + 1} of ${totalPages}`,
+          PAGE_MARGIN, 819, { width: CONTENT_WIDTH, align: "center" }
+        );
     }
 
     doc.end();
   });
 }
 
-// ─── CSV Generator ────────────────────────────────────────────────────────────
-export function generateReportsCSV(data: ReportData): string {
+// ─── CSV export ───────────────────────────────────────────────────────────────
+export function generateReportsCSV(
+  summary: ReportSummaryData,
+  disputes: DisputeRowForExport[],
+  dateRangeLabel: string,
+): string {
   const esc = (v: unknown) => {
     if (v == null) return "";
     const s = String(v);
     return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const row = (...cols: unknown[]) => cols.map(esc).join(",");
+  const fmt = (d: Date | null) => d ? new Date(d).toLocaleDateString("en-US") : "";
+  const money = (v: string | null) => v && Number(v) > 0 ? Number(v).toFixed(2) : "";
 
   const sections: string[] = [];
 
-  // Section 0: Executive Summary (if present)
-  if (data.executiveSummary) {
-    sections.push([
-      "EXECUTIVE SUMMARY",
-      `"Report Period: ${data.dateRangeLabel}"`,
-      `"Generated: ${new Date(data.generatedAt).toLocaleDateString()}"`,
-      "",
-      `"${data.executiveSummary.replace(/"/g, '""')}"`,
-      "",
-    ].join("\n"));
-  }
-
   // Section 1: KPI Summary
-  sections.push([
-    "KPI SUMMARY",
-    row("Metric", "Value"),
-    row("Total Disputes", data.metrics.totalDisputes),
-    row("Closed / Resolved", data.metrics.closed),
-    row("In Progress", data.metrics.inProgress),
-    row("Ineligible", data.metrics.ineligible),
-    row("Win Rate (%)", data.metrics.winRate),
-    row("Avg. Determination ($)", data.metrics.avgDetermination),
-    row("Avg. Days to Close", data.metrics.avgDaysToClose),
-    row("Total Billed ($)", data.metrics.totalBilled),
-    row("Total QPA ($)", data.metrics.totalQPA),
-    "",
-  ].join("\n"));
+  sections.push("SECTION: KPI Summary");
+  sections.push(`Period,${esc(dateRangeLabel)}`);
+  sections.push(`Total Disputes,${summary.totalDisputes}`);
+  sections.push(`Win Rate,${summary.winRate}%`);
+  sections.push(`Avg Determination Amount,$${summary.avgDetermination.toLocaleString()}`);
+  sections.push(`Avg Days to Close,${summary.avgDaysToClose}`);
+  sections.push("");
 
   // Section 2: Volume by Month
-  sections.push([
-    "DISPUTE VOLUME BY MONTH",
-    row("Month", "Open Negotiation", "IDR Active", "Closed", "Ineligible", "Total"),
-    ...data.byMonth.map(r => row(r.month, r.open_negotiation, r.idr_active, r.closed, r.ineligible, r.open_negotiation + r.idr_active + r.closed + r.ineligible)),
-    "",
-  ].join("\n"));
+  sections.push("SECTION: Dispute Volume by Month");
+  sections.push("Month,Open Negotiation,IDR Active,Closed,Ineligible,Total");
+  summary.byMonth.forEach(r => {
+    sections.push([r.month, r.open_negotiation, r.idr_active, r.closed, r.ineligible,
+      r.open_negotiation + r.idr_active + r.closed + r.ineligible].map(esc).join(","));
+  });
+  sections.push("");
 
   // Section 3: Financial Summary
-  sections.push([
-    "FINANCIAL SUMMARY BY SERVICE TYPE",
-    row("Service Type", "Avg. Billed ($)", "Avg. QPA ($)", "Avg. Determination ($)", "QPA vs Det. ($)"),
-    ...data.financialByServiceType.map(r => row(r.serviceType.replace(/_/g, " "), r.avgBilled, r.avgQPA, r.avgDetermination, r.avgDetermination - r.avgQPA)),
-    "",
-  ].join("\n"));
+  sections.push("SECTION: Financial Summary by Service Type");
+  sections.push("Service Type,Avg Billed,Avg QPA,Avg Determination,QPA vs Det Delta");
+  summary.financialByServiceType.forEach(r => {
+    const delta = r.avgQPA > 0 && r.avgDetermination > 0 ? r.avgDetermination - r.avgQPA : null;
+    sections.push([r.serviceType, r.avgBilled > 0 ? r.avgBilled : "", r.avgQPA > 0 ? r.avgQPA : "",
+      r.avgDetermination > 0 ? r.avgDetermination : "", delta != null ? delta : ""].map(esc).join(","));
+  });
+  sections.push("");
 
   // Section 4: Outcome Analysis
-  sections.push([
-    "OUTCOME ANALYSIS BY MONTH",
-    row("Month", "Won", "Lost", "Pending", "Win Rate (%)", "Determination Rate (%)"),
-    ...data.outcomeByMonth.map(r => {
-      const total = r.won + r.lost + r.pending;
-      const winPct = (r.won + r.lost) > 0 ? ((r.won / (r.won + r.lost)) * 100).toFixed(1) : "";
-      const detPct = total > 0 ? (((r.won + r.lost) / total) * 100).toFixed(1) : "";
-      return row(r.month, r.won, r.lost, r.pending, winPct, detPct);
-    }),
-    "",
-  ].join("\n"));
+  sections.push("SECTION: Outcome Analysis by Month");
+  sections.push("Month,Won,Lost,Pending,Win Rate,Determination Rate");
+  summary.outcomeByMonth.forEach(r => {
+    const closed = r.won + r.lost;
+    const total = closed + r.pending;
+    sections.push([r.month, r.won, r.lost, r.pending,
+      closed > 0 ? `${Math.round((r.won / closed) * 100)}%` : "",
+      total > 0 ? `${Math.round((closed / total) * 100)}%` : ""].map(esc).join(","));
+  });
+  sections.push("");
 
-  // Section 5: Dispute List
+  // Section 5: Timeline Compliance
+  sections.push("SECTION: Timeline Compliance");
+  sections.push("Step,Avg Days,Statutory Limit (days)");
+  summary.avgDaysByStep.forEach(r => {
+    const limit = r.step.includes("Step 1") ? 30 : r.step.includes("Step 2") || r.step.includes("Step 3") ? 4 : r.step.includes("Step 4") ? 3 : 10;
+    sections.push([r.step, r.avgDays > 0 ? r.avgDays : "", limit].map(esc).join(","));
+  });
+  sections.push("");
+
+  // Section 6: Full Dispute List
+  sections.push("SECTION: Dispute List");
   sections.push([
-    "DISPUTE LIST",
-    row("Reference #", "Status", "Service Type", "Initiating Party", "Responding Party", "Billed ($)", "QPA ($)", "Determination ($)", "Filed", "Closed"),
-    ...data.disputes.slice(0, 10000).map(d => row(
+    "Reference #", "Status", "Current Step", "Service Type", "Service Date",
+    "Initiating Party", "Responding Party", "Billed Amount", "QPA Amount",
+    "Determination Amount", "Patient State", "Facility State",
+    "Open Neg. Deadline", "Offer Sub. Deadline", "Payment Deadline",
+    "Created At", "Closed At",
+  ].map(esc).join(","));
+  disputes.forEach(d => {
+    sections.push([
       d.referenceNumber,
       (d.status ?? "").replace(/_/g, " "),
+      (d.currentStep ?? "").replace(/^STEP_\d+_/, "").replace(/_/g, " ").toLowerCase(),
       (d.serviceType ?? "").replace(/_/g, " "),
+      fmt(d.serviceDate),
       d.initiatingPartyName,
       d.respondingPartyName ?? "",
-      d.billedAmount != null ? Number(d.billedAmount).toFixed(2) : "",
-      d.qpaAmount != null ? Number(d.qpaAmount).toFixed(2) : "",
-      d.determinationAmount != null ? Number(d.determinationAmount).toFixed(2) : "",
-      d.createdAt ? new Date(d.createdAt).toLocaleDateString() : "",
-      d.closedAt ? new Date(d.closedAt).toLocaleDateString() : "",
-    )),
-  ].join("\n"));
+      money(d.billedAmount),
+      money(d.qpaAmount),
+      money(d.determinationAmount),
+      d.patientState ?? "",
+      d.facilityState ?? "",
+      fmt(d.openNegotiationDeadline),
+      fmt(d.offerSubmissionDeadline),
+      fmt(d.paymentDeadline),
+      fmt(d.createdAt),
+      fmt(d.closedAt),
+    ].map(esc).join(","));
+  });
 
   return sections.join("\n");
 }

@@ -1346,3 +1346,217 @@ export const hermesChatMessages = pgTable(
   ]
 );
 export type HermesChatMessage = typeof hermesChatMessages.$inferSelect;
+
+// ─── Organisation Settings ────────────────────────────────────────────────────
+/** Per-organisation global settings (one row per org / user scope) */
+export const orgSettings = pgTable(
+  "org_settings",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull().unique(),
+    orgName: varchar("orgName", { length: 256 }),
+    timezone: varchar("timezone", { length: 64 }).default("America/New_York"),
+    dateFormat: varchar("dateFormat", { length: 32 }).default("MM/DD/YYYY"),
+    defaultPageSize: integer("defaultPageSize").default(25),
+    // Notification prefs
+    emailDeadlineWarning: boolean("emailDeadlineWarning").default(true),
+    emailStepAdvanced: boolean("emailStepAdvanced").default(true),
+    emailDetermination: boolean("emailDetermination").default(true),
+    inAppNotifications: boolean("inAppNotifications").default(true),
+    deadlineWarningDays: integer("deadlineWarningDays").default(3),
+    // Security prefs
+    sessionTimeoutMinutes: integer("sessionTimeoutMinutes").default(30),
+    requireMFA: boolean("requireMFA").default(false),
+    auditAllActions: boolean("auditAllActions").default(true),
+    ipAllowlist: text("ipAllowlist"),
+    // Data prefs
+    retentionDays: integer("retentionDays").default(2555),
+    autoExportEnabled: boolean("autoExportEnabled").default(false),
+    exportFormat: varchar("exportFormat", { length: 16 }).default("csv"),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [index("org_settings_user_idx").on(t.userId)]
+);
+export type OrgSettings = typeof orgSettings.$inferSelect;
+export type InsertOrgSettings = typeof orgSettings.$inferInsert;
+
+// ─── TOTP / Two-Factor Auth ───────────────────────────────────────────────────
+export const totpStatusEnum = pgEnum("totp_status", ["pending", "active", "disabled"]);
+
+/** TOTP secrets and backup codes for 2FA */
+export const totpSecrets = pgTable(
+  "totp_secrets",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull().unique(),
+    secret: varchar("secret", { length: 128 }).notNull(),
+    status: totpStatusEnum("status").default("pending").notNull(),
+    backupCodes: text("backupCodes"), // JSON array of hashed backup codes
+    usedBackupCodes: text("usedBackupCodes"), // JSON array of used codes
+    enabledAt: timestamp("enabledAt"),
+    disabledAt: timestamp("disabledAt"),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [index("totp_user_idx").on(t.userId)]
+);
+export type TotpSecret = typeof totpSecrets.$inferSelect;
+export type InsertTotpSecret = typeof totpSecrets.$inferInsert;
+
+// ─── QPA Benchmark Reference Data ────────────────────────────────────────────
+/** CPT-level QPA benchmark data (seeded from CMS/NSA reference tables) */
+export const qpaBenchmarks = pgTable(
+  "qpa_benchmarks",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    cptCode: varchar("cptCode", { length: 16 }).notNull(),
+    description: text("description").notNull(),
+    specialty: varchar("specialty", { length: 64 }).notNull(),
+    p50National: integer("p50National").notNull(),
+    p75National: integer("p75National").notNull(),
+    p90National: integer("p90National").notNull(),
+    effectiveYear: integer("effectiveYear").default(2025),
+    source: varchar("source", { length: 128 }).default("CMS NSA Reference"),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [
+    index("qpa_cpt_idx").on(t.cptCode),
+    index("qpa_specialty_idx").on(t.specialty),
+  ]
+);
+export type QpaBenchmark = typeof qpaBenchmarks.$inferSelect;
+export type InsertQpaBenchmark = typeof qpaBenchmarks.$inferInsert;
+
+/** State-level QPA cost modifiers */
+export const qpaStateModifiers = pgTable(
+  "qpa_state_modifiers",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    stateCode: varchar("stateCode", { length: 2 }).notNull().unique(),
+    modifier: varchar("modifier", { length: 8 }).notNull(), // e.g. "1.35"
+    effectiveYear: integer("effectiveYear").default(2025),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [index("qpa_state_idx").on(t.stateCode)]
+);
+export type QpaStateModifier = typeof qpaStateModifiers.$inferSelect;
+
+// ─── Regulatory Change Feed ───────────────────────────────────────────────────
+export const regulatoryImpactEnum = pgEnum("regulatory_impact", ["low", "medium", "high", "critical"]);
+export const regulatoryCategoryEnum = pgEnum("regulatory_category", [
+  "fee_schedule", "court_ruling", "guidance", "regulation", "certification", "enforcement", "legislation",
+]);
+
+/** NSA/IDR regulatory updates and CMS announcements */
+export const regulatoryUpdates = pgTable(
+  "regulatory_updates",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    publishedAt: timestamp("publishedAt").notNull(),
+    title: varchar("title", { length: 512 }).notNull(),
+    summary: text("summary").notNull(),
+    category: regulatoryCategoryEnum("category").notNull(),
+    impactLevel: regulatoryImpactEnum("impactLevel").notNull(),
+    source: varchar("source", { length: 128 }).notNull(),
+    sourceUrl: varchar("sourceUrl", { length: 1024 }),
+    tags: text("tags"), // JSON string[]
+    isActive: boolean("isActive").default(true),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("reg_update_date_idx").on(t.publishedAt),
+    index("reg_update_impact_idx").on(t.impactLevel),
+    index("reg_update_category_idx").on(t.category),
+  ]
+);
+export type RegulatoryUpdate = typeof regulatoryUpdates.$inferSelect;
+export type InsertRegulatoryUpdate = typeof regulatoryUpdates.$inferInsert;
+
+// ─── Expert Panel ─────────────────────────────────────────────────────────────
+export const expertAvailabilityEnum = pgEnum("expert_availability", ["available", "busy", "unavailable"]);
+export const expertSpecialtyEnum = pgEnum("expert_specialty", [
+  "emergency_medicine", "anesthesiology", "air_ambulance", "radiology", "pathology",
+  "hospitalist", "intensivist", "neonatology", "ground_ambulance", "general",
+]);
+
+/** Certified IDR expert reviewers available for dispute analysis */
+export const expertPanel = pgTable(
+  "expert_panel",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    name: varchar("name", { length: 256 }).notNull(),
+    credentials: varchar("credentials", { length: 128 }),
+    specialty: expertSpecialtyEnum("specialty").notNull(),
+    yearsExperience: integer("yearsExperience").default(0),
+    casesHandled: integer("casesHandled").default(0),
+    successRate: varchar("successRate", { length: 8 }), // e.g. "94%"
+    avgResponseHours: integer("avgResponseHours").default(24),
+    availability: expertAvailabilityEnum("availability").default("available").notNull(),
+    bio: text("bio"),
+    isActive: boolean("isActive").default(true),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [
+    index("expert_specialty_idx").on(t.specialty),
+    index("expert_availability_idx").on(t.availability),
+  ]
+);
+export type ExpertPanelMember = typeof expertPanel.$inferSelect;
+export type InsertExpertPanelMember = typeof expertPanel.$inferInsert;
+
+// ─── NSA Compliance Checklist ─────────────────────────────────────────────────
+export const complianceStatusEnum = pgEnum("compliance_status", ["compliant", "non_compliant", "not_applicable", "pending_review"]);
+
+/** Per-dispute NSA compliance checklist item status */
+export const complianceChecks = pgTable(
+  "compliance_checks",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    sectionKey: varchar("sectionKey", { length: 128 }).notNull(),
+    itemKey: varchar("itemKey", { length: 256 }).notNull(),
+    status: complianceStatusEnum("status").default("pending_review").notNull(),
+    notes: text("notes"),
+    checkedAt: timestamp("checkedAt"),
+    checkedBy: varchar("checkedBy", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  (t) => [
+    index("compliance_dispute_idx").on(t.disputeId),
+    index("compliance_user_idx").on(t.userId),
+    index("compliance_section_idx").on(t.sectionKey),
+  ]
+);
+export type ComplianceCheck = typeof complianceChecks.$inferSelect;
+export type InsertComplianceCheck = typeof complianceChecks.$inferInsert;
+
+// ─── Changelog ────────────────────────────────────────────────────────────────
+export const changelogCategoryEnum = pgEnum("changelog_category", [
+  "feature", "improvement", "bugfix", "security", "breaking", "deprecation",
+]);
+
+/** Application changelog entries */
+export const changelogEntries = pgTable(
+  "changelog_entries",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    version: varchar("version", { length: 32 }).notNull(),
+    releasedAt: timestamp("releasedAt").notNull(),
+    title: varchar("title", { length: 512 }).notNull(),
+    description: text("description").notNull(),
+    category: changelogCategoryEnum("category").notNull(),
+    isHighlight: boolean("isHighlight").default(false),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("changelog_version_idx").on(t.version),
+    index("changelog_date_idx").on(t.releasedAt),
+  ]
+);
+export type ChangelogEntry = typeof changelogEntries.$inferSelect;
+export type InsertChangelogEntry = typeof changelogEntries.$inferInsert;
