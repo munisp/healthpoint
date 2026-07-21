@@ -183,12 +183,12 @@ export default function Home() {
   const [leadForm, setLeadForm] = useState({ name: "", email: "", org: "", role: "provider" });
   const [leadError, setLeadError] = useState("");
 
-  // Stats section
+  // Stats section — start counters immediately (section is above the fold)
   const statsRef = useInView(0.3);
-  const disputes = useCounter(47000, 2000, statsRef.inView);
-  const winRate = useCounter(76, 1500, statsRef.inView);
-  const timeSaved = useCounter(18, 1200, statsRef.inView);
-  const states = useCounter(50, 1000, statsRef.inView);
+  const disputes = useCounter(47000, 2000, true);
+  const winRate = useCounter(76, 1500, true);
+  const timeSaved = useCounter(18, 1200, true);
+  const states = useCounter(50, 1000, true);
 
   const submitLeadMutation = trpc.leads.submit.useMutation();
   useEffect(() => {
