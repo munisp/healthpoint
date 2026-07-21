@@ -229,11 +229,56 @@ export const appRouter = router({
       const totalWins = byServiceType.reduce((s, r) => s + r.wins, 0);
       return {
         overallWinRate: totalClosed > 0 ? totalWins / totalClosed : null,
-        byServiceType,
+                byServiceType,
       };
     }),
-  }),
 
+    // Cohort analysis — outcome trends by service type, state, and time period
+    cohortAnalysis: protectedProcedure
+      .input(z.object({
+        groupBy: z.enum(["serviceType", "state", "month"]).default("serviceType"),
+        dateFrom: z.string().optional(),
+        dateTo: z.string().optional(),
+      }))
+      .query(async ({ input }) => {
+        const db = await (await import("./db")).getDb();
+        if (!db) return { rows: [] };
+        const { groupBy, dateFrom, dateTo } = input;
+        const dateFilter = [
+          dateFrom ? `AND "createdAt" >= '${dateFrom}'` : "",
+          dateTo ? `AND "createdAt" <= '${dateTo}'` : "",
+        ].join(" ");
+        let groupCol: string;
+        if (groupBy === "serviceType") groupCol = '"serviceType"';
+        else if (groupBy === "state") groupCol = '"patientState"';
+        else groupCol = `TO_CHAR("createdAt", 'YYYY-MM')`;
+        const result = await db.execute(
+          `SELECT ${groupCol} AS label,
+                  COUNT(*) AS total,
+                  SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
+                  SUM(CASE WHEN "determinationWinner" = 'responding_party' THEN 1 ELSE 0 END) AS losses,
+                  AVG(COALESCE("determinationAmount", 0)) AS "avgDetermination",
+                  AVG(COALESCE("billedAmount", 0)) AS "avgBilled",
+                  AVG(EXTRACT(EPOCH FROM ("closedAt" - "createdAt")) / 86400) AS "avgDaysToClose"
+           FROM disputes
+           WHERE "determinationWinner" IS NOT NULL ${dateFilter}
+           GROUP BY ${groupCol}
+           ORDER BY total DESC`
+        ) as unknown as { rows: { label: string; total: string; wins: string; losses: string; avgDetermination: string; avgBilled: string; avgDaysToClose: string }[] };
+        return {
+          rows: (result.rows ?? []).map(r => ({
+            label: r.label ?? "Unknown",
+            total: Number(r.total),
+            wins: Number(r.wins),
+            losses: Number(r.losses),
+            winRate: Number(r.total) > 0 ? Math.round((Number(r.wins) / Number(r.total)) * 100) : 0,
+            avgDetermination: Math.round(Number(r.avgDetermination)),
+            avgBilled: Math.round(Number(r.avgBilled)),
+            avgDaysToClose: Math.round(Number(r.avgDaysToClose) ?? 0),
+          })),
+        };
+      }),
+  }),
   // --- Disputes ---------------------------------------------------------------
   disputes: router({
     list: protectedProcedure

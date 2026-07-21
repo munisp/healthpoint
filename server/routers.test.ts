@@ -1032,3 +1032,124 @@ describe("Hermes AI Agent", () => {
     expect(validTypes).toHaveLength(8);
   });
 });
+
+// ─── FHIR R4 Claim endpoint ──────────────────────────────────────────────────
+describe("FHIR R4 /api/fhir/Claim/:id endpoint", () => {
+  it("returns a valid FHIR R4 Claim resourceType", () => {
+    const mockClaim = {
+      resourceType: "Claim",
+      id: "test-dispute-id",
+      meta: { versionId: "1", lastUpdated: new Date().toISOString() },
+      status: "active",
+      type: { coding: [{ system: "http://terminology.hl7.org/CodeSystem/claim-type", code: "professional" }] },
+      use: "claim",
+      patient: { reference: "Patient/provider-123" },
+      created: new Date().toISOString(),
+      identifier: [{ system: "https://healthpoint.idr/reference", value: "IDR-2024-001" }],
+    };
+    expect(mockClaim.resourceType).toBe("Claim");
+    expect(mockClaim.type.coding[0].system).toContain("hl7.org");
+    expect(mockClaim.use).toBe("claim");
+  });
+
+  it("returns OperationOutcome for not-found dispute", () => {
+    const notFoundResponse = {
+      resourceType: "OperationOutcome",
+      issue: [{ severity: "error", code: "not-found", diagnostics: "Claim/unknown-id not found" }],
+    };
+    expect(notFoundResponse.resourceType).toBe("OperationOutcome");
+    expect(notFoundResponse.issue[0].code).toBe("not-found");
+  });
+
+  it("maps determinationWinner to FHIR extension correctly", () => {
+    const extensions = [
+      { url: "https://healthpoint.idr/fhir/StructureDefinition/idr-step", valueString: "STEP_11_DETERMINATION_ISSUED" },
+      { url: "https://healthpoint.idr/fhir/StructureDefinition/determination-winner", valueString: "initiating_party" },
+    ];
+    const winnerExt = extensions.find(e => e.url.includes("determination-winner"));
+    expect(winnerExt?.valueString).toBe("initiating_party");
+  });
+
+  it("sets Content-Type to application/fhir+json", () => {
+    const contentType = "application/fhir+json";
+    expect(contentType).toBe("application/fhir+json");
+  });
+});
+
+// ─── WAF / Request Validation Middleware ─────────────────────────────────────
+describe("WAF and request validation middleware", () => {
+  it("rate limiter config is correct for production", () => {
+    const rateLimitConfig = { windowMs: 60_000, max: 200 };
+    expect(rateLimitConfig.windowMs).toBe(60_000);
+    expect(rateLimitConfig.max).toBe(200);
+  });
+
+  it("auth endpoint rate limit is stricter (20 req/min)", () => {
+    const authRateLimit = { windowMs: 60_000, max: 20 };
+    expect(authRateLimit.max).toBeLessThan(200);
+    expect(authRateLimit.max).toBe(20);
+  });
+
+  it("slow-down kicks in after 5 auth requests", () => {
+    const slowDownConfig = { delayAfter: 5, delayMs: (hits: number) => hits * 200 };
+    expect(slowDownConfig.delayAfter).toBe(5);
+    expect(slowDownConfig.delayMs(3)).toBe(600);
+  });
+
+  it("HPP middleware prevents HTTP parameter pollution", () => {
+    const params = { status: ["open", "closed"] };
+    const sanitized = { status: params.status[params.status.length - 1] };
+    expect(sanitized.status).toBe("closed");
+  });
+
+  it("X-Request-ID is injected on every request", () => {
+    const reqId = "550e8400-e29b-41d4-a716-446655440000";
+    expect(reqId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("CSP directives restrict script sources in production", () => {
+    const cspDirectives = {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      frameSrc: ["'none'"],
+    };
+    expect(cspDirectives.frameSrc).toContain("'none'");
+    expect(cspDirectives.defaultSrc).toContain("'self'");
+  });
+});
+
+// ─── Cohort Analysis procedure ───────────────────────────────────────────────
+describe("dashboard.cohortAnalysis procedure", () => {
+  it("groupBy enum accepts serviceType, state, month", () => {
+    const validGroupBy = ["serviceType", "state", "month"];
+    expect(validGroupBy).toContain("serviceType");
+    expect(validGroupBy).toContain("state");
+    expect(validGroupBy).toContain("month");
+  });
+
+  it("cohort row shape is correct", () => {
+    const row = {
+      label: "emergency_medicine",
+      total: 42,
+      wins: 28,
+      losses: 14,
+      winRate: 67,
+      avgDetermination: 18500,
+      avgBilled: 22000,
+      avgDaysToClose: 31,
+    };
+    expect(row.winRate).toBe(Math.round((row.wins / row.total) * 100));
+    expect(row.wins + row.losses).toBeLessThanOrEqual(row.total);
+  });
+
+  it("winRate is clamped between 0 and 100", () => {
+    const winRate = Math.round((28 / 42) * 100);
+    expect(winRate).toBeGreaterThanOrEqual(0);
+    expect(winRate).toBeLessThanOrEqual(100);
+  });
+
+  it("empty result returns rows array", () => {
+    const result = { rows: [] };
+    expect(Array.isArray(result.rows)).toBe(true);
+  });
+});

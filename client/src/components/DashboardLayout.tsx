@@ -187,6 +187,7 @@ const menuItems = [
   { icon: GitCompare, label: "Compare Disputes", path: "/compare" },
   { icon: Tag, label: "Tag Manager", path: "/tags" },
   { icon: BarChart2, label: "Benchmarks", path: "/benchmarks" },
+  { icon: Group, label: "Cohort Analysis", path: "/cohort-analysis" },
   { icon: Bell, label: "Reminders", path: "/reminders" },
   { icon: Download, label: "Export Center", path: "/export" },
   { icon: Shield, label: "Role Matrix", path: "/role-matrix" },
@@ -382,7 +383,10 @@ function DashboardLayoutContent({
       <OnboardingTour />
       <SidebarInset>
         {/* Top bar with notification bell + dark mode + command palette */}
-        <div className="h-14 border-b flex items-center justify-end px-6 gap-3 bg-background">
+        <div className="h-14 border-b flex items-center justify-between px-4 gap-3 bg-background">
+          {/* Mobile hamburger — only visible on small screens where sidebar is off-canvas */}
+          <MobileMenuButton />
+          <div className="flex items-center gap-3 ml-auto">
           <CommandPaletteButton />
           <DarkModeToggle />
           <Popover open={notifOpen} onOpenChange={setNotifOpen}>
@@ -466,10 +470,27 @@ function DashboardLayoutContent({
               </div>
             </PopoverContent>
           </Popover>
+          </div>
         </div>
         <main className="flex-1 p-6">{children}</main>
       </SidebarInset>
     </>
+  );
+}
+
+function MobileMenuButton() {
+  const { toggleSidebar, isMobile } = useSidebar();
+  if (!isMobile) return null;
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-9 w-9 md:hidden"
+      onClick={toggleSidebar}
+      aria-label="Open navigation menu"
+    >
+      <PanelLeft className="h-5 w-5" />
+    </Button>
   );
 }
 

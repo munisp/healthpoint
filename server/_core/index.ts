@@ -216,6 +216,51 @@ async function startServer() {
     res.status(200).json({ ready: true, uptime: Math.round((Date.now() - startTime) / 1000) });
   });
 
+  // ── FHIR R4 read endpoint — GET /api/fhir/Claim/:id ───────────────────────
+  // Returns a dispute as a FHIR R4 Claim resource (application/fhir+json)
+  app.get("/api/fhir/Claim/:id", async (req: Request, res: Response) => {
+    try {
+      const { getDb } = await import("../db");
+      const { disputes: disputesTable } = await import("../../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) {
+        res.status(503).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "exception", diagnostics: "Database unavailable" }] });
+        return;
+      }
+      const rows = await db.select().from(disputesTable).where(eq(disputesTable.id, req.params.id)).limit(1);
+      if (!rows.length) {
+        res.status(404).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "not-found", diagnostics: `Claim/${req.params.id} not found` }] });
+        return;
+      }
+      const d = rows[0];
+      const claim = {
+        resourceType: "Claim",
+        id: d.id,
+        meta: { versionId: "1", lastUpdated: d.updatedAt?.toISOString() },
+        status: d.status === "closed" ? "cancelled" : "active",
+        type: { coding: [{ system: "http://terminology.hl7.org/CodeSystem/claim-type", code: "professional", display: "Professional" }] },
+        use: "claim",
+        patient: { reference: `Patient/${d.initiatingPartyId}`, display: d.initiatingPartyName ?? undefined },
+        created: d.createdAt?.toISOString(),
+        insurer: { display: d.respondingPartyName ?? undefined },
+        provider: { display: d.initiatingPartyName ?? undefined },
+        priority: { coding: [{ code: "normal" }] },
+        total: d.billedAmount ? { value: parseFloat(d.billedAmount), currency: "USD" } : undefined,
+        identifier: [{ system: "https://healthpoint.idr/reference", value: d.referenceNumber }],
+        extension: ([
+          { url: "https://healthpoint.idr/fhir/StructureDefinition/idr-step", valueString: d.currentStep },
+          d.determinationWinner ? { url: "https://healthpoint.idr/fhir/StructureDefinition/determination-winner", valueString: d.determinationWinner } : null,
+          d.serviceType ? { url: "https://healthpoint.idr/fhir/StructureDefinition/service-type", valueString: d.serviceType } : null,
+        ]).filter(Boolean),
+      };
+      res.setHeader("Content-Type", "application/fhir+json");
+      res.status(200).json(claim);
+    } catch (err) {
+      res.status(500).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "exception", diagnostics: String(err) }] });
+    }
+  });
+
   // ── Keycloak OIDC routes ──────────────────────────────────────────────────────
   registerKeycloakRoutes(app);
 
