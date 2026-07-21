@@ -172,6 +172,7 @@ export default function DisputeDetail() {
   // Advance state
   const [advanceDescription, setAdvanceDescription] = useState("");
   const [determinationBasis, setDeterminationBasis] = useState("");
+  const [determinationWinner, setDeterminationWinner] = useState<"initiating_party" | "responding_party" | "">("");
   const [showAdvanceConfirm, setShowAdvanceConfirm] = useState(false);
 
   // Queries
@@ -308,6 +309,7 @@ export default function DisputeDetail() {
         newStatus: nextStep.status as any,
         description: desc,
         ...(determinationBasis ? { determinationBasis } : {}),
+        ...(determinationWinner ? { determinationWinner: determinationWinner as "initiating_party" | "responding_party" } : {}),
       },
       { onSuccess: () => setShowAdvanceConfirm(false) }
     );
@@ -891,12 +893,27 @@ export default function DisputeDetail() {
               </div>
             </div>
             <p className="text-slate-500 text-xs">This action will be recorded in the dispute timeline and cannot be reversed without admin intervention.</p>
+            {nextStep?.step === "STEP_13_DETERMINATION_ISSUED" && (
+              <div className="space-y-1.5 pt-1">
+                <label className="text-xs font-semibold text-slate-700">Determination Winner <span className="text-red-500">*</span></label>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={determinationWinner}
+                  onChange={e => setDeterminationWinner(e.target.value as "initiating_party" | "responding_party" | "")}
+                >
+                  <option value="">Select winning party…</option>
+                  <option value="initiating_party">Initiating Party (Provider) won</option>
+                  <option value="responding_party">Responding Party (Payer) won</option>
+                </select>
+                <p className="text-[11px] text-slate-400">This determines the win-rate analytics for the platform.</p>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAdvanceConfirm(false)}>Cancel</Button>
             <Button
               onClick={confirmAdvance}
-              disabled={advanceMutation.isPending}
+              disabled={advanceMutation.isPending || (nextStep?.step === "STEP_13_DETERMINATION_ISSUED" && !determinationWinner)}
               className="flex items-center gap-2"
             >
               {advanceMutation.isPending
