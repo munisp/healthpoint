@@ -8,8 +8,11 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, TrendingUp, TrendingDown, BarChart3, Target } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { useChartColors } from "@/hooks/useChartColors";
 
 export default function CohortAnalysis() {
+  const C = useChartColors();
+
   const [groupBy, setGroupBy] = useState<"serviceType" | "state" | "month">("serviceType");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -120,7 +123,7 @@ export default function CohortAnalysis() {
                       <Tooltip formatter={(v: number) => [`${v}%`, "Win Rate"]} />
                       <Bar dataKey="winRate" radius={[4, 4, 0, 0]}>
                         {rows.map((r, i) => (
-                          <Cell key={i} fill={r.winRate >= 60 ? "#22c55e" : r.winRate >= 40 ? "#f59e0b" : "#ef4444"} />
+                          <Cell key={i} fill={r.winRate >= 60 ? C.chart2 : r.winRate >= 40 ? C.chart3 : C.danger} />
                         ))}
                       </Bar>
                     </BarChart>
@@ -142,8 +145,8 @@ export default function CohortAnalysis() {
                       <XAxis dataKey="label" tick={{ fontSize: 11 }} angle={-35} textAnchor="end" interval={0} />
                       <YAxis tick={{ fontSize: 11 }} />
                       <Tooltip />
-                      <Bar dataKey="wins" name="Provider Wins" fill="#22c55e" stackId="a" radius={[0, 0, 0, 0]} />
-                      <Bar dataKey="losses" name="Payer Wins" fill="#ef4444" stackId="a" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="wins" name="Provider Wins" fill={C.chart2} stackId="a" radius={[0, 0, 0, 0]} />
+                      <Bar dataKey="losses" name="Payer Wins" fill={C.danger} stackId="a" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

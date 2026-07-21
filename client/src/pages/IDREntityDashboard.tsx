@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { APP_LOGO, APP_TITLE } from "@/const";
+import { useChartColors } from "@/hooks/useChartColors";
 import {
   AlertTriangle, ArrowLeft, Building2, CheckCircle2, ChevronDown,
   ChevronRight, Clock, LogOut, RefreshCw, Shield, TrendingUp, Users,
@@ -61,7 +62,7 @@ function formatStep(step: string): string {
 }
 
 // ─── Utilisation gauge ────────────────────────────────────────────────────────
-function UtilisationGauge({ pct, status }: { pct: number; status: string }) {
+function UtilisationGauge({ pct, status, C }: { pct: number; status: string; C: ReturnType<typeof import('@/hooks/useChartColors').useChartColors> }) {
   const cfg = CAPACITY_CONFIG[status as keyof typeof CAPACITY_CONFIG] ?? CAPACITY_CONFIG.available;
   const clamped = Math.min(pct, 100);
   // SVG arc parameters
@@ -78,7 +79,7 @@ function UtilisationGauge({ pct, status }: { pct: number; status: string }) {
         <path
           d={`M 16 56 A ${r} ${r} 0 0 1 96 56`}
           fill="none"
-          stroke="#e2e8f0"
+          stroke={C.muted}
           strokeWidth="10"
           strokeLinecap="round"
         />
@@ -86,14 +87,14 @@ function UtilisationGauge({ pct, status }: { pct: number; status: string }) {
         <path
           d={`M 16 56 A ${r} ${r} 0 0 1 96 56`}
           fill="none"
-          stroke={pct >= 100 ? "#ef4444" : pct >= 90 ? "#f97316" : pct >= 75 ? "#f59e0b" : "#22c55e"}
+          stroke={pct >= 100 ? C.danger : pct >= 90 ? C.chart3 : pct >= 75 ? C.chart3 : C.chart2}
           strokeWidth="10"
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={offset}
           style={{ transition: "stroke-dashoffset 0.6s ease" }}
         />
-        <text x={cx} y={52} textAnchor="middle" className="text-sm font-bold" fontSize="14" fontWeight="700" fill="#1e293b">
+        <text x={cx} y={52} textAnchor="middle" className="text-sm font-bold" fontSize="14" fontWeight="700" fill={C.muted}>
           {pct}%
         </text>
       </svg>
@@ -104,6 +105,7 @@ function UtilisationGauge({ pct, status }: { pct: number; status: string }) {
 
 // ─── Entity card ──────────────────────────────────────────────────────────────
 function EntityCard({ caseload }: { caseload: any }) {
+  const C = useChartColors();
   const [expanded, setExpanded] = useState(false);
   const { entity, activeCases, stepBreakdown, overdueCount, utilizationPct, capacityStatus } = caseload;
   const cfg = CAPACITY_CONFIG[capacityStatus as keyof typeof CAPACITY_CONFIG] ?? CAPACITY_CONFIG.available;
@@ -161,7 +163,7 @@ function EntityCard({ caseload }: { caseload: any }) {
 
         {/* Utilisation gauge + bar */}
         <div className="flex items-center gap-4">
-          <UtilisationGauge pct={utilizationPct} status={capacityStatus} />
+          <UtilisationGauge pct={utilizationPct} status={capacityStatus} C={C} />
           <div className="flex-1 space-y-1.5">
             <div className="flex justify-between text-xs text-slate-500 mb-0.5">
               <span>Capacity utilisation</span>
@@ -267,6 +269,8 @@ function EntityCard({ caseload }: { caseload: any }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function IDREntityDashboard() {
+  const C = useChartColors();
+
   const [, navigate] = useLocation();
   const { user, logout } = useAuth();
 

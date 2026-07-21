@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Activity, CheckCircle2, AlertTriangle, XCircle, RefreshCw, Server, Database, Zap } from "lucide-react";
+import { useChartColors } from "@/hooks/useChartColors";
 
 interface HealthCheck {
   name: string;
@@ -46,6 +47,8 @@ const SERVICE_UPTIME: Record<string, number> = {
 };
 
 export default function SystemHealthDashboard() {
+  const C = useChartColors();
+
   const [latencyHistory, setLatencyHistory] = useState<{ time: string; api: number; db: number }[]>([]);
   const [checks, setChecks] = useState<HealthCheck[]>([
     { name: "API Server", status: "healthy", latency: 0, lastChecked: new Date(), uptime: SERVICE_UPTIME["API Server"] },
@@ -176,12 +179,12 @@ export default function SystemHealthDashboard() {
             <div style={{ height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={latencyHistory} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis dataKey="time" tick={{ fontSize: 9 }} />
                   <YAxis tick={{ fontSize: 11 }} unit="ms" />
                   <Tooltip formatter={(v: number) => `${v}ms`} />
-                  <Line type="monotone" dataKey="api" name="API" stroke="#6366f1" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="db" name="Database" stroke="#22c55e" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="api" name="API" stroke={C.primary} strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="db" name="Database" stroke={C.chart2} strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>

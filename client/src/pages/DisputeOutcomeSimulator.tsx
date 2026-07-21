@@ -9,6 +9,7 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { Zap, Info, DollarSign, Bot, Loader2, Sparkles, CheckCircle2, AlertTriangle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
+import { useChartColors } from "@/hooks/useChartColors";
 
 // Base win rates by service type (CMS IDR data)
 const BASE_WIN_RATES: Record<string, number> = {
@@ -35,6 +36,8 @@ const ENTITY_MULTIPLIERS: Record<string, number> = {
 function clamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
 
 export default function DisputeOutcomeSimulator() {
+  const C = useChartColors();
+
   const [serviceType, setServiceType] = useState("emergency_medicine");
   const [billedAmount, setBilledAmount] = useState("15000");
   const [payerOffer, setPayerOffer] = useState("8000");
@@ -72,9 +75,9 @@ export default function DisputeOutcomeSimulator() {
     const gain = expectedValue - offer;
 
     const scenarios = [
-      { name: "Full Award", probability: fullWinProb, amount: fullWin, color: "#22c55e" },
-      { name: "Partial Award", probability: partialWinProb, amount: partialWin, color: "#84cc16" },
-      { name: "Payer Wins", probability: loseProb, amount: lose, color: "#ef4444" },
+      { name: "Full Award", probability: fullWinProb, amount: fullWin, color: C.chart2 },
+      { name: "Partial Award", probability: partialWinProb, amount: partialWin, color: C.chart2 },
+      { name: "Payer Wins", probability: loseProb, amount: lose, color: C.danger },
     ];
 
     return { winRate, loseRate, expectedValue, gain, scenarios, fullWin, partialWin, lose, offer };

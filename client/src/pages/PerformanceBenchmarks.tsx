@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from "recharts";
 import { BarChart2, TrendingUp, TrendingDown, Minus, Info } from "lucide-react";
+import { useChartColors } from "@/hooks/useChartColors";
 
 // NSA industry benchmarks (based on CMS published IDR statistics)
 const BENCHMARKS = [
@@ -16,6 +17,8 @@ const BENCHMARKS = [
 ];
 
 export default function PerformanceBenchmarks() {
+  const C = useChartColors();
+
   const { data, isLoading } = trpc.disputes.list.useQuery({ limit: 500, offset: 0 });
   const { data: outcomeData } = trpc.dashboard.outcomeAnalytics.useQuery();
   const disputes = data?.items ?? [];
@@ -128,7 +131,7 @@ export default function PerformanceBenchmarks() {
                     className="h-full rounded-full"
                     style={{
                       width: `${Math.min((b.actual / (b.benchmark * 1.5)) * 100, 100)}%`,
-                      backgroundColor: b.status === "above" ? (b.lowerIsBetter ? "#ef4444" : "#22c55e") : b.status === "below" ? (b.lowerIsBetter ? "#22c55e" : "#f59e0b") : "#6366f1",
+                      backgroundColor: b.status === "above" ? (b.lowerIsBetter ? C.danger : "#22c55e") : b.status === "below" ? (b.lowerIsBetter ? C.chart2 : "#f59e0b") : C.primary,
                     }}
                   />
                 </div>
@@ -150,12 +153,12 @@ export default function PerformanceBenchmarks() {
             <div style={{ height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={benchmarkData.map(b => ({ name: b.metric.replace("Avg ", "").slice(0, 16), actual: b.actual, benchmark: b.benchmark }))} margin={{ top: 10, right: 20, left: 0, bottom: 30 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis dataKey="name" tick={{ fontSize: 9 }} angle={-20} textAnchor="end" />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip />
-                  <Bar dataKey="actual" name="Your Platform" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="benchmark" name="Industry Benchmark" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="actual" name="Your Platform" fill={C.primary} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="benchmark" name="Industry Benchmark" fill={C.muted} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

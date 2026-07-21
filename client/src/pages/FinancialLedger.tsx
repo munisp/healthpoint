@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import { useChartColors } from "@/hooks/useChartColors";
 import {
   DollarSign, TrendingUp, TrendingDown, BookOpen, ArrowRightLeft,
   Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download, Layers, List, ChevronDown,
@@ -21,14 +22,6 @@ import {
   LineChart, Line, CartesianGrid, Legend, ReferenceLine
 } from "recharts";
 
-const ACCOUNT_COLORS: Record<string, string> = {
-  billed: "#6366f1",
-  allowed: "#f59e0b",
-  paid: "#10b981",
-  determination: "#3b82f6",
-  adjustment: "#8b5cf6",
-  patient_responsibility: "#ef4444",
-};
 
 const ACCOUNT_LABELS: Record<string, string> = {
   billed: "Billed Amount",
@@ -113,6 +106,16 @@ function buildTrendData(
 }
 
 export default function FinancialLedger() {
+  const C = useChartColors();
+  const ACCOUNT_COLORS: Record<string, string> = {
+    billed: C.primary,
+    allowed: C.chart3,
+    paid: C.chart2,
+    determination: C.chart1,
+    adjustment: C.chart4,
+    patient_responsibility: C.danger,
+  };
+
   const [selectedDisputeId, setSelectedDisputeId] = useState("");
   const [disputeInput, setDisputeInput] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -197,7 +200,7 @@ export default function FinancialLedger() {
   const chartData = balances.map(b => ({
     name: ACCOUNT_LABELS[b.accountType] ?? b.accountType,
     amount: b.balanceDollars,
-    color: ACCOUNT_COLORS[b.accountType] ?? "#94a3b8",
+    color: ACCOUNT_COLORS[b.accountType] ?? C.muted,
   }));
 
   const hasDateFilter = !!(dateFrom || dateTo);
@@ -559,7 +562,7 @@ export default function FinancialLedger() {
                         <div key={b.accountId} className="flex items-center justify-between py-2 border-b last:border-0">
                           <div className="flex items-center gap-2">
                             <div className="w-3 h-3 rounded-full"
-                              style={{ backgroundColor: ACCOUNT_COLORS[b.accountType] ?? "#94a3b8" }} />
+                              style={{ backgroundColor: ACCOUNT_COLORS[b.accountType] ?? C.muted }} />
                             <span className="text-sm font-medium">
                               {ACCOUNT_LABELS[b.accountType] ?? b.accountType}
                             </span>
@@ -672,7 +675,7 @@ export default function FinancialLedger() {
                         const groupDebits = rows.filter(r => r.entry.entryType === "debit").reduce((s, r) => s + r.entry.amountCents, 0);
                         const groupCredits = rows.filter(r => r.entry.entryType === "credit").reduce((s, r) => s + r.entry.amountCents, 0);
                         const groupNet = groupCredits - groupDebits;
-                        const color = ACCOUNT_COLORS[accountKey] ?? "#94a3b8";
+                        const color = ACCOUNT_COLORS[accountKey] ?? C.muted;
         const isExpanded = expandedGroups[accountKey] !== false; // default open
                         return (
                           <div key={accountKey} className="border rounded-lg overflow-hidden">
@@ -711,7 +714,7 @@ export default function FinancialLedger() {
                                       <td className="py-2 pr-3 max-w-xs truncate">{entry.description}</td>
                                       <td className="py-2 pr-3 text-xs text-muted-foreground">
                                         <span className="inline-flex items-center gap-1">
-                                          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }} />
+                                          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? C.muted }} />
                                           → {ACCOUNT_LABELS[creditAccountType] ?? creditAccountType}
                                         </span>
                                       </td>
@@ -754,14 +757,14 @@ export default function FinancialLedger() {
                             <td className="py-2 pr-4">
                               <span className="inline-flex items-center gap-1">
                                 <div className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: ACCOUNT_COLORS[debitAccountType] ?? "#94a3b8" }} />
+                                  style={{ backgroundColor: ACCOUNT_COLORS[debitAccountType] ?? C.muted }} />
                                 {ACCOUNT_LABELS[debitAccountType] ?? debitAccountType}
                               </span>
                             </td>
                             <td className="py-2 pr-4">
                               <span className="inline-flex items-center gap-1">
                                 <div className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }} />
+                                  style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? C.muted }} />
                                 {ACCOUNT_LABELS[creditAccountType] ?? creditAccountType}
                               </span>
                             </td>

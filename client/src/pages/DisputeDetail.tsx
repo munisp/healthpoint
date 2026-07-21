@@ -13,13 +13,14 @@ import {
   AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock,
   DollarSign, FileText, Gavel, LogOut, Scale, Upload, Users,
   TrendingUp, CheckCircle, XCircle, RefreshCw, Download, Bell,
-  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp
+  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp, Pin, PinOff
 } from "lucide-react";
 import WorkflowTimeline from "@/components/WorkflowTimeline";
 import DeadlineCountdownBanner from "@/components/DeadlineCountdownBanner";
 import OutcomePredictionGauge from "@/components/OutcomePredictionGauge";
 import DisputeComments from "@/components/DisputeComments";
 import { useRecentDisputes } from "@/hooks/useRecentDisputes";
+import { usePinnedDisputes } from "@/hooks/usePinnedDisputes";
 
 const IDR_STEPS = [
   { key: "STEP_01_OPEN_NEGOTIATION_INITIATED", label: "Open Negotiation Initiated", description: "Party sends open negotiation notice per NSA §2799A-1", days: "Day 0" },
@@ -178,6 +179,8 @@ export default function DisputeDetail() {
 
   // Recent disputes tracking
   const { recordVisit } = useRecentDisputes();
+  // Pinned disputes
+  const { isPinned, toggle: togglePin } = usePinnedDisputes();
 
   // Queries
   const { data: timelineData, isLoading } = trpc.disputes.getTimeline.useQuery({ disputeId: id! });
@@ -380,6 +383,25 @@ export default function DisputeDetail() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => togglePin({
+                id: dispute.id,
+                referenceNumber: dispute.referenceNumber,
+                serviceType: dispute.serviceType ?? "",
+                status: dispute.status,
+              })}
+              className={`flex items-center gap-2 ${
+                isPinned(dispute.id)
+                  ? "border-amber-400 text-amber-700 bg-amber-50 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-400 dark:bg-amber-900/20"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              title={isPinned(dispute.id) ? "Unpin from sidebar" : "Pin to sidebar"}
+            >
+              {isPinned(dispute.id) ? <PinOff size={14} /> : <Pin size={14} />}
+              {isPinned(dispute.id) ? "Unpin" : "Pin"}
+            </Button>
             <Button variant="outline" onClick={handleAISummary} disabled={aiSummaryMutation.isPending} className="flex items-center gap-2 border-violet-300 text-violet-700 hover:bg-violet-50">
               <Brain size={14} />{aiSummaryMutation.isPending ? "Analysing..." : "AI Summary"}
             </Button>

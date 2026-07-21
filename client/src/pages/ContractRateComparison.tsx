@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useLocation } from "wouter";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { TrendingUp, TrendingDown, Minus, Search, ExternalLink, Info } from "lucide-react";
+import { useChartColors } from "@/hooks/useChartColors";
 
 // Benchmark contract rates by service type (% of Medicare as industry reference)
 const BENCHMARK_RATES: Record<string, { low: number; median: number; high: number }> = {
@@ -40,6 +41,8 @@ function getRatePosition(billedAmount: number, serviceType: string): "below" | "
 }
 
 export default function ContractRateComparison() {
+  const C = useChartColors();
+
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState("all");
@@ -135,13 +138,13 @@ export default function ContractRateComparison() {
             <div style={{ height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis dataKey="service" tick={{ fontSize: 10 }} />
                   <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                   <Tooltip />
-                  <Bar dataKey="above" name="Above Range" fill="#ef4444" stackId="a" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="in_range" name="In Range" fill="#22c55e" stackId="a" />
-                  <Bar dataKey="below" name="Below Range" fill="#f59e0b" stackId="a" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="above" name="Above Range" fill={C.danger} stackId="a" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="in_range" name="In Range" fill={C.chart2} stackId="a" />
+                  <Bar dataKey="below" name="Below Range" fill={C.chart3} stackId="a" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer, Tooltip } from "recharts";
 import { Star, TrendingUp, TrendingDown, Minus, Award } from "lucide-react";
+import { useChartColors } from "@/hooks/useChartColors";
 
 function scoreGrade(score: number): { grade: string; color: string } {
   if (score >= 85) return { grade: "A", color: "text-green-600" };
@@ -14,6 +15,8 @@ function scoreGrade(score: number): { grade: string; color: string } {
 }
 
 export default function PayerScorecard() {
+  const C = useChartColors();
+
   const { data, isLoading } = trpc.disputes.list.useQuery({ limit: 200, offset: 0 });
   const disputes = data?.items ?? [];
 
@@ -141,7 +144,7 @@ export default function PayerScorecard() {
                       className="h-full rounded-full"
                       style={{
                         width: `${sc.overallScore}%`,
-                        backgroundColor: sc.overallScore >= 70 ? "#22c55e" : sc.overallScore >= 50 ? "#f59e0b" : "#ef4444",
+                        backgroundColor: sc.overallScore >= 70 ? C.chart2 : sc.overallScore >= 50 ? C.chart3 : C.danger,
                       }}
                     />
                   </div>
@@ -155,7 +158,7 @@ export default function PayerScorecard() {
                     <RadarChart data={sc.radarData} margin={{ top: 10, right: 20, left: 20, bottom: 10 }}>
                       <PolarGrid />
                       <PolarAngleAxis dataKey="metric" tick={{ fontSize: 9 }} />
-                      <Radar dataKey="value" fill="#6366f1" fillOpacity={0.3} stroke="#6366f1" />
+                      <Radar dataKey="value" fill={C.primary} fillOpacity={0.3} stroke={C.primary} />
                       <Tooltip formatter={(v: number) => `${v}/100`} />
                     </RadarChart>
                   </ResponsiveContainer>
