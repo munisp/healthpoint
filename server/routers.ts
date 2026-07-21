@@ -315,6 +315,10 @@ export const appRouter = router({
           createdBy: ctx.user.id,
           initiatingPartyId: ctx.user.id,
         });
+        // Initialize double-entry ledger accounts for this dispute
+        initializeDisputeLedger(dispute.id).catch((e) =>
+          console.warn("[Ledger] Failed to initialize ledger for dispute", dispute.id, e)
+        );
         // Sync to OpenSearch
         indexDocument("dispute", dispute.id, dispute as unknown as Record<string, unknown>).catch(() => {});
         // Create deadline notification
@@ -333,7 +337,8 @@ export const appRouter = router({
       .input(advanceStepSchema)
       .mutation(async ({ ctx, input }) => {
         const { disputeId, newStep, newStatus, description, ...additionalData } = input;
-        const dispute = await advanceDisputeStep(
+        // Acquire distributed lock (10 s TTL) to prevent concurrent state transitions on the same dispute
+        const dispute = await withDisputeLock(disputeId, 10_000, () => advanceDisputeStep(
           disputeId, newStep, newStatus,
           ctx.user.id, ctx.user.name ?? "Unknown",
           description,
@@ -345,7 +350,7 @@ export const appRouter = router({
             determinationBasis: additionalData.determinationBasis ?? undefined,
             determinationWinner: additionalData.determinationWinner ?? undefined,
           }
-        );
+        ));
         // Create step-specific notifications
         if (newStep === "STEP_04_IDR_INITIATED") {
           await createNotification({
@@ -869,6 +874,59 @@ export const appRouter = router({
         return db.select().from(disputeDocuments)
           .where(eq(disputeDocuments.disputeId, input.disputeId))
           .orderBy(desc(disputeDocuments.uploadedAt));
+      }),
+    // Document version history — list all revisions of a specific document
+    listVersions: protectedProcedure
+      .input(z.object({ documentId: z.string() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        const { documentVersions } = await import("../drizzle/schema");
+        const { eq, desc } = await import("drizzle-orm");
+        return db.select().from(documentVersions)
+          .where(eq(documentVersions.documentId, input.documentId))
+          .orderBy(desc(documentVersions.versionNumber));
+      }),
+    // Upload a new version of an existing document
+    uploadVersion: protectedProcedure
+      .input(z.object({
+        documentId: z.string(),
+        disputeId: z.string(),
+        fileName: z.string().min(1),
+        fileType: z.string().min(1),
+        fileSize: z.number().min(1),
+        storageKey: z.string().min(1),
+        changeNote: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new Error("Database unavailable");
+        const { documentVersions } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        // Mark all previous versions as not latest
+        await db.update(documentVersions)
+          .set({ isLatest: false })
+          .where(eq(documentVersions.documentId, input.documentId));
+        // Get current max version number
+        const { max } = await import("drizzle-orm");
+        const [{ maxVer }] = await db.select({ maxVer: max(documentVersions.versionNumber) })
+          .from(documentVersions)
+          .where(eq(documentVersions.documentId, input.documentId));
+        const nextVersion = (maxVer ?? 0) + 1;
+        const [version] = await db.insert(documentVersions).values({
+          id: crypto.randomUUID(),
+          documentId: input.documentId,
+          disputeId: input.disputeId,
+          versionNumber: nextVersion,
+          s3Key: input.storageKey,
+          fileName: input.fileName,
+          fileSize: input.fileSize,
+          mimeType: input.fileType,
+          uploadedBy: ctx.user.id,
+          changeNote: input.changeNote ?? null,
+          isLatest: true,
+        }).returning();
+        return version;
       }),
   }),
 

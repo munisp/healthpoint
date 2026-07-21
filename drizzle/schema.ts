@@ -1580,3 +1580,30 @@ export const changelogEntries = pgTable(
 );
 export type ChangelogEntry = typeof changelogEntries.$inferSelect;
 export type InsertChangelogEntry = typeof changelogEntries.$inferInsert;
+
+// ─── Document Versions ────────────────────────────────────────────────────────
+/** Tracks every revision of a dispute document for full version history */
+export const documentVersions = pgTable(
+  "document_versions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    versionNumber: integer("versionNumber").notNull().default(1),
+    s3Key: varchar("s3Key", { length: 512 }).notNull(),
+    fileName: varchar("fileName", { length: 255 }).notNull(),
+    fileSize: integer("fileSize"),
+    mimeType: varchar("mimeType", { length: 128 }),
+    uploadedBy: varchar("uploadedBy", { length: 64 }).notNull(),
+    uploadedAt: timestamp("uploadedAt").defaultNow(),
+    changeNote: text("changeNote"),
+    isLatest: boolean("isLatest").default(true),
+  },
+  (t) => [
+    index("doc_versions_documentId_idx").on(t.documentId),
+    index("doc_versions_disputeId_idx").on(t.disputeId),
+    index("doc_versions_latest_idx").on(t.documentId, t.isLatest),
+  ]
+);
+export type DocumentVersion = typeof documentVersions.$inferSelect;
+export type InsertDocumentVersion = typeof documentVersions.$inferInsert;

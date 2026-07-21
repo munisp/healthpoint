@@ -75,6 +75,57 @@ const OFFER_TYPE_COLORS: Record<string, string> = {
   determination: "bg-green-50 border-green-200 text-green-700",
 };
 
+// ─── Document Version Row ─────────────────────────────────────────────────────
+function DocumentVersionRow({ doc, disputeId }: { doc: any; disputeId: string }) {
+  const [showVersions, setShowVersions] = useState(false);
+  const { data: versions } = trpc.documents.listVersions.useQuery(
+    { documentId: doc.id },
+    { enabled: showVersions }
+  );
+  return (
+    <div className="rounded-lg bg-slate-50 border border-slate-100">
+      <div className="flex items-start gap-2 p-2">
+        <FileText size={14} className="text-slate-400 mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold text-slate-700 truncate">{doc.fileName || doc.title}</div>
+          <div className="text-xs text-slate-400 capitalize">{doc.documentType?.replace(/_/g, " ")}</div>
+          {doc.fileSize && doc.fileSize > 0 && (
+            <div className="text-xs text-slate-400">{(doc.fileSize / 1024).toFixed(1)} KB</div>
+          )}
+          <div className="text-xs text-slate-400">{doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : ""}</div>
+        </div>
+        <button
+          onClick={() => setShowVersions(v => !v)}
+          className="text-xs text-blue-500 hover:underline shrink-0 flex items-center gap-0.5"
+          title="View version history"
+        >
+          {showVersions ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          History
+        </button>
+      </div>
+      {showVersions && (
+        <div className="border-t border-slate-100 px-3 pb-2">
+          {!versions || versions.length === 0 ? (
+            <p className="text-xs text-slate-400 py-2">No version history yet. Upload a new version to track revisions.</p>
+          ) : (
+            <div className="space-y-1 pt-1">
+              {versions.map((v: any) => (
+                <div key={v.id} className="flex items-center gap-2 text-xs">
+                  <span className="font-mono text-slate-500">v{v.versionNumber}</span>
+                  <span className="text-slate-600 truncate">{v.fileName}</span>
+                  {v.isLatest && <span className="px-1 py-0.5 bg-green-100 text-green-700 rounded text-[10px]">latest</span>}
+                  <span className="text-slate-400 ml-auto">{v.uploadedAt ? new Date(v.uploadedAt).toLocaleDateString() : ""}</span>
+                  {v.changeNote && <span className="text-slate-400 italic truncate max-w-[120px]">{v.changeNote}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DisputeDetail() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -625,17 +676,7 @@ export default function DisputeDetail() {
                 ) : (
                   <div className="space-y-2">
                     {documentList.map((doc: any) => (
-                      <div key={doc.id} className="flex items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
-                        <FileText size={14} className="text-slate-400 mt-0.5 shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-semibold text-slate-700 truncate">{doc.title}</div>
-                          <div className="text-xs text-slate-400 capitalize">{doc.documentType?.replace(/_/g, " ")}</div>
-                          {doc.fileSize && doc.fileSize > 0 && (
-                            <div className="text-xs text-slate-400">{(doc.fileSize / 1024).toFixed(1)} KB</div>
-                          )}
-                          <div className="text-xs text-slate-400">{doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : ""}</div>
-                        </div>
-                      </div>
+                      <DocumentVersionRow key={doc.id} doc={doc} disputeId={dispute.id} />
                     ))}
                   </div>
                 )}
