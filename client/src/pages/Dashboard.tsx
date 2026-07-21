@@ -17,18 +17,13 @@ import {
   LineChart, Line, Area, AreaChart,
 } from "recharts";
 
-// Generate a 7-point sparkline with date labels (last 7 days)
-function makeSparkline(base: number, variance = 0.3) {
-  const today = new Date();
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(today);
-    d.setDate(d.getDate() - (6 - i));
-    const label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    return {
-      v: Math.max(0, Math.round(base * (1 + (Math.random() - 0.5) * variance * (i / 3)))),
-      date: label,
-    };
-  });
+// Convert real daily stats to sparkline format
+function toSparkline(dailyStats: { date: string; total: number; opened: number; closed: number }[] | undefined, field: "total" | "opened" | "closed" = "total") {
+  if (!dailyStats?.length) return [];
+  return dailyStats.map(d => ({
+    v: d[field],
+    date: new Date(d.date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+  }));
 }
 
 function SparklineTooltip({ active, payload, metricLabel }: any) {
@@ -136,15 +131,19 @@ export default function Dashboard() {
     </div>
   );
 
-  // Sparkline data — seeded from current KPI values so they look realistic
+  // Real 7-day sparkline data from DB
+  const { data: dailyStats } = trpc.dashboard.dailyStats.useQuery({ days: 7 }, { enabled: isAuthenticated });
+  const totalSpark = toSparkline(dailyStats, "total");
+  const openedSpark = toSparkline(dailyStats, "opened");
+  const closedSpark = toSparkline(dailyStats, "closed");
   const sparklines = [
-    makeSparkline(stats?.total ?? 10, 0.15),
-    makeSparkline(stats?.openNegotiation ?? 4, 0.4),
-    makeSparkline(stats?.inIDR ?? 3, 0.4),
-    makeSparkline(stats?.closedThisMonth ?? 2, 0.5),
-    makeSparkline(stats?.dueSoon ?? 1, 0.6),
-    makeSparkline(stats?.overdue ?? 0, 0.8),
-    makeSparkline(stats?.unreadNotifications ?? 0, 0.7),
+    totalSpark,   // Total Disputes
+    openedSpark,  // Open Negotiation
+    openedSpark,  // In IDR Process
+    closedSpark,  // Closed This Month
+    openedSpark,  // Due in 5 Days
+    openedSpark,  // Overdue
+    openedSpark,  // Unread Alerts
   ];
   const sparkColors = ["#3b82f6","#f59e0b","#8b5cf6","#22c55e","#f59e0b","#ef4444","#6366f1"];
 

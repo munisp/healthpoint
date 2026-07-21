@@ -40,7 +40,7 @@ import { generateDisputePDF } from "./pdf-export";
 import { generateReportsPDF, generateReportsCSV } from "./reports-export";
 import { getDb, checkDbHealth } from "./db";
 import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
-import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries } from "../drizzle/schema";
+import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
@@ -97,6 +97,8 @@ const advanceStepSchema = z.object({
   isEligible: z.boolean().optional(),
   ineligibilityReason: z.string().optional(),
   determinationBasis: z.string().optional(),
+  // Who won the determination: 'initiating_party' = provider, 'responding_party' = payer
+  determinationWinner: z.enum(["initiating_party", "responding_party"]).optional(),
 });
 
 const submitOfferSchema = z.object({
@@ -115,6 +117,31 @@ export const appRouter = router({
         db: await checkDbHealth(),
         ts: Date.now(),
       })),
+    // Real latency probe: measures actual DB round-trip time
+    latencyProbe: publicProcedure.query(async () => {
+      const apiStart = Date.now();
+      let dbLatency = 0;
+      let dbStatus: "healthy" | "degraded" | "down" = "healthy";
+      try {
+        const db = await getDb();
+        const dbStart = Date.now();
+        if (db) {
+          await db.execute("SELECT 1");
+          dbLatency = Date.now() - dbStart;
+          dbStatus = dbLatency > 500 ? "degraded" : "healthy";
+        } else {
+          dbStatus = "down";
+        }
+      } catch {
+        dbStatus = "down";
+      }
+      const apiLatency = Date.now() - apiStart;
+      return {
+        ts: Date.now(),
+        api: { latency: apiLatency, status: apiLatency > 1000 ? "degraded" as const : "healthy" as const },
+        db: { latency: dbLatency, status: dbStatus },
+      };
+    }),
   }),
 
   auth: router({
@@ -146,19 +173,49 @@ export const appRouter = router({
         return getDisputesByMonth(input.months);
       }),
 
+    // Real 7-day daily dispute counts for sparklines (no Math.random)
+    dailyStats: protectedProcedure
+      .input(z.object({ days: z.number().int().min(1).max(30).default(7) }))
+      .query(async ({ input }) => {
+        const db = await (await import("./db")).getDb();
+        if (!db) return [];
+        const result: { date: string; total: number; opened: number; closed: number }[] = [];
+        const now = new Date();
+        for (let i = input.days - 1; i >= 0; i--) {
+          const dayStart = new Date(now);
+          dayStart.setDate(now.getDate() - i);
+          dayStart.setHours(0, 0, 0, 0);
+          const dayEnd = new Date(dayStart);
+          dayEnd.setHours(23, 59, 59, 999);
+          const { sql, and, between } = await import("drizzle-orm");
+          const { disputes: disputesTable } = await import("../drizzle/schema");
+          const [openedRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(disputesTable)
+            .where(between(disputesTable.createdAt, dayStart, dayEnd));
+          const [closedRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(disputesTable)
+            .where(and(between(disputesTable.closedAt!, dayStart, dayEnd)));
+          result.push({
+            date: dayStart.toISOString().slice(0, 10),
+            total: Number(openedRow?.count ?? 0) + Number(closedRow?.count ?? 0),
+            opened: Number(openedRow?.count ?? 0),
+            closed: Number(closedRow?.count ?? 0),
+          });
+        }
+        return result;
+      }),
     outcomeAnalytics: protectedProcedure.query(async () => {
       const db = await (await import("./db")).getDb();
       if (!db) return { overallWinRate: null, byServiceType: [] };
-      // Pull closed disputes with determination amounts
+      // Use determinationWinner field for accurate provider win rate
+      // 'initiating_party' = provider won; 'responding_party' = payer won
       const rows = await db.execute(
         `SELECT serviceType,
                 COUNT(*) AS total,
-                SUM(CASE WHEN determinationAmount IS NOT NULL AND determinationAmount >= billedAmount * 0.5 THEN 1 ELSE 0 END) AS wins,
-                AVG(COALESCE(determinationAmount, 0)) AS avgDeterminationAmount,
-                AVG(COALESCE(billedAmount, 0)) AS avgBilledAmount
+                SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
+                AVG(COALESCE("determinationAmount", 0)) AS "avgDeterminationAmount",
+                AVG(COALESCE("billedAmount", 0)) AS "avgBilledAmount"
          FROM disputes
-         WHERE status = 'closed' AND determinationAmount IS NOT NULL
-         GROUP BY serviceType`
+         WHERE status IN ('closed', 'determination_issued') AND "determinationWinner" IS NOT NULL
+         GROUP BY "serviceType"`
       ) as unknown as { rows: { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[] };
       const byServiceType = (rows.rows ?? []).map(r => ({
         serviceType: r.serviceType,
@@ -241,6 +298,7 @@ export const appRouter = router({
             isEligible: additionalData.isEligible ?? undefined,
             ineligibilityReason: additionalData.ineligibilityReason ?? undefined,
             determinationBasis: additionalData.determinationBasis ?? undefined,
+            determinationWinner: additionalData.determinationWinner ?? undefined,
           }
         );
         // Create step-specific notifications
@@ -1249,10 +1307,29 @@ export const appRouter = router({
           });
           return result.patients ?? [];
         } catch {
-          // Graceful fallback: return mock suggestions so UI is usable without AI service
-          return [
-            { id: `PT-${Math.floor(Math.random() * 90000) + 10000}`, name: `Patient matching "${input.query}"`, dob: "1980-01-01", mrn: `MRN-${Math.floor(Math.random() * 90000) + 10000}` },
-          ];
+          // Graceful fallback: attempt a real FHIR R4 Patient search using the stored connection
+          try {
+            const db = await getDb();
+            if (!db) return [];
+            const conn = await db.select().from(emrConnections).where(eq(emrConnections.id, input.connectionId)).limit(1);
+            if (!conn.length || !conn[0].baseUrl) return [];
+            const baseUrl = conn[0].baseUrl.replace(/\/$/, "");
+            const params = new URLSearchParams({ name: input.query, _count: "10" });
+            const resp = await fetch(`${baseUrl}/Patient?${params.toString()}`, {
+              headers: { Accept: "application/fhir+json" },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (!resp.ok) return [];
+            const bundle = await resp.json() as { entry?: { resource: { id: string; name?: { family?: string; given?: string[] }[]; birthDate?: string; identifier?: { value: string }[] } }[] };
+            return (bundle.entry ?? []).map(e => ({
+              id: e.resource.id,
+              name: e.resource.name?.[0] ? `${e.resource.name[0].family ?? ""}, ${(e.resource.name[0].given ?? []).join(" ")}`.trim() : "Unknown",
+              dob: e.resource.birthDate ?? "",
+              mrn: e.resource.identifier?.find(i => i.value)?.value ?? e.resource.id,
+            }));
+          } catch {
+            return [];
+          }
         }
       }),
 
@@ -1529,19 +1606,38 @@ export const appRouter = router({
     checkCompliance: protectedProcedure
       .input(z.object({ disputeId: z.string(), state: z.string() }))
       .query(async ({ input }) => {
-        const AI_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
-        try {
-          const res = await fetch(`${AI_URL}/ask-assistant`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question: `For a dispute in ${input.state}: what state balance billing laws apply and what are the compliance requirements for NSA IDR?`, dispute_context: { disputeId: input.disputeId, state: input.state } }),
-          });
-          if (!res.ok) throw new Error("AI unavailable");
-          const data = await res.json() as { answer: string; sources: string[]; confidence: number; suggested_actions: string[] };
-          return { answer: data.answer, sources: data.sources, confidence: data.confidence, suggestedActions: data.suggested_actions };
-        } catch {
-          return { answer: `State ${input.state} disputes are subject to both federal NSA IDR requirements (45 CFR § 149.510) and any applicable state balance billing laws. Ensure compliance with the state's specific notice requirements and IDR timelines.`, sources: ["45 CFR § 149.510", "No Surprises Act § 2799A-1"], confidence: 0.75, suggestedActions: ["Verify state law applicability", "Check plan type (ERISA vs state-regulated)", "Confirm notice requirements"] };
-        }
+        const { invokeLLM } = await import("./_core/llm");
+        const dispute = await getDisputeById(input.disputeId);
+        const disputeContext = dispute
+          ? `Service type: ${dispute.serviceType}, billed: $${dispute.billedAmount}, QPA: $${dispute.qpaAmount ?? "N/A"}, service date: ${dispute.serviceDate ? new Date(dispute.serviceDate).toLocaleDateString() : "N/A"}`
+          : "";
+        const response = await invokeLLM({
+          messages: [
+            { role: "system", content: "You are an expert in the No Surprises Act (NSA), 45 CFR § 149.510, and state balance billing laws. Provide concise, accurate compliance guidance. Always cite specific regulatory provisions. Return JSON with fields: answer (string), sources (string array), confidence (0-1 number), suggestedActions (string array)." },
+            { role: "user", content: `State: ${input.state}. ${disputeContext}\n\nWhat state balance billing laws apply to this dispute and what are the compliance requirements for NSA IDR? Include specific notice requirements, IDR timelines, and plan type considerations (ERISA vs state-regulated).` },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "compliance_analysis",
+              strict: true,
+              schema: {
+                type: "object",
+                properties: {
+                  answer: { type: "string" },
+                  sources: { type: "array", items: { type: "string" } },
+                  confidence: { type: "number" },
+                  suggestedActions: { type: "array", items: { type: "string" } },
+                },
+                required: ["answer", "sources", "confidence", "suggestedActions"],
+                additionalProperties: false,
+              },
+            },
+          },
+        });
+        const content = response.choices[0]?.message?.content ?? "{}";
+        const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content)) as { answer: string; sources: string[]; confidence: number; suggestedActions: string[] };
+        return parsed;
       }),
   }),
 
@@ -1562,19 +1658,48 @@ export const appRouter = router({
     getAnalysis: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
       .query(async ({ input }) => {
-        const AI_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
-        try {
-          const res = await fetch(`${AI_URL}/ask-assistant`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question: `Provide an expert analysis of this dispute including: (1) strength of the provider's position, (2) likelihood of success in IDR, (3) recommended negotiation strategy, (4) key regulatory arguments to raise, (5) comparable determination benchmarks.`, dispute_context: { disputeId: input.disputeId } }),
-          });
-          if (!res.ok) throw new Error("AI unavailable");
-          const data = await res.json() as { answer: string; sources: string[]; confidence: number; suggested_actions: string[] };
-          return { analysis: data.answer, sources: data.sources, confidence: data.confidence, recommendations: data.suggested_actions };
-        } catch {
-          return { analysis: "Expert analysis is being prepared. Our certified IDR specialists are reviewing the dispute details, QPA methodology, and comparable service benchmarks. You will receive a detailed analysis within the estimated response time.", sources: ["45 CFR § 149.510", "CMS IDR Guidance"], confidence: 0.8, recommendations: ["Gather all supporting clinical documentation", "Document QPA calculation methodology", "Identify comparable determinations"] };
-        }
+        const { invokeLLM } = await import("./_core/llm");
+        const dispute = await getDisputeById(input.disputeId);
+        if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        const disputeContext = [
+          `Reference: ${dispute.referenceNumber}`,
+          `Service type: ${dispute.serviceType}`,
+          `Billed amount: $${dispute.billedAmount}`,
+          `QPA: $${dispute.qpaAmount ?? "N/A"}`,
+          `Initiating party offer: $${dispute.initiatingPartyOffer ?? "N/A"}`,
+          `Responding party offer: $${dispute.respondingPartyOffer ?? "N/A"}`,
+          `Current step: ${dispute.currentStep}`,
+          `Patient state: ${dispute.patientState}`,
+          `Service date: ${dispute.serviceDate ? new Date(dispute.serviceDate).toLocaleDateString() : "N/A"}`,
+          `Determination basis: ${dispute.determinationBasis ?? "N/A"}`,
+        ].join("; ");
+        const response = await invokeLLM({
+          messages: [
+            { role: "system", content: "You are a certified IDR expert specializing in the No Surprises Act. Analyze disputes and provide actionable expert guidance. Return JSON with fields: analysis (string), sources (string array), confidence (0-1 number), recommendations (string array)." },
+            { role: "user", content: `Analyze this IDR dispute: ${disputeContext}\n\nProvide: (1) strength of the provider's position, (2) likelihood of success in IDR arbitration, (3) recommended negotiation strategy, (4) key regulatory arguments to raise under 45 CFR § 149.510, (5) comparable determination benchmarks and QPA methodology considerations.` },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "expert_analysis",
+              strict: true,
+              schema: {
+                type: "object",
+                properties: {
+                  analysis: { type: "string" },
+                  sources: { type: "array", items: { type: "string" } },
+                  confidence: { type: "number" },
+                  recommendations: { type: "array", items: { type: "string" } },
+                },
+                required: ["analysis", "sources", "confidence", "recommendations"],
+                additionalProperties: false,
+              },
+            },
+          },
+        });
+        const content = response.choices[0]?.message?.content ?? "{}";
+        const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content)) as { analysis: string; sources: string[]; confidence: number; recommendations: string[] };
+        return parsed;
       }),
   }),
 
@@ -3946,6 +4071,21 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
 
   // ─── Two-Factor Auth (TOTP) ─────────────────────────────────────────────────
   totp: router({
+    // Generate a cryptographically secure TOTP secret and QR code URI server-side
+    generateSecret: protectedProcedure
+      .input(z.object({ appName: z.string().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        const { generateSecret: genSecret, generateURI } = await import("otplib");
+        const secret = genSecret();
+        const user = ctx.user;
+        const issuer = input.appName ?? "HealthPoint IDR";
+        const accountName = user.email ?? user.name ?? user.id;
+        const otpAuthUrl = generateURI({ secret, label: accountName, issuer });
+        // Generate QR code as data URL
+        const QRCode = await import("qrcode");
+        const qrDataUrl = await QRCode.default.toDataURL(otpAuthUrl);
+        return { secret, otpAuthUrl, qrDataUrl };
+      }),
     status: protectedProcedure.query(async ({ ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -3962,10 +4102,12 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
       .mutation(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        // Generate 8 backup codes
-        const backupCodes = Array.from({ length: 8 }, () =>
-          `${Math.random().toString(36).slice(2, 6)}-${Math.random().toString(36).slice(2, 6)}`
-        );
+        // Generate 8 cryptographically secure backup codes
+        const backupCodes = Array.from({ length: 8 }, () => {
+          const bytes = crypto.getRandomValues(new Uint8Array(4));
+          const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+          return `${hex.slice(0, 4)}-${hex.slice(4, 8)}`;
+        });
         const existing = await db.select({ id: totpSecrets.id }).from(totpSecrets).where(eq(totpSecrets.userId, ctx.user.id)).limit(1);
         if (existing.length) {
           await db.update(totpSecrets).set({ secret: input.secret, status: "pending", backupCodes: JSON.stringify(backupCodes), usedBackupCodes: "[]", updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
@@ -3979,8 +4121,14 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
       .mutation(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        // Accept any 6-digit code for demo (real impl would use speakeasy/otplib)
         if (!/^\d{6}$/.test(input.code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid code format" });
+        // Fetch pending secret and validate with otplib v13
+        const rows = await db.select({ secret: totpSecrets.secret }).from(totpSecrets)
+          .where(and(eq(totpSecrets.userId, ctx.user.id), eq(totpSecrets.status, "pending"))).limit(1);
+        if (!rows.length) throw new TRPCError({ code: "NOT_FOUND", message: "No pending TOTP setup found" });
+        const { verify: totpVerify } = await import("otplib");
+        const verifyResult = await totpVerify({ token: input.code, secret: rows[0].secret });
+        if (!verifyResult.valid) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid TOTP code — please try again" });
         await db.update(totpSecrets).set({ status: "active", enabledAt: new Date(), updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
         return { success: true };
       }),
@@ -3990,6 +4138,13 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         if (!/^\d{6}$/.test(input.code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid code format" });
+        // Validate TOTP code before disabling with otplib v13
+        const rows = await db.select({ secret: totpSecrets.secret }).from(totpSecrets)
+          .where(and(eq(totpSecrets.userId, ctx.user.id), eq(totpSecrets.status, "active"))).limit(1);
+        if (!rows.length) throw new TRPCError({ code: "NOT_FOUND", message: "2FA is not currently active" });
+        const { verify: totpVerify } = await import("otplib");
+        const verifyResult = await totpVerify({ token: input.code, secret: rows[0].secret });
+        if (!verifyResult.valid) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid TOTP code" });
         await db.update(totpSecrets).set({ status: "disabled", disabledAt: new Date(), updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
         return { success: true };
       }),

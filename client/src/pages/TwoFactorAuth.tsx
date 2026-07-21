@@ -9,12 +9,6 @@ import { toast } from "sonner";
 import { Shield, ShieldCheck, ShieldOff, Key, Copy, Check, AlertTriangle, Smartphone, RefreshCw, Loader2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 
-// Generate a random base32 TOTP secret on the client for demo
-function generateSecret(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-}
-
 type Step = "status" | "setup-scan" | "setup-verify" | "setup-backup" | "setup-done" | "disable-confirm";
 
 export default function TwoFactorAuth() {
@@ -24,13 +18,25 @@ export default function TwoFactorAuth() {
   const [disableCode, setDisableCode] = useState("");
   const [copiedCodes, setCopiedCodes] = useState(false);
   const [copiedSecret, setCopiedSecret] = useState(false);
-  const [pendingSecret] = useState(() => generateSecret());
+  // Server-generated secret + QR code (cryptographically secure, never client-side random)
+  const [serverSecret, setServerSecret] = useState<string | null>(null);
+  const [serverQrDataUrl, setServerQrDataUrl] = useState<string | null>(null);
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
 
   const utils = trpc.useUtils();
 
   const { data: totpStatus, isLoading } = trpc.totp.status.useQuery(undefined, { enabled: isAuthenticated });
   const { data: backupCodesData } = trpc.totp.getBackupCodes.useQuery(undefined, { enabled: isAuthenticated && totpStatus?.enabled === true });
+
+  // Generate secret server-side when user starts setup
+  const generateSecretMutation = trpc.totp.generateSecret.useMutation({
+    onSuccess: (data) => {
+      setServerSecret(data.secret);
+      setServerQrDataUrl(data.qrDataUrl);
+      setStep("setup-scan");
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const setupMutation = trpc.totp.setup.useMutation({
     onSuccess: (data) => {
@@ -44,6 +50,8 @@ export default function TwoFactorAuth() {
   const verifyMutation = trpc.totp.verify.useMutation({
     onSuccess: () => {
       utils.totp.status.invalidate();
+      setStep("status");
+      toast.success("Two-factor authentication enabled");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -61,24 +69,23 @@ export default function TwoFactorAuth() {
 
   const is2FAEnabled = totpStatus?.enabled === true;
 
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
-    `otpauth://totp/HealthPoint:${user?.email ?? "user"}?secret=${pendingSecret}&issuer=HealthPoint%20IDR`
-  )}`;
+  function handleStartSetup() {
+    setServerSecret(null);
+    setServerQrDataUrl(null);
+    generateSecretMutation.mutate({ appName: "HealthPoint IDR" });
+  }
 
   function handleVerify() {
-    if (!/^\d{6}$/.test(verifyCode)) {
-      toast.error("Please enter a valid 6-digit code");
-      return;
-    }
-    // Setup first (stores secret + generates backup codes), then verify
-    setupMutation.mutate({ secret: pendingSecret });
+    if (!serverSecret) { toast.error("No secret generated — please restart setup"); return; }
+    if (!/^\d{6}$/.test(verifyCode)) { toast.error("Please enter a valid 6-digit code"); return; }
+    // Store secret + generate backup codes
+    setupMutation.mutate({ secret: serverSecret });
   }
 
   function handleFinish() {
-    verifyMutation.mutate({ code: "000000" }); // Mark as active after backup codes saved
-    setStep("status");
-    toast.success("Two-factor authentication enabled");
-    utils.totp.status.invalidate();
+    // Activate TOTP after user has saved backup codes — requires a real code
+    if (!/^\d{6}$/.test(verifyCode)) { toast.error("Please enter a valid 6-digit code to activate"); return; }
+    verifyMutation.mutate({ code: verifyCode });
   }
 
   function handleDisable() {
@@ -90,7 +97,7 @@ export default function TwoFactorAuth() {
   }
 
   function copySecret() {
-    navigator.clipboard.writeText(pendingSecret);
+    if (serverSecret) navigator.clipboard.writeText(serverSecret);
     setCopiedSecret(true);
     setTimeout(() => setCopiedSecret(false), 2000);
   }
@@ -149,7 +156,7 @@ export default function TwoFactorAuth() {
                   <p className="text-xs text-slate-500">
                     You have {displayBackupCodes.length - usedCount} of {displayBackupCodes.length} backup codes remaining.
                   </p>
-                  <Button variant="outline" size="sm" onClick={() => { setStep("setup-scan"); }}>
+                  <Button variant="outline" size="sm" onClick={handleStartSetup} disabled={generateSecretMutation.isPending}>
                     <RefreshCw size={14} className="mr-2" />Regenerate (re-setup 2FA)
                   </Button>
                 </div>
@@ -183,7 +190,8 @@ export default function TwoFactorAuth() {
                     ))}
                   </div>
                 </div>
-                <Button onClick={() => setStep("setup-scan")} className="w-full">
+                <Button onClick={handleStartSetup} className="w-full" disabled={generateSecretMutation.isPending}>
+                  {generateSecretMutation.isPending ? <Loader2 size={14} className="mr-2 animate-spin" /> : null}
                   <Shield size={14} className="mr-2" />Enable Two-Factor Authentication
                 </Button>
               </>
@@ -204,12 +212,15 @@ export default function TwoFactorAuth() {
           <CardContent className="space-y-4">
             <p className="text-sm text-slate-600">Open your authenticator app and scan the QR code below, or enter the secret key manually.</p>
             <div className="flex justify-center">
-              <img src={qrUrl} alt="TOTP QR Code" className="w-48 h-48 rounded-lg border border-slate-200" />
+              {serverQrDataUrl
+                ? <img src={serverQrDataUrl} alt="TOTP QR Code" className="w-48 h-48 rounded-lg border border-slate-200" />
+                : <div className="w-48 h-48 rounded-lg border border-slate-200 flex items-center justify-center text-muted-foreground text-xs">Generating...</div>
+              }
             </div>
             <div className="space-y-2">
               <div className="text-xs font-medium text-slate-500">Manual entry key</div>
               <div className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200">
-                <code className="flex-1 text-xs font-mono text-slate-700 tracking-wider">{pendingSecret}</code>
+                <code className="flex-1 text-xs font-mono text-slate-700 tracking-wider">{serverSecret ?? "..."}</code>
                 <button onClick={copySecret} className="text-slate-400 hover:text-blue-600">
                   {copiedSecret ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
                 </button>
@@ -244,7 +255,7 @@ export default function TwoFactorAuth() {
               className="text-center text-2xl font-mono tracking-widest h-14"
             />
             <div className="flex gap-3">
-              <Button variant="outline" onClick={() => setStep("setup-scan")}>Back</Button>
+              <Button variant="outline" onClick={handleStartSetup} disabled={generateSecretMutation.isPending}>Back (Regenerate)</Button>
               <Button
                 onClick={handleVerify}
                 className="flex-1"
@@ -288,22 +299,35 @@ export default function TwoFactorAuth() {
         </Card>
       )}
 
-      {/* Step 4: Done */}
+      {/* Step 4: Activate — enter one final code to confirm setup */}
       {step === "setup-done" && (
         <Card className="border-green-200 bg-green-50">
-          <CardContent className="pt-6 text-center space-y-4">
-            <div className="flex justify-center">
-              <div className="p-4 rounded-full bg-green-100">
-                <ShieldCheck size={32} className="text-green-600" />
+          <CardContent className="pt-6 space-y-4">
+            <div className="text-center">
+              <div className="flex justify-center mb-3">
+                <div className="p-4 rounded-full bg-green-100">
+                  <ShieldCheck size={32} className="text-green-600" />
+                </div>
               </div>
+              <h3 className="text-lg font-bold text-green-800">Almost Done!</h3>
+              <p className="text-sm text-green-600 mt-1">Enter one final code from your authenticator app to activate 2FA.</p>
             </div>
-            <div>
-              <h3 className="text-lg font-bold text-green-800">Setup Complete!</h3>
-              <p className="text-sm text-green-600 mt-1">Two-factor authentication has been configured for your account.</p>
-            </div>
-            <Button onClick={handleFinish} className="bg-green-600 hover:bg-green-700 text-white" disabled={verifyMutation.isPending}>
+            <Input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="000000"
+              value={verifyCode}
+              onChange={e => setVerifyCode(e.target.value.replace(/\D/g, ""))}
+              className="text-center text-2xl font-mono tracking-widest h-14"
+            />
+            <Button
+              onClick={handleFinish}
+              className="w-full bg-green-600 hover:bg-green-700 text-white"
+              disabled={verifyCode.length !== 6 || verifyMutation.isPending}
+            >
               {verifyMutation.isPending ? <Loader2 size={14} className="mr-2 animate-spin" /> : null}
-              Done
+              Activate Two-Factor Authentication
             </Button>
           </CardContent>
         </Card>

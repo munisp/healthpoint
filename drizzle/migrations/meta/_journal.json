@@ -120,6 +120,20 @@
       "when": 1784195589460,
       "tag": "0016_melodic_ender_wiggin",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1784602604375,
+      "tag": "0017_striped_molten_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1784603245495,
+      "tag": "0018_next_omega_flight",
+      "breakpoints": true
     }
   ]
 }

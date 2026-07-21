@@ -17,6 +17,7 @@ const BENCHMARKS = [
 
 export default function PerformanceBenchmarks() {
   const { data, isLoading } = trpc.disputes.list.useQuery({ limit: 500, offset: 0 });
+  const { data: outcomeData } = trpc.dashboard.outcomeAnalytics.useQuery();
   const disputes = data?.items ?? [];
 
   const metrics = useMemo(() => {
@@ -37,15 +38,20 @@ export default function PerformanceBenchmarks() {
 
     const avgBilledAmount = disputes.reduce((sum, d) => sum + (Number(d.billedAmount) || 0), 0) / total;
 
+    // Real provider win rate from DB determination outcomes
+    const providerWinRate = outcomeData?.overallWinRate != null
+      ? Math.round(outcomeData.overallWinRate * 100)
+      : 0;
+
     return {
       avgResolutionDays: Math.round(avgResolutionDays),
       resolutionRate: Math.round((resolved.length / total) * 100),
-      providerWinRate: Math.round(Math.random() * 20 + 60), // Simulated — real data would come from determination outcomes
+      providerWinRate,
       ineligibilityRate: Math.round((ineligible.length / total) * 100),
       appealRate: Math.round((appealed.length / total) * 100),
       avgBilledAmount: Math.round(avgBilledAmount),
     };
-  }, [disputes]);
+  }, [disputes, outcomeData]);
 
   const benchmarkData = BENCHMARKS.map(b => {
     const actual = metrics?.[b.key as keyof typeof metrics] ?? 0;

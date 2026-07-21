@@ -141,6 +141,7 @@ export const disputes = pgTable(
     isEligible: boolean("isEligible"),
     ineligibilityReason: text("ineligibilityReason"),
     determinationBasis: text("determinationBasis"),
+    determinationWinner: varchar("determinationWinner", { length: 32 }), // "initiating_party" | "responding_party" | null
     notes: text("notes"),
     createdBy: varchar("createdBy", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow(),
@@ -153,6 +154,9 @@ export const disputes = pgTable(
     index("disputes_initiating_idx").on(t.initiatingPartyId),
     index("disputes_responding_idx").on(t.respondingPartyId),
     uniqueIndex("disputes_ref_idx").on(t.referenceNumber),
+    index("disputes_createdAt_idx").on(t.createdAt),
+    index("disputes_billedAmount_idx").on(t.billedAmount),
+    index("disputes_respondingName_idx").on(t.respondingPartyName),
   ]
 );
 export type Dispute = typeof disputes.$inferSelect;
@@ -222,23 +226,31 @@ export const disputeDocuments = pgTable(
 export type DisputeDocument = typeof disputeDocuments.$inferSelect;
 
 // ─── IDR Entities ─────────────────────────────────────────────────────────────
-export const idrEntities = pgTable("idr_entities", {
-  id: varchar("id", { length: 64 }).primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  certificationNumber: varchar("certificationNumber", { length: 64 }).unique(),
-  certificationExpiry: timestamp("certificationExpiry"),
-  specialties: jsonb("specialties").$type<string[]>(),
-  states: jsonb("states").$type<string[]>(),
-  contactEmail: varchar("contactEmail", { length: 320 }),
-  contactPhone: varchar("contactPhone", { length: 20 }),
-  website: varchar("website", { length: 512 }),
-  avgResolutionDays: integer("avgResolutionDays"),
-  totalCasesHandled: integer("totalCasesHandled").default(0),
-  maxConcurrentCases: integer("maxConcurrentCases").default(50),
-  currentActiveCases: integer("currentActiveCases").default(0),
-  isActive: boolean("isActive").default(true),
-  createdAt: timestamp("createdAt").defaultNow(),
-});
+export const idrEntities = pgTable(
+  "idr_entities",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    name: varchar("name", { length: 255 }).notNull(),
+    certificationNumber: varchar("certificationNumber", { length: 64 }).unique(),
+    certificationExpiry: timestamp("certificationExpiry"),
+    specialties: jsonb("specialties").$type<string[]>(),
+    states: jsonb("states").$type<string[]>(),
+    contactEmail: varchar("contactEmail", { length: 320 }),
+    contactPhone: varchar("contactPhone", { length: 20 }),
+    website: varchar("website", { length: 512 }),
+    avgResolutionDays: integer("avgResolutionDays"),
+    totalCasesHandled: integer("totalCasesHandled").default(0),
+    maxConcurrentCases: integer("maxConcurrentCases").default(50),
+    currentActiveCases: integer("currentActiveCases").default(0),
+    isActive: boolean("isActive").default(true),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("idr_entities_name_idx").on(t.name),
+    index("idr_entities_active_idx").on(t.isActive),
+    index("idr_entities_expiry_idx").on(t.certificationExpiry),
+  ]
+);
 export type IDREntity = typeof idrEntities.$inferSelect;
 
 // ─── Notifications ────────────────────────────────────────────────────────────
@@ -264,14 +276,21 @@ export const notifications = pgTable(
 export type Notification = typeof notifications.$inferSelect;
 
 // ─── Dispute Drafts ───────────────────────────────────────────────────────────
-export const disputeDrafts = pgTable("dispute_drafts", {
-  id: varchar("id", { length: 64 }).primaryKey(),
-  userId: varchar("userId", { length: 64 }).notNull(),
-  formData: jsonb("formData").$type<Record<string, unknown>>().notNull(),
-  currentStep: integer("currentStep").default(1),
-  lastSavedAt: timestamp("lastSavedAt").defaultNow(),
-  createdAt: timestamp("createdAt").defaultNow(),
-});
+export const disputeDrafts = pgTable(
+  "dispute_drafts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    formData: jsonb("formData").$type<Record<string, unknown>>().notNull(),
+    currentStep: integer("currentStep").default(1),
+    lastSavedAt: timestamp("lastSavedAt").defaultNow(),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("dispute_drafts_user_idx").on(t.userId),
+    index("dispute_drafts_lastSaved_idx").on(t.lastSavedAt),
+  ]
+);
 export type DisputeDraft = typeof disputeDrafts.$inferSelect;
 export type InsertDisputeDraft = typeof disputeDrafts.$inferInsert;
 
@@ -514,6 +533,7 @@ export const auditLog = pgTable(
     index("audit_log_userId_idx").on(t.userId),
     index("audit_log_entityType_entityId_idx").on(t.entityType, t.entityId),
     index("audit_log_createdAt_idx").on(t.createdAt),
+    index("audit_log_action_idx").on(t.action),
   ]
 );
 export type AuditLogEntry = typeof auditLog.$inferSelect;
