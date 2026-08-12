@@ -1,0 +1,396 @@
+{
+  "summary": {
+    "timestamp": "2025-10-06T18:24:35.134400",
+    "total_tests": 22,
+    "passed": 14,
+    "failed": 8,
+    "skipped": 0,
+    "regressions_detected": 8,
+    "success_rate": 63.64,
+    "total_duration": 0.063,
+    "categories": {
+      "Core Authentication": {
+        "total": 2,
+        "passed": 0,
+        "failed": 2,
+        "skipped": 0,
+        "regressions": 2
+      },
+      "Core User Management": {
+        "total": 2,
+        "passed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "regressions": 1
+      },
+      "Core Claims Processing": {
+        "total": 2,
+        "passed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "regressions": 1
+      },
+      "Core Provider Management": {
+        "total": 2,
+        "passed": 0,
+        "failed": 2,
+        "skipped": 0,
+        "regressions": 2
+      },
+      "Core Notification": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "regressions": 1
+      },
+      "Core Search Analytics": {
+        "total": 2,
+        "passed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "regressions": 1
+      },
+      "Performance Regression": {
+        "total": 11,
+        "passed": 11,
+        "failed": 0,
+        "skipped": 0,
+        "regressions": 0
+      }
+    }
+  },
+  "results": [
+    {
+      "test_name": "User Login Functionality",
+      "category": "Core Authentication",
+      "status": "FAIL",
+      "duration": 0.004931926727294922,
+      "message": "User login failed - regression detected",
+      "regression_detected": true,
+      "baseline_result": null,
+      "current_result": {
+        "status": 404,
+        "data": {
+          "detail": "Not Found"
+        },
+        "headers": {
+          "Date": "Mon, 06 Oct 2025 22:24:34 GMT",
+          "Server": "uvicorn",
+          "Content-Length": "22",
+          "Content-Type": "application/json"
+        }
+      }
+    },
+    {
+      "test_name": "Token Validation",
+      "category": "Core Authentication",
+      "status": "FAIL",
+      "duration": 0.0007872581481933594,
+      "message": "Cannot obtain token for validation test",
+      "regression_detected": true,
+      "baseline_result": null,
+      "current_result": null
+    },
+    {
+      "test_name": "User Creation",
+      "category": "Core User Management",
+      "status": "FAIL",
+      "duration": 0.03428077697753906,
+      "message": "User creation failed - regression detected",
+      "regression_detected": true,
+      "baseline_result": null,
+      "current_result": {
+        "status": 422,
+        "data": {
+          "detail": [
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "first_name"
+              ],
+              "msg": "Field required",
+              "input": {
+                "email": "test.user.1759789475@example.com",
+                "password": "TestPass123!",
+                "firstName": "Test",
+                "lastName": "User",
+                "role": "provider_user",
+                "tenantId": "tenant-001"
+              }
+            },
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "last_name"
+              ],
+              "msg": "Field required",
+              "input": {
+                "email": "test.user.1759789475@example.com",
+                "password": "TestPass123!",
+                "firstName": "Test",
+                "lastName": "User",
+                "role": "provider_user",
+                "tenantId": "tenant-001"
+              }
+            },
+            {
+              "type": "missing",
+              "loc": [
+                "body",
+                "tenant_id"
+              ],
+              "msg": "Field required",
+              "input": {
+                "email": "test.user.1759789475@example.com",
+                "password": "TestPass123!",
+                "firstName": "Test",
+                "lastName": "User",
+                "role": "provider_user",
+                "tenantId": "tenant-001"
+              }
+            }
+          ]
+        },
+        "headers": {
+          "Date": "Mon, 06 Oct 2025 22:24:34 GMT",
+          "Server": "uvicorn",
+          "Content-Length": "709",
+          "Content-Type": "application/json"
+        }
+      }
+    },
+    {
+      "test_name": "User Listing",
+      "category": "Core User Management",
+      "status": "PASS",
+      "duration": 0.0013813972473144531,
+      "message": "User listing working correctly",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "status": 200,
+        "user_count": 2
+      }
+    },
+    {
+      "test_name": "Claims Submission",
+      "category": "Core Claims Processing",
+      "status": "FAIL",
+      "duration": 0.0021016597747802734,
+      "message": "Claims submission failed - regression detected",
+      "regression_detected": true,
+      "baseline_result": null,
+      "current_result": null
+    },
+    {
+      "test_name": "Claims Status Check",
+      "category": "Core Claims Processing",
+      "status": "PASS",
+      "duration": 0.0006744861602783203,
+      "message": "Claims status check working correctly",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "status": 404
+      }
+    },
+    {
+      "test_name": "Provider Registration",
+      "category": "Core Provider Management",
+      "status": "FAIL",
+      "duration": 0.0017189979553222656,
+      "message": "Provider registration failed - regression detected",
+      "regression_detected": true,
+      "baseline_result": null,
+      "current_result": null
+    },
+    {
+      "test_name": "Provider Search",
+      "category": "Core Provider Management",
+      "status": "FAIL",
+      "duration": 0.0009646415710449219,
+      "message": "Provider search failed - regression detected",
+      "regression_detected": true,
+      "baseline_result": null,
+      "current_result": null
+    },
+    {
+      "test_name": "Notification Sending",
+      "category": "Core Notification",
+      "status": "FAIL",
+      "duration": 0.0015826225280761719,
+      "message": "Notification sending failed - regression detected",
+      "regression_detected": true,
+      "baseline_result": null,
+      "current_result": null
+    },
+    {
+      "test_name": "Search Functionality",
+      "category": "Core Search Analytics",
+      "status": "FAIL",
+      "duration": 0.0015344619750976562,
+      "message": "Search functionality failed - regression detected",
+      "regression_detected": true,
+      "baseline_result": null,
+      "current_result": null
+    },
+    {
+      "test_name": "Analytics Dashboard",
+      "category": "Core Search Analytics",
+      "status": "PASS",
+      "duration": 0.0008726119995117188,
+      "message": "Analytics dashboard working correctly",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "status": 200
+      }
+    },
+    {
+      "test_name": "Performance - user_management Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.0007045269012451172,
+      "message": "Health check performance acceptable (0.001s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.0007045269012451172,
+        "baseline": 1.0
+      }
+    },
+    {
+      "test_name": "Performance - provider_management Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.0006270408630371094,
+      "message": "Health check performance acceptable (0.001s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.0006270408630371094,
+        "baseline": 1.0
+      }
+    },
+    {
+      "test_name": "Performance - authentication Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.0008935928344726562,
+      "message": "Health check performance acceptable (0.001s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.0008935928344726562,
+        "baseline": 1.0
+      }
+    },
+    {
+      "test_name": "Performance - api_gateway Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.0016314983367919922,
+      "message": "Health check performance acceptable (0.002s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.0016314983367919922,
+        "baseline": 1.0
+      }
+    },
+    {
+      "test_name": "Performance - claims_processing Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.0006990432739257812,
+      "message": "Health check performance acceptable (0.001s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.0006990432739257812,
+        "baseline": 1.0
+      }
+    },
+    {
+      "test_name": "Performance - notification Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.0008206367492675781,
+      "message": "Health check performance acceptable (0.001s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.0008206367492675781,
+        "baseline": 1.0
+      }
+    },
+    {
+      "test_name": "Performance - search_analytics Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.0007188320159912109,
+      "message": "Health check performance acceptable (0.001s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.0007188320159912109,
+        "baseline": 1.0
+      }
+    },
+    {
+      "test_name": "Performance - enhanced_user_mgmt Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.0017554759979248047,
+      "message": "Health check performance acceptable (0.002s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.0017554759979248047,
+        "baseline": 1.0
+      }
+    },
+    {
+      "test_name": "Performance - ai_fraud_detection Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.0015070438385009766,
+      "message": "Health check performance acceptable (0.002s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.0015070438385009766,
+        "baseline": 1.0
+      }
+    },
+    {
+      "test_name": "Performance - document_verification Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.00145721435546875,
+      "message": "Health check performance acceptable (0.001s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.00145721435546875,
+        "baseline": 1.0
+      }
+    },
+    {
+      "test_name": "Performance - kyb_verification Health Check",
+      "category": "Performance Regression",
+      "status": "PASS",
+      "duration": 0.001531362533569336,
+      "message": "Health check performance acceptable (0.002s)",
+      "regression_detected": false,
+      "baseline_result": null,
+      "current_result": {
+        "duration": 0.001531362533569336,
+        "baseline": 1.0
+      }
+    }
+  ]
+}

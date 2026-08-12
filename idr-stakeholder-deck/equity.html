@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #FFFFFF;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      .top-bar { width: 100%; height: 6px; background: #2563EB; display: flex; }
+      .top-bar-accent { width: 200px; height: 6px; background: #F43F5E; margin-left: auto; }
+      .main-content { flex: 1; display: flex; }
+      .left-col {
+        width: 420px;
+        background: #0F172A;
+        padding: 44px 40px 0 52px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .section-label {
+        font-size: 11px; font-weight: 700; color: #F43F5E;
+        letter-spacing: 2.5px; text-transform: uppercase; margin-bottom: 12px;
+      }
+      .slide-title {
+        font-size: 34px; font-weight: 900; color: #FFFFFF;
+        line-height: 1.1; letter-spacing: -0.5px;
+      }
+      .slide-title span { color: #2563EB; }
+      .slide-desc {
+        font-size: 12px; color: #94A3B8;
+        line-height: 1.65; margin-top: 16px;
+      }
+      .problem-block {
+        background: #1E293B;
+        padding: 18px 20px;
+        margin-top: 24px;
+      }
+      .problem-label {
+        font-size: 10px; font-weight: 700; color: #F43F5E;
+        text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px;
+      }
+      .problem-stat-row {
+        display: flex; gap: 20px; align-items: flex-end;
+      }
+      .p-stat { }
+      .p-num {
+        font-size: 38px; font-weight: 900; color: #F43F5E;
+        line-height: 1; letter-spacing: -1px;
+      }
+      .p-num.blue { color: #2563EB; }
+      .p-label {
+        font-size: 10px; color: #64748B;
+        text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px;
+        line-height: 1.3;
+      }
+      .divider-v { width: 1px; background: #334155; align-self: stretch; }
+      .quote-block {
+        border-top: 2px solid #2563EB;
+        padding-top: 16px;
+        padding-bottom: 24px;
+      }
+      .quote-text {
+        font-size: 12px; color: #94A3B8;
+        line-height: 1.6; font-style: italic;
+      }
+      .quote-source {
+        font-size: 10px; font-weight: 700; color: #2563EB;
+        text-transform: uppercase; letter-spacing: 0.5px; margin-top: 8px;
+      }
+      .right-col {
+        flex: 1;
+        padding: 36px 52px 0 44px;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+      }
+      .right-header {
+        display: flex; align-items: center; gap: 0;
+        margin-bottom: 12px;
+      }
+      .rh-label {
+        font-size: 10px; font-weight: 700; color: #64748B;
+        text-transform: uppercase; letter-spacing: 1.5px;
+        flex: 1;
+      }
+      .col-headers {
+        display: flex; gap: 0;
+        margin-bottom: 0;
+      }
+      .ch-spacer { width: 200px; flex-shrink: 0; }
+      .ch-label {
+        flex: 1;
+        font-size: 10px; font-weight: 700;
+        text-transform: uppercase; letter-spacing: 1px;
+        text-align: center;
+        padding: 8px 0;
+      }
+      .ch-label.before {
+        background: #FFF1F2; color: #F43F5E;
+        border-top: 3px solid #F43F5E;
+      }
+      .ch-label.after {
+        background: #EFF6FF; color: #2563EB;
+        border-top: 3px solid #2563EB;
+      }
+      .provider-rows { display: flex; flex-direction: column; flex: 1; }
+      .provider-row {
+        display: flex;
+        align-items: stretch;
+        border-top: 1px solid #E2E8F0;
+      }
+      .provider-row:last-child { border-bottom: 1px solid #E2E8F0; }
+      .provider-id {
+        width: 200px;
+        flex-shrink: 0;
+        padding: 16px 16px 16px 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .prov-icon {
+        width: 36px; height: 36px; background: #2563EB;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+      }
+      .prov-icon.coral { background: #F43F5E; }
+      .prov-icon.dark { background: #0F172A; }
+      .prov-icon i { color: #fff; font-size: 14px; }
+      .prov-name {
+        font-size: 12px; font-weight: 900; color: #0F172A;
+        line-height: 1.3;
+      }
+      .prov-sub {
+        font-size: 10px; color: #94A3B8; margin-top: 2px;
+      }
+      .cell {
+        flex: 1;
+        padding: 14px 16px;
+        border-left: 1px solid #E2E8F0;
+      }
+      .cell.before-cell { background: #FFFBFB; }
+      .cell.after-cell { background: #F8FBFF; }
+      .cell-title {
+        font-size: 11px; font-weight: 700; color: #0F172A;
+        line-height: 1.3;
+      }
+      .cell-desc {
+        font-size: 10px; color: #64748B;
+        margin-top: 4px; line-height: 1.45;
+      }
+      .cell-badge {
+        display: inline-block;
+        font-size: 9px; font-weight: 700;
+        padding: 2px 6px;
+        text-transform: uppercase; letter-spacing: 0.3px;
+        margin-top: 6px;
+      }
+      .badge-red { background: #FFF1F2; color: #F43F5E; }
+      .badge-green { background: #F0FDF4; color: #16A34A; }
+      .bottom-strip {
+        background: #0F172A;
+        padding: 14px 52px;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+      }
+      .bs-icon {
+        width: 32px; height: 32px; background: #2563EB;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+      }
+      .bs-icon i { color: #fff; font-size: 13px; }
+      .bs-text {
+        font-size: 11px; color: #94A3B8; line-height: 1.5;
+      }
+      .bs-text strong { color: #FFFFFF; }
+      .bs-stat {
+        margin-left: auto;
+        text-align: right;
+        flex-shrink: 0;
+      }
+      .bs-num {
+        font-size: 22px; font-weight: 900; color: #2563EB;
+        line-height: 1;
+      }
+      .bs-label {
+        font-size: 9px; color: #64748B;
+        text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px;
+      }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="top-bar"><div class="top-bar-accent"></div></div>
+  <div class="main-content">
+    <div class="left-col">
+      <div>
+        <div class="section-label">Health Equity</div>
+        <div class="slide-title">Levelling the<br>Playing Field for<br><span>All Providers</span></div>
+        <div class="slide-desc">The NSA was designed to protect patients and small providers — but without the right tools, only large health systems with dedicated compliance teams could effectively use it. This platform changes that.</div>
+        <div class="problem-block">
+          <div class="problem-label">The Equity Gap — Before This Platform</div>
+          <div class="problem-stat-row">
+            <div class="p-stat">
+              <div class="p-num">67%</div>
+              <div class="p-label">IDR disputes filed by<br>large health systems</div>
+            </div>
+            <div class="divider-v"></div>
+            <div class="p-stat">
+              <div class="p-num blue">33%</div>
+              <div class="p-label">Filed by small &amp;<br>rural providers</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="quote-block">
+        <div class="quote-text">"The No Surprises Act was intended to protect patients and ensure fair payment for all providers — regardless of their size or resources."</div>
+        <div class="quote-source">— CMS, NSA Implementation Guidance, 45 CFR § 149.510</div>
+      </div>
+    </div>
+    <div class="right-col">
+      <div class="right-header">
+        <div class="rh-label">Provider Type — Before vs. After Agentic AI</div>
+      </div>
+      <div class="col-headers">
+        <div class="ch-spacer"></div>
+        <div class="ch-label before">Before — Manual Process</div>
+        <div class="ch-label after">After — Agentic AI Platform</div>
+      </div>
+      <div class="provider-rows">
+        <div class="provider-row">
+          <div class="provider-id">
+            <div class="prov-icon"><i class="fas fa-hospital"></i></div>
+            <div>
+              <div class="prov-name">Rural Hospital</div>
+              <div class="prov-sub">Critical Access, &lt;25 beds</div>
+            </div>
+          </div>
+          <div class="cell before-cell">
+            <div class="cell-title">No dedicated IDR staff</div>
+            <div class="cell-desc">1–2 billing staff handling everything. NSA disputes abandoned due to complexity. Average $0 recovered from out-of-network disputes.</div>
+            <span class="cell-badge badge-red">$0 Recovered</span>
+          </div>
+          <div class="cell after-cell">
+            <div class="cell-title">AI handles the full 19-step workflow</div>
+            <div class="cell-desc">Document analysis, CMS submission, deadline alerts, and regulatory Q&amp;A all automated. Same capability as a 5-person compliance team.</div>
+            <span class="cell-badge badge-green">Full Compliance Coverage</span>
+          </div>
+        </div>
+        <div class="provider-row">
+          <div class="provider-id">
+            <div class="prov-icon coral"><i class="fas fa-user-md"></i></div>
+            <div>
+              <div class="prov-name">Solo Practice</div>
+              <div class="prov-sub">Independent Physician Group</div>
+            </div>
+          </div>
+          <div class="cell before-cell">
+            <div class="cell-title">$350–$800 per regulatory question</div>
+            <div class="cell-desc">Outside counsel required for every NSA question. High rejection rates due to submission errors. Most disputes not filed at all.</div>
+            <span class="cell-badge badge-red">78% Rejection Rate</span>
+          </div>
+          <div class="cell after-cell">
+            <div class="cell-title">IDR Assistant answers in &lt;10 seconds</div>
+            <div class="cell-desc">5-layer CMS validation eliminates submission errors. Auto-fix patches common issues automatically. No outside counsel needed for routine disputes.</div>
+            <span class="cell-badge badge-green">&lt;12% Rejection Rate</span>
+          </div>
+        </div>
+        <div class="provider-row">
+          <div class="provider-id">
+            <div class="prov-icon dark"><i class="fas fa-ambulance"></i></div>
+            <div>
+              <div class="prov-name">Air Ambulance</div>
+              <div class="prov-sub">Independent Air Medical Provider</div>
+            </div>
+          </div>
+          <div class="cell before-cell">
+            <div class="cell-title">Complex QPA disputes unresolvable</div>
+            <div class="cell-desc">Air ambulance disputes require physician + economist expertise. Small operators cannot afford specialist representation. Average determination: payer wins.</div>
+            <span class="cell-badge badge-red">High Payer Win Rate</span>
+          </div>
+          <div class="cell after-cell">
+            <div class="cell-title">Expert panel + AI economic analysis</div>
+            <div class="cell-desc">AI generates QPA challenge brief. Expert panel (MD + PhD economist) available for escalation. Full audit trail and NSA-compliant documentation auto-generated.</div>
+            <span class="cell-badge badge-green">90% Panel Success Rate</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="bottom-strip">
+    <div class="bs-icon"><i class="fas fa-balance-scale"></i></div>
+    <div class="bs-text"><strong>The platform democratises NSA compliance.</strong> A solo practice in rural Montana now has the same document analysis, CMS submission quality, and regulatory intelligence as a major health system — for a fraction of the cost.</div>
+    <div class="bs-stat">
+      <div class="bs-num">3× More</div>
+      <div class="bs-label">Disputes Filed by Small Providers</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

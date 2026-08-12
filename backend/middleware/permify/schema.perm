@@ -1,0 +1,11 @@
+entity user {}
+
+entity resource {
+    relation admin @user
+    relation read @user
+    relation write @user
+}
+
+action read = resource.read
+action write = resource.write
+action delete = resource.admin

@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: healthpoint
+
+resources:
+  - namespaces/namespaces.yaml
+  - rbac/rbac.yaml
+  - configmaps/platform-config.yaml
+  - secrets/external-secrets.yaml
+  - deployments/core-services.yaml
+  - services/core-services.yaml
+  - hpa/hpa.yaml
+  - ingress/ingress.yaml
+
+commonLabels:
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/part-of: healthpoint-platform
+
+images:
+  - name: healthpoint/api-gateway
+    newTag: latest
+  - name: healthpoint/nsa-idr-dispute
+    newTag: latest
+  - name: healthpoint/payment-processing
+    newTag: latest
+  - name: healthpoint/claims-processing
+    newTag: latest
+  - name: healthpoint/provider-management
+    newTag: latest
+  - name: healthpoint/security-auth
+    newTag: latest
+  - name: healthpoint/audit-compliance
+    newTag: latest
+  - name: healthpoint/ai-fraud-detection
+    newTag: latest
+  - name: healthpoint/notification
+    newTag: latest
+  - name: healthpoint/gfe-management
+    newTag: latest
+  - name: healthpoint/predictive-analytics
+    newTag: latest

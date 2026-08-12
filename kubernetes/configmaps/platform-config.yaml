@@ -1,0 +1,54 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: healthpoint-platform-config
+  namespace: healthpoint
+  labels:
+    app.kubernetes.io/part-of: healthpoint-platform
+data:
+  # PostgreSQL
+  POSTGRES_HOST: "postgres.healthpoint-middleware.svc.cluster.local"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "healthpoint"
+
+  # Redis
+  REDIS_HOST: "redis.healthpoint-middleware.svc.cluster.local"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  # Kafka
+  KAFKA_BOOTSTRAP_SERVERS: "kafka.healthpoint-middleware.svc.cluster.local:9092"
+
+  # Keycloak
+  KEYCLOAK_URL: "http://keycloak.healthpoint-middleware.svc.cluster.local:8080"
+  KEYCLOAK_REALM: "healthpoint"
+  KEYCLOAK_CLIENT_ID: "healthpoint-backend"
+
+  # TigerBeetle
+  TIGERBEETLE_CLUSTER_ID: "0"
+  TIGERBEETLE_ADDRESSES: "tigerbeetle.healthpoint-middleware.svc.cluster.local:3000"
+
+  # Temporal
+  TEMPORAL_HOST: "temporal.healthpoint-middleware.svc.cluster.local"
+  TEMPORAL_PORT: "7233"
+  TEMPORAL_NAMESPACE: "healthpoint"
+
+  # OpenSearch
+  OPENSEARCH_URL: "http://opensearch.healthpoint-middleware.svc.cluster.local:9200"
+
+  # Vault
+  VAULT_ADDR: "http://vault.healthpoint-middleware.svc.cluster.local:8200"
+  VAULT_ENABLED: "true"
+
+  # Permify
+  PERMIFY_HOST: "permify.healthpoint-middleware.svc.cluster.local"
+  PERMIFY_PORT: "3476"
+
+  # APISIX
+  APISIX_ADMIN_URL: "http://apisix.healthpoint-middleware.svc.cluster.local:9180"
+
+  # Platform
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  ALLOWED_ORIGINS: "https://app.healthpoint.example.com"

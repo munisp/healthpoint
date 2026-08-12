@@ -1,0 +1,184 @@
+---
+# HealthPoint NSA/IDR Platform — Ingress (NGINX + APISIX)
+# TLS termination, rate limiting, CORS, and WAF via OpenAppSec
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: healthpoint-ingress
+  namespace: healthpoint
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Frame-Options "DENY" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+      add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+      add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https:;" always;
+      # Cache-busting for HTML entry point
+      if ($request_uri ~* "\.html$") {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+      }
+    # Proxy settings
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # CORS
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://app.healthpoint.example.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "Authorization, Content-Type, X-Request-ID, X-Tenant-ID"
+    # TLS cert from cert-manager
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+    - hosts:
+        - api.healthpoint.example.com
+        - app.healthpoint.example.com
+      secretName: healthpoint-tls
+  rules:
+    - host: api.healthpoint.example.com
+      http:
+        paths:
+          - path: /api/v1/disputes
+            pathType: Prefix
+            backend:
+              service:
+                name: nsa-idr-dispute
+                port:
+                  number: 80
+          - path: /api/v1/payments
+            pathType: Prefix
+            backend:
+              service:
+                name: payment-processing
+                port:
+                  number: 80
+          - path: /api/v1/claims
+            pathType: Prefix
+            backend:
+              service:
+                name: claims-processing
+                port:
+                  number: 80
+          - path: /api/v1/providers
+            pathType: Prefix
+            backend:
+              service:
+                name: provider-management
+                port:
+                  number: 80
+          - path: /api/v1/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: security-auth
+                port:
+                  number: 80
+          - path: /api/v1/audit
+            pathType: Prefix
+            backend:
+              service:
+                name: audit-compliance
+                port:
+                  number: 80
+          - path: /api/v1/fraud
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-fraud-detection
+                port:
+                  number: 80
+          - path: /api/v1/notifications
+            pathType: Prefix
+            backend:
+              service:
+                name: notification
+                port:
+                  number: 80
+          - path: /api/v1/gfe
+            pathType: Prefix
+            backend:
+              service:
+                name: gfe-management
+                port:
+                  number: 80
+          - path: /api/v1/analytics
+            pathType: Prefix
+            backend:
+              service:
+                name: predictive-analytics
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 80
+    - host: app.healthpoint.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+---
+# PodDisruptionBudget — ensure availability during node maintenance
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-gateway-pdb
+  namespace: healthpoint
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payment-processing-pdb
+  namespace: healthpoint
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: payment-processing
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: claims-processing-pdb
+  namespace: healthpoint
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: claims-processing
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: security-auth-pdb
+  namespace: healthpoint
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: security-auth

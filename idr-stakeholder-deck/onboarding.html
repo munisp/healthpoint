@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #FFFFFF;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      .top-bar { width: 100%; height: 6px; background: #2563EB; display: flex; }
+      .top-bar-accent { width: 200px; height: 6px; background: #F43F5E; margin-left: auto; }
+      .main-area { flex: 1; display: flex; }
+
+      /* LEFT — Dark hero */
+      .left-col {
+        width: 320px;
+        background: #0F172A;
+        padding: 44px 36px 0 52px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .section-label {
+        font-size: 11px; font-weight: 700; color: #F43F5E;
+        letter-spacing: 2.5px; text-transform: uppercase; margin-bottom: 12px;
+      }
+      .slide-title {
+        font-size: 32px; font-weight: 900; color: #FFFFFF;
+        line-height: 1.1; letter-spacing: -0.5px;
+      }
+      .slide-title span { color: #2563EB; }
+      .slide-desc {
+        font-size: 12px; color: #94A3B8; line-height: 1.6; margin-top: 14px;
+      }
+      .big-time {
+        margin-top: 28px;
+      }
+      .big-time-num {
+        font-size: 80px; font-weight: 900; color: #2563EB;
+        line-height: 1; letter-spacing: -3px;
+      }
+      .big-time-label {
+        font-size: 13px; font-weight: 700; color: #FFFFFF;
+        text-transform: uppercase; letter-spacing: 1px; margin-top: 4px;
+      }
+      .big-time-sub {
+        font-size: 11px; color: #64748B; margin-top: 4px; line-height: 1.4;
+      }
+      .vs-badge {
+        display: flex; align-items: center; gap: 10px;
+        margin-top: 16px; background: #1E293B; padding: 10px 14px;
+      }
+      .vs-before {
+        font-size: 13px; font-weight: 900; color: #F43F5E;
+        text-decoration: line-through;
+      }
+      .vs-arrow { font-size: 14px; color: #475569; font-weight: 900; }
+      .vs-after { font-size: 13px; font-weight: 900; color: #10B981; }
+      .vs-label { font-size: 10px; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; }
+
+      /* CENTER — 5-step wizard */
+      .center-col {
+        width: 380px;
+        padding: 40px 32px 0 36px;
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid #E2E8F0;
+      }
+      .col-heading {
+        font-size: 10px; font-weight: 700; color: #64748B;
+        text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 16px;
+      }
+      .wizard-steps { display: flex; flex-direction: column; gap: 0; flex: 1; }
+      .wizard-step {
+        display: flex; align-items: stretch;
+        border-top: 1px solid #E2E8F0;
+      }
+      .wizard-step:last-child { border-bottom: 1px solid #E2E8F0; }
+      .step-num {
+        width: 44px; display: flex; align-items: center; justify-content: center;
+        font-size: 20px; font-weight: 900; color: #2563EB;
+        flex-shrink: 0; padding: 14px 0;
+      }
+      .wizard-step.coral .step-num { color: #F43F5E; }
+      .step-bar {
+        width: 3px; background: #2563EB; flex-shrink: 0; margin: 8px 0;
+      }
+      .wizard-step.coral .step-bar { background: #F43F5E; }
+      .step-content { flex: 1; padding: 12px 14px; }
+      .step-title {
+        font-size: 12px; font-weight: 900; color: #0F172A;
+        text-transform: uppercase; letter-spacing: 0.3px;
+      }
+      .step-desc { font-size: 11px; color: #64748B; margin-top: 3px; line-height: 1.4; }
+      .step-time {
+        font-size: 10px; font-weight: 700; color: #2563EB;
+        margin-top: 4px; text-transform: uppercase; letter-spacing: 0.3px;
+      }
+      .wizard-step.coral .step-time { color: #F43F5E; }
+      .total-time-bar {
+        background: #2563EB; padding: 10px 14px;
+        display: flex; justify-content: space-between; align-items: center;
+        margin-top: 16px;
+      }
+      .total-label { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.7); text-transform: uppercase; letter-spacing: 0.5px; }
+      .total-val { font-size: 16px; font-weight: 900; color: #FFFFFF; }
+
+      /* RIGHT — Image + features */
+      .right-col {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+      }
+      .right-image {
+        width: 100%;
+        height: 280px;
+        object-fit: cover;
+        object-position: top center;
+        display: block;
+      }
+      .features-grid {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0;
+        padding: 0;
+      }
+      .feature-block {
+        padding: 18px 20px;
+        border-right: 1px solid #E2E8F0;
+        border-top: 1px solid #E2E8F0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .feature-block:nth-child(2n) { border-right: none; }
+      .feature-icon-row { display: flex; align-items: center; gap: 10px; }
+      .feature-icon {
+        width: 32px; height: 32px; background: #2563EB;
+        display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      }
+      .feature-icon.coral { background: #F43F5E; }
+      .feature-icon i { color: #fff; font-size: 13px; }
+      .feature-name { font-size: 12px; font-weight: 900; color: #0F172A; text-transform: uppercase; letter-spacing: 0.3px; }
+      .feature-desc { font-size: 11px; color: #64748B; line-height: 1.5; }
+      .feature-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+      .ftag {
+        font-size: 9px; font-weight: 700; color: #2563EB;
+        background: #EFF6FF; padding: 2px 6px;
+        text-transform: uppercase; letter-spacing: 0.3px;
+      }
+      .ftag.coral { color: #F43F5E; background: #FFF1F2; }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="top-bar"><div class="top-bar-accent"></div></div>
+  <div class="main-area">
+    <!-- LEFT -->
+    <div class="left-col">
+      <div>
+        <div class="section-label">Implementation</div>
+        <div class="slide-title">Live in<br><span>48 Hours</span><br>— Not Months</div>
+        <div class="slide-desc">No software to install. No IT project. No months of configuration. Connect your EMR, upload your first document, and file your first dispute — all within two business days.</div>
+        <div class="big-time">
+          <div class="big-time-num">48h</div>
+          <div class="big-time-label">To First Dispute Filed</div>
+          <div class="big-time-sub">From account creation to active dispute management</div>
+        </div>
+        <div class="vs-badge">
+          <div>
+            <div class="vs-label">Traditional Platforms</div>
+            <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+              <span class="vs-before">3–6 months</span>
+              <span class="vs-arrow">→</span>
+              <span class="vs-after">48 hours</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CENTER — 5-step wizard -->
+    <div class="center-col">
+      <div class="col-heading">EMR Onboarding Wizard — 5 Steps</div>
+      <div class="wizard-steps">
+        <div class="wizard-step">
+          <div class="step-num">1</div>
+          <div class="step-bar"></div>
+          <div class="step-content">
+            <div class="step-title">Select Your EMR System</div>
+            <div class="step-desc">Choose from Epic, Cerner, Meditech, Allscripts, eClinicalWorks, Athena, or configure a custom FHIR R4 endpoint</div>
+            <div class="step-time">~5 minutes</div>
+          </div>
+        </div>
+        <div class="wizard-step coral">
+          <div class="step-num">2</div>
+          <div class="step-bar"></div>
+          <div class="step-content">
+            <div class="step-title">Configure Credentials</div>
+            <div class="step-desc">Enter your FHIR base URL, client ID, and secret. Credentials are encrypted at rest and never exposed to the UI</div>
+            <div class="step-time">~10 minutes</div>
+          </div>
+        </div>
+        <div class="wizard-step">
+          <div class="step-num">3</div>
+          <div class="step-bar"></div>
+          <div class="step-content">
+            <div class="step-title">AI Field Mapping</div>
+            <div class="step-desc">The AI agent maps your EMR's schema to NSA IDR fields automatically — review and confirm the suggested mappings</div>
+            <div class="step-time">~15 minutes (AI-assisted)</div>
+          </div>
+        </div>
+        <div class="wizard-step coral">
+          <div class="step-num">4</div>
+          <div class="step-bar"></div>
+          <div class="step-content">
+            <div class="step-title">AI Connection Test</div>
+            <div class="step-desc">Live FHIR R4 test pull with confidence scores per field. Sync log written. Issues flagged with specific remediation steps</div>
+            <div class="step-time">~5 minutes</div>
+          </div>
+        </div>
+        <div class="wizard-step">
+          <div class="step-num">5</div>
+          <div class="step-bar"></div>
+          <div class="step-content">
+            <div class="step-title">Activate &amp; Go Live</div>
+            <div class="step-desc">Connection activated. Role-based access configured. Stakeholder upload portal enabled. Ready to file disputes</div>
+            <div class="step-time">~5 minutes</div>
+          </div>
+        </div>
+      </div>
+      <div class="total-time-bar">
+        <div class="total-label">Total Onboarding Time</div>
+        <div class="total-val">Under 40 Minutes</div>
+      </div>
+    </div>
+
+    <!-- RIGHT -->
+    <div class="right-col">
+      <img class="right-image" src="/home/ubuntu/upload/search_images/U7R88e9QDXvr.webp" alt="Platform dashboard live" />
+      <div class="features-grid">
+        <div class="feature-block">
+          <div class="feature-icon-row">
+            <div class="feature-icon"><i class="fas fa-upload"></i></div>
+            <div class="feature-name">Stakeholder Upload Portal</div>
+          </div>
+          <div class="feature-desc">Drag-and-drop document submission for providers, facilities, payers, and aggregators — AI analysis on every upload</div>
+          <div class="feature-tags"><span class="ftag">4 Stakeholder Roles</span><span class="ftag">AI Analysis</span></div>
+        </div>
+        <div class="feature-block">
+          <div class="feature-icon-row">
+            <div class="feature-icon coral"><i class="fas fa-users-cog"></i></div>
+            <div class="feature-name">Role-Based Access</div>
+          </div>
+          <div class="feature-desc">Admin, provider, facility, and payer roles pre-configured. Each role sees only the data and actions relevant to them</div>
+          <div class="feature-tags"><span class="ftag coral">Pre-Configured</span><span class="ftag coral">Zero IT Setup</span></div>
+        </div>
+        <div class="feature-block">
+          <div class="feature-icon-row">
+            <div class="feature-icon"><i class="fas fa-cloud"></i></div>
+            <div class="feature-name">Cloud-Native</div>
+          </div>
+          <div class="feature-desc">No software to install. No servers to manage. Autoscaling cloud infrastructure — available 24/7 from any device</div>
+          <div class="feature-tags"><span class="ftag">No Install</span><span class="ftag">Always On</span></div>
+        </div>
+        <div class="feature-block">
+          <div class="feature-icon-row">
+            <div class="feature-icon coral"><i class="fas fa-shield-alt"></i></div>
+            <div class="feature-name">HIPAA Compliant</div>
+          </div>
+          <div class="feature-desc">All data encrypted in transit and at rest. Audit trail on every action. BAA available. SOC 2 Type II aligned architecture</div>
+          <div class="feature-tags"><span class="ftag coral">HIPAA</span><span class="ftag coral">Audit Trail</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

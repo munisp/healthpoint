@@ -1,0 +1,133 @@
+{
+  "_comment": "Epic App Orchard Registration Configuration for HealthPoint NSA/IDR Platform",
+  "_instructions": [
+    "1. Go to https://appmarket.epic.com/Gallery and click 'Submit an App'",
+    "2. Fill in the fields below exactly as specified",
+    "3. For PRODUCTION: submit for Epic review (2-4 week process)",
+    "4. For SANDBOX: use https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4",
+    "5. Replace all REPLACE_WITH_* placeholders with real values after registration"
+  ],
+  "app_name": "HealthPoint NSA/IDR Dispute Resolution Platform",
+  "app_description": "HealthPoint automates the No Surprises Act Independent Dispute Resolution (IDR) process, enabling healthcare providers to submit, track, and resolve payment disputes with insurers. The platform integrates with Epic to retrieve patient demographics, coverage information, and clinical encounter data needed for IDR submissions.",
+  "app_type": "Clinician-Facing",
+  "app_category": "Revenue Cycle",
+  "company_name": "HealthPoint Inc.",
+  "company_website": "https://healthpoint.io",
+  "support_email": "support@healthpoint.io",
+  "privacy_policy_url": "https://healthpoint.io/privacy",
+  "terms_of_service_url": "https://healthpoint.io/terms",
+  "logo_url": "https://healthpoint.io/assets/logo-512x512.png",
+
+  "oauth2_configuration": {
+    "grant_types": ["authorization_code", "client_credentials"],
+    "response_types": ["code"],
+    "token_endpoint_auth_method": "private_key_jwt",
+    "jwks_uri": "https://fhir.healthpoint.io/.well-known/jwks.json",
+    "redirect_uris": [
+      "https://fhir.healthpoint.io/smart/callback/epic",
+      "https://app.healthpoint.io/auth/epic/callback"
+    ],
+    "post_logout_redirect_uris": [
+      "https://app.healthpoint.io/logout"
+    ],
+    "scopes_requested": [
+      "launch",
+      "launch/patient",
+      "openid",
+      "fhirUser",
+      "patient/Patient.read",
+      "patient/Coverage.read",
+      "patient/Encounter.read",
+      "patient/Condition.read",
+      "patient/Procedure.read",
+      "patient/MedicationRequest.read",
+      "patient/Observation.read",
+      "system/Patient.read",
+      "system/Coverage.read",
+      "system/Encounter.read",
+      "system/Condition.read",
+      "system/Procedure.read",
+      "offline_access"
+    ],
+    "smart_capabilities": [
+      "launch-ehr",
+      "launch-standalone",
+      "client-public",
+      "client-confidential-symmetric",
+      "sso-openid-connect",
+      "context-ehr-patient",
+      "context-ehr-encounter",
+      "permission-patient",
+      "permission-user",
+      "permission-offline"
+    ]
+  },
+
+  "fhir_r4_endpoints": {
+    "sandbox": "https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4",
+    "production": "REPLACE_WITH_CUSTOMER_EPIC_FHIR_ENDPOINT"
+  },
+
+  "client_credentials": {
+    "sandbox_client_id": "REPLACE_WITH_EPIC_SANDBOX_CLIENT_ID",
+    "production_client_id": "REPLACE_WITH_EPIC_PRODUCTION_CLIENT_ID",
+    "_note": "Epic uses private_key_jwt — no client_secret. Generate RSA-2048 key pair and register public key at App Orchard."
+  },
+
+  "smart_app_manifest": {
+    "name": "HealthPoint NSA/IDR",
+    "description": "NSA Independent Dispute Resolution Platform",
+    "launch_url": "https://app.healthpoint.io/smart/launch",
+    "redirect_uris": ["https://fhir.healthpoint.io/smart/callback/epic"],
+    "logo_uri": "https://healthpoint.io/assets/logo-512x512.png",
+    "policy_uri": "https://healthpoint.io/privacy",
+    "tos_uri": "https://healthpoint.io/terms",
+    "contacts": ["support@healthpoint.io"],
+    "scope": "launch launch/patient openid fhirUser patient/Patient.read patient/Coverage.read patient/Encounter.read offline_access",
+    "token_endpoint_auth_method": "private_key_jwt",
+    "jwks_uri": "https://fhir.healthpoint.io/.well-known/jwks.json"
+  },
+
+  "cds_hooks_registration": {
+    "hook_base_url": "https://fhir.healthpoint.io/cds-hooks",
+    "hooks": [
+      {
+        "id": "patient-view-nsa-eligibility",
+        "hook": "patient-view",
+        "title": "NSA Eligibility Check",
+        "description": "Checks if the current patient encounter is subject to NSA billing protections and alerts the provider.",
+        "prefetch": {
+          "patient": "Patient/{{context.patientId}}",
+          "coverage": "Coverage?patient={{context.patientId}}&status=active"
+        }
+      },
+      {
+        "id": "order-sign-gfe",
+        "hook": "order-sign",
+        "title": "Good Faith Estimate Generator",
+        "description": "Automatically generates a Good Faith Estimate when a scheduled service order is signed.",
+        "prefetch": {
+          "patient": "Patient/{{context.patientId}}",
+          "coverage": "Coverage?patient={{context.patientId}}&status=active"
+        }
+      },
+      {
+        "id": "appointment-book-coverage",
+        "hook": "appointment-book",
+        "title": "Coverage Verification",
+        "description": "Verifies insurance coverage and NSA applicability at appointment booking.",
+        "prefetch": {
+          "patient": "Patient/{{context.patientId}}"
+        }
+      }
+    ]
+  },
+
+  "bulk_data_access": {
+    "enabled": true,
+    "backend_services_jwks_uri": "https://fhir.healthpoint.io/.well-known/jwks.json",
+    "group_export_supported": true,
+    "patient_export_supported": true,
+    "system_export_supported": false
+  }
+}

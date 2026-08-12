@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #FFFFFF;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      .top-bar { width: 100%; height: 6px; background: #2563EB; display: flex; }
+      .top-bar-accent { width: 200px; height: 6px; background: #F43F5E; margin-left: auto; }
+      .header-row {
+        padding: 36px 52px 20px 52px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+      }
+      .section-label {
+        font-size: 11px; font-weight: 700; color: #F43F5E;
+        letter-spacing: 2.5px; text-transform: uppercase; margin-bottom: 8px;
+      }
+      .slide-title {
+        font-size: 34px; font-weight: 900; color: #0F172A;
+        line-height: 1.1; letter-spacing: -0.5px;
+      }
+      .slide-title span { color: #2563EB; }
+      .headline-stats {
+        display: flex; gap: 24px; align-items: flex-end;
+      }
+      .h-stat { text-align: right; }
+      .h-num { font-size: 28px; font-weight: 900; color: #2563EB; line-height: 1; }
+      .h-num.coral { color: #F43F5E; }
+      .h-lbl { font-size: 10px; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+      .main-content {
+        flex: 1;
+        display: flex;
+        gap: 0;
+        padding: 0 52px 32px 52px;
+      }
+      /* LEFT — EMR Systems */
+      .emr-col {
+        width: 280px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding-right: 28px;
+        border-right: 1px solid #E2E8F0;
+      }
+      .col-heading {
+        font-size: 10px; font-weight: 700; color: #64748B;
+        text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px;
+      }
+      .emr-grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+      }
+      .emr-box {
+        background: #F8FAFC;
+        border-top: 3px solid #2563EB;
+        padding: 10px 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .emr-box.coral { border-top-color: #F43F5E; }
+      .emr-icon { width: 24px; height: 24px; background: #2563EB; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+      .emr-icon.coral { background: #F43F5E; }
+      .emr-icon i { color: #fff; font-size: 10px; }
+      .emr-name { font-size: 11px; font-weight: 700; color: #0F172A; }
+      .emr-sub { font-size: 9px; color: #94A3B8; margin-top: 1px; }
+      .fhir-badge {
+        background: #0F172A;
+        padding: 10px 14px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 4px;
+      }
+      .fhir-icon { width: 28px; height: 28px; background: #2563EB; display: flex; align-items: center; justify-content: center; }
+      .fhir-icon i { color: #fff; font-size: 12px; }
+      .fhir-text { }
+      .fhir-title { font-size: 12px; font-weight: 900; color: #FFFFFF; }
+      .fhir-desc { font-size: 10px; color: #94A3B8; margin-top: 1px; }
+      /* CENTER — Flow */
+      .flow-col {
+        width: 320px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 0 28px;
+        border-right: 1px solid #E2E8F0;
+        gap: 0;
+      }
+      .flow-step {
+        width: 100%;
+        background: #F8FAFC;
+        border-left: 4px solid #2563EB;
+        padding: 10px 14px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .flow-step.coral { border-left-color: #F43F5E; }
+      .flow-step.dark { background: #0F172A; border-left-color: #2563EB; }
+      .flow-num {
+        width: 22px; height: 22px; background: #2563EB;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 10px; font-weight: 900; color: #fff; flex-shrink: 0;
+      }
+      .flow-step.coral .flow-num { background: #F43F5E; }
+      .flow-info { flex: 1; }
+      .flow-title { font-size: 11px; font-weight: 700; color: #0F172A; }
+      .flow-step.dark .flow-title { color: #FFFFFF; }
+      .flow-desc { font-size: 10px; color: #64748B; margin-top: 2px; line-height: 1.3; }
+      .flow-step.dark .flow-desc { color: #94A3B8; }
+      .flow-arrow {
+        width: 100%; text-align: center;
+        font-size: 16px; color: #CBD5E1;
+        padding: 4px 0;
+      }
+      .time-badge {
+        width: 100%;
+        background: #2563EB;
+        padding: 8px 14px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 8px;
+      }
+      .time-before { font-size: 11px; color: rgba(255,255,255,0.6); }
+      .time-after { font-size: 14px; font-weight: 900; color: #FFFFFF; }
+      .time-label { font-size: 9px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.5px; }
+      /* RIGHT — Fields */
+      .fields-col {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding-left: 28px;
+        gap: 6px;
+      }
+      .field-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border-bottom: 1px solid #F1F5F9;
+        padding-bottom: 6px;
+      }
+      .field-row:last-of-type { border-bottom: none; }
+      .field-name {
+        font-size: 10px; font-weight: 700; color: #0F172A;
+        width: 140px; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.3px;
+      }
+      .conf-bar-bg {
+        flex: 1; height: 6px; background: #F1F5F9;
+      }
+      .conf-bar-fill {
+        height: 6px; background: #2563EB;
+      }
+      .conf-bar-fill.high { background: #2563EB; }
+      .conf-bar-fill.med { background: #F43F5E; }
+      .conf-pct {
+        font-size: 10px; font-weight: 700; color: #2563EB;
+        width: 32px; text-align: right; flex-shrink: 0;
+      }
+      .conf-pct.med { color: #F43F5E; }
+      .audit-box {
+        background: #0F172A;
+        padding: 12px 14px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 4px;
+      }
+      .audit-icon { width: 28px; height: 28px; background: #F43F5E; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+      .audit-icon i { color: #fff; font-size: 12px; }
+      .audit-text { }
+      .audit-title { font-size: 11px; font-weight: 700; color: #FFFFFF; }
+      .audit-desc { font-size: 10px; color: #94A3B8; margin-top: 2px; }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="top-bar"><div class="top-bar-accent"></div></div>
+  <div class="header-row">
+    <div>
+      <div class="section-label">EMR Integration</div>
+      <div class="slide-title">Connected to Your EMR —<br><span>Disputes Pre-Populated</span></div>
+    </div>
+    <div class="headline-stats">
+      <div class="h-stat">
+        <div class="h-num">12</div>
+        <div class="h-lbl">Fields Auto-Filled</div>
+      </div>
+      <div class="h-stat">
+        <div class="h-num coral">91%</div>
+        <div class="h-lbl">Field Accuracy</div>
+      </div>
+      <div class="h-stat">
+        <div class="h-num">1–2 Days</div>
+        <div class="h-lbl">vs. 2–4 Week Integration</div>
+      </div>
+    </div>
+  </div>
+  <div class="main-content">
+    <!-- LEFT: EMR Systems -->
+    <div class="emr-col">
+      <div class="col-heading">Supported EMR Systems</div>
+      <div class="emr-grid">
+        <div class="emr-box">
+          <div class="emr-icon"><i class="fas fa-hospital"></i></div>
+          <div><div class="emr-name">Epic</div><div class="emr-sub">MyChart / Clarity</div></div>
+        </div>
+        <div class="emr-box coral">
+          <div class="emr-icon coral"><i class="fas fa-database"></i></div>
+          <div><div class="emr-name">Cerner</div><div class="emr-sub">Millennium</div></div>
+        </div>
+        <div class="emr-box">
+          <div class="emr-icon"><i class="fas fa-server"></i></div>
+          <div><div class="emr-name">Meditech</div><div class="emr-sub">Expanse</div></div>
+        </div>
+        <div class="emr-box coral">
+          <div class="emr-icon coral"><i class="fas fa-notes-medical"></i></div>
+          <div><div class="emr-name">Allscripts</div><div class="emr-sub">Sunrise</div></div>
+        </div>
+        <div class="emr-box">
+          <div class="emr-icon"><i class="fas fa-clinic-medical"></i></div>
+          <div><div class="emr-name">eCW</div><div class="emr-sub">eClinicalWorks</div></div>
+        </div>
+        <div class="emr-box coral">
+          <div class="emr-icon coral"><i class="fas fa-file-medical"></i></div>
+          <div><div class="emr-name">Athena</div><div class="emr-sub">athenahealth</div></div>
+        </div>
+      </div>
+      <div class="fhir-badge">
+        <div class="fhir-icon"><i class="fas fa-exchange-alt"></i></div>
+        <div class="fhir-text">
+          <div class="fhir-title">FHIR R4 Standard</div>
+          <div class="fhir-desc">Same protocol used by the federal government — secure, interoperable, auditable</div>
+        </div>
+      </div>
+    </div>
+    <!-- CENTER: Data Flow -->
+    <div class="flow-col">
+      <div class="col-heading" style="align-self:flex-start;">AI-Assisted Data Flow</div>
+      <div class="flow-step">
+        <div class="flow-num">1</div>
+        <div class="flow-info">
+          <div class="flow-title">Enter Patient / Claim ID</div>
+          <div class="flow-desc">Autocomplete searches FHIR Patient resource in real time</div>
+        </div>
+      </div>
+      <div class="flow-arrow"><i class="fas fa-chevron-down"></i></div>
+      <div class="flow-step coral">
+        <div class="flow-num">2</div>
+        <div class="flow-info">
+          <div class="flow-title">AI Field Mapping Agent</div>
+          <div class="flow-desc">Aligns EMR schema to NSA IDR required fields automatically</div>
+        </div>
+      </div>
+      <div class="flow-arrow"><i class="fas fa-chevron-down"></i></div>
+      <div class="flow-step">
+        <div class="flow-num">3</div>
+        <div class="flow-info">
+          <div class="flow-title">Eligibility Pre-Screening</div>
+          <div class="flow-desc">Cross-references NSA rules before dispute is created</div>
+        </div>
+      </div>
+      <div class="flow-arrow"><i class="fas fa-chevron-down"></i></div>
+      <div class="flow-step dark">
+        <div class="flow-num">4</div>
+        <div class="flow-info">
+          <div class="flow-title">12 Fields Auto-Populated</div>
+          <div class="flow-desc">Confidence score shown per field — review and submit</div>
+        </div>
+      </div>
+      <div class="time-badge">
+        <div>
+          <div class="time-label">Integration Time</div>
+          <div class="time-before" style="text-decoration:line-through;">2–4 weeks manual</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="time-label">With AI Mapping</div>
+          <div class="time-after">1–2 Days</div>
+        </div>
+      </div>
+    </div>
+    <!-- RIGHT: Fields with confidence -->
+    <div class="fields-col">
+      <div class="col-heading">Auto-Populated Fields &amp; Confidence</div>
+      <div class="field-row">
+        <div class="field-name">Patient Name</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill high" style="width:98%;"></div></div>
+        <div class="conf-pct">98%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">Date of Service</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill high" style="width:97%;"></div></div>
+        <div class="conf-pct">97%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">Procedure Code</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill high" style="width:95%;"></div></div>
+        <div class="conf-pct">95%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">Billed Amount</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill high" style="width:96%;"></div></div>
+        <div class="conf-pct">96%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">Payer Name</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill high" style="width:94%;"></div></div>
+        <div class="conf-pct">94%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">Plan Type</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill high" style="width:92%;"></div></div>
+        <div class="conf-pct">92%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">Provider NPI</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill high" style="width:99%;"></div></div>
+        <div class="conf-pct">99%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">Facility Name</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill high" style="width:93%;"></div></div>
+        <div class="conf-pct">93%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">Diagnosis Code</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill med" style="width:88%;"></div></div>
+        <div class="conf-pct med">88%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">Service Type</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill high" style="width:91%;"></div></div>
+        <div class="conf-pct">91%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">Remittance Date</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill med" style="width:85%;"></div></div>
+        <div class="conf-pct med">85%</div>
+      </div>
+      <div class="field-row">
+        <div class="field-name">QPA Amount</div>
+        <div class="conf-bar-bg"><div class="conf-bar-fill high" style="width:90%;"></div></div>
+        <div class="conf-pct">90%</div>
+      </div>
+      <div class="audit-box">
+        <div class="audit-icon"><i class="fas fa-history"></i></div>
+        <div class="audit-text">
+          <div class="audit-title">Full Sync History &amp; Audit Trail</div>
+          <div class="audit-desc">Every data pull logged with status, duration, fields extracted, confidence scores, and FHIR resource tags</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

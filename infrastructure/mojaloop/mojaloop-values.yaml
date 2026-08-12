@@ -1,0 +1,169 @@
+# Mojaloop Helm Chart Values — HealthPoint Production Configuration
+# Chart: mojaloop/mojaloop (https://github.com/mojaloop/helm)
+# NOTE: Mojaloop core services use MySQL internally. We configure MySQL with
+# InnoDB tuning for high-throughput and use the mojaloop_client.py proxy
+# to bridge HealthPoint's PostgreSQL payment records to Mojaloop's MySQL rails.
+
+global:
+  config:
+    forensicloggingsidecar_disabled: true
+
+  # MySQL configuration — tuned for millions of transactions per second
+  mysql:
+    # Use Percona XtraDB Cluster for HA MySQL
+    enabled: true
+    image:
+      repository: percona/percona-xtradb-cluster
+      tag: "8.0"
+    auth:
+      rootPassword: "${MYSQL_ROOT_PASSWORD}"
+      database: mojaloop
+      username: mojaloop
+      password: "${MYSQL_MOJALOOP_PASSWORD}"
+    primary:
+      configuration: |
+        [mysqld]
+        # InnoDB tuning for high-throughput OLTP
+        innodb_buffer_pool_size = 8G
+        innodb_buffer_pool_instances = 8
+        innodb_flush_log_at_trx_commit = 2
+        innodb_flush_method = O_DIRECT
+        innodb_io_capacity = 10000
+        innodb_io_capacity_max = 20000
+        innodb_read_io_threads = 16
+        innodb_write_io_threads = 16
+        innodb_log_file_size = 2G
+        innodb_log_buffer_size = 256M
+        innodb_undo_log_truncate = ON
+        innodb_max_undo_log_size = 2G
+
+        # Connection tuning
+        max_connections = 2000
+        thread_cache_size = 128
+        table_open_cache = 8000
+        table_definition_cache = 4000
+
+        # Binary logging for replication
+        log_bin = mysql-bin
+        binlog_format = ROW
+        binlog_row_image = MINIMAL
+        sync_binlog = 0
+        expire_logs_days = 7
+
+        # Query cache (disabled in MySQL 8 — use ProxySQL for caching)
+        # query_cache_type = 0
+
+        # Slow query log
+        slow_query_log = 1
+        long_query_time = 1
+        log_queries_not_using_indexes = 0
+
+        # Character set
+        character_set_server = utf8mb4
+        collation_server = utf8mb4_unicode_ci
+
+    replication:
+      enabled: true
+      replicaCount: 2
+
+  kafka:
+    enabled: true
+    replicaCount: 3
+    config:
+      auto.create.topics.enable: "false"
+      log.retention.hours: 168
+      log.segment.bytes: 1073741824
+      num.partitions: 10
+      default.replication.factor: 3
+      min.insync.replicas: 2
+
+  redis:
+    enabled: true
+    architecture: replication
+    auth:
+      enabled: true
+      password: "${REDIS_PASSWORD}"
+    master:
+      persistence:
+        enabled: true
+        size: 10Gi
+    replica:
+      replicaCount: 2
+
+# ── Central Ledger ────────────────────────────────────────────────────────────
+centralledger:
+  enabled: true
+  replicaCount: 3
+  config:
+    db_host: mojaloop-mysql
+    db_port: 3306
+    db_user: mojaloop
+    db_password: "${MYSQL_MOJALOOP_PASSWORD}"
+    db_database: central_ledger
+    kafka_host: mojaloop-kafka
+    kafka_port: 9092
+    redis_host: mojaloop-redis-master
+    redis_port: 6379
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+
+# ── Account Lookup Service ────────────────────────────────────────────────────
+account-lookup-service:
+  enabled: true
+  replicaCount: 2
+  config:
+    db_host: mojaloop-mysql
+    db_port: 3306
+    db_user: mojaloop
+    db_password: "${MYSQL_MOJALOOP_PASSWORD}"
+    db_database: account_lookup
+
+# ── Quoting Service ───────────────────────────────────────────────────────────
+quoting-service:
+  enabled: true
+  replicaCount: 2
+  config:
+    db_host: mojaloop-mysql
+    db_port: 3306
+    db_user: mojaloop
+    db_password: "${MYSQL_MOJALOOP_PASSWORD}"
+    db_database: quoting_service
+
+# ── Transaction Requests Service ─────────────────────────────────────────────
+transaction-requests-service:
+  enabled: true
+  replicaCount: 2
+
+# ── ML API Adapter ────────────────────────────────────────────────────────────
+ml-api-adapter:
+  enabled: true
+  replicaCount: 3
+  config:
+    kafka_host: mojaloop-kafka
+    kafka_port: 9092
+
+# ── Mojaloop Connector (HealthPoint bridge) ───────────────────────────────────
+# This is our custom connector that bridges Mojaloop ↔ HealthPoint PostgreSQL
+mojaloop-connector:
+  enabled: true
+  image:
+    repository: healthpoint/mojaloop-connector
+    tag: "1.0.0"
+  replicaCount: 2
+  config:
+    mojaloop_host: ml-api-adapter
+    mojaloop_port: 3000
+    healthpoint_postgres_url: "${DATABASE_URL}"
+    vault_addr: "${VAULT_ADDR}"
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "512Mi"

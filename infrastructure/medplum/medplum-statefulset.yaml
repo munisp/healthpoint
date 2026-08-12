@@ -1,0 +1,366 @@
+---
+# Medplum FHIR R4 Server — Kubernetes StatefulSet
+# Self-hosted Medplum with PostgreSQL backend and Redis cache
+# https://www.medplum.com/docs/self-hosting
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: medplum
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+
+---
+# ConfigMap for Medplum server configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: medplum-config
+  namespace: medplum
+data:
+  medplum.config.json: |
+    {
+      "port": 8103,
+      "baseUrl": "https://fhir.healthpoint.local/",
+      "appBaseUrl": "https://app.healthpoint.local/",
+      "storageBaseUrl": "https://storage.healthpoint.local/",
+      "binaryStorage": "s3:healthpoint-medplum-storage",
+      "signingKeyId": "medplum-signing-key",
+      "supportEmail": "support@healthpoint.local",
+      "logLevel": "info",
+      "logRequests": false,
+      "database": {
+        "host": "postgres-medplum.medplum.svc.cluster.local",
+        "port": 5432,
+        "dbname": "medplum",
+        "ssl": {
+          "require": true,
+          "rejectUnauthorized": false
+        },
+        "runMigrations": true,
+        "maxConnections": 100
+      },
+      "redis": {
+        "host": "redis.healthpoint.svc.cluster.local",
+        "port": 6379,
+        "password": "${REDIS_PASSWORD}",
+        "tls": {}
+      },
+      "smtp": {
+        "host": "${SMTP_HOST}",
+        "port": 587,
+        "username": "${SMTP_USERNAME}",
+        "password": "${SMTP_PASSWORD}"
+      },
+      "maxJsonSize": "8mb",
+      "maxBatchSize": "50mb",
+      "allowedOrigins": "https://app.healthpoint.local,https://healthpoint.local",
+      "introspectionEnabled": true,
+      "registerEnabled": false,
+      "recaptchaSiteKey": "",
+      "recaptchaSecretKey": "",
+      "botLambdaRoleArn": "",
+      "botLambdaLayerName": "",
+      "accurateCountThreshold": 1000000,
+      "defaultBotRuntimeVersion": "vmcontext",
+      "defaultProjectFeatures": ["bots", "cron", "email", "google-auth-required", "terminology"]
+    }
+
+---
+# PostgreSQL for Medplum (dedicated instance)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-medplum
+  namespace: medplum
+  labels:
+    app: postgres-medplum
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  serviceName: postgres-medplum
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-medplum
+  template:
+    metadata:
+      labels:
+        app: postgres-medplum
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: medplum
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: medplum-db-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: medplum-db-secret
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "medplum", "-d", "medplum"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "medplum", "-d", "medplum"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 100Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-medplum
+  namespace: medplum
+spec:
+  selector:
+    app: postgres-medplum
+  ports:
+    - port: 5432
+      targetPort: 5432
+  clusterIP: None  # Headless for StatefulSet
+
+---
+# Medplum Server StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: medplum-server
+  namespace: medplum
+  labels:
+    app: medplum-server
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/version: "3.2.0"
+spec:
+  serviceName: medplum-server
+  replicas: 2
+  selector:
+    matchLabels:
+      app: medplum-server
+  template:
+    metadata:
+      labels:
+        app: medplum-server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8103"
+        prometheus.io/path: "/healthcheck"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      serviceAccountName: medplum-server
+      containers:
+        - name: medplum-server
+          image: ghcr.io/munisp/healthpoint/medplum-server:3.2.0
+          ports:
+            - containerPort: 8103
+              name: http
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: MEDPLUM_CONFIG_PATH
+              value: /etc/medplum/medplum.config.json
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: medplum-db-secret
+                  key: url
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: medplum-redis-secret
+                  key: password
+            - name: SMTP_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: medplum-smtp-secret
+                  key: host
+            - name: SMTP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: medplum-smtp-secret
+                  key: username
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: medplum-smtp-secret
+                  key: password
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: medplum-aws-secret
+                  key: access_key_id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: medplum-aws-secret
+                  key: secret_access_key
+            - name: AWS_REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: medplum-config
+              mountPath: /etc/medplum
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: 8103
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthcheck
+              port: 8103
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: medplum-config
+          configMap:
+            name: medplum-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: medplum-server
+  namespace: medplum
+  labels:
+    app: medplum-server
+spec:
+  selector:
+    app: medplum-server
+  ports:
+    - name: http
+      port: 8103
+      targetPort: 8103
+  type: ClusterIP
+
+---
+# Ingress for Medplum FHIR API
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: medplum-ingress
+  namespace: medplum
+  annotations:
+    kubernetes.io/ingress.class: apisix
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    k8s.apisix.apache.org/plugin-config-name: medplum-security
+spec:
+  tls:
+    - hosts:
+        - fhir.healthpoint.local
+      secretName: medplum-tls
+  rules:
+    - host: fhir.healthpoint.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: medplum-server
+                port:
+                  number: 8103
+
+---
+# HPA for Medplum server
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: medplum-server-hpa
+  namespace: medplum
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: medplum-server
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# ServiceAccount for Medplum
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: medplum-server
+  namespace: medplum
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/medplum-server-role
+
+---
+# PodDisruptionBudget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: medplum-server-pdb
+  namespace: medplum
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: medplum-server

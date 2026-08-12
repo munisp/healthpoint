@@ -1,0 +1,158 @@
+---
+# Kafka Topic Configuration — HealthPoint NSA/IDR Platform
+# Applied via: kafka-topics.sh or Strimzi KafkaTopic CRDs
+# Partitioning strategy: partition by tenant_id + resource_id hash
+# Replication factor: 3 (min.insync.replicas = 2)
+
+# ── Topic Definitions (Strimzi KafkaTopic CRDs) ───────────────────────────────
+
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: idr-dispute-events
+  namespace: healthpoint-infra
+  labels:
+    strimzi.io/cluster: healthpoint-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"        # 7 days
+    retention.bytes: "10737418240"   # 10 GB per partition
+    segment.ms: "86400000"           # 1 day segments
+    compression.type: "lz4"
+    min.insync.replicas: "2"
+    cleanup.policy: "delete"
+    # Partition key: dispute_id (ensures all events for a dispute go to same partition)
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: claim-events
+  namespace: healthpoint-infra
+  labels:
+    strimzi.io/cluster: healthpoint-kafka
+spec:
+  partitions: 24
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    retention.bytes: "10737418240"
+    compression.type: "lz4"
+    min.insync.replicas: "2"
+    # Partition key: claim_id
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: payment-events
+  namespace: healthpoint-infra
+  labels:
+    strimzi.io/cluster: healthpoint-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "2592000000"       # 30 days (regulatory requirement)
+    retention.bytes: "21474836480"   # 20 GB per partition
+    compression.type: "lz4"
+    min.insync.replicas: "2"
+    # Partition key: payment_id
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: audit-events
+  namespace: healthpoint-infra
+  labels:
+    strimzi.io/cluster: healthpoint-kafka
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "31536000000"      # 365 days (HIPAA audit retention)
+    retention.bytes: "53687091200"   # 50 GB per partition
+    compression.type: "gzip"
+    min.insync.replicas: "2"
+    cleanup.policy: "delete"
+    # Partition key: user_id
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: notification-events
+  namespace: healthpoint-infra
+  labels:
+    strimzi.io/cluster: healthpoint-kafka
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "86400000"         # 1 day
+    compression.type: "lz4"
+    min.insync.replicas: "2"
+    # Partition key: recipient_id
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: fraud-detection-events
+  namespace: healthpoint-infra
+  labels:
+    strimzi.io/cluster: healthpoint-kafka
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    compression.type: "lz4"
+    min.insync.replicas: "2"
+    # Partition key: organization_id (group fraud signals by org)
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: workflow-events
+  namespace: healthpoint-infra
+  labels:
+    strimzi.io/cluster: healthpoint-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    compression.type: "lz4"
+    min.insync.replicas: "2"
+    # Partition key: workflow_id
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: opensearch-sync
+  namespace: healthpoint-infra
+  labels:
+    strimzi.io/cluster: healthpoint-kafka
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "3600000"          # 1 hour — sync events are transient
+    compression.type: "lz4"
+    min.insync.replicas: "2"
+    # Partition key: resource_type
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: lakehouse-ingestion
+  namespace: healthpoint-infra
+  labels:
+    strimzi.io/cluster: healthpoint-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "86400000"         # 1 day — Spark reads and commits offsets
+    compression.type: "lz4"
+    min.insync.replicas: "2"
+    # Partition key: table_name

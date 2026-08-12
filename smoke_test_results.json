@@ -1,0 +1,319 @@
+{
+  "summary": {
+    "timestamp": "2025-10-06T18:26:45.672727",
+    "total_tests": 7,
+    "passed": 1,
+    "failed": 5,
+    "skipped": 1,
+    "critical_failures": 3,
+    "success_rate": 14.29,
+    "total_duration": 0.036,
+    "system_operational": false,
+    "categories": {
+      "System Health": {
+        "total": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "critical_failures": 0
+      },
+      "User Journey": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "critical_failures": 1
+      },
+      "Claims Workflow": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "critical_failures": 1
+      },
+      "Provider Workflow": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "critical_failures": 1
+      },
+      "Notification Workflow": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "critical_failures": 0
+      },
+      "Search Analytics Workflow": {
+        "total": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "critical_failures": 0
+      },
+      "NSA/IDR Workflow": {
+        "total": 1,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 1,
+        "critical_failures": 0
+      }
+    }
+  },
+  "results": [
+    {
+      "test_name": "Critical System Health Check",
+      "category": "System Health",
+      "status": "PASS",
+      "duration": 0.01931905746459961,
+      "message": "Critical services health: All healthy",
+      "workflow_steps": [
+        {
+          "step": "Health check - user_management",
+          "status": "PASS",
+          "duration": 0.009320497512817383,
+          "details": {
+            "status": "healthy",
+            "timestamp": "2025-10-06T22:26:45.644231",
+            "service": "user-management-service",
+            "version": "1.0.0",
+            "users_count": 2
+          }
+        },
+        {
+          "step": "Health check - authentication",
+          "status": "PASS",
+          "duration": 0.0027163028717041016,
+          "details": {
+            "status": "healthy",
+            "timestamp": "2025-10-06T22:26:45.647259",
+            "service": "authentication-service",
+            "version": "1.0.0"
+          }
+        },
+        {
+          "step": "Health check - claims_processing",
+          "status": "PASS",
+          "duration": 0.0023093223571777344,
+          "details": {
+            "status": "healthy",
+            "timestamp": "2025-10-06T22:26:45.649714",
+            "service": "claims-processing-service",
+            "version": "1.0.0",
+            "claims_count": 2
+          }
+        },
+        {
+          "step": "Health check - provider_management",
+          "status": "PASS",
+          "duration": 0.0024232864379882812,
+          "details": {
+            "status": "healthy",
+            "timestamp": "2025-10-06T22:26:45.651945",
+            "service": "provider-management-service",
+            "version": "1.0.0",
+            "providers_count": 2
+          }
+        },
+        {
+          "step": "Health check - api_gateway",
+          "status": "PASS",
+          "duration": 0.0025305747985839844,
+          "details": {
+            "status": "healthy",
+            "timestamp": "2025-10-06T22:26:45.654519",
+            "service": "api-gateway-service",
+            "version": "1.0.0",
+            "registered_services": 10
+          }
+        }
+      ],
+      "critical_failure": false
+    },
+    {
+      "test_name": "User Authentication Journey",
+      "category": "User Journey",
+      "status": "FAIL",
+      "duration": 0.0012056827545166016,
+      "message": "Authentication journey: Failed",
+      "workflow_steps": [
+        {
+          "step": "User Login",
+          "status": "FAIL",
+          "duration": 0.0011951923370361328,
+          "error": "Login failed: {'status': 404, 'data': {'detail': 'Not Found'}, 'headers': {'Date': 'Mon, 06 Oct 2025 22:26:45 GMT', 'Server': 'uvicorn', 'Content-Length': '22', 'Content-Type': 'application/json'}}"
+        }
+      ],
+      "critical_failure": true
+    },
+    {
+      "test_name": "Claims Processing Workflow",
+      "category": "Claims Workflow",
+      "status": "FAIL",
+      "duration": 0.004797697067260742,
+      "message": "Claims processing workflow: Failed",
+      "workflow_steps": [
+        {
+          "step": "Claims Submission",
+          "status": "FAIL",
+          "duration": 0.0011720657348632812,
+          "error": "Submission failed: {'status': 405, 'data': {'detail': 'Method Not Allowed'}, 'headers': {'Date': 'Mon, 06 Oct 2025 22:26:44 GMT', 'Server': 'uvicorn', 'Allow': 'GET', 'Content-Length': '31', 'Content-Type': 'application/json'}}"
+        },
+        {
+          "step": "Claims Status Check",
+          "status": "PASS",
+          "duration": 0.0011970996856689453,
+          "details": {
+            "detail": "Not Found"
+          }
+        },
+        {
+          "step": "Fraud Detection Analysis",
+          "status": "FAIL",
+          "duration": 0.0024080276489257812,
+          "error": "Fraud analysis failed: {'status': 404, 'data': {'detail': 'Not Found'}, 'headers': {'Date': 'Mon, 06 Oct 2025 22:26:45 GMT', 'Server': 'uvicorn', 'Content-Length': '22', 'Content-Type': 'application/json'}}"
+        }
+      ],
+      "critical_failure": true
+    },
+    {
+      "test_name": "Provider Onboarding Workflow",
+      "category": "Provider Workflow",
+      "status": "FAIL",
+      "duration": 0.004979133605957031,
+      "message": "Provider onboarding workflow: Failed",
+      "workflow_steps": [
+        {
+          "step": "Provider Registration",
+          "status": "FAIL",
+          "duration": 0.0011055469512939453,
+          "error": "Registration failed: {'status': 405, 'data': {'detail': 'Method Not Allowed'}, 'headers': {'Date': 'Mon, 06 Oct 2025 22:26:45 GMT', 'Server': 'uvicorn', 'Allow': 'GET', 'Content-Length': '31', 'Content-Type': 'application/json'}}"
+        },
+        {
+          "step": "KYB Verification",
+          "status": "FAIL",
+          "duration": 0.0019540786743164062,
+          "error": "KYB verification failed: {'status': 404, 'data': {'detail': 'Not Found'}, 'headers': {'Date': 'Mon, 06 Oct 2025 22:26:45 GMT', 'Server': 'uvicorn', 'Content-Length': '22', 'Content-Type': 'application/json'}}"
+        },
+        {
+          "step": "Document Verification",
+          "status": "FAIL",
+          "duration": 0.0018894672393798828,
+          "error": "Document verification failed: {'status': 404, 'data': {'detail': 'Not Found'}, 'headers': {'Date': 'Mon, 06 Oct 2025 22:26:45 GMT', 'Server': 'uvicorn', 'Content-Length': '22', 'Content-Type': 'application/json'}}"
+        }
+      ],
+      "critical_failure": true
+    },
+    {
+      "test_name": "Notification Workflow",
+      "category": "Notification Workflow",
+      "status": "FAIL",
+      "duration": 0.002471923828125,
+      "message": "Notification workflow: Failed",
+      "workflow_steps": [
+        {
+          "step": "Send Notification",
+          "status": "FAIL",
+          "duration": 0.0018377304077148438,
+          "error": "Send failed: {'status': 405, 'data': {'detail': 'Method Not Allowed'}, 'headers': {'Date': 'Mon, 06 Oct 2025 22:26:44 GMT', 'Server': 'uvicorn', 'Allow': 'GET', 'Content-Length': '31', 'Content-Type': 'application/json'}}"
+        },
+        {
+          "step": "Check Notification Status",
+          "status": "PASS",
+          "duration": 0.0006232261657714844,
+          "details": {
+            "detail": "Not Found"
+          }
+        }
+      ],
+      "critical_failure": false
+    },
+    {
+      "test_name": "Search Analytics Workflow",
+      "category": "Search Analytics Workflow",
+      "status": "FAIL",
+      "duration": 0.0024993419647216797,
+      "message": "Search analytics workflow: Failed",
+      "workflow_steps": [
+        {
+          "step": "Perform Search",
+          "status": "FAIL",
+          "duration": 0.0016427040100097656,
+          "error": "Search failed: {'status': 405, 'data': {'detail': 'Method Not Allowed'}, 'headers': {'Date': 'Mon, 06 Oct 2025 22:26:45 GMT', 'Server': 'uvicorn', 'Allow': 'POST', 'Content-Length': '31', 'Content-Type': 'application/json'}}"
+        },
+        {
+          "step": "Get Analytics Dashboard",
+          "status": "PASS",
+          "duration": 0.00084686279296875,
+          "details": {
+            "total_searches": 1049,
+            "avg_response_time": 184.57,
+            "top_queries": [
+              {
+                "query": "patient claims",
+                "count": 103
+              },
+              {
+                "query": "provider verification",
+                "count": 78
+              },
+              {
+                "query": "billing reports",
+                "count": 97
+              }
+            ],
+            "search_trends": [
+              {
+                "date": "2025-09-29",
+                "searches": 454
+              },
+              {
+                "date": "2025-09-30",
+                "searches": 371
+              },
+              {
+                "date": "2025-10-01",
+                "searches": 315
+              },
+              {
+                "date": "2025-10-02",
+                "searches": 212
+              },
+              {
+                "date": "2025-10-03",
+                "searches": 374
+              },
+              {
+                "date": "2025-10-04",
+                "searches": 433
+              },
+              {
+                "date": "2025-10-05",
+                "searches": 207
+              }
+            ],
+            "timestamp": "2025-10-06T22:26:45.671301"
+          }
+        }
+      ],
+      "critical_failure": false
+    },
+    {
+      "test_name": "NSA/IDR Workflow",
+      "category": "NSA/IDR Workflow",
+      "status": "SKIP",
+      "duration": 0.0008375644683837891,
+      "message": "NSA/IDR services not available - skipping workflow test",
+      "workflow_steps": [
+        {
+          "step": "NSA/IDR Service Availability Check",
+          "status": "SKIP",
+          "duration": 0.0008380413055419922,
+          "message": "Services not deployed"
+        }
+      ],
+      "critical_failure": false
+    }
+  ]
+}

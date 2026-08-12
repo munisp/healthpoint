@@ -1,0 +1,52 @@
+---
+# Service account for HealthPoint backend services
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: healthpoint-app
+  namespace: healthpoint
+  annotations:
+    # Vault Kubernetes auth role
+    vault.hashicorp.com/role: "healthpoint-app"
+---
+# Role: read secrets and configmaps in healthpoint namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: healthpoint-app-role
+  namespace: healthpoint
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: healthpoint-app-rolebinding
+  namespace: healthpoint
+subjects:
+  - kind: ServiceAccount
+    name: healthpoint-app
+    namespace: healthpoint
+roleRef:
+  kind: Role
+  name: healthpoint-app-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Vault agent injector cluster role (for Vault sidecar injection)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-agent-injector-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: vault-agent-injector
+    namespace: healthpoint-middleware

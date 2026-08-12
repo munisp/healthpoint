@@ -1,0 +1,54 @@
+{
+  "realm": "nsa-idr-platform",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "frontend",
+      "secret": "Z3VpxN2YyA4V3wH0aA4V3wH0aA4V3wH0",
+      "publicClient": true,
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["+"]
+    },
+    {
+      "clientId": "backend",
+      "secret": "V3wH0aA4V3wH0aA4V3wH0aA4V3wH0aA4",
+      "serviceAccountsEnabled": true
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "Administrator"
+      },
+      {
+        "name": "user",
+        "description": "Regular user"
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin"
+        }
+      ],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "user",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user"
+        }
+      ],
+      "realmRoles": ["user"]
+    }
+  ]
+}

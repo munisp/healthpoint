@@ -1,0 +1,54 @@
+{
+  "port": 8103,
+  "baseUrl": "http://medplum-server:8103/",
+  "appBaseUrl": "http://medplum-app:3000/",
+  "binaryStorage": "file:///var/medplum/binary",
+  "storageBaseUrl": "http://medplum-server:8103/binary/",
+  "logLevel": "INFO",
+  "logRequests": false,
+  "saveAuditEvents": true,
+  "logAuditEvents": true,
+  "registerEnabled": false,
+  "allowedOrigins": "http://localhost:3000,http://medplum-app:3000,http://localhost:8080,https://healthpoint.local",
+  "issuer": "http://medplum-server:8103/",
+  "jwksUrl": "http://medplum-server:8103/.well-known/jwks.json",
+  "authorizeUrl": "http://medplum-server:8103/oauth2/authorize",
+  "tokenUrl": "http://medplum-server:8103/oauth2/token",
+  "userInfoUrl": "http://medplum-server:8103/oauth2/userinfo",
+  "maxJsonSize": "10mb",
+  "maxBatchSize": "100mb",
+  "database": {
+    "host": "postgres-medplum",
+    "port": 5432,
+    "dbname": "medplum",
+    "username": "medplum",
+    "password": "__MEDPLUM_DB_PASSWORD__",
+    "ssl": {
+      "rejectUnauthorized": false
+    }
+  },
+  "redis": {
+    "host": "redis",
+    "port": 6379,
+    "password": "__REDIS_PASSWORD__"
+  },
+  "emailProvider": "smtp",
+  "smtp": {
+    "host": "__SMTP_HOST__",
+    "port": 587,
+    "username": "__SMTP_USER__",
+    "password": "__SMTP_PASSWORD__"
+  },
+  "supportEmail": "support@healthpoint.local",
+  "bullmq": {
+    "concurrency": 4,
+    "removeOnComplete": {
+      "count": 1000,
+      "age": 86400
+    },
+    "removeOnFail": {
+      "count": 5000,
+      "age": 604800
+    }
+  }
+}

@@ -1,0 +1,239 @@
+---
+# PgBouncer — Connection Pooling for all HealthPoint services
+# Mode: transaction pooling (best for stateless microservices)
+# Pool size: 20 server connections per database, 100 client connections per pool
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgbouncer-config
+  namespace: healthpoint-infra
+data:
+  pgbouncer.ini: |
+    [databases]
+    ; Primary read-write pool
+    healthpoint = host=postgres-primary.healthpoint-infra.svc.cluster.local
+                  port=5432
+                  dbname=healthpoint
+                  pool_size=20
+                  max_db_connections=50
+                  pool_mode=transaction
+
+    ; Read-only replica pool (for analytics and reporting services)
+    healthpoint_ro = host=postgres-replica.healthpoint-infra.svc.cluster.local
+                     port=5432
+                     dbname=healthpoint
+                     pool_size=30
+                     max_db_connections=80
+                     pool_mode=transaction
+
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = 5432
+    auth_type = scram-sha-256
+    auth_file = /etc/pgbouncer/userlist.txt
+    auth_query = SELECT usename, passwd FROM pg_shadow WHERE usename=$1
+
+    ; Pool settings
+    pool_mode = transaction
+    max_client_conn = 1000
+    default_pool_size = 20
+    min_pool_size = 5
+    reserve_pool_size = 5
+    reserve_pool_timeout = 3.0
+    max_db_connections = 100
+    max_user_connections = 100
+
+    ; Connection lifetime
+    server_lifetime = 3600
+    server_idle_timeout = 600
+    server_connect_timeout = 15
+    server_login_retry = 15
+    client_idle_timeout = 0
+    client_login_timeout = 60
+
+    ; TLS for server connections (PostgreSQL)
+    server_tls_sslmode = require
+    server_tls_ca_file = /etc/pgbouncer/tls/ca.crt
+
+    ; TLS for client connections (services → PgBouncer)
+    client_tls_sslmode = require
+    client_tls_cert_file = /etc/pgbouncer/tls/tls.crt
+    client_tls_key_file = /etc/pgbouncer/tls/tls.key
+    client_tls_ca_file = /etc/pgbouncer/tls/ca.crt
+
+    ; Logging
+    log_connections = 0
+    log_disconnections = 0
+    log_pooler_errors = 1
+    stats_period = 60
+
+    ; Admin interface
+    admin_users = pgbouncer_admin
+    stats_users = pgbouncer_stats
+
+    ; Prepared statements — must be disabled for transaction pooling
+    ignore_startup_parameters = extra_float_digits,search_path
+
+    ; Query cancellation
+    query_wait_timeout = 120
+    query_timeout = 0
+
+    ; Server reset query — clear session state between clients
+    server_reset_query = DISCARD ALL
+
+  userlist.txt: |
+    ; Format: "username" "md5hash_or_scram_hash"
+    ; Populated by init container from Vault secrets
+    ; Do not commit real passwords here
+    "healthpoint_app" "VAULT_MANAGED"
+    "healthpoint_ro" "VAULT_MANAGED"
+    "pgbouncer_admin" "VAULT_MANAGED"
+    "pgbouncer_stats" "VAULT_MANAGED"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbouncer
+  namespace: healthpoint-infra
+  labels:
+    app: pgbouncer
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pgbouncer
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: pgbouncer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9127"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+      initContainers:
+        - name: vault-init
+          image: hashicorp/vault:1.15
+          command:
+            - sh
+            - -c
+            - |
+              # Fetch PgBouncer userlist from Vault
+              vault login -method=kubernetes role=pgbouncer
+              APP_PASS=$(vault kv get -field=password secret/healthpoint/pgbouncer/app)
+              RO_PASS=$(vault kv get -field=password secret/healthpoint/pgbouncer/readonly)
+              ADMIN_PASS=$(vault kv get -field=password secret/healthpoint/pgbouncer/admin)
+              STATS_PASS=$(vault kv get -field=password secret/healthpoint/pgbouncer/stats)
+              cat > /etc/pgbouncer/userlist.txt << EOF
+              "healthpoint_app" "$(echo -n "${APP_PASS}healthpoint_app" | md5sum | awk '{print "md5"$1}')"
+              "healthpoint_ro" "$(echo -n "${RO_PASS}healthpoint_ro" | md5sum | awk '{print "md5"$1}')"
+              "pgbouncer_admin" "$(echo -n "${ADMIN_PASS}pgbouncer_admin" | md5sum | awk '{print "md5"$1}')"
+              "pgbouncer_stats" "$(echo -n "${STATS_PASS}pgbouncer_stats" | md5sum | awk '{print "md5"$1}')"
+              EOF
+          env:
+            - name: VAULT_ADDR
+              value: "https://vault.healthpoint-infra.svc.cluster.local:8200"
+            - name: VAULT_CACERT
+              value: /etc/pgbouncer/tls/ca.crt
+          volumeMounts:
+            - name: config
+              mountPath: /etc/pgbouncer
+            - name: tls
+              mountPath: /etc/pgbouncer/tls
+      containers:
+        - name: pgbouncer
+          image: bitnami/pgbouncer:1.21.0
+          ports:
+            - containerPort: 5432
+              name: postgres
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/pgbouncer
+            - name: tls
+              mountPath: /etc/pgbouncer/tls
+              readOnly: true
+        # PgBouncer Prometheus exporter sidecar
+        - name: pgbouncer-exporter
+          image: prometheuscommunity/pgbouncer-exporter:v0.7.0
+          args:
+            - "--pgBouncer.connectionString=postgres://pgbouncer_stats:$(STATS_PASSWORD)@localhost:5432/pgbouncer?sslmode=require"
+          env:
+            - name: STATS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pgbouncer-stats-secret
+                  key: password
+          ports:
+            - containerPort: 9127
+              name: metrics
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+      volumes:
+        - name: config
+          configMap:
+            name: pgbouncer-config
+        - name: tls
+          secret:
+            secretName: pgbouncer-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbouncer
+  namespace: healthpoint-infra
+  labels:
+    app: pgbouncer
+spec:
+  selector:
+    app: pgbouncer
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pgbouncer-pdb
+  namespace: healthpoint-infra
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: pgbouncer

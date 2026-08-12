@@ -1,0 +1,178 @@
+---
+# cert-manager — ClusterIssuer using Let's Encrypt (production)
+# For internal services, use the self-signed CA issuer below
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: platform-ops@healthpoint.io
+    privateKeySecretRef:
+      name: letsencrypt-prod-key
+    solvers:
+      - http01:
+          ingress:
+            class: apisix
+---
+# Self-signed CA for internal cluster TLS
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: healthpoint-internal-ca
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: healthpoint-internal-ca-cert
+  namespace: healthpoint-infra
+spec:
+  isCA: true
+  commonName: HealthPoint Internal CA
+  subject:
+    organizations: ["HealthPoint"]
+  secretName: healthpoint-internal-ca-tls
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: healthpoint-internal-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# CA Issuer backed by the self-signed cert above
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: healthpoint-ca-issuer
+  namespace: healthpoint-infra
+spec:
+  ca:
+    secretName: healthpoint-internal-ca-tls
+---
+# Vault TLS certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vault-tls
+  namespace: healthpoint-infra
+spec:
+  secretName: vault-tls
+  duration: 8760h  # 1 year
+  renewBefore: 720h  # 30 days
+  subject:
+    organizations: ["HealthPoint"]
+  commonName: vault.healthpoint-infra.svc.cluster.local
+  dnsNames:
+    - vault
+    - vault.healthpoint-infra
+    - vault.healthpoint-infra.svc
+    - vault.healthpoint-infra.svc.cluster.local
+    - vault-0.vault-internal.healthpoint-infra.svc.cluster.local
+    - vault-1.vault-internal.healthpoint-infra.svc.cluster.local
+    - vault-2.vault-internal.healthpoint-infra.svc.cluster.local
+  issuerRef:
+    name: healthpoint-ca-issuer
+    kind: Issuer
+---
+# OpenSearch TLS certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: opensearch-tls
+  namespace: healthpoint-infra
+spec:
+  secretName: opensearch-tls
+  duration: 8760h
+  renewBefore: 720h
+  subject:
+    organizations: ["HealthPoint"]
+  commonName: opensearch.healthpoint-infra.svc.cluster.local
+  dnsNames:
+    - opensearch
+    - opensearch.healthpoint-infra
+    - opensearch.healthpoint-infra.svc.cluster.local
+    - opensearch-0.opensearch-headless.healthpoint-infra.svc.cluster.local
+    - opensearch-1.opensearch-headless.healthpoint-infra.svc.cluster.local
+    - opensearch-2.opensearch-headless.healthpoint-infra.svc.cluster.local
+  issuerRef:
+    name: healthpoint-ca-issuer
+    kind: Issuer
+---
+# OpenSearch Dashboards TLS
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: opensearch-dashboards-tls
+  namespace: healthpoint-infra
+spec:
+  secretName: opensearch-dashboards-tls
+  duration: 8760h
+  renewBefore: 720h
+  commonName: opensearch-dashboards.healthpoint-infra.svc.cluster.local
+  dnsNames:
+    - opensearch-dashboards
+    - opensearch-dashboards.healthpoint-infra.svc.cluster.local
+  issuerRef:
+    name: healthpoint-ca-issuer
+    kind: Issuer
+---
+# Keycloak TLS
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: keycloak-tls
+  namespace: healthpoint-infra
+spec:
+  secretName: keycloak-tls
+  duration: 8760h
+  renewBefore: 720h
+  commonName: keycloak.healthpoint-infra.svc.cluster.local
+  dnsNames:
+    - keycloak
+    - keycloak.healthpoint-infra.svc.cluster.local
+    - auth.healthpoint.io
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+# PostgreSQL TLS
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: postgres-tls
+  namespace: healthpoint-infra
+spec:
+  secretName: postgres-tls
+  duration: 8760h
+  renewBefore: 720h
+  commonName: postgres.healthpoint-infra.svc.cluster.local
+  dnsNames:
+    - postgres
+    - postgres.healthpoint-infra.svc.cluster.local
+    - postgres-primary.healthpoint-infra.svc.cluster.local
+    - postgres-replica.healthpoint-infra.svc.cluster.local
+  issuerRef:
+    name: healthpoint-ca-issuer
+    kind: Issuer
+---
+# Wildcard certificate for all HealthPoint services
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: healthpoint-services-tls
+  namespace: healthpoint-services
+spec:
+  secretName: healthpoint-services-tls
+  duration: 8760h
+  renewBefore: 720h
+  commonName: "*.healthpoint-services.svc.cluster.local"
+  dnsNames:
+    - "*.healthpoint-services.svc.cluster.local"
+    - "*.healthpoint.io"
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer

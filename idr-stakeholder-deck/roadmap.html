@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #0F172A;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      .top-bar {
+        width: 100%;
+        height: 6px;
+        background: #2563EB;
+        display: flex;
+      }
+      .top-bar-accent { width: 200px; height: 6px; background: #F43F5E; margin-left: auto; }
+      .header-row {
+        padding: 36px 52px 0 52px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+      }
+      .section-label {
+        font-size: 11px;
+        font-weight: 700;
+        color: #F43F5E;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+      }
+      .slide-title {
+        font-size: 36px;
+        font-weight: 900;
+        color: #FFFFFF;
+        line-height: 1.1;
+        letter-spacing: -0.5px;
+      }
+      .slide-title span { color: #2563EB; }
+      .slide-sub {
+        font-size: 13px;
+        color: #64748B;
+        margin-top: 8px;
+        line-height: 1.6;
+        max-width: 520px;
+      }
+      .header-badge {
+        background: #1E293B;
+        padding: 14px 20px;
+        text-align: right;
+        flex-shrink: 0;
+      }
+      .badge-num {
+        font-size: 32px;
+        font-weight: 900;
+        color: #2563EB;
+        line-height: 1;
+      }
+      .badge-label {
+        font-size: 10px;
+        color: #64748B;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-top: 4px;
+      }
+      /* Timeline */
+      .timeline-area {
+        flex: 1;
+        padding: 32px 52px 0 52px;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+      }
+      .timeline-track {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        margin-bottom: 12px;
+      }
+      .track-line {
+        flex: 1;
+        height: 2px;
+        background: #1E293B;
+        position: relative;
+      }
+      .track-line::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: -1px;
+        height: 4px;
+        width: 60%;
+        background: #2563EB;
+      }
+      .track-label {
+        font-size: 10px;
+        font-weight: 700;
+        color: #334155;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        white-space: nowrap;
+        margin-right: 12px;
+      }
+      .track-label.right {
+        margin-right: 0;
+        margin-left: 12px;
+        color: #2563EB;
+      }
+      /* Phase grid */
+      .phases-grid {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 12px;
+        flex: 1;
+      }
+      .phase-block {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        border-top: 3px solid #2563EB;
+        padding-top: 14px;
+      }
+      .phase-block.coral { border-top-color: #F43F5E; }
+      .phase-block.dim { border-top-color: #334155; }
+      .phase-num-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      .phase-num {
+        width: 28px;
+        height: 28px;
+        background: #2563EB;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 900;
+        color: #FFFFFF;
+        flex-shrink: 0;
+      }
+      .phase-block.coral .phase-num { background: #F43F5E; }
+      .phase-block.dim .phase-num { background: #334155; }
+      .phase-label {
+        font-size: 10px;
+        font-weight: 700;
+        color: #2563EB;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .phase-block.coral .phase-label { color: #F43F5E; }
+      .phase-block.dim .phase-label { color: #475569; }
+      .phase-icon {
+        width: 36px;
+        height: 36px;
+        background: #1E293B;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 10px;
+      }
+      .phase-block.coral .phase-icon { border-top: 2px solid #F43F5E; }
+      .phase-block:not(.coral):not(.dim) .phase-icon { border-top: 2px solid #2563EB; }
+      .phase-block.dim .phase-icon { border-top: 2px solid #334155; }
+      .phase-icon i { color: #2563EB; font-size: 15px; }
+      .phase-block.coral .phase-icon i { color: #F43F5E; }
+      .phase-block.dim .phase-icon i { color: #475569; }
+      .phase-name {
+        font-size: 13px;
+        font-weight: 900;
+        color: #FFFFFF;
+        line-height: 1.2;
+        margin-bottom: 8px;
+      }
+      .phase-block.dim .phase-name { color: #64748B; }
+      .phase-desc {
+        font-size: 11px;
+        color: #64748B;
+        line-height: 1.55;
+        flex: 1;
+      }
+      .phase-block.dim .phase-desc { color: #334155; }
+      .phase-eta {
+        font-size: 10px;
+        font-weight: 700;
+        color: #2563EB;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid #1E293B;
+      }
+      .phase-block.coral .phase-eta { color: #F43F5E; }
+      .phase-block.dim .phase-eta { color: #334155; }
+      /* Bottom bar */
+      .bottom-bar {
+        background: #1E293B;
+        padding: 14px 52px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 20px;
+      }
+      .bottom-tagline {
+        font-size: 14px;
+        font-weight: 700;
+        color: #FFFFFF;
+      }
+      .bottom-tagline span { color: #2563EB; }
+      .bottom-tags {
+        display: flex;
+        gap: 8px;
+      }
+      .btag {
+        font-size: 10px;
+        font-weight: 700;
+        color: #FFFFFF;
+        background: #2563EB;
+        padding: 4px 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .btag.coral { background: #F43F5E; }
+      .btag.dark { background: #334155; }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="top-bar"><div class="top-bar-accent"></div></div>
+  <div class="header-row">
+    <div>
+      <div class="section-label">Product Roadmap</div>
+      <div class="slide-title">The Road Ahead —<br><span>Getting Smarter</span> Every Day</div>
+      <div class="slide-sub">The platform is already the most capable NSA/IDR solution on the market. These five capabilities — in active development — will extend that lead further.</div>
+    </div>
+    <div class="header-badge">
+      <div class="badge-num">5</div>
+      <div class="badge-label">Upcoming Capabilities</div>
+    </div>
+  </div>
+  <div class="timeline-area">
+    <div class="timeline-track">
+      <div class="track-label">Today</div>
+      <div class="track-line"></div>
+      <div class="track-label right">12 Months</div>
+    </div>
+    <div class="phases-grid">
+      <div class="phase-block">
+        <div class="phase-num-row">
+          <div class="phase-num">1</div>
+          <div class="phase-label">Q3 2026</div>
+        </div>
+        <div class="phase-icon"><i class="fas fa-brain"></i></div>
+        <div class="phase-name">Predictive Outcome Modelling</div>
+        <div class="phase-desc">ML model trained on historical NSA IDR outcomes predicts the probability of winning at arbitration, the expected determination amount, and the optimal offer strategy — before you file.</div>
+        <div class="phase-eta">In Development</div>
+      </div>
+      <div class="phase-block coral">
+        <div class="phase-num-row">
+          <div class="phase-num">2</div>
+          <div class="phase-label">Q3 2026</div>
+        </div>
+        <div class="phase-icon"><i class="fas fa-dollar-sign"></i></div>
+        <div class="phase-name">Automated QPA Benchmarking</div>
+        <div class="phase-desc">RAG agent continuously queries payer fee schedules and market data from connected EMRs to auto-suggest the Qualifying Payment Amount with a full methodology citation for arbitrators.</div>
+        <div class="phase-eta">In Development</div>
+      </div>
+      <div class="phase-block">
+        <div class="phase-num-row">
+          <div class="phase-num">3</div>
+          <div class="phase-label">Q4 2026</div>
+        </div>
+        <div class="phase-icon"><i class="fas fa-layer-group"></i></div>
+        <div class="phase-name">Multi-Jurisdiction Batch Filing</div>
+        <div class="phase-desc">File hundreds of disputes simultaneously across federal and state IDR processes. AI assigns the correct framework per dispute, generates jurisdiction-specific forms, and tracks all deadlines in one queue.</div>
+        <div class="phase-eta">Planned</div>
+      </div>
+      <div class="phase-block coral">
+        <div class="phase-num-row">
+          <div class="phase-num">4</div>
+          <div class="phase-label">Q4 2026</div>
+        </div>
+        <div class="phase-icon"><i class="fas fa-satellite-dish"></i></div>
+        <div class="phase-name">Real-Time Payer Intelligence</div>
+        <div class="phase-desc">Live monitoring of payer behaviour patterns — offer response times, acceptance rates by service type, and QPA methodology trends — surfaced as actionable intelligence on the Dashboard.</div>
+        <div class="phase-eta">Planned</div>
+      </div>
+      <div class="phase-block dim">
+        <div class="phase-num-row">
+          <div class="phase-num">5</div>
+          <div class="phase-label">Q1 2027</div>
+        </div>
+        <div class="phase-icon"><i class="fas fa-mobile-alt"></i></div>
+        <div class="phase-name">Mobile Application</div>
+        <div class="phase-desc">Native iOS and Android app for revenue cycle managers. Push notifications for deadline alerts, one-tap offer responses, and AI assistant access — full IDR management from any device.</div>
+        <div class="phase-eta">Roadmap</div>
+      </div>
+    </div>
+  </div>
+  <div class="bottom-bar">
+    <div class="bottom-tagline">Built on <span>open-source AI</span> — every improvement is transparent, auditable, and yours.</div>
+    <div class="bottom-tags">
+      <span class="btag">LangGraph</span>
+      <span class="btag coral">LangChain</span>
+      <span class="btag">FHIR R4</span>
+      <span class="btag coral">FastAPI</span>
+      <span class="btag dark">Open Source</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>

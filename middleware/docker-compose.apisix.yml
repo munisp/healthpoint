@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  apisix:
+    image: apache/apisix:2.15.0-debian
+    container_name: apisix
+    volumes:
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml
+    ports:
+      - "9080:9080"
+      - "9443:9443"
+    networks:
+      - middleware_net
+
+networks:
+  middleware_net:
+    driver: bridge
+

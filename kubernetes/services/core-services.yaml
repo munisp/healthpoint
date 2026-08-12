@@ -1,0 +1,223 @@
+---
+# HealthPoint NSA/IDR Platform — Kubernetes Services
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: healthpoint
+  labels:
+    app: api-gateway
+spec:
+  selector:
+    app: api-gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nsa-idr-dispute
+  namespace: healthpoint
+  labels:
+    app: nsa-idr-dispute
+spec:
+  selector:
+    app: nsa-idr-dispute
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8016
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-processing
+  namespace: healthpoint
+  labels:
+    app: payment-processing
+spec:
+  selector:
+    app: payment-processing
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8016
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: claims-processing
+  namespace: healthpoint
+  labels:
+    app: claims-processing
+spec:
+  selector:
+    app: claims-processing
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8004
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: provider-management
+  namespace: healthpoint
+  labels:
+    app: provider-management
+spec:
+  selector:
+    app: provider-management
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8002
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: security-auth
+  namespace: healthpoint
+  labels:
+    app: security-auth
+spec:
+  selector:
+    app: security-auth
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8031
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audit-compliance
+  namespace: healthpoint
+  labels:
+    app: audit-compliance
+spec:
+  selector:
+    app: audit-compliance
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8005
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-fraud-detection
+  namespace: healthpoint
+  labels:
+    app: ai-fraud-detection
+spec:
+  selector:
+    app: ai-fraud-detection
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8001
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification
+  namespace: healthpoint
+  labels:
+    app: notification
+spec:
+  selector:
+    app: notification
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8023
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gfe-management
+  namespace: healthpoint
+  labels:
+    app: gfe-management
+spec:
+  selector:
+    app: gfe-management
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8036
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: predictive-analytics
+  namespace: healthpoint
+  labels:
+    app: predictive-analytics
+spec:
+  selector:
+    app: predictive-analytics
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8081
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-reporting
+  namespace: healthpoint
+  labels:
+    app: analytics-reporting
+spec:
+  selector:
+    app: analytics-reporting
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8007
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: document-management
+  namespace: healthpoint
+  labels:
+    app: document-management
+spec:
+  selector:
+    app: document-management
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8009
+      protocol: TCP
+  type: ClusterIP

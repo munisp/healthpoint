@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      .slide-container {
+        width: 1280px;
+        min-height: 720px;
+        background: #FFFFFF;
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      .top-bar {
+        width: 100%;
+        height: 6px;
+        background: #2563EB;
+        display: flex;
+      }
+      .top-bar-accent { width: 120px; height: 6px; background: #F43F5E; }
+      .content-area {
+        flex: 1;
+        display: flex;
+        gap: 0;
+      }
+      .left-col {
+        width: 620px;
+        padding: 44px 48px 40px 52px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .section-label {
+        font-size: 11px;
+        font-weight: 700;
+        color: #F43F5E;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        margin-bottom: 12px;
+      }
+      .slide-title {
+        font-size: 38px;
+        font-weight: 900;
+        color: #0F172A;
+        line-height: 1.1;
+        letter-spacing: -0.5px;
+      }
+      .slide-title span { color: #2563EB; }
+      .problems-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-top: 8px;
+      }
+      .problem-item {
+        border-top: 3px solid #2563EB;
+        padding-top: 14px;
+      }
+      .problem-item.coral { border-top-color: #F43F5E; }
+      .problem-number {
+        font-size: 40px;
+        font-weight: 900;
+        color: #2563EB;
+        line-height: 1;
+        letter-spacing: -1px;
+      }
+      .problem-item.coral .problem-number { color: #F43F5E; }
+      .problem-label {
+        font-size: 12px;
+        font-weight: 700;
+        color: #0F172A;
+        margin-top: 4px;
+        line-height: 1.4;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+      .problem-desc {
+        font-size: 11px;
+        color: #64748B;
+        margin-top: 4px;
+        line-height: 1.5;
+      }
+      .callout-box {
+        background: #0F172A;
+        padding: 16px 20px;
+        margin-top: 8px;
+      }
+      .callout-text {
+        font-size: 13px;
+        color: #FFFFFF;
+        line-height: 1.6;
+        font-style: italic;
+      }
+      .callout-text strong { color: #F43F5E; font-style: normal; }
+      .right-col {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: #F8FAFC;
+        border-left: 1px solid #E2E8F0;
+      }
+      .right-image {
+        width: 100%;
+        height: 380px;
+        object-fit: cover;
+        object-position: top center;
+        display: block;
+      }
+      .right-stats {
+        flex: 1;
+        padding: 20px 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        justify-content: center;
+      }
+      .stat-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border-bottom: 1px solid #E2E8F0;
+        padding-bottom: 10px;
+      }
+      .stat-row:last-child { border-bottom: none; padding-bottom: 0; }
+      .stat-icon {
+        width: 32px;
+        height: 32px;
+        background: #2563EB;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .stat-icon.coral { background: #F43F5E; }
+      .stat-icon i { color: #fff; font-size: 14px; }
+      .stat-info { flex: 1; }
+      .stat-val {
+        font-size: 18px;
+        font-weight: 900;
+        color: #0F172A;
+        line-height: 1;
+      }
+      .stat-desc {
+        font-size: 11px;
+        color: #64748B;
+        margin-top: 2px;
+        line-height: 1.4;
+      }
+    </style>
+</head>
+<body>
+<div class="slide-container">
+  <div class="top-bar"><div class="top-bar-accent"></div></div>
+  <div class="content-area">
+    <div class="left-col">
+      <div>
+        <div class="section-label">The Challenge</div>
+        <div class="slide-title">A <span>$40 Billion</span><br>Compliance Challenge —<br>Providers Are Losing</div>
+      </div>
+      <div class="problems-grid">
+        <div class="problem-item">
+          <div class="problem-number">78%</div>
+          <div class="problem-label">First-Attempt CMS Rejection Rate</div>
+          <div class="problem-desc">Nearly 4 in 5 submissions are rejected, resetting the clock and risking forfeiture</div>
+        </div>
+        <div class="problem-item coral">
+          <div class="problem-number">75–90</div>
+          <div class="problem-label">Minutes Per Dispute (Manual)</div>
+          <div class="problem-desc">Staff time for document prep and CMS portal submission alone — before any negotiation</div>
+        </div>
+        <div class="problem-item coral">
+          <div class="problem-number">$38K</div>
+          <div class="problem-label">Maximum Loss Per Dispute</div>
+          <div class="problem-desc">Air ambulance and anesthesiology providers face the highest unresolved claim exposure</div>
+        </div>
+        <div class="problem-item">
+          <div class="problem-number">19</div>
+          <div class="problem-label">Mandatory Steps, Strict Deadlines</div>
+          <div class="problem-desc">Missing a single statutory deadline can forfeit the entire claim — permanently</div>
+        </div>
+      </div>
+      <div class="callout-box">
+        <div class="callout-text">"The average provider has <strong>47 open IDR disputes</strong> at any given time. Without automation, that is <strong>3,500+ hours of manual work per year</strong> — equivalent to two full-time compliance staff."</div>
+      </div>
+    </div>
+    <div class="right-col">
+      <img class="right-image" src="/home/ubuntu/upload/search_images/CLNBs8ODHrj2.png" alt="No Surprises Act implementation" />
+      <div class="right-stats">
+        <div class="stat-row">
+          <div class="stat-icon"><i class="fas fa-dollar-sign"></i></div>
+          <div class="stat-info">
+            <div class="stat-val">$180K–$420K</div>
+            <div class="stat-desc">Recoverable revenue lost annually per mid-size provider due to process failures</div>
+          </div>
+        </div>
+        <div class="stat-row">
+          <div class="stat-icon coral"><i class="fas fa-hospital"></i></div>
+          <div class="stat-info">
+            <div class="stat-val">Rural & Small Providers</div>
+            <div class="stat-desc">Lack dedicated IDR compliance teams — creating a systematic equity gap in outcomes</div>
+          </div>
+        </div>
+        <div class="stat-row">
+          <div class="stat-icon"><i class="fas fa-clock"></i></div>
+          <div class="stat-info">
+            <div class="stat-val">4-Business-Day Window</div>
+            <div class="stat-desc">To initiate IDR after failed negotiation (45 CFR § 149.510(b)(2)) — easily missed manually</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

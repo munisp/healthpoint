@@ -1,0 +1,555 @@
+version: '3.8'
+
+# HealthPoint NSA/IDR Platform — Production-grade Docker Compose
+# Includes: Vault, PostgreSQL (production config), Redis, Kafka, Keycloak,
+#           APISIX, Permify, Temporal, Dapr, TigerBeetle, OpenSearch,
+#           Fluvio, Mojaloop proxy, OpenAppSec
+
+x-healthpoint-env: &healthpoint-env
+  DATABASE_URL: postgresql://healthpoint:${POSTGRES_PASSWORD:-changeme}@postgres:5432/healthpoint
+  REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  KEYCLOAK_URL: http://keycloak:8080
+  KEYCLOAK_REALM: healthpoint
+  KEYCLOAK_CLIENT_ID: healthpoint-backend
+  KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-changeme}
+  VAULT_ADDR: http://vault:8200
+  VAULT_ENABLED: "true"
+  VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+  VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+  ENVIRONMENT: production
+
+services:
+
+  # ── HashiCorp Vault ─────────────────────────────────────────────────────────
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: vault
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_TOKEN:-vault-dev-root-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_LOG_LEVEL: warn
+    ports:
+      - "8200:8200"
+    volumes:
+      - vault_data:/vault/data
+      - ./vault/config.hcl:/vault/config/config.hcl:ro
+      - ./vault/policies:/vault/policies:ro
+    command: server -dev
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - middleware_net
+
+  vault-init:
+    image: hashicorp/vault:1.15
+    container_name: vault-init
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_DEV_TOKEN:-vault-dev-root-token}
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: healthpoint
+      POSTGRES_VAULT_ADMIN_USER: vault_admin
+      POSTGRES_VAULT_ADMIN_PASSWORD: ${POSTGRES_VAULT_ADMIN_PASSWORD:-vault_admin_pass}
+    volumes:
+      - ../scripts/vault_setup.sh:/vault_setup.sh:ro
+    command: sh /vault_setup.sh
+    networks:
+      - middleware_net
+    restart: "no"
+
+  # ── PostgreSQL (Production-tuned) ───────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: healthpoint
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: healthpoint
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    command: >
+      postgres
+        -c config_file=/etc/postgresql/postgresql.conf
+        -c max_connections=500
+        -c shared_buffers=256MB
+        -c effective_cache_size=768MB
+        -c maintenance_work_mem=64MB
+        -c checkpoint_completion_target=0.9
+        -c wal_buffers=16MB
+        -c default_statistics_target=100
+        -c random_page_cost=1.1
+        -c effective_io_concurrency=200
+        -c work_mem=4MB
+        -c min_wal_size=1GB
+        -c max_wal_size=4GB
+        -c max_worker_processes=8
+        -c max_parallel_workers_per_gather=4
+        -c max_parallel_workers=8
+        -c max_parallel_maintenance_workers=4
+        -c log_min_duration_statement=1000
+        -c log_checkpoints=on
+        -c log_connections=on
+        -c log_disconnections=on
+        -c log_lock_waits=on
+        -c log_temp_files=0
+        -c track_activities=on
+        -c track_counts=on
+        -c track_io_timing=on
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U healthpoint -d healthpoint"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - middleware_net
+
+  # ── Redis (Production-tuned) ────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: >
+      redis-server
+        --requirepass ${REDIS_PASSWORD:-changeme}
+        --maxmemory 512mb
+        --maxmemory-policy allkeys-lru
+        --save 900 1
+        --save 300 10
+        --save 60 10000
+        --appendonly yes
+        --appendfsync everysec
+        --no-appendfsync-on-rewrite no
+        --auto-aof-rewrite-percentage 100
+        --auto-aof-rewrite-min-size 64mb
+        --tcp-keepalive 300
+        --timeout 0
+        --tcp-backlog 511
+        --loglevel warning
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - middleware_net
+
+  # ── Keycloak ────────────────────────────────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0.4
+    container_name: keycloak
+    command: start-dev --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: healthpoint
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-changeme}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY: edge
+      KC_LOG_LEVEL: warn
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - middleware_net
+
+  # ── TigerBeetle ─────────────────────────────────────────────────────────────
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    container_name: tigerbeetle
+    command: >
+      start
+        --addresses=0.0.0.0:3000
+        /data/0_0.tigerbeetle
+    ports:
+      - "3000:3000"
+    volumes:
+      - tigerbeetle_data:/data
+    entrypoint: ["/bin/sh", "-c", "
+      if [ ! -f /data/0_0.tigerbeetle ]; then
+        /tigerbeetle format --cluster=0 --replica=0 --replica-count=1 /data/0_0.tigerbeetle;
+      fi;
+      exec /tigerbeetle start --addresses=0.0.0.0:3000 /data/0_0.tigerbeetle
+    "]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 3000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - middleware_net
+
+  # ── Zookeeper ───────────────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - middleware_net
+
+  # ── Kafka (Production-tuned) ────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      KAFKA_COMPRESSION_TYPE: lz4
+      KAFKA_MESSAGE_MAX_BYTES: 10485760
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 10485760
+      KAFKA_HEAP_OPTS: "-Xmx1G -Xms1G"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - middleware_net
+
+  # ── Fluvio (High-throughput streaming) ─────────────────────────────────────
+  fluvio:
+    image: infinyon/fluvio:latest
+    container_name: fluvio
+    command: cluster start --local
+    ports:
+      - "9003:9003"
+      - "9010:9010"
+    volumes:
+      - fluvio_data:/var/lib/fluvio
+    networks:
+      - middleware_net
+
+  # ── OpenSearch ──────────────────────────────────────────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: opensearch
+    environment:
+      - cluster.name=healthpoint-cluster
+      - node.name=opensearch-node1
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - middleware_net
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.11.0
+    container_name: opensearch-dashboards
+    ports:
+      - "5601:5601"
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - middleware_net
+
+  # ── Temporal ────────────────────────────────────────────────────────────────
+  temporal:
+    image: temporalio/auto-setup:1.22.0
+    container_name: temporal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=healthpoint
+      - POSTGRES_PWD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_SEEDS=postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"
+    volumes:
+      - ./temporal/dynamicconfig:/etc/temporal/config/dynamicconfig
+    healthcheck:
+      test: ["CMD", "temporal", "workflow", "list", "--namespace", "default"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - middleware_net
+
+  temporal-ui:
+    image: temporalio/ui:2.21.3
+    container_name: temporal-ui
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    ports:
+      - "8088:8080"
+    networks:
+      - middleware_net
+
+  # ── Permify ─────────────────────────────────────────────────────────────────
+  permify:
+    image: ghcr.io/permify/permify:latest
+    container_name: permify
+    command: serve
+    ports:
+      - "3476:3476"
+      - "3478:3478"
+    environment:
+      - PERMIFY_DATABASE_ENGINE=postgres
+      - PERMIFY_DATABASE_URI=postgresql://healthpoint:${POSTGRES_PASSWORD:-changeme}@postgres:5432/healthpoint
+      - PERMIFY_DATABASE_MAX_OPEN_CONNECTIONS=20
+      - PERMIFY_SERVER_RATE_LIMIT=1000
+    volumes:
+      - ./permify/schema.perm:/etc/permify/schema.perm:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "grpc_health_probe -addr=:3476 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - middleware_net
+
+  # ── APISIX ──────────────────────────────────────────────────────────────────
+  apisix-etcd:
+    image: bitnami/etcd:3.5.9
+    container_name: apisix-etcd
+    environment:
+      ALLOW_NONE_AUTHENTICATION: "yes"
+      ETCD_ADVERTISE_CLIENT_URLS: http://apisix-etcd:2379
+    volumes:
+      - etcd_data:/bitnami/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - middleware_net
+
+  apisix:
+    image: apache/apisix:3.6.0-debian
+    container_name: apisix
+    depends_on:
+      apisix-etcd:
+        condition: service_healthy
+    volumes:
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./apisix/routes:/usr/local/apisix/conf/routes:ro
+    ports:
+      - "9080:9080"
+      - "9443:9443"
+      - "9180:9180"
+    environment:
+      - APISIX_STAND_ALONE=false
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9080/apisix/admin/routes -H 'X-API-KEY: ${APISIX_ADMIN_KEY:-edd1c9f034335f136f87ad84b625c8f1}' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - middleware_net
+
+  # ── Dapr ────────────────────────────────────────────────────────────────────
+  dapr-placement:
+    image: daprio/dapr:1.12.0
+    container_name: dapr-placement
+    command: ["./placement", "-port", "50006"]
+    ports:
+      - "50006:50006"
+    networks:
+      - middleware_net
+
+  # ── OpenAppSec ──────────────────────────────────────────────────────────────
+  openappsec:
+    image: openappsec/agent:latest
+    container_name: openappsec
+    ports:
+      - "8443:8443"
+    environment:
+      - OPENAPPSEC_MODE=prevent
+    networks:
+      - middleware_net
+
+  # ── Mojaloop MySQL (Mojaloop requires MySQL; bridged via mojaloop_client.py) ─
+  mojaloop-mysql:
+    image: mysql:8.0
+    container_name: mojaloop-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MOJALOOP_MYSQL_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: central_ledger
+      MYSQL_USER: mojaloop
+      MYSQL_PASSWORD: ${MOJALOOP_MYSQL_PASSWORD:-changeme}
+    command: >
+      --innodb-buffer-pool-size=512M
+      --innodb-flush-log-at-trx-commit=2
+      --innodb-io-capacity=10000
+      --innodb-io-capacity-max=20000
+      --innodb-read-io-threads=8
+      --innodb-write-io-threads=8
+      --innodb-log-file-size=256M
+      --innodb-log-buffer-size=64M
+      --max-connections=500
+      --thread-cache-size=50
+      --query-cache-type=0
+      --sync-binlog=0
+      --binlog-format=ROW
+      --transaction-isolation=READ-COMMITTED
+    ports:
+      - "3306:3306"
+    volumes:
+      - mojaloop_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "mojaloop", "-p${MOJALOOP_MYSQL_PASSWORD:-changeme}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - middleware_net
+
+  # ── Prometheus + Grafana ────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+    ports:
+      - "9090:9090"
+    networks:
+      - middleware_net
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-changeme}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: grafana
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${GRAFANA_OAUTH_SECRET:-changeme}
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: http://keycloak:8080/realms/healthpoint/protocol/openid-connect/auth
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://keycloak:8080/realms/healthpoint/protocol/openid-connect/token
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - middleware_net
+
+volumes:
+  postgres_data:
+  redis_data:
+  vault_data:
+  tigerbeetle_data:
+  kafka_data:
+  zookeeper_data:
+  zookeeper_log:
+  fluvio_data:
+  opensearch_data:
+  etcd_data:
+  mojaloop_mysql_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  middleware_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
