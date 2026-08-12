@@ -6,50 +6,9 @@ import { trpc } from "@/lib/trpc";
 import {
   Scale, Clock, Shield, Zap, Brain, FileText, Building2,
   Stethoscope, Landmark, Users, CheckCircle2, ArrowRight,
-  ChevronDown, Star, ExternalLink, Menu, X
+  ChevronDown, ExternalLink, Menu, X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-// ─── Animated counter hook ────────────────────────────────────────────────────
-function useCounter(target: number, duration = 1800, start = false) {
-  const [value, setValue] = useState(0);
-  useEffect(() => {
-    if (!start) return;
-    let startTime: number | null = null;
-    const step = (timestamp: number) => {
-      if (!startTime) startTime = timestamp;
-      const progress = Math.min((timestamp - startTime) / duration, 1);
-      setValue(Math.floor(progress * target));
-      if (progress < 1) requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  }, [target, duration, start]);
-  return value;
-}
-
-// ─── Intersection observer hook ───────────────────────────────────────────────
-function useInView(threshold = 0.2) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [inView, setInView] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    // Use a short delay so layout is settled before checking viewport position
-    const timer = setTimeout(() => {
-      const rect = el.getBoundingClientRect();
-      if (rect.top < window.innerHeight && rect.bottom > 0) {
-        setInView(true);
-        return;
-      }
-      const obs = new IntersectionObserver(([entry]) => {
-        if (entry.isIntersecting) { setInView(true); obs.disconnect(); }
-      }, { threshold });
-      obs.observe(el);
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [threshold]);
-  return { ref, inView };
-}
 
 // ─── 19 IDR workflow steps ────────────────────────────────────────────────────
 const IDR_STEPS = [
@@ -82,7 +41,7 @@ const AUDIENCES = [
     title: "Physicians & Providers",
     color: "blue",
     pain: "Spending hours on manual IDR paperwork while disputes pile up",
-    outcomes: ["76% win rate on submitted disputes", "18-min average filing time", "Zero missed deadlines"],
+    outcomes: ["Guided 19-step workflow", "Deadline tracking workspace", "Offer and document tools"],
     cta: "Sign Up as Provider",
   },
   {
@@ -91,7 +50,7 @@ const AUDIENCES = [
     title: "Hospitals & Facilities",
     color: "purple",
     pain: "Managing hundreds of concurrent disputes across multiple departments",
-    outcomes: ["Batch filing for 300+ disputes", "Department-level analytics", "Automated QPA benchmarking"],
+    outcomes: ["Bulk dispute operations", "Department-level analytics", "QPA benchmark workspace"],
     cta: "Sign Up as Facility",
   },
   {
@@ -100,7 +59,7 @@ const AUDIENCES = [
     title: "Health Plans & Payers",
     color: "amber",
     pain: "Inconsistent offer strategies and reactive dispute management",
-    outcomes: ["AI-driven offer optimization", "Real-time exposure tracking", "Regulatory audit trail"],
+    outcomes: ["Offer-management workspace", "Dispute portfolio views", "Auditable activity records"],
     cta: "Sign Up as Payer",
   },
   {
@@ -109,7 +68,7 @@ const AUDIENCES = [
     title: "IDR Entities",
     color: "green",
     pain: "Manual case intake and document review slowing arbitration throughput",
-    outcomes: ["5× arbitrator throughput", "AI document pre-screening", "Automated determination drafts"],
+    outcomes: ["Structured case intake", "Document analysis support", "Determination drafting tools"],
     cta: "Sign Up as IDR Entity",
   },
 ];
@@ -121,59 +80,6 @@ const colorMap: Record<string, { bg: string; border: string; text: string; btn: 
   green:  { bg: "bg-green-50",  border: "border-green-200",  text: "text-green-700",  btn: "bg-green-600 hover:bg-green-700",  badge: "bg-green-100 text-green-700" },
 };
 
-// ─── Testimonials ─────────────────────────────────────────────────────────────
-const TESTIMONIALS = [
-  {
-    quote: "We manage 300+ concurrent disputes across 8 departments. HealthPoint's batch filing and deadline tracking has been transformational for our revenue cycle team.",
-    name: "VP of Revenue Cycle",
-    org: "Regional Health System (850 beds)",
-    stars: 5,
-  },
-  {
-    quote: "The AI document analysis alone saves our arbitrators 2 hours per case. We've tripled our monthly case throughput since onboarding.",
-    name: "Director of Operations",
-    org: "Certified IDR Entity",
-    stars: 5,
-  },
-  {
-    quote: "Our QPA offer acceptance rate improved by 34% in the first quarter. The benchmarking data and AI offer optimization are genuinely game-changing.",
-    name: "Chief Compliance Officer",
-    org: "Regional Health Plan",
-    stars: 5,
-  },
-];
-
-// ─── Pricing tiers ────────────────────────────────────────────────────────────
-const PRICING = [
-  {
-    name: "Starter",
-    price: "$299",
-    period: "/mo",
-    desc: "For independent providers and small practices",
-    features: ["Up to 50 disputes/month", "19-step workflow automation", "Deadline tracking & alerts", "Basic analytics dashboard", "Email support"],
-    cta: "Get Started Free",
-    highlight: false,
-  },
-  {
-    name: "Professional",
-    price: "$899",
-    period: "/mo",
-    desc: "For hospitals, facilities, and payers",
-    features: ["Unlimited disputes", "AI document analysis", "EMR/EHR integration (FHIR R4)", "CMS submission automation", "Batch filing & bulk actions", "Dispute templates", "Priority support"],
-    cta: "Start 14-Day Trial",
-    highlight: true,
-  },
-  {
-    name: "Enterprise",
-    price: "Custom",
-    period: "",
-    desc: "For IDR entities and large health systems",
-    features: ["Everything in Professional", "White-label deployment", "Custom Keycloak realm", "Dedicated infrastructure", "SLA guarantee (99.9%)", "Dedicated success manager", "Custom integrations"],
-    cta: "Contact Sales",
-    highlight: false,
-  },
-];
-
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function Home() {
   const [, navigate] = useLocation();
@@ -182,13 +88,6 @@ export default function Home() {
   const [leadSubmitted, setLeadSubmitted] = useState(false);
   const [leadForm, setLeadForm] = useState({ name: "", email: "", org: "", role: "provider" });
   const [leadError, setLeadError] = useState("");
-
-  // Stats section — start counters immediately (section is above the fold)
-  const statsRef = useInView(0.3);
-  const disputes = useCounter(47000, 2000, true);
-  const winRate = useCounter(76, 1500, true);
-  const timeSaved = useCounter(18, 1200, true);
-  const states = useCounter(50, 1000, true);
 
   const submitLeadMutation = trpc.leads.submit.useMutation();
   useEffect(() => {
@@ -280,18 +179,18 @@ export default function Home() {
             NSA No Surprises Act — Federal IDR Platform
           </div>
           <h1 className="text-5xl sm:text-6xl font-extrabold mb-6 leading-tight">
-            The Most Intelligent<br />
-            <span className="text-blue-400">NSA/IDR Platform</span><br />
-            on the Market
+            A Structured<br />
+            <span className="text-blue-400">NSA/IDR Workflow</span><br />
+            Demonstration Platform
           </h1>
           <p className="text-lg text-slate-300 max-w-2xl mx-auto mb-10">
-            HealthPoint automates the complete 19-step Federal IDR process — from open negotiation through final determination.
-            AI-powered, Keycloak-secured, built to 45 CFR §149.510.
+            HealthPoint demonstrates a structured approach to managing the Federal IDR workflow, including dispute records, deadlines, documents, offers, and determination tracking.
+            It is a development platform and should not be treated as legal, regulatory, or payment-settlement advice.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <a href={getRegisterUrl("provider", "/dashboard")}
               className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold px-8 py-3.5 rounded-xl text-base transition-colors">
-              Start Free Trial <ArrowRight size={18} />
+              Access the Demonstration <ArrowRight size={18} />
             </a>
             <a href="#how-it-works"
               className="inline-flex items-center gap-2 border border-white/30 hover:bg-white/10 text-white font-semibold px-8 py-3.5 rounded-xl text-base transition-colors">
@@ -301,17 +200,17 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ── Stats ── */}
-      <section className="bg-blue-600 text-white py-12" ref={statsRef.ref}>
+      {/* ── Verified capabilities ── */}
+      <section className="bg-blue-600 text-white py-12">
         <div className="max-w-5xl mx-auto px-4 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
           {[
-            { value: disputes.toLocaleString(), suffix: "+", label: "Disputes Processed" },
-            { value: winRate, suffix: "%", label: "Average Win Rate" },
-            { value: timeSaved, suffix: " min", label: "Avg. Filing Time" },
-            { value: states, suffix: "-State", label: "Balance-Billing Coverage" },
+            { value: "19", label: "Workflow Steps Modeled" },
+            { value: "R4", label: "FHIR Claim Interface" },
+            { value: "DB", label: "Dispute Activity Records" },
+            { value: "AI", label: "Optional Drafting Support" },
           ].map(s => (
             <div key={s.label}>
-              <div className="text-4xl font-extrabold mb-1">{s.value}{s.suffix}</div>
+              <div className="text-4xl font-extrabold mb-1">{s.value}</div>
               <div className="text-blue-200 text-sm font-medium">{s.label}</div>
             </div>
           ))}
@@ -324,7 +223,7 @@ export default function Home() {
           <div className="text-center mb-14">
             <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">The Complete Process</span>
             <h2 className="text-4xl font-extrabold text-slate-900 mt-2 mb-4">19-Step IDR Workflow</h2>
-            <p className="text-slate-600 max-w-2xl mx-auto">Every step of the Federal IDR process is tracked, deadline-managed, and AI-assisted — from the first open negotiation notice to final payment.</p>
+            <p className="text-slate-600 max-w-2xl mx-auto">The demonstration models each workflow step and provides a workspace for deadlines, evidence, offers, determinations, and payment evidence.</p>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {IDR_STEPS.map(s => (
@@ -346,10 +245,10 @@ export default function Home() {
               <h2 className="text-4xl font-extrabold mt-2 mb-6">Built-in AI Engine with 4 Specialized Capabilities</h2>
               <div className="space-y-4">
                 {[
-                  { icon: Brain, title: "NSA Regulatory Intelligence", desc: "Real-time 45 CFR Part 149 eligibility screening, compliance checks, and regulatory guidance" },
-                  { icon: FileText, title: "Document Analysis", desc: "Extracts EOBs, remittances, and clinical records; validates completeness; classifies evidence" },
-                  { icon: Zap, title: "CMS Submission Drafting", desc: "Multi-layer validation, auto-fix suggestions, and structured submission narrative generation" },
-                  { icon: Scale, title: "QPA Benchmarking", desc: "Calculates Qualifying Payment Amounts, benchmarks offers against market data, and optimizes strategy" },
+                  { icon: Brain, title: "Regulatory Research Support", desc: "Provides workflow prompts and reference-oriented assistance that staff must review before relying on it." },
+                  { icon: FileText, title: "Document Analysis", desc: "Supports extraction and classification workflows; uploaded results require human validation." },
+                  { icon: Zap, title: "Submission Drafting", desc: "Generates structured draft content and validation prompts; it does not submit to CMS on a user’s behalf." },
+                  { icon: Scale, title: "QPA Workspace", desc: "Stores and compares supplied benchmark information; it does not independently establish a qualifying payment amount." },
                 ].map(f => (
                   <div key={f.title} className="flex gap-4">
                     <div className="w-10 h-10 rounded-lg bg-sky-500/20 border border-sky-500/30 flex items-center justify-center flex-shrink-0">
@@ -369,19 +268,17 @@ export default function Home() {
                 <div className="w-3 h-3 rounded-full bg-red-500" />
                 <div className="w-3 h-3 rounded-full bg-yellow-500" />
                 <div className="w-3 h-3 rounded-full bg-green-500" />
-                <span className="ml-2 text-slate-400 text-xs font-mono">IDR Assistant — AI Analysis</span>
+                <span className="ml-2 text-slate-400 text-xs font-mono">Illustrative analysis workflow — not a live case</span>
               </div>
               <div className="p-5 font-mono text-xs space-y-2 text-slate-300">
-                <p><span className="text-sky-400">user@healthpoint</span><span className="text-slate-500">:~$</span> <span className="text-white">analyze_dispute --id HP-2024-0847</span></p>
-                <p className="text-slate-500">{">"} Fetching dispute record...</p>
-                <p className="text-green-400">✓ Dispute HP-2024-0847 loaded (Emergency Radiology, $18,400)</p>
-                <p className="text-slate-500">{">"} Running NSA eligibility check...</p>
-                <p className="text-green-400">✓ Eligible: Out-of-network, no prior agreement, within 4-business-day window</p>
-                <p className="text-slate-500">{">"} Calculating QPA benchmark...</p>
-                <p className="text-yellow-400">⚡ QPA: $12,200 | Payer offer: $9,800 | Gap: $2,400 (19.7%)</p>
-                <p className="text-slate-500">{">"} Generating offer rationale...</p>
-                <p className="text-green-400">✓ Rationale: 3 comparable rates, 2 clinical complexity factors, 1 market share argument</p>
-                <p className="text-sky-400">{">"} Recommended action: <span className="text-white">Submit IDR at $14,600 (above QPA median)</span></p>
+                <p><span className="text-sky-400">demo@healthpoint</span><span className="text-slate-500">:~$</span> <span className="text-white">review_dispute --sample</span></p>
+                <p className="text-slate-500">{">"} Loading an illustrative workflow record...</p>
+                <p className="text-green-400">✓ Sample record loaded — no patient or payment data displayed</p>
+                <p className="text-slate-500">{">"} Preparing review prompts...</p>
+                <p className="text-yellow-400">⚡ Staff review required: eligibility, evidence completeness, and deadlines</p>
+                <p className="text-slate-500">{">"} Generating a draft outline...</p>
+                <p className="text-green-400">✓ Draft generated for authorized-user review</p>
+                <p className="text-sky-400">{">"} Next action: <span className="text-white">Validate source records before taking any operational action</span></p>
                 <p className="text-slate-500 animate-pulse">▋</p>
               </div>
             </div>
@@ -426,65 +323,23 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ── Testimonials ── */}
-      <section className="py-20 bg-slate-50">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-14">
-            <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Results That Speak</span>
-            <h2 className="text-4xl font-extrabold text-slate-900 mt-2">Trusted by Healthcare Organizations</h2>
-          </div>
-          <div className="grid md:grid-cols-3 gap-8">
-            {TESTIMONIALS.map((t, i) => (
-              <div key={i} className="bg-white border border-slate-200 rounded-2xl p-7 shadow-sm">
-                <div className="flex gap-1 mb-4">
-                  {Array.from({ length: t.stars }).map((_, j) => (
-                    <Star key={j} size={16} className="text-amber-400 fill-amber-400" />
-                  ))}
-                </div>
-                <p className="text-slate-700 leading-relaxed mb-6 italic">"{t.quote}"</p>
-                <div>
-                  <p className="font-semibold text-slate-900 text-sm">{t.name}</p>
-                  <p className="text-slate-500 text-xs mt-0.5">{t.org}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── Pricing ── */}
+      {/* ── Deployment status ── */}
       <section id="pricing" className="py-20 bg-white">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-14">
-            <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Transparent Pricing</span>
-            <h2 className="text-4xl font-extrabold text-slate-900 mt-2 mb-4">Plans for Every Organization</h2>
-            <p className="text-slate-600">All plans include Keycloak SSO, deadline tracking, and HIPAA-compliant infrastructure.</p>
+            <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Current Status</span>
+            <h2 className="text-4xl font-extrabold text-slate-900 mt-2 mb-4">Development Demonstration</h2>
+            <p className="text-slate-600">This deployment is a development demonstration. Commercial pricing, trials, support commitments, and service-level agreements are not offered through this page.</p>
           </div>
-          <div className="grid md:grid-cols-3 gap-8 items-start">
-            {PRICING.map(p => (
-              <div key={p.name}
-                className={`rounded-2xl border p-8 flex flex-col ${p.highlight ? "border-blue-500 shadow-xl shadow-blue-100 relative" : "border-slate-200"}`}>
-                {p.highlight && (
-                  <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-xs font-bold px-4 py-1.5 rounded-full">Most Popular</div>
-                )}
-                <h3 className="text-xl font-bold text-slate-900 mb-1">{p.name}</h3>
-                <p className="text-slate-500 text-sm mb-5">{p.desc}</p>
-                <div className="flex items-end gap-1 mb-6">
-                  <span className="text-4xl font-extrabold text-slate-900">{p.price}</span>
-                  <span className="text-slate-500 text-sm mb-1">{p.period}</span>
-                </div>
-                <ul className="space-y-3 flex-1 mb-8">
-                  {p.features.map(f => (
-                    <li key={f} className="flex items-start gap-2 text-sm text-slate-700">
-                      <CheckCircle2 size={15} className="text-blue-500 mt-0.5 flex-shrink-0" />
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-                <a href={p.name === "Enterprise" ? "#contact" : getRegisterUrl("provider", "/dashboard")}
-                  className={`block text-center font-semibold py-3 rounded-xl transition-colors text-sm ${p.highlight ? "bg-blue-600 hover:bg-blue-700 text-white" : "border-2 border-blue-500 text-blue-600 hover:bg-blue-50"}`}>
-                  {p.cta}
-                </a>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 grid sm:grid-cols-3 gap-6 text-left">
+            {[
+              ["Workflow demo", "Use the guided dispute, document, offer, and determination views for evaluation."],
+              ["Human review", "Validate legal, clinical, payment, and regulatory decisions with qualified personnel."],
+              ["No funds transfer", "Payment entries record external evidence; they do not initiate or release funds."],
+            ].map(([title, description]) => (
+              <div key={title}>
+                <h3 className="font-semibold text-slate-900 mb-2">{title}</h3>
+                <p className="text-sm text-slate-600">{description}</p>
               </div>
             ))}
           </div>
@@ -535,8 +390,8 @@ export default function Home() {
       {/* ── Lead Capture / CTA ── */}
       <section id="contact" className="py-20 bg-gradient-to-br from-blue-600 to-blue-800 text-white">
         <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <h2 className="text-4xl font-extrabold mb-4">Ready to Transform Your IDR Process?</h2>
-          <p className="text-blue-200 mb-10">Join healthcare organizations already using HealthPoint to win more disputes in less time.</p>
+          <h2 className="text-4xl font-extrabold mb-4">Explore the IDR Workflow Demonstration</h2>
+          <p className="text-blue-200 mb-10">Create a demonstration account to evaluate the workflow interface. Do not enter production patient data or rely on this environment for funds movement.</p>
 
           {leadSubmitted ? (
             <div className="bg-white/10 border border-white/20 rounded-2xl p-8">
@@ -603,7 +458,7 @@ export default function Home() {
                 <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover border border-slate-700" alt="HealthPoint" />
                 <span className="text-white font-bold">{APP_TITLE}</span>
               </div>
-              <p className="text-sm leading-relaxed">The most intelligent NSA/IDR platform on the market. Automating the 19-step Federal IDR process for all stakeholders.</p>
+              <p className="text-sm leading-relaxed">A development demonstration for structured IDR workflow evaluation, including dispute tracking, documents, offers, determinations, and payment evidence.</p>
             </div>
             <div>
               <h4 className="text-white font-semibold mb-4 text-sm">Platform</h4>
@@ -642,8 +497,8 @@ export default function Home() {
             </div>
           </div>
           <div className="border-t border-slate-800 pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
-            <p>© 2026 HealthPoint. Built for NSA/IDR Compliance · 45 CFR Part 149 · HIPAA-compliant infrastructure.</p>
-            <p className="text-slate-600">Keycloak SSO · FHIR R4 Ready · HIPAA-Compliant Infrastructure</p>
+            <p>© 2026 HealthPoint. Development demonstration for IDR workflow evaluation.</p>
+            <p className="text-slate-600">Authentication tooling · FHIR R4 interface · Human review required</p>
           </div>
         </div>
       </footer>

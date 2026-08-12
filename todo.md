@@ -627,3 +627,6 @@
 - [x] Evaluate operational middleware and infrastructure controls (PostgreSQL transactions, Redis, outbox/event streaming, Temporal/Kafka/TigerBeetle/Fluvio relevance) against the current architecture without claiming unimplemented services
 - [x] Run source, database, API, UI, security, TypeScript, test, and live-deployment validation; publish evidence-based feature and service readiness scores
 - [x] Reconcile GitHub branch/PR status and publish validated changes safely; GitHub main was not overwritten because it has no merge base with the workspace and contains unrelated files, while the validated branch was pushed as audit/funds-flow-hardening-20260812 at 7a8e08d
+
+## Production Readiness Remediation (Aug 12 2026)
+- [x] Remove unsupported marketing superlatives and fabricated operational metrics from the public landing page
