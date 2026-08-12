@@ -8,16 +8,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"time"
 
-	permifyv1 "github.com/Permify/permify-go/generated/base/v1"
-	permify "github.com/Permify/permify-go/v1"
+	permifyv1 "buf.build/gen/go/permifyco/permify/protocolbuffers/go/base/v1"
+	permify "github.com/Permify/permify-go/grpc"
 	"github.com/segmentio/kafka-go"
 	tigerbeetle_go "github.com/tigerbeetle/tigerbeetle-go"
 	. "github.com/tigerbeetle/tigerbeetle-go/pkg/types"
@@ -33,6 +36,7 @@ type Config struct {
 	TigerBeetleAddr   string
 	KafkaBrokers      string
 	MojaloopURL       string
+	InternalAuthToken string
 }
 
 func loadConfig() Config {
@@ -42,6 +46,7 @@ func loadConfig() Config {
 		TigerBeetleAddr: getEnv("TIGERBEETLE_ADDRESS", "localhost:3000"),
 		KafkaBrokers:    getEnv("KAFKA_BROKERS", "localhost:9092"),
 		MojaloopURL:     getEnv("MOJALOOP_URL", "http://localhost:3003"),
+		InternalAuthToken: os.Getenv("INTERNAL_SERVICE_TOKEN"),
 	}
 }
 
@@ -55,7 +60,7 @@ func getEnv(key, fallback string) string {
 // ── Permify client ────────────────────────────────────────────────────────────
 
 type PermifyService struct {
-	client permify.Client
+	client *permify.Client
 }
 
 func NewPermifyService(grpcURL string) (*PermifyService, error) {
@@ -124,7 +129,7 @@ type LedgerService struct {
 }
 
 func NewLedgerService(addr string) (*LedgerService, error) {
-	client, err := tigerbeetle_go.NewClient(ToUint128(0), []string{addr}, 32)
+	client, err := tigerbeetle_go.NewClient(ToUint128(0), []string{addr})
 	if err != nil {
 		return nil, fmt.Errorf("tigerbeetle client: %w", err)
 	}
@@ -162,9 +167,9 @@ func (l *LedgerService) Transfer(ctx context.Context, req TransferRequest) (Tran
 	}
 
 	transfers := []Transfer{{
-		Id:              id,
-		DebitAccountId:  debitID,
-		CreditAccountId: creditID,
+		ID:              id,
+		DebitAccountID:  debitID,
+		CreditAccountID: creditID,
 		Amount:          ToUint128(req.Amount),
 		Ledger:          req.Ledger,
 		Code:            req.Code,
@@ -221,7 +226,25 @@ type PaymentInitiateResponse struct {
 	Timestamp     int64  `json:"timestamp"`
 }
 
+var moneyPattern = regexp.MustCompile(`^[1-9][0-9]{0,9}(\.[0-9]{1,2})?$`)
+
+func validatePaymentInitiateRequest(req PaymentInitiateRequest) error {
+	if req.TransactionID == "" || req.DisputeID == "" || req.PayerFSP == "" || req.PayeeFSP == "" {
+		return fmt.Errorf("transactionId, disputeId, payerFsp, and payeeFsp are required")
+	}
+	if !moneyPattern.MatchString(req.Amount) {
+		return fmt.Errorf("amount must be a positive USD value with at most two decimal places")
+	}
+	if req.Currency != "USD" {
+		return fmt.Errorf("only USD payment evidence is supported")
+	}
+	return nil
+}
+
 func (m *MojaloopService) InitiatePayment(ctx context.Context, req PaymentInitiateRequest) (PaymentInitiateResponse, error) {
+	if err := validatePaymentInitiateRequest(req); err != nil {
+		return PaymentInitiateResponse{}, err
+	}
 	payload := map[string]interface{}{
 		"transactionId": req.TransactionID,
 		"payerFsp":      req.PayerFSP,
@@ -243,9 +266,12 @@ func (m *MojaloopService) InitiatePayment(ctx context.Context, req PaymentInitia
 		},
 	}
 
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return PaymentInitiateResponse{}, fmt.Errorf("marshal mojaloop payload: %w", err)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST",
-		m.baseURL+"/transfers", nil)
+		m.baseURL+"/transfers", bytes.NewReader(body))
 	if err != nil {
 		return PaymentInitiateResponse{}, err
 	}
@@ -254,22 +280,19 @@ func (m *MojaloopService) InitiatePayment(ctx context.Context, req PaymentInitia
 	httpReq.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
 	httpReq.Header.Set("FSPIOP-Source", req.PayerFSP)
 	httpReq.Header.Set("FSPIOP-Destination", req.PayeeFSP)
-	_ = body
-
 	resp, err := m.client.Do(httpReq)
 	if err != nil {
 		return PaymentInitiateResponse{}, fmt.Errorf("mojaloop request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	status := "initiated"
 	if resp.StatusCode >= 400 {
-		status = fmt.Sprintf("error_%d", resp.StatusCode)
+		return PaymentInitiateResponse{}, fmt.Errorf("mojaloop returned HTTP %d", resp.StatusCode)
 	}
 
 	return PaymentInitiateResponse{
 		TransactionID: req.TransactionID,
-		Status:        status,
+		Status:        "initiated",
 		Timestamp:     time.Now().UnixMilli(),
 	}, nil
 }
@@ -306,10 +329,24 @@ func (k *KafkaPublisher) Publish(ctx context.Context, topic string, key string, 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 
 type Server struct {
-	permify  *PermifyService
-	ledger   *LedgerService
-	mojaloop *MojaloopService
-	kafka    *KafkaPublisher
+	permify           *PermifyService
+	ledger            *LedgerService
+	mojaloop          *MojaloopService
+	kafka             *KafkaPublisher
+	internalAuthToken string
+}
+
+func (s *Server) requireInternalAuth(w http.ResponseWriter, r *http.Request) bool {
+	if s.internalAuthToken == "" {
+		http.Error(w, "payment execution is disabled: INTERNAL_SERVICE_TOKEN is not configured", http.StatusServiceUnavailable)
+		return false
+	}
+	provided := r.Header.Get("X-Internal-Auth")
+	if len(provided) != len(s.internalAuthToken) || subtle.ConstantTimeCompare([]byte(provided), []byte(s.internalAuthToken)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -346,9 +383,20 @@ func (s *Server) handleLedgerTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireInternalAuth(w, r) {
+		return
+	}
+	if s.ledger == nil {
+		http.Error(w, "ledger service unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	var req TransferRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.TransferID == "" || req.DebitAccountID == "" || req.CreditAccountID == "" || req.Amount == 0 || req.Ledger == 0 || req.Code == 0 {
+		http.Error(w, "transferId, debitAccountId, creditAccountId, amount, ledger, and code are required", http.StatusBadRequest)
 		return
 	}
 	resp, err := s.ledger.Transfer(r.Context(), req)
@@ -374,9 +422,16 @@ func (s *Server) handlePaymentInitiate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireInternalAuth(w, r) {
+		return
+	}
 	var req PaymentInitiateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := validatePaymentInitiateRequest(req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	resp, err := s.mojaloop.InitiatePayment(r.Context(), req)
@@ -426,10 +481,11 @@ func main() {
 	kafkaPub := NewKafkaPublisher(cfg.KafkaBrokers)
 
 	srv := &Server{
-		permify:  permifySvc,
-		ledger:   ledgerSvc,
-		mojaloop: mojaloopSvc,
-		kafka:    kafkaPub,
+		permify:           permifySvc,
+		ledger:            ledgerSvc,
+		mojaloop:          mojaloopSvc,
+		kafka:             kafkaPub,
+		internalAuthToken: cfg.InternalAuthToken,
 	}
 
 	mux := http.NewServeMux()

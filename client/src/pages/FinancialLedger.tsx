@@ -119,6 +119,8 @@ export default function FinancialLedger() {
   const [selectedDisputeId, setSelectedDisputeId] = useState("");
   const [disputeInput, setDisputeInput] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState("");
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
 
   // Date range filter
@@ -168,6 +170,8 @@ export default function FinancialLedger() {
       toast.success("Payment recorded in ledger");
       setPaymentDialogOpen(false);
       setPaymentAmount("");
+      setPaymentReference("");
+      setPaymentIdempotencyKey("");
       balancesQuery.refetch();
       summaryQuery.refetch();
       historyQuery.refetch();
@@ -261,7 +265,7 @@ export default function FinancialLedger() {
               Financial Ledger
             </h1>
             <p className="text-muted-foreground text-sm mt-1">
-              Double-entry accounting ledger for IDR dispute financials (TigerBeetle-style)
+              PostgreSQL double-entry evidence ledger for IDR dispute financials; it records verified settlement evidence and does not initiate funds transfers
             </p>
           </div>
           <div className="flex gap-2">
@@ -325,23 +329,32 @@ export default function FinancialLedger() {
                 <Button variant="outline" size="sm" onClick={() => { balancesQuery.refetch(); historyQuery.refetch(); }}>
                   <RefreshCw className="h-4 w-4 mr-1" /> Refresh
                 </Button>
-                <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
+                <Dialog open={paymentDialogOpen} onOpenChange={(open) => {
+                  setPaymentDialogOpen(open);
+                  if (open && !paymentIdempotencyKey) setPaymentIdempotencyKey(crypto.randomUUID());
+                }}>
                   <DialogTrigger asChild>
-                    <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Record Payment</Button>
+                    <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Record Payment Evidence</Button>
                   </DialogTrigger>
                   <DialogContent>
-                    <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
+                    <DialogHeader><DialogTitle>Record Verified Payment Evidence</DialogTitle></DialogHeader>
                     <div className="space-y-4 pt-2">
+                      <p className="text-sm text-muted-foreground">This writes an auditable record of an externally completed payment. It does not initiate, route, or release funds.</p>
                       <div>
                         <Label>Payment Amount (USD)</Label>
                         <Input type="number" min="0.01" step="0.01" placeholder="0.00"
                           value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="mt-1" />
                       </div>
+                      <div>
+                        <Label>External Payment Reference</Label>
+                        <Input minLength={3} maxLength={64} placeholder="ACH trace, bank confirmation, or remittance ID"
+                          value={paymentReference} onChange={e => setPaymentReference(e.target.value)} className="mt-1" />
+                      </div>
                       <Button className="w-full"
-                        disabled={!paymentAmount || parseFloat(paymentAmount) <= 0 || recordPaymentMutation.isPending}
-                        onClick={() => recordPaymentMutation.mutate({ disputeId: selectedDisputeId, amountDollars: parseFloat(paymentAmount) })}>
+                        disabled={!paymentAmount || parseFloat(paymentAmount) <= 0 || paymentReference.trim().length < 3 || !paymentIdempotencyKey || recordPaymentMutation.isPending}
+                        onClick={() => recordPaymentMutation.mutate({ disputeId: selectedDisputeId, amountDollars: parseFloat(paymentAmount), referenceId: paymentReference.trim(), idempotencyKey: paymentIdempotencyKey })}>
                         {recordPaymentMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                        Record Payment
+                        Record Payment Evidence
                       </Button>
                     </div>
                   </DialogContent>

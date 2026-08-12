@@ -620,3 +620,10 @@
 - [x] Pinned disputes — pin icon on dispute list rows and detail page, sidebar Pinned section above Recent, localStorage persistence via usePinnedDisputes hook
 - [x] Bulk keyboard shortcuts on disputes list — N opens New Dispute wizard, / focuses search bar, E exports current filtered view to CSV
 - [x] Dark mode chart colour polish — replace hardcoded hex fills in all Recharts charts with CSS variable references so charts adapt to dark/light theme
+
+## Production Readiness & Funds-Flow Audit (Aug 12 2026)
+- [x] Produce a traceable end-to-end implementation inventory, identifying every verified integration, stub, fixture, mock, or unsupported production claim
+- [x] Audit funds-flow scope, transactional atomicity, idempotency, concurrency, authorization, auditability, and failure recovery; implement verified remediation where the platform actually handles money
+- [x] Evaluate operational middleware and infrastructure controls (PostgreSQL transactions, Redis, outbox/event streaming, Temporal/Kafka/TigerBeetle/Fluvio relevance) against the current architecture without claiming unimplemented services
+- [ ] Run source, database, API, UI, security, TypeScript, test, and live-deployment validation; publish evidence-based feature and service readiness scores
+- [ ] Reconcile GitHub branch/PR status, safely merge only verified compatible changes into main, push the validated main branch, and record the resulting commit

@@ -122,6 +122,8 @@ export const disputes = pgTable(
     initiatingPartyOffer: numeric("initiatingPartyOffer", { precision: 12, scale: 2 }),
     respondingPartyOffer: numeric("respondingPartyOffer", { precision: 12, scale: 2 }),
     determinationAmount: numeric("determinationAmount", { precision: 12, scale: 2 }),
+    // Cumulative verified payment evidence. This is never a payment instruction.
+    paidAmount: numeric("paidAmount", { precision: 12, scale: 2 }).default("0"),
     adminFeeAmount: numeric("adminFeeAmount", { precision: 12, scale: 2 }),
     // Workflow state
     currentStep: idrStepEnum("currentStep").notNull().default("STEP_01_OPEN_NEGOTIATION_INITIATED"),
@@ -672,6 +674,8 @@ export const ledgerEntries = pgTable(
     description: text("description").notNull(),
     referenceId: varchar("referenceId", { length: 64 }), // offer ID, determination ID, etc.
     referenceType: varchar("referenceType", { length: 64 }), // "offer", "determination", "adjustment"
+    // Required for externally evidenced payment records. Unique per dispute when present.
+    idempotencyKey: varchar("idempotencyKey", { length: 64 }),
     metadata: jsonb("metadata"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -680,6 +684,7 @@ export const ledgerEntries = pgTable(
     index("ledger_entries_debitAccountId_idx").on(t.debitAccountId),
     index("ledger_entries_creditAccountId_idx").on(t.creditAccountId),
     index("ledger_entries_createdAt_idx").on(t.createdAt),
+    uniqueIndex("ledger_entries_dispute_idempotency_idx").on(t.disputeId, t.idempotencyKey),
   ]
 );
 export type LedgerEntry = typeof ledgerEntries.$inferSelect;

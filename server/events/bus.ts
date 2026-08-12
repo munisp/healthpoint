@@ -58,6 +58,7 @@ export type IDREventType =
   | "offer.accepted"
   | "offer.rejected"
   | "determination.issued"
+  | "payment.recorded"
   | "notification.sent"
   | "webhook.triggered"
   | "audit.logged"
@@ -68,6 +69,7 @@ export type IDRTopic =
   | "idr.disputes.state_changes"
   | "idr.documents"
   | "idr.offers"
+  | "idr.payments"
   | "idr.notifications"
   | "idr.audit"
   | "idr.users";
@@ -83,6 +85,7 @@ const EVENT_TOPIC_MAP: Record<IDREventType, IDRTopic> = {
   "offer.accepted": "idr.offers",
   "offer.rejected": "idr.offers",
   "determination.issued": "idr.disputes.state_changes",
+  "payment.recorded": "idr.payments",
   "notification.sent": "idr.notifications",
   "webhook.triggered": "idr.notifications",
   "audit.logged": "idr.audit",

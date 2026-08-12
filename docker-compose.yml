@@ -681,6 +681,8 @@ services:
       KAFKA_BROKERS: "kafka:9092"
       MOJALOOP_URL: "http://mojaloop-simulator:3003"
       GO_SERVICES_PORT: "8001"
+      # Payment and TigerBeetle execution stay fail-closed until this secret is explicitly supplied.
+      INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?Set INTERNAL_SERVICE_TOKEN before enabling payment execution}"
     ports:
       - "8001:8001"
 

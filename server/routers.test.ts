@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { addBusinessDays, generateReferenceNumber } from "./db";
+import { assertValidLedgerEntry, LedgerIntegrityError } from "./ledger";
 
 // ─── Business day calculation tests ──────────────────────────────────────────
 
@@ -64,6 +65,38 @@ describe("generateReferenceNumber", () => {
     const ref = generateReferenceNumber();
     const year = new Date().getFullYear().toString();
     expect(ref).toContain(year);
+  });
+});
+
+describe("financial ledger integrity guards", () => {
+  const validPayment = {
+    disputeId: "dispute-1",
+    debitAccountType: "paid" as const,
+    creditAccountType: "determination" as const,
+    amountCents: 12500,
+    entryType: "credit" as const,
+    description: "Verified external payment evidence recorded",
+    referenceType: "payment",
+    referenceId: "ACH-TRACE-123",
+    idempotencyKey: "af56fe67-8fe2-4ec0-91fe-0e585b1aef10",
+  };
+
+  it("accepts a positive, externally referenced, idempotent payment record", () => {
+    expect(() => assertValidLedgerEntry(validPayment)).not.toThrow();
+  });
+
+  it("rejects a payment record without an external reference", () => {
+    expect(() => assertValidLedgerEntry({ ...validPayment, referenceId: "" })).toThrow(LedgerIntegrityError);
+  });
+
+  it("rejects a payment record without an idempotency key", () => {
+    expect(() => assertValidLedgerEntry({ ...validPayment, idempotencyKey: "" })).toThrow(LedgerIntegrityError);
+  });
+
+  it("rejects zero, fractional, or self-balancing ledger entries", () => {
+    expect(() => assertValidLedgerEntry({ ...validPayment, amountCents: 0 })).toThrow(LedgerIntegrityError);
+    expect(() => assertValidLedgerEntry({ ...validPayment, amountCents: 1.25 })).toThrow(LedgerIntegrityError);
+    expect(() => assertValidLedgerEntry({ ...validPayment, creditAccountType: "paid" })).toThrow(LedgerIntegrityError);
   });
 });
 

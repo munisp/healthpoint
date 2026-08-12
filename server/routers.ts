@@ -2686,14 +2686,18 @@ Based on NSA IDR historical data and legal precedent, provide:
       .input(z.object({
         disputeId: z.string(),
         amountDollars: z.number().positive(),
-        referenceId: z.string().optional(),
+        referenceId: z.string().trim().min(3).max(64),
+        idempotencyKey: z.string().uuid(),
       }))
       .mutation(async ({ ctx, input }) => {
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
         const amountCents = Math.round(input.amountDollars * 100);
-        const entry = await recordPayment(input.disputeId, amountCents, input.referenceId);
-        await eventBus.publish('dispute.offer_submitted', input.disputeId, 'dispute',
-          { type: 'payment', amountDollars: input.amountDollars },
+        if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Payment amount must resolve to positive whole cents" });
+        }
+        const entry = await recordPayment(input.disputeId, amountCents, input.referenceId, input.idempotencyKey);
+        await eventBus.publish('payment.recorded', input.disputeId, 'dispute',
+          { type: 'payment_evidence', amountDollars: input.amountDollars, referenceId: input.referenceId, ledgerEntryId: entry.id },
           { userId: ctx.user.id, timestamp: new Date().toISOString() }
         );
         return entry;
@@ -4530,4 +4534,3 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
   }),
 });
 export type AppRouter = typeof appRouter;
-
