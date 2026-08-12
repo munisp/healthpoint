@@ -14,6 +14,7 @@
 
 import { EventEmitter } from "events";
 import { Kafka, Producer, Partitioners, logLevel } from "kafkajs";
+import { eq, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { eventLog } from "../../drizzle/schema";
 import { publishNotification } from "../redis";
@@ -59,6 +60,8 @@ export type IDREventType =
   | "offer.rejected"
   | "determination.issued"
   | "payment.recorded"
+  | "payment.settled"
+  | "payment.settlement_failed"
   | "notification.sent"
   | "webhook.triggered"
   | "audit.logged"
@@ -86,6 +89,8 @@ const EVENT_TOPIC_MAP: Record<IDREventType, IDRTopic> = {
   "offer.rejected": "idr.offers",
   "determination.issued": "idr.disputes.state_changes",
   "payment.recorded": "idr.payments",
+  "payment.settled": "idr.payments",
+  "payment.settlement_failed": "idr.payments",
   "notification.sent": "idr.notifications",
   "webhook.triggered": "idr.notifications",
   "audit.logged": "idr.audit",
@@ -151,37 +156,48 @@ class IDREventBus extends EventEmitter {
       },
     };
 
-    // 1. Persist to event_log (durable, replayable)
+    // 1. Persist to event_log before dispatch. Business transactions use the
+    // same table as a transactional outbox and are dispatched after commit.
     await this.persistEvent(event);
 
-    // 2. Emit to in-process consumers
-    this.emit(eventType, event);
-    this.emit(topic, event);
+    try {
+      await this.deliverOutboxEvent(event);
+      await this.markDelivered(event.id);
+    } catch (error) {
+      await this.markFailed(event.id, error);
+    }
+    return event;
+  }
+
+  /** Dispatches an already-persisted outbox event without writing a duplicate. */
+  async deliverOutboxEvent<T = Record<string, unknown>>(event: IDREvent<T>): Promise<void> {
+    // 1. Emit to in-process consumers
+    this.emit(event.eventType, event);
+    this.emit(event.topic, event);
     this.emit("*", event);
 
-    // 3. Forward to Kafka for downstream services (Rust processor, Lakehouse, OpenSearch)
-    getKafkaProducer().then(p => {
-      if (!p) return;
-      const kafkaTopic = topic.startsWith("idr.") ? topic : `idr.${topic}`;
-      p.send({
-        topic: kafkaTopic,
+    // 2. Forward to Kafka for downstream services. Kafka failure leaves the
+    // outbox event pending/failed for a later retry instead of being ignored.
+    const producer = await getKafkaProducer();
+    if (producer) {
+      await producer.send({
+        topic: event.topic,
         messages: [{
-          key: aggregateId,
+          key: event.aggregateId,
           value: JSON.stringify(event),
-          headers: { "event-type": eventType, "source-service": "idr-app" },
+          headers: { "event-type": event.eventType, "source-service": "idr-app" },
         }],
-      }).catch(() => {/* Kafka send failure — ignore */});
-    }).catch(() => {});
+      });
+    }
 
-    // 4. Publish to Redis pub/sub for real-time UI (fire-and-forget)
+    // 3. Redis notification is non-authoritative UI fan-out. Delivery failure
+    // must not alter financial reconciliation state.
     publishNotification({
-      type: eventType,
-      disputeId: aggregateType === "dispute" ? aggregateId : undefined,
-      message: `${eventType} — ${aggregateId}`,
-      data: payload as Record<string, unknown>,
-    }).catch(() => {/* Redis unavailable — ignore */});
-
-    return event;
+      type: event.eventType,
+      disputeId: event.aggregateType === "dispute" ? event.aggregateId : undefined,
+      message: `${event.eventType} — ${event.aggregateId}`,
+      data: event.payload as Record<string, unknown>,
+    }).catch(() => {});
   }
 
   private async persistEvent<T>(event: IDREvent<T>): Promise<void> {
@@ -197,12 +213,30 @@ class IDREventBus extends EventEmitter {
         aggregateType: event.aggregateType,
         payload: event.payload as Record<string, unknown>,
         metadata: event.metadata as Record<string, unknown>,
-        status: "delivered",
-        publishedAt: new Date(),
+        status: "pending",
+        nextAttemptAt: new Date(),
       });
     } catch (err) {
-      console.warn("[EventBus] Failed to persist event:", err);
+      throw new Error(`Failed to persist event: ${err instanceof Error ? err.message : "unknown error"}`);
     }
+  }
+
+  private async markDelivered(eventId: string): Promise<void> {
+    const db = await getDb();
+    if (!db) return;
+    await db.update(eventLog).set({ status: "delivered", publishedAt: new Date(), failureReason: null, nextAttemptAt: null })
+      .where(eq(eventLog.id, eventId));
+  }
+
+  private async markFailed(eventId: string, error: unknown): Promise<void> {
+    const db = await getDb();
+    if (!db) return;
+    await db.update(eventLog).set({
+      status: "failed",
+      retryCount: sql`${eventLog.retryCount} + 1`,
+      lastAttemptAt: new Date(),
+      failureReason: error instanceof Error ? error.message.slice(0, 2000) : "event delivery failed",
+    }).where(eq(eventLog.id, eventId));
   }
 
   /**

@@ -1,21 +1,22 @@
 # HealthPoint Production-Readiness and Funds-Flow Control Audit
 
 **Assessment date:** 2026-08-12  
-**Assessment basis:** Source snapshot at commit `ccbcad5`, local build/test execution, static review of service and deployment configuration, and GitHub repository inspection.  
+**Assessment basis:** Source snapshot after authenticated-settlement and transactional-outbox implementation, local PostgreSQL migration execution, TypeScript/build/test execution, Playwright end-to-end evidence, static deployment review, and GitHub repository inspection.  
 **Scope limitation:** This is an engineering assurance assessment, not a financial, legal, regulatory, PCI DSS, SOC 2, HIPAA, or penetration-testing certification.
 
-> **Verdict:** HealthPoint is a feature-rich **IDR workflow demonstration and operational tracking application**, but it is **not 100% production-ready** and it is **not safe to represent as a production payment-execution platform**. The current platform records IDR payment obligations and payment evidence; it does not yet have a verified end-to-end settlement rail, bank/FSP onboarding, callback authentication, durable reconciliation workflow, or an independently deployed PostgreSQL migration target.
+> **Verdict:** HealthPoint is a feature-rich **IDR workflow demonstration and operational tracking application**, but it is **not 100% production-ready** and it is **not safe to represent as a production payment-execution platform**. It now accepts signed, timestamp-bounded, idempotent settlement evidence and reconciles it through a PostgreSQL transactional outbox. It still lacks a verified production FSP/bank rail, regulated onboarding, and independently operated production controls.
 
 ## 1. Evidence Collected
 
 | Verification area | Result | Evidence |
 | --- | --- | --- |
 | TypeScript compilation | Passed | `npx tsc --noEmit` exited successfully. |
-| Node test suite | Passed | `pnpm test --run`: **150/150** tests passed. |
+| Node test suite | Passed | `pnpm test`: **152/152** tests passed. |
+| Playwright settlement E2E suite | Passed | 4 scenarios validated rejected unsigned/stale/mismatched callbacks, exactly-once settlement evidence, outbox delivery, overpayment rollback, failed settlement handling, and legacy-route retirement. |
 | Node production build | Passed with performance warning | `pnpm build` completed; the JavaScript bundle is 4.47 MB uncompressed / 803.96 KB gzip, above Vite’s 500 KB warning threshold. |
 | Go payment-sidecar tests | Passed | `go test ./...` in `services/go`: passed. |
-| Migration generation | Passed | `drizzle/migrations/0020_living_human_cannonball.sql` generated. |
-| Migration application | Blocked | The managed `DATABASE_URL` resolves to **TiDB/MySQL**, while the source schema and generated migration use PostgreSQL syntax. The local PostgreSQL service is unavailable in this sandbox. |
+| Migration generation | Passed | Settlement callback/outbox migrations `0021` and `0022` generated and reviewed. |
+| Migration application | Passed locally | The full PostgreSQL migration chain, including `settlement_callbacks`, outbox retry metadata, and `event_status=processing`, was applied and queried on PostgreSQL 16. The incompatible managed TiDB/MySQL target was not modified. |
 | Live-site verification | Blocked | `https://healthpoint.upi.dev` rendered a blank page during this review; the hardened code has not been verified as deployed there. |
 | GitHub PR/branch review | Completed | `munisp/healthpoint` had no open PRs and initially only `main`; its history has no merge base with the validated workspace branch. |
 
@@ -30,12 +31,12 @@ Scores reflect **verified behavior in this snapshot**, not intended architecture
 | Authentication, authorization, and HTTP middleware | 65/100 | Helmet, CORS, HPP, compression, request IDs, rate limiting, slow-down, logging, and readiness endpoints are registered in `server/_core/index.ts`. Resource authorization is inconsistent: some mutations use `assertDisputeAccess`, while `disputes.getById` does not show an equivalent access check. |
 | Documents, search, reports, and export | 60/100 | DB-backed procedures and export paths are present. OpenSearch and external services remain optional/fallback configurations; no end-to-end production dependency validation was available. |
 | AI, EMR, and FHIR integration | 30/100 | There are live procedure paths, but explicit demo/simulation implementations remain, including hard-coded FHIR resources in `LastEHRIntegration.tsx` and simulation content in `SmartFormVisualization.tsx`. These cannot be described as uniformly live integrations. |
-| Eventing, workflows, and streaming | 30/100 | KafkaJS and Redis clients are present; Compose provisions Kafka, Temporal, Fluvio, and Dapr. The active event bus is primarily in-process and accepts Kafka/Redis failures. `server/events/kafka-consumer.ts` logs payment events with a future-work comment instead of reconciling them. Temporal is queried/fallback-only rather than the authoritative workflow executor. |
-| PostgreSQL evidence ledger | 55/100 | The hardened source now uses PostgreSQL transactions, transaction-scoped advisory locks, payment evidence idempotency, positive-cent validation, external-reference requirements, and determined-amount limits. The migration is generated but not applied to a reachable PostgreSQL production target, so this score cannot be higher. |
-| External funds transfer / settlement rail | 15/100 | The Go sidecar can call a Mojaloop-compatible endpoint and TigerBeetle client, but the configured compose target is a **Mojaloop simulator**. There is no verified regulated FSP/bank integration, callback signature verification, transfer-state machine, approval policy, reconciliation worker, or live settlement test. |
-| Observability, deployment, and recovery | 40/100 | Logging, request IDs, readiness, Docker Compose, and some health checks are present. The live site was blank during review, the database deployment target is dialect-incompatible with the code, and no backup/restore, disaster recovery, load, or incident drills were evidenced. |
-| Overall production readiness for an IDR workflow tracker | **48/100** | Suitable for continued controlled development and demo/training use, not for an unrestricted external production launch. |
-| Overall production readiness for handling or initiating real funds | **15/100** | **Not approved**. No engineering review can honestly guarantee that funds-flow scenarios are uncompromisable on this implementation. |
+| Eventing, workflows, and streaming | 45/100 | Payment evidence and callback events now use a transactional PostgreSQL outbox with `pending`/`processing`/`delivered`/`failed` states, stale-worker recovery, bounded retries, and dispatch after commit. Temporal remains non-authoritative and Kafka/Redis are not independently deployed in this assessment. |
+| PostgreSQL evidence ledger | 70/100 | PostgreSQL transactions, transaction-scoped advisory locks, payment-evidence idempotency, positive-cent validation, external-reference requirements, determined-amount limits, and local migration validation are now evidenced. A separately managed production database, backup/restore test, and access review remain required. |
+| External funds transfer / settlement rail | 30/100 | Signed HMAC-SHA256 callbacks, a five-minute replay window, provider/event idempotency, atomic settlement evidence, immutable callback rows, outbox delivery, and Playwright coverage exist. The Go sidecar still targets a simulator; no verified regulated FSP/bank integration, maker-checker approval, key rotation, or live settlement certification exists. |
+| Observability, deployment, and recovery | 50/100 | Logging, request IDs, readiness, PostgreSQL-only startup validation, a compose migration gate, and local migration validation are evidenced. The live site was not revalidated, and backup/restore, disaster recovery, load, and incident drills remain unevidenced. |
+| Overall production readiness for an IDR workflow tracker | **55/100** | Suitable for continued controlled development and more realistic staging validation, not for an unrestricted external production launch. |
+| Overall production readiness for handling or initiating real funds | **30/100** | **Not approved for real funds.** Controls improved settlement-evidence integrity but do not establish an independently verified payment rail or guarantee against compromise. |
 
 ## 3. Verified Non-Production or Simulated Areas
 
@@ -58,7 +59,7 @@ The application currently manages **IDR dispute financial information**: billed 
 
 It does **not** currently prove that a payer’s bank/FSP transferred money to a payee. A user-entered “Record Payment Evidence” action therefore must be treated as an operator attestation supported by an external payment reference, not as settlement confirmation from a payment rail.
 
-### Controls added in commit `ccbcad5`
+### Controls added in the payment-evidence and settlement hardening work
 
 | Control | Implementation |
 | --- | --- |
@@ -71,15 +72,18 @@ It does **not** currently prove that a payer’s bank/FSP transferred money to a
 | Payment sidecar fail-closed behavior | `services/go/main.go` disables execution endpoints unless `INTERNAL_SERVICE_TOKEN` is configured and supplied as `X-Internal-Auth`; unavailable TigerBeetle also returns 503. |
 | Mojaloop request correction | The sidecar now validates USD/amount fields and sends the marshalled JSON payload instead of an empty request body. |
 | Sidecar tests | `services/go/main_test.go` validates payment input and fail-closed internal authorization. |
+| Signed callback boundary | `/api/settlement/callbacks` verifies the exact raw JSON body with an HMAC-SHA256 signature, signed timestamp, matching event identifier, provider allowlist, payload schema, and five-minute replay window before any database transaction starts. |
+| Callback idempotency | `settlement_callbacks(provider, providerEventId)` is unique. Duplicate signed delivery returns the originally reconciled record without a second ledger entry. |
+| Transactional outbox | Callback and manual payment-evidence writes add a pending `event_log` row inside the same PostgreSQL transaction as the ledger mutation. The worker claims, retries, and records explicit delivery state after commit. |
+| E2E evidence | Playwright provisions an isolated Step 14 fixture and verifies rejection, rollback, exactly-once posting, Step 15 transition, callback persistence, and outbox delivery. |
 
 ### Remaining blockers before any real-money use
 
 The following are **mandatory** before enabling real transfer initiation:
 
-1. Deploy one authoritative PostgreSQL environment and apply migration `0020`; do not run the PostgreSQL Drizzle schema against the current TiDB/MySQL-managed URL.
-2. Replace the Mojaloop simulator with a contracted, production FSP/payment provider; implement mutually authenticated APIs, signed callback verification, key rotation, and provider-specific idempotency semantics.
-3. Implement a durable payment state machine with explicit states such as `requested`, `authorized`, `submitted`, `accepted`, `settled`, `failed`, `reversed`, and `reconciled`. Only provider-authenticated settlement callbacks may mark a payment settled.
-4. Add a transactional outbox in the same transaction as the financial write and a retrying consumer. Current `eventBus.publish` and Kafka/Redis publication can fail without blocking the primary write.
+1. Deploy one authoritative PostgreSQL environment using the compose migration gate; do not run the PostgreSQL Drizzle schema against the current TiDB/MySQL-managed URL.
+2. Replace the Mojaloop simulator with a contracted, production FSP/payment provider; implement mutual TLS or an equivalent provider-authentication scheme, key rotation, provider-specific idempotency semantics, and formal operational acceptance.
+3. Extend the settlement model to a durable transfer lifecycle such as `requested`, `authorized`, `submitted`, `accepted`, `settled`, `failed`, `reversed`, and `reconciled`; this implementation intentionally records only externally reported settlement evidence.
 5. Make Redis/Redlock fail closed for non-ledger critical state transitions or use PostgreSQL transaction/advisory locks consistently; `withDisputeLock` presently executes unlocked when Redis is absent or lock acquisition fails.
 6. Move the 19-step state machine into the authoritative transaction path, enforce required-field guards, and reject arbitrary `newStatus`/step jumps at the API layer.
 7. Add independent reconciliation against provider settlement reports, maker-checker approval for transfers, role separation, immutable audit exports, daily balance proof, and controlled reversal/correction entries rather than mutable state edits.

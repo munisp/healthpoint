@@ -630,3 +630,10 @@
 
 ## Production Readiness Remediation (Aug 12 2026)
 - [x] Remove unsupported marketing superlatives and fabricated operational metrics from the public landing page
+
+## Settlement Controls, E2E Validation & Deployment Alignment (Aug 12 2026)
+- [x] Implement signed, timestamped, idempotent settlement callback validation with fail-closed state transitions and immutable audit records
+- [x] Implement a transactional outbox for payment-evidence and settlement events, plus a retrying reconciliation worker with explicit delivery states
+- [x] Add Playwright E2E coverage for payment-evidence idempotency, invalid payment rejection, signed callback acceptance/rejection, and reconciliation outcomes
+- [x] Align runtime configuration and migration workflow with PostgreSQL; validate the migration against a PostgreSQL instance without changing the incompatible managed TiDB target
+- [ ] Prepare and validate a non-destructive Git history reconciliation plan that preserves both unrelated histories before any main-branch change

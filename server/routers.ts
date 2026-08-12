@@ -34,6 +34,7 @@ import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDispu
 import { eventBus } from "./events/bus";
 import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, addBusinessDays, daysUntilDeadline } from "./workflow/idr-workflow";
 import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
+import { dispatchOutboxBatch } from "./outbox";
 import { search, generateLakehouseExport, invalidateSearchIndex, suggest, indexDocument, deleteFromIndex } from "./search";
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
@@ -2695,11 +2696,8 @@ Based on NSA IDR historical data and legal precedent, provide:
         if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Payment amount must resolve to positive whole cents" });
         }
-        const entry = await recordPayment(input.disputeId, amountCents, input.referenceId, input.idempotencyKey);
-        await eventBus.publish('payment.recorded', input.disputeId, 'dispute',
-          { type: 'payment_evidence', amountDollars: input.amountDollars, referenceId: input.referenceId, ledgerEntryId: entry.id },
-          { userId: ctx.user.id, timestamp: new Date().toISOString() }
-        );
+        const entry = await recordPayment(input.disputeId, amountCents, input.referenceId, input.idempotencyKey, ctx.user.id);
+        await dispatchOutboxBatch(1);
         return entry;
       }),
   }),

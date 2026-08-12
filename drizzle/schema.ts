@@ -691,7 +691,7 @@ export type LedgerEntry = typeof ledgerEntries.$inferSelect;
 export type InsertLedgerEntry = typeof ledgerEntries.$inferInsert;
 
 // ─── Event Bus (Kafka-style durable event log) ────────────────────────────────
-export const eventStatusEnum = pgEnum("event_status", ["pending", "delivered", "failed", "skipped"]);
+export const eventStatusEnum = pgEnum("event_status", ["pending", "processing", "delivered", "failed", "skipped"]);
 export const eventLog = pgTable(
   "event_log",
   {
@@ -702,21 +702,65 @@ export const eventLog = pgTable(
     aggregateType: varchar("aggregateType", { length: 64 }).notNull(), // "dispute"
     payload: jsonb("payload").notNull(),
     metadata: jsonb("metadata"),
+    // Natural deduplication key for callbacks and other externally delivered events.
+    idempotencyKey: varchar("idempotencyKey", { length: 191 }),
     status: eventStatusEnum().default("pending").notNull(),
     publishedAt: timestamp("publishedAt"),
     failureReason: text("failureReason"),
     retryCount: integer("retryCount").default(0).notNull(),
+    lastAttemptAt: timestamp("lastAttemptAt"),
+    nextAttemptAt: timestamp("nextAttemptAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => [
     index("event_log_topic_idx").on(t.topic),
     index("event_log_aggregateId_idx").on(t.aggregateId),
     index("event_log_status_idx").on(t.status),
+    index("event_log_retry_idx").on(t.status, t.nextAttemptAt),
+    uniqueIndex("event_log_idempotency_idx").on(t.idempotencyKey),
     index("event_log_createdAt_idx").on(t.createdAt),
   ]
 );
 export type EventLogEntry = typeof eventLog.$inferSelect;
 export type InsertEventLogEntry = typeof eventLog.$inferInsert;
+
+// ─── Settlement Callback Reconciliation ──────────────────────────────────────
+// Callback records are written only after an HMAC-authenticated request passes
+// schema validation. They retain the provider payload and link settlement proof
+// to the resulting ledger entry without initiating a funds transfer.
+export const settlementCallbackStatusEnum = pgEnum("settlement_callback_status", [
+  "settled",
+  "failed",
+  "rejected",
+]);
+
+export const settlementCallbacks = pgTable(
+  "settlement_callbacks",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    providerEventId: varchar("providerEventId", { length: 128 }).notNull(),
+    providerTransferId: varchar("providerTransferId", { length: 128 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    amountCents: integer("amountCents").notNull(),
+    currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    status: settlementCallbackStatusEnum("status").notNull(),
+    occurredAt: timestamp("occurredAt").notNull(),
+    signatureVersion: varchar("signatureVersion", { length: 16 }).default("v1").notNull(),
+    rawPayload: jsonb("rawPayload").notNull(),
+    ledgerEntryId: varchar("ledgerEntryId", { length: 64 }),
+    reconciliationNote: text("reconciliationNote"),
+    reconciledAt: timestamp("reconciledAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("settlement_callbacks_provider_event_idx").on(t.provider, t.providerEventId),
+    index("settlement_callbacks_dispute_idx").on(t.disputeId),
+    index("settlement_callbacks_transfer_idx").on(t.providerTransferId),
+    index("settlement_callbacks_status_idx").on(t.status),
+  ]
+);
+export type SettlementCallback = typeof settlementCallbacks.$inferSelect;
 
 // ─── Workflow Step Notes ──────────────────────────────────────────────────────
 export const stepNotes = pgTable(

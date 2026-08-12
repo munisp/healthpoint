@@ -22,7 +22,7 @@
 
 import { eq, and, desc, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { disputes, ledgerAccounts, ledgerEntries } from "../drizzle/schema";
+import { disputes, eventLog, ledgerAccounts, ledgerEntries } from "../drizzle/schema";
 import type { LedgerAccount, LedgerEntry } from "../drizzle/schema";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -320,7 +320,8 @@ export async function recordDetermination(
 /**
  * Record actual payment received.
  */
-export async function recordPayment(
+export async function recordPaymentInTransaction(
+  tx: any,
   disputeId: string,
   paidCents: number,
   referenceId: string,
@@ -330,51 +331,76 @@ export async function recordPayment(
     disputeId, debitAccountType: "paid", creditAccountType: "determination", amountCents: paidCents,
     entryType: "credit", description: "Verified external payment evidence recorded", referenceId, referenceType: "payment", idempotencyKey,
   });
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${disputeId}))`);
+  const disputeRows = await tx.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
+  const dispute = disputeRows[0];
+  if (!dispute) throw new LedgerIntegrityError("Dispute not found");
+  if (!dispute.determinationAmount) throw new LedgerIntegrityError("A payment determination is required before payment evidence can be posted");
+  if (!["STEP_14_PAYMENT_DETERMINATION", "STEP_15_PAYMENT_MADE", "STEP_16_ADMINISTRATIVE_FEE_PAID", "STEP_17_DISPUTE_CLOSED"].includes(dispute.currentStep)) {
+    throw new LedgerIntegrityError("Payment evidence can only be posted after the payment-determination stage");
+  }
+  const determinationCents = dollarsToCents(dispute.determinationAmount);
+  const paidToDateCents = dollarsToCents(dispute.paidAmount);
+  if (paidCents > determinationCents - paidToDateCents) {
+    throw new LedgerIntegrityError("Payment evidence exceeds the remaining determined amount");
+  }
+  const existing = await tx.select().from(ledgerEntries).where(and(
+    eq(ledgerEntries.disputeId, disputeId), eq(ledgerEntries.idempotencyKey, idempotencyKey)
+  )).limit(1);
+  if (existing[0]) return existing[0];
+
+  const accountTypes: AccountType[] = ["billed", "allowed", "paid", "determination", "adjustment", "patient_responsibility"];
+  const now = new Date();
+  await tx.insert(ledgerAccounts).values(accountTypes.map(accountType => ({
+    id: crypto.randomUUID(), disputeId, accountType, balanceCents: 0, currency: "USD", createdAt: now, updatedAt: now,
+  }))).onConflictDoNothing();
+  const accounts = await tx.select().from(ledgerAccounts).where(eq(ledgerAccounts.disputeId, disputeId));
+  const paidAccount = accounts.find((account: LedgerAccount) => account.accountType === "paid");
+  const determinationAccount = accounts.find((account: LedgerAccount) => account.accountType === "determination");
+  if (!paidAccount || !determinationAccount) throw new LedgerIntegrityError("Ledger accounts are unavailable for this payment");
+
+  const entryId = crypto.randomUUID();
+  await tx.insert(ledgerEntries).values({
+    id: entryId, disputeId, debitAccountId: paidAccount.id, creditAccountId: determinationAccount.id,
+    amountCents: paidCents, currency: "USD", entryType: "credit", description: "Verified external payment evidence recorded",
+    referenceId, referenceType: "payment", idempotencyKey,
+    metadata: { paymentEvidence: true, settlementExecution: "external" }, createdAt: now,
+  });
+  await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} + ${paidCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, paidAccount.id));
+  await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} + ${paidCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, determinationAccount.id));
+  await tx.update(disputes).set({ paidAmount: centsToDecimal(paidToDateCents + paidCents), updatedAt: now }).where(eq(disputes.id, disputeId));
+  const entries = await tx.select().from(ledgerEntries).where(eq(ledgerEntries.id, entryId)).limit(1);
+  if (!entries[0]) throw new LedgerIntegrityError("Payment evidence was not persisted");
+  return entries[0];
+}
+
+export async function recordPayment(
+  disputeId: string,
+  paidCents: number,
+  referenceId: string,
+  idempotencyKey: string,
+  actorId = "system"
+): Promise<LedgerEntry> {
   const db = await getDb();
   if (!db) throw new LedgerIntegrityError("Database unavailable; payment evidence was not recorded");
-
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${disputeId}))`);
-    const disputeRows = await tx.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
-    const dispute = disputeRows[0];
-    if (!dispute) throw new LedgerIntegrityError("Dispute not found");
-    if (!dispute.determinationAmount) throw new LedgerIntegrityError("A payment determination is required before payment evidence can be posted");
-    if (!["STEP_14_PAYMENT_DETERMINATION", "STEP_15_PAYMENT_MADE", "STEP_16_ADMINISTRATIVE_FEE_PAID", "STEP_17_DISPUTE_CLOSED"].includes(dispute.currentStep)) {
-      throw new LedgerIntegrityError("Payment evidence can only be posted after the payment-determination stage");
-    }
-    const determinationCents = dollarsToCents(dispute.determinationAmount);
-    const paidToDateCents = dollarsToCents(dispute.paidAmount);
-    if (paidCents > determinationCents - paidToDateCents) {
-      throw new LedgerIntegrityError("Payment evidence exceeds the remaining determined amount");
-    }
-    const existing = await tx.select().from(ledgerEntries).where(and(
-      eq(ledgerEntries.disputeId, disputeId), eq(ledgerEntries.idempotencyKey, idempotencyKey)
-    )).limit(1);
-    if (existing[0]) return existing[0];
-
-    const accountTypes: AccountType[] = ["billed", "allowed", "paid", "determination", "adjustment", "patient_responsibility"];
+  return db.transaction(async tx => {
+    const entry = await recordPaymentInTransaction(tx, disputeId, paidCents, referenceId, idempotencyKey);
     const now = new Date();
-    await tx.insert(ledgerAccounts).values(accountTypes.map(accountType => ({
-      id: crypto.randomUUID(), disputeId, accountType, balanceCents: 0, currency: "USD", createdAt: now, updatedAt: now,
-    }))).onConflictDoNothing();
-    const accounts = await tx.select().from(ledgerAccounts).where(eq(ledgerAccounts.disputeId, disputeId));
-    const paidAccount = accounts.find(account => account.accountType === "paid");
-    const determinationAccount = accounts.find(account => account.accountType === "determination");
-    if (!paidAccount || !determinationAccount) throw new LedgerIntegrityError("Ledger accounts are unavailable for this payment");
-
-    const entryId = crypto.randomUUID();
-    await tx.insert(ledgerEntries).values({
-      id: entryId, disputeId, debitAccountId: paidAccount.id, creditAccountId: determinationAccount.id,
-      amountCents: paidCents, currency: "USD", entryType: "credit", description: "Verified external payment evidence recorded",
-      referenceId, referenceType: "payment", idempotencyKey,
-      metadata: { paymentEvidence: true, settlementExecution: "external" }, createdAt: now,
-    });
-    await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} + ${paidCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, paidAccount.id));
-    await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} + ${paidCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, determinationAccount.id));
-    await tx.update(disputes).set({ paidAmount: centsToDecimal(paidToDateCents + paidCents), updatedAt: now }).where(eq(disputes.id, disputeId));
-    const entries = await tx.select().from(ledgerEntries).where(eq(ledgerEntries.id, entryId)).limit(1);
-    if (!entries[0]) throw new LedgerIntegrityError("Payment evidence was not persisted");
-    return entries[0];
+    await tx.insert(eventLog).values({
+      id: crypto.randomUUID(),
+      topic: "idr.payments",
+      eventType: "payment.recorded",
+      aggregateId: disputeId,
+      aggregateType: "dispute",
+      payload: { type: "payment_evidence", amountCents: paidCents, referenceId, ledgerEntryId: entry.id },
+      metadata: { userId: actorId, timestamp: now.toISOString(), source: "manual_payment_evidence" },
+      idempotencyKey: `payment-recorded:${idempotencyKey}`,
+      status: "pending",
+      retryCount: 0,
+      nextAttemptAt: now,
+      createdAt: now,
+    }).onConflictDoNothing();
+    return entry;
   });
 }
 

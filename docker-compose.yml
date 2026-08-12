@@ -573,6 +573,20 @@ services:
 ###############################################################################
 
   # ── Main HealthPoint Node.js app ──────────────────────────────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    networks: [idr-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+    command: ["sh", "-c", "pnpm drizzle-kit migrate"]
+
   app:
     build:
       context: .
@@ -582,6 +596,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       kafka:
@@ -592,6 +608,8 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+      SETTLEMENT_CALLBACK_SECRET: "${SETTLEMENT_CALLBACK_SECRET:?Set SETTLEMENT_CALLBACK_SECRET before starting the production app}"
+      SETTLEMENT_CALLBACK_PROVIDER: "${SETTLEMENT_CALLBACK_PROVIDER:-mojaloop}"
       REDIS_URL: "redis://:${REDIS_PASSWORD:-redis_pass123}@redis:6379"
       KAFKA_BROKERS: "kafka:9092"
       KEYCLOAK_URL: "http://keycloak:8080"
