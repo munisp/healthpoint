@@ -625,5 +625,5 @@
 - [x] Produce a traceable end-to-end implementation inventory, identifying every verified integration, stub, fixture, mock, or unsupported production claim
 - [x] Audit funds-flow scope, transactional atomicity, idempotency, concurrency, authorization, auditability, and failure recovery; implement verified remediation where the platform actually handles money
 - [x] Evaluate operational middleware and infrastructure controls (PostgreSQL transactions, Redis, outbox/event streaming, Temporal/Kafka/TigerBeetle/Fluvio relevance) against the current architecture without claiming unimplemented services
-- [ ] Run source, database, API, UI, security, TypeScript, test, and live-deployment validation; publish evidence-based feature and service readiness scores
-- [ ] Reconcile GitHub branch/PR status, safely merge only verified compatible changes into main, push the validated main branch, and record the resulting commit
+- [x] Run source, database, API, UI, security, TypeScript, test, and live-deployment validation; publish evidence-based feature and service readiness scores
+- [x] Reconcile GitHub branch/PR status and publish validated changes safely; GitHub main was not overwritten because it has no merge base with the workspace and contains unrelated files, while the validated branch was pushed as audit/funds-flow-hardening-20260812 at 7a8e08d
