@@ -106,6 +106,7 @@ import SMARTTokenManager from "@/pages/SMARTTokenManager";
 import DisputeAccessControl from "@/pages/DisputeAccessControl";
 import HermesAssistant from "@/pages/HermesAssistant";
 import SmartFormVisualization from "@/pages/SmartFormVisualization";
+import CohortAnalysis from "@/pages/CohortAnalysis";
 import ProtectedRoute from "./components/ProtectedRoute";
 import DashboardLayout from "./components/DashboardLayout";
 
@@ -232,6 +233,7 @@ function Router() {
       <Route path="/access-control" component={() => <PL component={DisputeAccessControl} />} />
       <Route path="/hermes" component={() => <PL component={HermesAssistant} />} />
       <Route path="/smartform-guide" component={() => <PL component={SmartFormVisualization} />} />
+      <Route path="/cohort-analysis" component={() => <PL component={CohortAnalysis} />} />
 
       {/* Admin-only routes */}
       <Route path="/admin/leads" component={() => <PL component={LeadsManager} admin />} />

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { Network, Search, AlertTriangle, TrendingUp } from "lucide-react";
+import { useChartColors } from "@/hooks/useChartColors";
 
 const SERVICE_TYPE_LABELS: Record<string, string> = {
   emergency_medicine: "Emergency Medicine", anesthesiology: "Anesthesiology",
@@ -14,9 +15,10 @@ const SERVICE_TYPE_LABELS: Record<string, string> = {
   hospitalist: "Hospitalist", intensivist: "Intensivist", other: "Other",
 };
 
-const COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#ddd6fe", "#ede9fe", "#f5f3ff"];
-
 export default function ProviderNetworkGapAnalyzer() {
+  const C = useChartColors();
+  const COLORS = [C.primary, C.chart4, C.chart4, C.chart4, C.chart4, C.chart4, C.chart4];
+
   const [search, setSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState("all");
 
@@ -113,11 +115,11 @@ export default function ProviderNetworkGapAnalyzer() {
               <div style={{ height: 220 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={serviceDistribution} layout="vertical" margin={{ top: 5, right: 20, left: 80, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                     <XAxis type="number" tick={{ fontSize: 11 }} />
                     <YAxis type="category" dataKey="service" tick={{ fontSize: 10 }} width={80} />
                     <Tooltip />
-                    <Bar dataKey="count" fill="#6366f1" radius={[0, 4, 4, 0]} />
+                    <Bar dataKey="count" fill={C.primary} radius={[0, 4, 4, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -135,11 +137,11 @@ export default function ProviderNetworkGapAnalyzer() {
               <div style={{ height: 220 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={topPayersByGap.map(p => ({ name: p.payer.length > 20 ? p.payer.slice(0, 18) + "…" : p.payer, disputes: p.totalDisputes, services: p.uniqueServices }))} margin={{ top: 5, right: 20, left: 0, bottom: 30 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                     <XAxis dataKey="name" tick={{ fontSize: 9 }} angle={-30} textAnchor="end" />
                     <YAxis tick={{ fontSize: 11 }} />
                     <Tooltip />
-                    <Bar dataKey="disputes" name="Disputes" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="disputes" name="Disputes" fill={C.chart4} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -202,7 +204,7 @@ export default function ProviderNetworkGapAnalyzer() {
                               className="h-full rounded-full"
                               style={{
                                 width: `${Math.min((p.uniqueServices / 5) * 100, 100)}%`,
-                                backgroundColor: p.uniqueServices >= 4 ? "#ef4444" : p.uniqueServices >= 2 ? "#f59e0b" : "#22c55e",
+                                backgroundColor: p.uniqueServices >= 4 ? C.danger : p.uniqueServices >= 2 ? C.chart3 : C.chart2,
                               }}
                             />
                           </div>

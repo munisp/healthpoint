@@ -6,32 +6,37 @@ import { Button } from "@/components/ui/button";
 import { useLocation } from "wouter";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { Clock, AlertTriangle, TrendingUp, ExternalLink } from "lucide-react";
+import { useChartColors } from "@/hooks/useChartColors";
 
-const AGING_BUCKETS = [
-  { label: "0-7 days", min: 0, max: 7, color: "#22c55e" },
-  { label: "8-14 days", min: 8, max: 14, color: "#84cc16" },
-  { label: "15-30 days", min: 15, max: 30, color: "#eab308" },
-  { label: "31-60 days", min: 31, max: 60, color: "#f97316" },
-  { label: "61-90 days", min: 61, max: 90, color: "#ef4444" },
-  { label: "90+ days", min: 91, max: Infinity, color: "#dc2626" },
-];
+function getAgingBuckets(C: { chart2: string; chart3: string; danger: string }) {
+  return [
+    { label: "0-7 days", min: 0, max: 7, color: C.chart2 },
+    { label: "8-14 days", min: 8, max: 14, color: C.chart2 },
+    { label: "15-30 days", min: 15, max: 30, color: C.chart3 },
+    { label: "31-60 days", min: 31, max: 60, color: C.chart3 },
+    { label: "61-90 days", min: 61, max: 90, color: C.danger },
+    { label: "90+ days", min: 91, max: Infinity, color: C.danger },
+  ];
+}
 
 function getAgeDays(createdAt: Date | string | null | undefined): number {
   if (!createdAt) return 0;
   return Math.floor((Date.now() - new Date(createdAt).getTime()) / 86400000);
 }
 
-function getBucket(days: number) {
-  return AGING_BUCKETS.find(b => days >= b.min && days <= b.max) ?? AGING_BUCKETS[AGING_BUCKETS.length - 1];
+function getBucket(days: number, C: { chart2: string; chart3: string; danger: string }) {
+  return getAgingBuckets(C).find(b => days >= b.min && days <= b.max) ?? getAgingBuckets(C)[getAgingBuckets(C).length - 1];
 }
 
 export default function ClaimAgingReport() {
+  const C = useChartColors();
+
   const [, navigate] = useLocation();
   const { data, isLoading } = trpc.disputes.list.useQuery({ limit: 100, offset: 0 });
   const disputes = (data?.items ?? []).filter(d => d.status !== "closed" && d.status !== "ineligible");
 
   const agingData = useMemo(() => {
-    return AGING_BUCKETS.map(bucket => ({
+    return getAgingBuckets(C).map(bucket => ({
       ...bucket,
       count: disputes.filter(d => {
         const age = getAgeDays(d.createdAt);
@@ -107,7 +112,7 @@ export default function ClaimAgingReport() {
             <div style={{ height: 220 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={agingData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                   <Tooltip
@@ -150,7 +155,7 @@ export default function ClaimAgingReport() {
               <tbody className="divide-y">
                 {sortedByAge.slice(0, 20).map(d => {
                   const age = getAgeDays(d.createdAt);
-                  const bucket = getBucket(age);
+                  const bucket = getBucket(age, C);
                   return (
                     <tr key={d.id} className="hover:bg-muted/30">
                       <td className="px-4 py-3 font-mono text-xs text-primary">{d.referenceNumber}</td>

@@ -34,13 +34,14 @@ import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDispu
 import { eventBus } from "./events/bus";
 import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, addBusinessDays, daysUntilDeadline } from "./workflow/idr-workflow";
 import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
-import { search, generateLakehouseExport, invalidateSearchIndex, suggest } from "./search";
+import { dispatchOutboxBatch } from "./outbox";
+import { search, generateLakehouseExport, invalidateSearchIndex, suggest, indexDocument, deleteFromIndex } from "./search";
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { generateReportsPDF, generateReportsCSV } from "./reports-export";
 import { getDb, checkDbHealth } from "./db";
 import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
-import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries } from "../drizzle/schema";
+import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
@@ -97,6 +98,8 @@ const advanceStepSchema = z.object({
   isEligible: z.boolean().optional(),
   ineligibilityReason: z.string().optional(),
   determinationBasis: z.string().optional(),
+  // Who won the determination: 'initiating_party' = provider, 'responding_party' = payer
+  determinationWinner: z.enum(["initiating_party", "responding_party"]).optional(),
 });
 
 const submitOfferSchema = z.object({
@@ -115,6 +118,31 @@ export const appRouter = router({
         db: await checkDbHealth(),
         ts: Date.now(),
       })),
+    // Real latency probe: measures actual DB round-trip time
+    latencyProbe: publicProcedure.query(async () => {
+      const apiStart = Date.now();
+      let dbLatency = 0;
+      let dbStatus: "healthy" | "degraded" | "down" = "healthy";
+      try {
+        const db = await getDb();
+        const dbStart = Date.now();
+        if (db) {
+          await db.execute("SELECT 1");
+          dbLatency = Date.now() - dbStart;
+          dbStatus = dbLatency > 500 ? "degraded" : "healthy";
+        } else {
+          dbStatus = "down";
+        }
+      } catch {
+        dbStatus = "down";
+      }
+      const apiLatency = Date.now() - apiStart;
+      return {
+        ts: Date.now(),
+        api: { latency: apiLatency, status: apiLatency > 1000 ? "degraded" as const : "healthy" as const },
+        db: { latency: dbLatency, status: dbStatus },
+      };
+    }),
   }),
 
   auth: router({
@@ -146,19 +174,49 @@ export const appRouter = router({
         return getDisputesByMonth(input.months);
       }),
 
+    // Real 7-day daily dispute counts for sparklines (no Math.random)
+    dailyStats: protectedProcedure
+      .input(z.object({ days: z.number().int().min(1).max(30).default(7) }))
+      .query(async ({ input }) => {
+        const db = await (await import("./db")).getDb();
+        if (!db) return [];
+        const result: { date: string; total: number; opened: number; closed: number }[] = [];
+        const now = new Date();
+        for (let i = input.days - 1; i >= 0; i--) {
+          const dayStart = new Date(now);
+          dayStart.setDate(now.getDate() - i);
+          dayStart.setHours(0, 0, 0, 0);
+          const dayEnd = new Date(dayStart);
+          dayEnd.setHours(23, 59, 59, 999);
+          const { sql, and, between } = await import("drizzle-orm");
+          const { disputes: disputesTable } = await import("../drizzle/schema");
+          const [openedRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(disputesTable)
+            .where(between(disputesTable.createdAt, dayStart, dayEnd));
+          const [closedRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(disputesTable)
+            .where(and(between(disputesTable.closedAt!, dayStart, dayEnd)));
+          result.push({
+            date: dayStart.toISOString().slice(0, 10),
+            total: Number(openedRow?.count ?? 0) + Number(closedRow?.count ?? 0),
+            opened: Number(openedRow?.count ?? 0),
+            closed: Number(closedRow?.count ?? 0),
+          });
+        }
+        return result;
+      }),
     outcomeAnalytics: protectedProcedure.query(async () => {
       const db = await (await import("./db")).getDb();
       if (!db) return { overallWinRate: null, byServiceType: [] };
-      // Pull closed disputes with determination amounts
+      // Use determinationWinner field for accurate provider win rate
+      // 'initiating_party' = provider won; 'responding_party' = payer won
       const rows = await db.execute(
         `SELECT serviceType,
                 COUNT(*) AS total,
-                SUM(CASE WHEN determinationAmount IS NOT NULL AND determinationAmount >= billedAmount * 0.5 THEN 1 ELSE 0 END) AS wins,
-                AVG(COALESCE(determinationAmount, 0)) AS avgDeterminationAmount,
-                AVG(COALESCE(billedAmount, 0)) AS avgBilledAmount
+                SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
+                AVG(COALESCE("determinationAmount", 0)) AS "avgDeterminationAmount",
+                AVG(COALESCE("billedAmount", 0)) AS "avgBilledAmount"
          FROM disputes
-         WHERE status = 'closed' AND determinationAmount IS NOT NULL
-         GROUP BY serviceType`
+         WHERE status IN ('closed', 'determination_issued') AND "determinationWinner" IS NOT NULL
+         GROUP BY "serviceType"`
       ) as unknown as { rows: { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[] };
       const byServiceType = (rows.rows ?? []).map(r => ({
         serviceType: r.serviceType,
@@ -172,11 +230,56 @@ export const appRouter = router({
       const totalWins = byServiceType.reduce((s, r) => s + r.wins, 0);
       return {
         overallWinRate: totalClosed > 0 ? totalWins / totalClosed : null,
-        byServiceType,
+                byServiceType,
       };
     }),
-  }),
 
+    // Cohort analysis — outcome trends by service type, state, and time period
+    cohortAnalysis: protectedProcedure
+      .input(z.object({
+        groupBy: z.enum(["serviceType", "state", "month"]).default("serviceType"),
+        dateFrom: z.string().optional(),
+        dateTo: z.string().optional(),
+      }))
+      .query(async ({ input }) => {
+        const db = await (await import("./db")).getDb();
+        if (!db) return { rows: [] };
+        const { groupBy, dateFrom, dateTo } = input;
+        const dateFilter = [
+          dateFrom ? `AND "createdAt" >= '${dateFrom}'` : "",
+          dateTo ? `AND "createdAt" <= '${dateTo}'` : "",
+        ].join(" ");
+        let groupCol: string;
+        if (groupBy === "serviceType") groupCol = '"serviceType"';
+        else if (groupBy === "state") groupCol = '"patientState"';
+        else groupCol = `TO_CHAR("createdAt", 'YYYY-MM')`;
+        const result = await db.execute(
+          `SELECT ${groupCol} AS label,
+                  COUNT(*) AS total,
+                  SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
+                  SUM(CASE WHEN "determinationWinner" = 'responding_party' THEN 1 ELSE 0 END) AS losses,
+                  AVG(COALESCE("determinationAmount", 0)) AS "avgDetermination",
+                  AVG(COALESCE("billedAmount", 0)) AS "avgBilled",
+                  AVG(EXTRACT(EPOCH FROM ("closedAt" - "createdAt")) / 86400) AS "avgDaysToClose"
+           FROM disputes
+           WHERE "determinationWinner" IS NOT NULL ${dateFilter}
+           GROUP BY ${groupCol}
+           ORDER BY total DESC`
+        ) as unknown as { rows: { label: string; total: string; wins: string; losses: string; avgDetermination: string; avgBilled: string; avgDaysToClose: string }[] };
+        return {
+          rows: (result.rows ?? []).map(r => ({
+            label: r.label ?? "Unknown",
+            total: Number(r.total),
+            wins: Number(r.wins),
+            losses: Number(r.losses),
+            winRate: Number(r.total) > 0 ? Math.round((Number(r.wins) / Number(r.total)) * 100) : 0,
+            avgDetermination: Math.round(Number(r.avgDetermination)),
+            avgBilled: Math.round(Number(r.avgBilled)),
+            avgDaysToClose: Math.round(Number(r.avgDaysToClose) ?? 0),
+          })),
+        };
+      }),
+  }),
   // --- Disputes ---------------------------------------------------------------
   disputes: router({
     list: protectedProcedure
@@ -213,6 +316,12 @@ export const appRouter = router({
           createdBy: ctx.user.id,
           initiatingPartyId: ctx.user.id,
         });
+        // Initialize double-entry ledger accounts for this dispute
+        initializeDisputeLedger(dispute.id).catch((e) =>
+          console.warn("[Ledger] Failed to initialize ledger for dispute", dispute.id, e)
+        );
+        // Sync to OpenSearch
+        indexDocument("dispute", dispute.id, dispute as unknown as Record<string, unknown>).catch(() => {});
         // Create deadline notification
         await createNotification({
           disputeId: dispute.id,
@@ -229,7 +338,8 @@ export const appRouter = router({
       .input(advanceStepSchema)
       .mutation(async ({ ctx, input }) => {
         const { disputeId, newStep, newStatus, description, ...additionalData } = input;
-        const dispute = await advanceDisputeStep(
+        // Acquire distributed lock (10 s TTL) to prevent concurrent state transitions on the same dispute
+        const dispute = await withDisputeLock(disputeId, 10_000, () => advanceDisputeStep(
           disputeId, newStep, newStatus,
           ctx.user.id, ctx.user.name ?? "Unknown",
           description,
@@ -239,8 +349,9 @@ export const appRouter = router({
             isEligible: additionalData.isEligible ?? undefined,
             ineligibilityReason: additionalData.ineligibilityReason ?? undefined,
             determinationBasis: additionalData.determinationBasis ?? undefined,
+            determinationWinner: additionalData.determinationWinner ?? undefined,
           }
-        );
+        ));
         // Create step-specific notifications
         if (newStep === "STEP_04_IDR_INITIATED") {
           await createNotification({
@@ -270,6 +381,8 @@ export const appRouter = router({
             dueDate: dispute.paymentDeadline ?? null,
           });
         }
+        // Sync updated dispute to OpenSearch
+        indexDocument("dispute", dispute.id, dispute as unknown as Record<string, unknown>).catch(() => {});
         return dispute;
       }),
 
@@ -763,6 +876,59 @@ export const appRouter = router({
           .where(eq(disputeDocuments.disputeId, input.disputeId))
           .orderBy(desc(disputeDocuments.uploadedAt));
       }),
+    // Document version history — list all revisions of a specific document
+    listVersions: protectedProcedure
+      .input(z.object({ documentId: z.string() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return [];
+        const { documentVersions } = await import("../drizzle/schema");
+        const { eq, desc } = await import("drizzle-orm");
+        return db.select().from(documentVersions)
+          .where(eq(documentVersions.documentId, input.documentId))
+          .orderBy(desc(documentVersions.versionNumber));
+      }),
+    // Upload a new version of an existing document
+    uploadVersion: protectedProcedure
+      .input(z.object({
+        documentId: z.string(),
+        disputeId: z.string(),
+        fileName: z.string().min(1),
+        fileType: z.string().min(1),
+        fileSize: z.number().min(1),
+        storageKey: z.string().min(1),
+        changeNote: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new Error("Database unavailable");
+        const { documentVersions } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        // Mark all previous versions as not latest
+        await db.update(documentVersions)
+          .set({ isLatest: false })
+          .where(eq(documentVersions.documentId, input.documentId));
+        // Get current max version number
+        const { max } = await import("drizzle-orm");
+        const [{ maxVer }] = await db.select({ maxVer: max(documentVersions.versionNumber) })
+          .from(documentVersions)
+          .where(eq(documentVersions.documentId, input.documentId));
+        const nextVersion = (maxVer ?? 0) + 1;
+        const [version] = await db.insert(documentVersions).values({
+          id: crypto.randomUUID(),
+          documentId: input.documentId,
+          disputeId: input.disputeId,
+          versionNumber: nextVersion,
+          s3Key: input.storageKey,
+          fileName: input.fileName,
+          fileSize: input.fileSize,
+          mimeType: input.fileType,
+          uploadedBy: ctx.user.id,
+          changeNote: input.changeNote ?? null,
+          isLatest: true,
+        }).returning();
+        return version;
+      }),
   }),
 
   // --- Admin --------------------------------------------------------------------
@@ -1245,10 +1411,29 @@ export const appRouter = router({
           });
           return result.patients ?? [];
         } catch {
-          // Graceful fallback: return mock suggestions so UI is usable without AI service
-          return [
-            { id: `PT-${Math.floor(Math.random() * 90000) + 10000}`, name: `Patient matching "${input.query}"`, dob: "1980-01-01", mrn: `MRN-${Math.floor(Math.random() * 90000) + 10000}` },
-          ];
+          // Graceful fallback: attempt a real FHIR R4 Patient search using the stored connection
+          try {
+            const db = await getDb();
+            if (!db) return [];
+            const conn = await db.select().from(emrConnections).where(eq(emrConnections.id, input.connectionId)).limit(1);
+            if (!conn.length || !conn[0].baseUrl) return [];
+            const baseUrl = conn[0].baseUrl.replace(/\/$/, "");
+            const params = new URLSearchParams({ name: input.query, _count: "10" });
+            const resp = await fetch(`${baseUrl}/Patient?${params.toString()}`, {
+              headers: { Accept: "application/fhir+json" },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (!resp.ok) return [];
+            const bundle = await resp.json() as { entry?: { resource: { id: string; name?: { family?: string; given?: string[] }[]; birthDate?: string; identifier?: { value: string }[] } }[] };
+            return (bundle.entry ?? []).map(e => ({
+              id: e.resource.id,
+              name: e.resource.name?.[0] ? `${e.resource.name[0].family ?? ""}, ${(e.resource.name[0].given ?? []).join(" ")}`.trim() : "Unknown",
+              dob: e.resource.birthDate ?? "",
+              mrn: e.resource.identifier?.find(i => i.value)?.value ?? e.resource.id,
+            }));
+          } catch {
+            return [];
+          }
         }
       }),
 
@@ -1525,19 +1710,38 @@ export const appRouter = router({
     checkCompliance: protectedProcedure
       .input(z.object({ disputeId: z.string(), state: z.string() }))
       .query(async ({ input }) => {
-        const AI_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
-        try {
-          const res = await fetch(`${AI_URL}/ask-assistant`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question: `For a dispute in ${input.state}: what state balance billing laws apply and what are the compliance requirements for NSA IDR?`, dispute_context: { disputeId: input.disputeId, state: input.state } }),
-          });
-          if (!res.ok) throw new Error("AI unavailable");
-          const data = await res.json() as { answer: string; sources: string[]; confidence: number; suggested_actions: string[] };
-          return { answer: data.answer, sources: data.sources, confidence: data.confidence, suggestedActions: data.suggested_actions };
-        } catch {
-          return { answer: `State ${input.state} disputes are subject to both federal NSA IDR requirements (45 CFR § 149.510) and any applicable state balance billing laws. Ensure compliance with the state's specific notice requirements and IDR timelines.`, sources: ["45 CFR § 149.510", "No Surprises Act § 2799A-1"], confidence: 0.75, suggestedActions: ["Verify state law applicability", "Check plan type (ERISA vs state-regulated)", "Confirm notice requirements"] };
-        }
+        const { invokeLLM } = await import("./_core/llm");
+        const dispute = await getDisputeById(input.disputeId);
+        const disputeContext = dispute
+          ? `Service type: ${dispute.serviceType}, billed: $${dispute.billedAmount}, QPA: $${dispute.qpaAmount ?? "N/A"}, service date: ${dispute.serviceDate ? new Date(dispute.serviceDate).toLocaleDateString() : "N/A"}`
+          : "";
+        const response = await invokeLLM({
+          messages: [
+            { role: "system", content: "You are an expert in the No Surprises Act (NSA), 45 CFR § 149.510, and state balance billing laws. Provide concise, accurate compliance guidance. Always cite specific regulatory provisions. Return JSON with fields: answer (string), sources (string array), confidence (0-1 number), suggestedActions (string array)." },
+            { role: "user", content: `State: ${input.state}. ${disputeContext}\n\nWhat state balance billing laws apply to this dispute and what are the compliance requirements for NSA IDR? Include specific notice requirements, IDR timelines, and plan type considerations (ERISA vs state-regulated).` },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "compliance_analysis",
+              strict: true,
+              schema: {
+                type: "object",
+                properties: {
+                  answer: { type: "string" },
+                  sources: { type: "array", items: { type: "string" } },
+                  confidence: { type: "number" },
+                  suggestedActions: { type: "array", items: { type: "string" } },
+                },
+                required: ["answer", "sources", "confidence", "suggestedActions"],
+                additionalProperties: false,
+              },
+            },
+          },
+        });
+        const content = response.choices[0]?.message?.content ?? "{}";
+        const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content)) as { answer: string; sources: string[]; confidence: number; suggestedActions: string[] };
+        return parsed;
       }),
   }),
 
@@ -1558,19 +1762,48 @@ export const appRouter = router({
     getAnalysis: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
       .query(async ({ input }) => {
-        const AI_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
-        try {
-          const res = await fetch(`${AI_URL}/ask-assistant`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question: `Provide an expert analysis of this dispute including: (1) strength of the provider's position, (2) likelihood of success in IDR, (3) recommended negotiation strategy, (4) key regulatory arguments to raise, (5) comparable determination benchmarks.`, dispute_context: { disputeId: input.disputeId } }),
-          });
-          if (!res.ok) throw new Error("AI unavailable");
-          const data = await res.json() as { answer: string; sources: string[]; confidence: number; suggested_actions: string[] };
-          return { analysis: data.answer, sources: data.sources, confidence: data.confidence, recommendations: data.suggested_actions };
-        } catch {
-          return { analysis: "Expert analysis is being prepared. Our certified IDR specialists are reviewing the dispute details, QPA methodology, and comparable service benchmarks. You will receive a detailed analysis within the estimated response time.", sources: ["45 CFR § 149.510", "CMS IDR Guidance"], confidence: 0.8, recommendations: ["Gather all supporting clinical documentation", "Document QPA calculation methodology", "Identify comparable determinations"] };
-        }
+        const { invokeLLM } = await import("./_core/llm");
+        const dispute = await getDisputeById(input.disputeId);
+        if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        const disputeContext = [
+          `Reference: ${dispute.referenceNumber}`,
+          `Service type: ${dispute.serviceType}`,
+          `Billed amount: $${dispute.billedAmount}`,
+          `QPA: $${dispute.qpaAmount ?? "N/A"}`,
+          `Initiating party offer: $${dispute.initiatingPartyOffer ?? "N/A"}`,
+          `Responding party offer: $${dispute.respondingPartyOffer ?? "N/A"}`,
+          `Current step: ${dispute.currentStep}`,
+          `Patient state: ${dispute.patientState}`,
+          `Service date: ${dispute.serviceDate ? new Date(dispute.serviceDate).toLocaleDateString() : "N/A"}`,
+          `Determination basis: ${dispute.determinationBasis ?? "N/A"}`,
+        ].join("; ");
+        const response = await invokeLLM({
+          messages: [
+            { role: "system", content: "You are a certified IDR expert specializing in the No Surprises Act. Analyze disputes and provide actionable expert guidance. Return JSON with fields: analysis (string), sources (string array), confidence (0-1 number), recommendations (string array)." },
+            { role: "user", content: `Analyze this IDR dispute: ${disputeContext}\n\nProvide: (1) strength of the provider's position, (2) likelihood of success in IDR arbitration, (3) recommended negotiation strategy, (4) key regulatory arguments to raise under 45 CFR § 149.510, (5) comparable determination benchmarks and QPA methodology considerations.` },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "expert_analysis",
+              strict: true,
+              schema: {
+                type: "object",
+                properties: {
+                  analysis: { type: "string" },
+                  sources: { type: "array", items: { type: "string" } },
+                  confidence: { type: "number" },
+                  recommendations: { type: "array", items: { type: "string" } },
+                },
+                required: ["analysis", "sources", "confidence", "recommendations"],
+                additionalProperties: false,
+              },
+            },
+          },
+        });
+        const content = response.choices[0]?.message?.content ?? "{}";
+        const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content)) as { analysis: string; sources: string[]; confidence: number; recommendations: string[] };
+        return parsed;
       }),
   }),
 
@@ -2454,16 +2687,17 @@ Based on NSA IDR historical data and legal precedent, provide:
       .input(z.object({
         disputeId: z.string(),
         amountDollars: z.number().positive(),
-        referenceId: z.string().optional(),
+        referenceId: z.string().trim().min(3).max(64),
+        idempotencyKey: z.string().uuid(),
       }))
       .mutation(async ({ ctx, input }) => {
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
         const amountCents = Math.round(input.amountDollars * 100);
-        const entry = await recordPayment(input.disputeId, amountCents, input.referenceId);
-        await eventBus.publish('dispute.offer_submitted', input.disputeId, 'dispute',
-          { type: 'payment', amountDollars: input.amountDollars },
-          { userId: ctx.user.id, timestamp: new Date().toISOString() }
-        );
+        if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Payment amount must resolve to positive whole cents" });
+        }
+        const entry = await recordPayment(input.disputeId, amountCents, input.referenceId, input.idempotencyKey, ctx.user.id);
+        await dispatchOutboxBatch(1);
         return entry;
       }),
   }),
@@ -2473,7 +2707,7 @@ Based on NSA IDR historical data and legal precedent, provide:
     query: protectedProcedure
       .input(z.object({
         q: z.string().min(1).max(200),
-        entityTypes: z.array(z.enum(['dispute', 'document', 'audit'])).optional(),
+        entityTypes: z.array(z.enum(['dispute', 'document', 'audit', 'payer_contact', 'idr_entity', 'expert', 'regulatory', 'qpa_benchmark'])).optional(),
         limit: z.number().int().min(1).max(50).default(20),
       }))
       .query(async ({ ctx, input }) => {
@@ -2742,10 +2976,12 @@ Based on NSA IDR historical data and legal precedent, provide:
       .query(async ({ input }) => {
         const db = await getDb();
         if (!db) return [];
-        if (input.search) {
-          const { ilike, or } = await import("drizzle-orm");
-          const q = `%${input.search}%`;
-          return db.select().from(payerContacts).where(or(ilike(payerContacts.payerName, q), ilike(payerContacts.contactName, q), ilike(payerContacts.email, q)));
+        if (input.search && input.search.trim().length > 1) {
+          // Use OpenSearch / Fuse.js for full-text search
+          const results = await search({ q: input.search, entityTypes: ["payer_contact"], limit: 100 });
+          const ids = new Set(results.hits.map(h => h.id));
+          const all = await db.select().from(payerContacts).orderBy(payerContacts.payerName);
+          return all.filter(c => ids.has(c.id));
         }
         return db.select().from(payerContacts).orderBy(payerContacts.payerName);
       }),
@@ -2767,6 +3003,8 @@ Based on NSA IDR historical data and legal precedent, provide:
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const [contact] = await db.insert(payerContacts).values({ ...input, createdBy: ctx.user.id }).returning();
+        // Sync to OpenSearch
+        indexDocument("payer_contact", contact.id, contact as unknown as Record<string, unknown>).catch(() => {});
         return contact;
       }),
 
@@ -2787,6 +3025,8 @@ Based on NSA IDR historical data and legal precedent, provide:
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { id, ...rest } = input;
         const [updated] = await db.update(payerContacts).set({ ...rest, updatedAt: new Date() }).where(eq(payerContacts.id, id)).returning();
+        // Sync to OpenSearch
+        if (updated) indexDocument("payer_contact", updated.id, updated as unknown as Record<string, unknown>).catch(() => {});
         return updated;
       }),
 
@@ -2796,6 +3036,8 @@ Based on NSA IDR historical data and legal precedent, provide:
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         await db.delete(payerContacts).where(eq(payerContacts.id, input.id));
+        // Remove from OpenSearch
+        deleteFromIndex("payer_contact", input.id).catch(() => {});
         return { success: true };
       }),
   }),
@@ -3934,6 +4176,21 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
 
   // ─── Two-Factor Auth (TOTP) ─────────────────────────────────────────────────
   totp: router({
+    // Generate a cryptographically secure TOTP secret and QR code URI server-side
+    generateSecret: protectedProcedure
+      .input(z.object({ appName: z.string().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        const { generateSecret: genSecret, generateURI } = await import("otplib");
+        const secret = genSecret();
+        const user = ctx.user;
+        const issuer = input.appName ?? "HealthPoint IDR";
+        const accountName = user.email ?? user.name ?? user.id;
+        const otpAuthUrl = generateURI({ secret, label: accountName, issuer });
+        // Generate QR code as data URL
+        const QRCode = await import("qrcode");
+        const qrDataUrl = await QRCode.default.toDataURL(otpAuthUrl);
+        return { secret, otpAuthUrl, qrDataUrl };
+      }),
     status: protectedProcedure.query(async ({ ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -3950,10 +4207,12 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
       .mutation(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        // Generate 8 backup codes
-        const backupCodes = Array.from({ length: 8 }, () =>
-          `${Math.random().toString(36).slice(2, 6)}-${Math.random().toString(36).slice(2, 6)}`
-        );
+        // Generate 8 cryptographically secure backup codes
+        const backupCodes = Array.from({ length: 8 }, () => {
+          const bytes = crypto.getRandomValues(new Uint8Array(4));
+          const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+          return `${hex.slice(0, 4)}-${hex.slice(4, 8)}`;
+        });
         const existing = await db.select({ id: totpSecrets.id }).from(totpSecrets).where(eq(totpSecrets.userId, ctx.user.id)).limit(1);
         if (existing.length) {
           await db.update(totpSecrets).set({ secret: input.secret, status: "pending", backupCodes: JSON.stringify(backupCodes), usedBackupCodes: "[]", updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
@@ -3967,8 +4226,14 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
       .mutation(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        // Accept any 6-digit code for demo (real impl would use speakeasy/otplib)
         if (!/^\d{6}$/.test(input.code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid code format" });
+        // Fetch pending secret and validate with otplib v13
+        const rows = await db.select({ secret: totpSecrets.secret }).from(totpSecrets)
+          .where(and(eq(totpSecrets.userId, ctx.user.id), eq(totpSecrets.status, "pending"))).limit(1);
+        if (!rows.length) throw new TRPCError({ code: "NOT_FOUND", message: "No pending TOTP setup found" });
+        const { verify: totpVerify } = await import("otplib");
+        const verifyResult = await totpVerify({ token: input.code, secret: rows[0].secret });
+        if (!verifyResult.valid) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid TOTP code — please try again" });
         await db.update(totpSecrets).set({ status: "active", enabledAt: new Date(), updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
         return { success: true };
       }),
@@ -3978,6 +4243,13 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         if (!/^\d{6}$/.test(input.code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid code format" });
+        // Validate TOTP code before disabling with otplib v13
+        const rows = await db.select({ secret: totpSecrets.secret }).from(totpSecrets)
+          .where(and(eq(totpSecrets.userId, ctx.user.id), eq(totpSecrets.status, "active"))).limit(1);
+        if (!rows.length) throw new TRPCError({ code: "NOT_FOUND", message: "2FA is not currently active" });
+        const { verify: totpVerify } = await import("otplib");
+        const verifyResult = await totpVerify({ token: input.code, secret: rows[0].secret });
+        if (!verifyResult.valid) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid TOTP code" });
         await db.update(totpSecrets).set({ status: "disabled", disabledAt: new Date(), updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
         return { success: true };
       }),
@@ -4057,7 +4329,8 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
       for (const b of benchmarks) {
         const existing = await db.select({ id: qpaBenchmarks.id }).from(qpaBenchmarks).where(eq(qpaBenchmarks.cptCode, b.cptCode)).limit(1);
         if (!existing.length) {
-          await db.insert(qpaBenchmarks).values({ id: crypto.randomUUID(), ...b });
+          const [inserted] = await db.insert(qpaBenchmarks).values({ id: crypto.randomUUID(), ...b }).returning();
+          if (inserted) indexDocument("qpa_benchmark", inserted.id, inserted as unknown as Record<string, unknown>).catch(() => {});
         }
       }
       // Upsert state modifiers
@@ -4083,6 +4356,19 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
       .query(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // Use OpenSearch / Fuse.js for full-text search when a query is present
+        if (input.search && input.search.trim().length > 1) {
+          const results = await search({ q: input.search, entityTypes: ["regulatory"], limit: input.limit });
+          const ids = new Set(results.hits.map(h => h.id));
+          const rows = await db.select().from(regulatoryUpdates)
+            .where(eq(regulatoryUpdates.isActive, true))
+            .orderBy(desc(regulatoryUpdates.publishedAt))
+            .limit(500);
+          let filtered = rows.filter(r => ids.has(r.id));
+          if (input.category && input.category !== "all") filtered = filtered.filter(r => r.category === input.category);
+          if (input.impact && input.impact !== "all") filtered = filtered.filter(r => r.impactLevel === input.impact);
+          return filtered.slice(0, input.limit).map(r => ({ ...r, tags: JSON.parse(r.tags ?? "[]") as string[] }));
+        }
         const rows = await db.select().from(regulatoryUpdates)
           .where(eq(regulatoryUpdates.isActive, true))
           .orderBy(desc(regulatoryUpdates.publishedAt))
@@ -4090,10 +4376,6 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         let filtered = rows;
         if (input.category && input.category !== "all") filtered = filtered.filter(r => r.category === input.category);
         if (input.impact && input.impact !== "all") filtered = filtered.filter(r => r.impactLevel === input.impact);
-        if (input.search) {
-          const s = input.search.toLowerCase();
-          filtered = filtered.filter(r => r.title.toLowerCase().includes(s) || r.summary.toLowerCase().includes(s));
-        }
         return filtered.map(r => ({ ...r, tags: JSON.parse(r.tags ?? "[]") as string[] }));
       }),
     seed: protectedProcedure.mutation(async ({ ctx }) => {
@@ -4114,6 +4396,8 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         const existing = await db.select({ id: regulatoryUpdates.id }).from(regulatoryUpdates).where(eq(regulatoryUpdates.id, u.id)).limit(1);
         if (!existing.length) {
           await db.insert(regulatoryUpdates).values(u);
+          // Sync to OpenSearch
+          indexDocument("regulatory", u.id, u as unknown as Record<string, unknown>).catch(() => {});
         }
       }
       return { seeded: updates.length };
@@ -4152,6 +4436,8 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         if (!existing.length) {
           await db.insert(expertPanel).values(e);
         }
+        // Sync to OpenSearch (fire-and-forget)
+        indexDocument("expert", e.id, e as unknown as Record<string, unknown>).catch(() => {});
       }
       return { seeded: experts.length };
     }),
@@ -4246,4 +4532,3 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
   }),
 });
 export type AppRouter = typeof appRouter;
-

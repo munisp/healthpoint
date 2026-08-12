@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import { useChartColors } from "@/hooks/useChartColors";
 import {
   DollarSign, TrendingUp, TrendingDown, BookOpen, ArrowRightLeft,
   Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download, Layers, List, ChevronDown,
@@ -21,14 +22,6 @@ import {
   LineChart, Line, CartesianGrid, Legend, ReferenceLine
 } from "recharts";
 
-const ACCOUNT_COLORS: Record<string, string> = {
-  billed: "#6366f1",
-  allowed: "#f59e0b",
-  paid: "#10b981",
-  determination: "#3b82f6",
-  adjustment: "#8b5cf6",
-  patient_responsibility: "#ef4444",
-};
 
 const ACCOUNT_LABELS: Record<string, string> = {
   billed: "Billed Amount",
@@ -113,9 +106,21 @@ function buildTrendData(
 }
 
 export default function FinancialLedger() {
+  const C = useChartColors();
+  const ACCOUNT_COLORS: Record<string, string> = {
+    billed: C.primary,
+    allowed: C.chart3,
+    paid: C.chart2,
+    determination: C.chart1,
+    adjustment: C.chart4,
+    patient_responsibility: C.danger,
+  };
+
   const [selectedDisputeId, setSelectedDisputeId] = useState("");
   const [disputeInput, setDisputeInput] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState("");
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
 
   // Date range filter
@@ -165,6 +170,8 @@ export default function FinancialLedger() {
       toast.success("Payment recorded in ledger");
       setPaymentDialogOpen(false);
       setPaymentAmount("");
+      setPaymentReference("");
+      setPaymentIdempotencyKey("");
       balancesQuery.refetch();
       summaryQuery.refetch();
       historyQuery.refetch();
@@ -197,7 +204,7 @@ export default function FinancialLedger() {
   const chartData = balances.map(b => ({
     name: ACCOUNT_LABELS[b.accountType] ?? b.accountType,
     amount: b.balanceDollars,
-    color: ACCOUNT_COLORS[b.accountType] ?? "#94a3b8",
+    color: ACCOUNT_COLORS[b.accountType] ?? C.muted,
   }));
 
   const hasDateFilter = !!(dateFrom || dateTo);
@@ -258,7 +265,7 @@ export default function FinancialLedger() {
               Financial Ledger
             </h1>
             <p className="text-muted-foreground text-sm mt-1">
-              Double-entry accounting ledger for IDR dispute financials (TigerBeetle-style)
+              PostgreSQL double-entry evidence ledger for IDR dispute financials; it records verified settlement evidence and does not initiate funds transfers
             </p>
           </div>
           <div className="flex gap-2">
@@ -322,23 +329,32 @@ export default function FinancialLedger() {
                 <Button variant="outline" size="sm" onClick={() => { balancesQuery.refetch(); historyQuery.refetch(); }}>
                   <RefreshCw className="h-4 w-4 mr-1" /> Refresh
                 </Button>
-                <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
+                <Dialog open={paymentDialogOpen} onOpenChange={(open) => {
+                  setPaymentDialogOpen(open);
+                  if (open && !paymentIdempotencyKey) setPaymentIdempotencyKey(crypto.randomUUID());
+                }}>
                   <DialogTrigger asChild>
-                    <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Record Payment</Button>
+                    <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Record Payment Evidence</Button>
                   </DialogTrigger>
                   <DialogContent>
-                    <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
+                    <DialogHeader><DialogTitle>Record Verified Payment Evidence</DialogTitle></DialogHeader>
                     <div className="space-y-4 pt-2">
+                      <p className="text-sm text-muted-foreground">This writes an auditable record of an externally completed payment. It does not initiate, route, or release funds.</p>
                       <div>
                         <Label>Payment Amount (USD)</Label>
                         <Input type="number" min="0.01" step="0.01" placeholder="0.00"
                           value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="mt-1" />
                       </div>
+                      <div>
+                        <Label>External Payment Reference</Label>
+                        <Input minLength={3} maxLength={64} placeholder="ACH trace, bank confirmation, or remittance ID"
+                          value={paymentReference} onChange={e => setPaymentReference(e.target.value)} className="mt-1" />
+                      </div>
                       <Button className="w-full"
-                        disabled={!paymentAmount || parseFloat(paymentAmount) <= 0 || recordPaymentMutation.isPending}
-                        onClick={() => recordPaymentMutation.mutate({ disputeId: selectedDisputeId, amountDollars: parseFloat(paymentAmount) })}>
+                        disabled={!paymentAmount || parseFloat(paymentAmount) <= 0 || paymentReference.trim().length < 3 || !paymentIdempotencyKey || recordPaymentMutation.isPending}
+                        onClick={() => recordPaymentMutation.mutate({ disputeId: selectedDisputeId, amountDollars: parseFloat(paymentAmount), referenceId: paymentReference.trim(), idempotencyKey: paymentIdempotencyKey })}>
                         {recordPaymentMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                        Record Payment
+                        Record Payment Evidence
                       </Button>
                     </div>
                   </DialogContent>
@@ -559,7 +575,7 @@ export default function FinancialLedger() {
                         <div key={b.accountId} className="flex items-center justify-between py-2 border-b last:border-0">
                           <div className="flex items-center gap-2">
                             <div className="w-3 h-3 rounded-full"
-                              style={{ backgroundColor: ACCOUNT_COLORS[b.accountType] ?? "#94a3b8" }} />
+                              style={{ backgroundColor: ACCOUNT_COLORS[b.accountType] ?? C.muted }} />
                             <span className="text-sm font-medium">
                               {ACCOUNT_LABELS[b.accountType] ?? b.accountType}
                             </span>
@@ -672,7 +688,7 @@ export default function FinancialLedger() {
                         const groupDebits = rows.filter(r => r.entry.entryType === "debit").reduce((s, r) => s + r.entry.amountCents, 0);
                         const groupCredits = rows.filter(r => r.entry.entryType === "credit").reduce((s, r) => s + r.entry.amountCents, 0);
                         const groupNet = groupCredits - groupDebits;
-                        const color = ACCOUNT_COLORS[accountKey] ?? "#94a3b8";
+                        const color = ACCOUNT_COLORS[accountKey] ?? C.muted;
         const isExpanded = expandedGroups[accountKey] !== false; // default open
                         return (
                           <div key={accountKey} className="border rounded-lg overflow-hidden">
@@ -711,7 +727,7 @@ export default function FinancialLedger() {
                                       <td className="py-2 pr-3 max-w-xs truncate">{entry.description}</td>
                                       <td className="py-2 pr-3 text-xs text-muted-foreground">
                                         <span className="inline-flex items-center gap-1">
-                                          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }} />
+                                          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? C.muted }} />
                                           → {ACCOUNT_LABELS[creditAccountType] ?? creditAccountType}
                                         </span>
                                       </td>
@@ -754,14 +770,14 @@ export default function FinancialLedger() {
                             <td className="py-2 pr-4">
                               <span className="inline-flex items-center gap-1">
                                 <div className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: ACCOUNT_COLORS[debitAccountType] ?? "#94a3b8" }} />
+                                  style={{ backgroundColor: ACCOUNT_COLORS[debitAccountType] ?? C.muted }} />
                                 {ACCOUNT_LABELS[debitAccountType] ?? debitAccountType}
                               </span>
                             </td>
                             <td className="py-2 pr-4">
                               <span className="inline-flex items-center gap-1">
                                 <div className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }} />
+                                  style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? C.muted }} />
                                 {ACCOUNT_LABELS[creditAccountType] ?? creditAccountType}
                               </span>
                             </td>

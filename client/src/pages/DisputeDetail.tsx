@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useParams, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -13,12 +13,14 @@ import {
   AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock,
   DollarSign, FileText, Gavel, LogOut, Scale, Upload, Users,
   TrendingUp, CheckCircle, XCircle, RefreshCw, Download, Bell,
-  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp
+  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp, Pin, PinOff
 } from "lucide-react";
 import WorkflowTimeline from "@/components/WorkflowTimeline";
 import DeadlineCountdownBanner from "@/components/DeadlineCountdownBanner";
 import OutcomePredictionGauge from "@/components/OutcomePredictionGauge";
 import DisputeComments from "@/components/DisputeComments";
+import { useRecentDisputes } from "@/hooks/useRecentDisputes";
+import { usePinnedDisputes } from "@/hooks/usePinnedDisputes";
 
 const IDR_STEPS = [
   { key: "STEP_01_OPEN_NEGOTIATION_INITIATED", label: "Open Negotiation Initiated", description: "Party sends open negotiation notice per NSA §2799A-1", days: "Day 0" },
@@ -75,6 +77,57 @@ const OFFER_TYPE_COLORS: Record<string, string> = {
   determination: "bg-green-50 border-green-200 text-green-700",
 };
 
+// ─── Document Version Row ─────────────────────────────────────────────────────
+function DocumentVersionRow({ doc, disputeId }: { doc: any; disputeId: string }) {
+  const [showVersions, setShowVersions] = useState(false);
+  const { data: versions } = trpc.documents.listVersions.useQuery(
+    { documentId: doc.id },
+    { enabled: showVersions }
+  );
+  return (
+    <div className="rounded-lg bg-slate-50 border border-slate-100">
+      <div className="flex items-start gap-2 p-2">
+        <FileText size={14} className="text-slate-400 mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold text-slate-700 truncate">{doc.fileName || doc.title}</div>
+          <div className="text-xs text-slate-400 capitalize">{doc.documentType?.replace(/_/g, " ")}</div>
+          {doc.fileSize && doc.fileSize > 0 && (
+            <div className="text-xs text-slate-400">{(doc.fileSize / 1024).toFixed(1)} KB</div>
+          )}
+          <div className="text-xs text-slate-400">{doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : ""}</div>
+        </div>
+        <button
+          onClick={() => setShowVersions(v => !v)}
+          className="text-xs text-blue-500 hover:underline shrink-0 flex items-center gap-0.5"
+          title="View version history"
+        >
+          {showVersions ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          History
+        </button>
+      </div>
+      {showVersions && (
+        <div className="border-t border-slate-100 px-3 pb-2">
+          {!versions || versions.length === 0 ? (
+            <p className="text-xs text-slate-400 py-2">No version history yet. Upload a new version to track revisions.</p>
+          ) : (
+            <div className="space-y-1 pt-1">
+              {versions.map((v: any) => (
+                <div key={v.id} className="flex items-center gap-2 text-xs">
+                  <span className="font-mono text-slate-500">v{v.versionNumber}</span>
+                  <span className="text-slate-600 truncate">{v.fileName}</span>
+                  {v.isLatest && <span className="px-1 py-0.5 bg-green-100 text-green-700 rounded text-[10px]">latest</span>}
+                  <span className="text-slate-400 ml-auto">{v.uploadedAt ? new Date(v.uploadedAt).toLocaleDateString() : ""}</span>
+                  {v.changeNote && <span className="text-slate-400 italic truncate max-w-[120px]">{v.changeNote}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DisputeDetail() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -121,7 +174,13 @@ export default function DisputeDetail() {
   // Advance state
   const [advanceDescription, setAdvanceDescription] = useState("");
   const [determinationBasis, setDeterminationBasis] = useState("");
+  const [determinationWinner, setDeterminationWinner] = useState<"initiating_party" | "responding_party" | "">("");
   const [showAdvanceConfirm, setShowAdvanceConfirm] = useState(false);
+
+  // Recent disputes tracking
+  const { recordVisit } = useRecentDisputes();
+  // Pinned disputes
+  const { isPinned, toggle: togglePin } = usePinnedDisputes();
 
   // Queries
   const { data: timelineData, isLoading } = trpc.disputes.getTimeline.useQuery({ disputeId: id! });
@@ -235,6 +294,20 @@ export default function DisputeDetail() {
 
   // Use full timeline data if available, fall back to basic dispute data
   const dispute = timelineData?.dispute ?? basicDispute!;
+
+  // Track this dispute as recently visited
+  useEffect(() => {
+    if (dispute?.id && dispute?.referenceNumber) {
+      recordVisit({
+        id: dispute.id,
+        referenceNumber: dispute.referenceNumber,
+        status: dispute.status ?? "open_negotiation",
+        currentStep: dispute.currentStep ?? "",
+        serviceType: dispute.serviceType ?? "",
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispute?.id]);
   const timeline = timelineData?.timeline ?? [];
   const { dispute: _d, timeline: _t, ...timelineRest } = timelineData ?? {}; // keep offers etc.
   const offers = (timelineData as any).offers ?? [];
@@ -257,6 +330,7 @@ export default function DisputeDetail() {
         newStatus: nextStep.status as any,
         description: desc,
         ...(determinationBasis ? { determinationBasis } : {}),
+        ...(determinationWinner ? { determinationWinner: determinationWinner as "initiating_party" | "responding_party" } : {}),
       },
       { onSuccess: () => setShowAdvanceConfirm(false) }
     );
@@ -309,6 +383,25 @@ export default function DisputeDetail() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => togglePin({
+                id: dispute.id,
+                referenceNumber: dispute.referenceNumber,
+                serviceType: dispute.serviceType ?? "",
+                status: dispute.status,
+              })}
+              className={`flex items-center gap-2 ${
+                isPinned(dispute.id)
+                  ? "border-amber-400 text-amber-700 bg-amber-50 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-400 dark:bg-amber-900/20"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              title={isPinned(dispute.id) ? "Unpin from sidebar" : "Pin to sidebar"}
+            >
+              {isPinned(dispute.id) ? <PinOff size={14} /> : <Pin size={14} />}
+              {isPinned(dispute.id) ? "Unpin" : "Pin"}
+            </Button>
             <Button variant="outline" onClick={handleAISummary} disabled={aiSummaryMutation.isPending} className="flex items-center gap-2 border-violet-300 text-violet-700 hover:bg-violet-50">
               <Brain size={14} />{aiSummaryMutation.isPending ? "Analysing..." : "AI Summary"}
             </Button>
@@ -625,17 +718,7 @@ export default function DisputeDetail() {
                 ) : (
                   <div className="space-y-2">
                     {documentList.map((doc: any) => (
-                      <div key={doc.id} className="flex items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
-                        <FileText size={14} className="text-slate-400 mt-0.5 shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-semibold text-slate-700 truncate">{doc.title}</div>
-                          <div className="text-xs text-slate-400 capitalize">{doc.documentType?.replace(/_/g, " ")}</div>
-                          {doc.fileSize && doc.fileSize > 0 && (
-                            <div className="text-xs text-slate-400">{(doc.fileSize / 1024).toFixed(1)} KB</div>
-                          )}
-                          <div className="text-xs text-slate-400">{doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : ""}</div>
-                        </div>
-                      </div>
+                      <DocumentVersionRow key={doc.id} doc={doc} disputeId={dispute.id} />
                     ))}
                   </div>
                 )}
@@ -830,7 +913,24 @@ export default function DisputeDetail() {
 
       {/* ── Step Advance Confirmation Dialog ──────────────────────────── */}
       <Dialog open={showAdvanceConfirm} onOpenChange={setShowAdvanceConfirm}>
-        <DialogContent className="max-w-md">
+        <DialogContent
+          className="max-w-md"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              setShowAdvanceConfirm(false);
+            }
+            if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+              // Only fire Enter-to-confirm when not inside a select/textarea
+              const tag = (e.target as HTMLElement).tagName.toLowerCase();
+              if (tag === "select" || tag === "textarea") return;
+              e.preventDefault();
+              const isWinnerRequired = nextStep?.step === "STEP_13_DETERMINATION_ISSUED";
+              if (isWinnerRequired && !determinationWinner) return;
+              if (!advanceMutation.isPending) confirmAdvance();
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ChevronRight size={18} className="text-blue-600" />
@@ -850,12 +950,32 @@ export default function DisputeDetail() {
               </div>
             </div>
             <p className="text-slate-500 text-xs">This action will be recorded in the dispute timeline and cannot be reversed without admin intervention.</p>
+            {nextStep?.step === "STEP_13_DETERMINATION_ISSUED" && (
+              <div className="space-y-1.5 pt-1">
+                <label className="text-xs font-semibold text-slate-700">Determination Winner <span className="text-red-500">*</span></label>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={determinationWinner}
+                  onChange={e => setDeterminationWinner(e.target.value as "initiating_party" | "responding_party" | "")}
+                >
+                  <option value="">Select winning party…</option>
+                  <option value="initiating_party">Initiating Party (Provider) won</option>
+                  <option value="responding_party">Responding Party (Payer) won</option>
+                </select>
+                <p className="text-[11px] text-slate-400">This determines the win-rate analytics for the platform.</p>
+              </div>
+            )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:items-center">
+            <span className="text-[11px] text-muted-foreground mr-auto hidden sm:block">
+              <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono text-[10px]">Enter</kbd> to confirm
+              {" · "}
+              <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono text-[10px]">Esc</kbd> to cancel
+            </span>
             <Button variant="outline" onClick={() => setShowAdvanceConfirm(false)}>Cancel</Button>
             <Button
               onClick={confirmAdvance}
-              disabled={advanceMutation.isPending}
+              disabled={advanceMutation.isPending || (nextStep?.step === "STEP_13_DETERMINATION_ISSUED" && !determinationWinner)}
               className="flex items-center gap-2"
             >
               {advanceMutation.isPending

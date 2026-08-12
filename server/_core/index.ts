@@ -21,6 +21,15 @@ import { serveStatic, setupVite } from "./vite";
 import { deadlineCheckHandler } from "../scheduled/deadlineCheck";
 import { weeklyDigestHandler } from "../scheduled/weeklyDigest";
 import { ENV } from "./env";
+import {
+  SETTLEMENT_EVENT_ID_HEADER,
+  SETTLEMENT_SIGNATURE_HEADER,
+  SETTLEMENT_TIMESTAMP_HEADER,
+  verifySettlementCallbackSignature,
+} from "../settlement-auth";
+import { reconcileAuthenticatedSettlementCallback, settlementCallbackSchema } from "../settlement";
+import { LedgerIntegrityError } from "../ledger";
+import { startOutboxWorker } from "../outbox-worker";
 
 // ─── Startup ENV validation ──────────────────────────────────────────────────
 function validateEnv() {
@@ -31,6 +40,15 @@ function validateEnv() {
   }
   if (!ENV.cookieSecret || ENV.cookieSecret.length < 16) {
     console.warn("[startup] JWT_SECRET is weak or missing — using insecure default in dev");
+  }
+  if (ENV.isProduction) {
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!/^postgres(?:ql)?:\/\//.test(databaseUrl)) {
+      throw new Error("Production requires DATABASE_URL to be an open-source PostgreSQL connection string");
+    }
+    if (!process.env.SETTLEMENT_CALLBACK_SECRET || process.env.SETTLEMENT_CALLBACK_SECRET.length < 32) {
+      throw new Error("Production requires a high-entropy SETTLEMENT_CALLBACK_SECRET before settlement callbacks are enabled");
+    }
   }
 }
 
@@ -167,6 +185,62 @@ async function startServer() {
   // Use 'combined' format in production for full Apache-style logs, 'dev' in development
   app.use(morgan(ENV.isProduction ? "combined" : "dev"));
 
+  // ── Authenticated settlement-provider callbacks ───────────────────────────
+  // This route must stay before express.json so the signature covers the exact
+  // bytes received from the provider. It records externally settled evidence;
+  // it never initiates or releases funds.
+  app.post("/api/settlement/callbacks", express.raw({ type: "application/json", limit: "256kb" }), async (req: Request, res: Response) => {
+    const rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
+    const verification = verifySettlementCallbackSignature({
+      secret: process.env.SETTLEMENT_CALLBACK_SECRET,
+      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
+      signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+      rawBody,
+    });
+    if (!verification.valid) {
+      res.status(401).json({ error: "Invalid settlement callback", reason: verification.reason });
+      return;
+    }
+
+    let parsedPayload: unknown;
+    try {
+      parsedPayload = JSON.parse(rawBody);
+    } catch {
+      res.status(400).json({ error: "Settlement callback body must be valid JSON" });
+      return;
+    }
+    const parsed = settlementCallbackSchema.safeParse(parsedPayload);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid settlement callback payload", issues: parsed.error.issues });
+      return;
+    }
+    const providerEventHeader = req.header(SETTLEMENT_EVENT_ID_HEADER);
+    if (!providerEventHeader || providerEventHeader !== parsed.data.eventId) {
+      res.status(400).json({ error: "Settlement event identifier header does not match the signed payload" });
+      return;
+    }
+    const expectedProvider = process.env.SETTLEMENT_CALLBACK_PROVIDER ?? "mojaloop";
+    if (parsed.data.provider !== expectedProvider) {
+      res.status(403).json({ error: "Unexpected settlement provider" });
+      return;
+    }
+
+    try {
+      const reconciliation = await reconcileAuthenticatedSettlementCallback(parsed.data, parsedPayload as Record<string, unknown>);
+      res.setHeader("Cache-Control", "no-store");
+      res.status(reconciliation.duplicate ? 200 : 202).json({
+        status: reconciliation.duplicate ? "duplicate" : "reconciled",
+        settlementCallbackId: reconciliation.settlementCallbackId,
+        ledgerEntryId: reconciliation.ledgerEntryId,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Settlement reconciliation failed";
+      const status = error instanceof LedgerIntegrityError ? 409 : 503;
+      console.error("[settlement] authenticated callback reconciliation failed", { requestId: (req as any).requestId, message });
+      res.status(status).json({ error: "Settlement callback was not reconciled", message });
+    }
+  });
+
   // ── Body parsers ──────────────────────────────────────────────────────────
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -216,6 +290,51 @@ async function startServer() {
     res.status(200).json({ ready: true, uptime: Math.round((Date.now() - startTime) / 1000) });
   });
 
+  // ── FHIR R4 read endpoint — GET /api/fhir/Claim/:id ───────────────────────
+  // Returns a dispute as a FHIR R4 Claim resource (application/fhir+json)
+  app.get("/api/fhir/Claim/:id", async (req: Request, res: Response) => {
+    try {
+      const { getDb } = await import("../db");
+      const { disputes: disputesTable } = await import("../../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) {
+        res.status(503).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "exception", diagnostics: "Database unavailable" }] });
+        return;
+      }
+      const rows = await db.select().from(disputesTable).where(eq(disputesTable.id, req.params.id)).limit(1);
+      if (!rows.length) {
+        res.status(404).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "not-found", diagnostics: `Claim/${req.params.id} not found` }] });
+        return;
+      }
+      const d = rows[0];
+      const claim = {
+        resourceType: "Claim",
+        id: d.id,
+        meta: { versionId: "1", lastUpdated: d.updatedAt?.toISOString() },
+        status: d.status === "closed" ? "cancelled" : "active",
+        type: { coding: [{ system: "http://terminology.hl7.org/CodeSystem/claim-type", code: "professional", display: "Professional" }] },
+        use: "claim",
+        patient: { reference: `Patient/${d.initiatingPartyId}`, display: d.initiatingPartyName ?? undefined },
+        created: d.createdAt?.toISOString(),
+        insurer: { display: d.respondingPartyName ?? undefined },
+        provider: { display: d.initiatingPartyName ?? undefined },
+        priority: { coding: [{ code: "normal" }] },
+        total: d.billedAmount ? { value: parseFloat(d.billedAmount), currency: "USD" } : undefined,
+        identifier: [{ system: "https://healthpoint.idr/reference", value: d.referenceNumber }],
+        extension: ([
+          { url: "https://healthpoint.idr/fhir/StructureDefinition/idr-step", valueString: d.currentStep },
+          d.determinationWinner ? { url: "https://healthpoint.idr/fhir/StructureDefinition/determination-winner", valueString: d.determinationWinner } : null,
+          d.serviceType ? { url: "https://healthpoint.idr/fhir/StructureDefinition/service-type", valueString: d.serviceType } : null,
+        ]).filter(Boolean),
+      };
+      res.setHeader("Content-Type", "application/fhir+json");
+      res.status(200).json(claim);
+    } catch (err) {
+      res.status(500).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "exception", diagnostics: String(err) }] });
+    }
+  });
+
   // ── Keycloak OIDC routes ──────────────────────────────────────────────────────
   registerKeycloakRoutes(app);
 
@@ -241,25 +360,22 @@ async function startServer() {
     res.status(200).json({ status: "SUCCESS" });
   });
 
-  // ── Mojaloop FSPIOP transfer callback receiver ────────────────────────────
-  app.post("/api/mojaloop/callbacks/transfers", express.json(), (req: Request, res: Response) => {
-    const body = req.body as Record<string, unknown>;
-    console.info("[Mojaloop] transfer callback:", body?.transferId ?? "unknown");
-    import("../events/bus").then(({ eventBus }) => {
-      eventBus.publish(
-        "dispute.offer_submitted",
-        (body?.transferId as string) ?? "unknown",
-        "payment",
-        { mojaloopCallback: body },
-        { userId: "system", timestamp: new Date().toISOString() }
-      ).catch(() => {});
-    }).catch(() => {});
-    res.status(200).json({ status: "received" });
+  // ── Legacy unauthenticated transfer callback retirement ───────────────────
+  app.post("/api/mojaloop/callbacks/transfers", (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: "Deprecated callback route",
+      message: "Use /api/settlement/callbacks with the required signed callback headers.",
+    });
   });
 
   // ── Scheduled heartbeat endpoints (auth-guarded in production) ───────────
   app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
+
+  // Durable settlement and payment-evidence events are reconciled after their
+  // transaction commits. The worker is single-flight in each process; database
+  // event claims prevent duplicate in-process dispatch across instances.
+  startOutboxWorker();
 
   // ── Ollama pull-stream SSE endpoint ────────────────────────────────────────
   // Streams NDJSON progress from Ollama's /api/pull endpoint as SSE events.
