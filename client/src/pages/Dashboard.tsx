@@ -11,30 +11,26 @@ import {
 import SlaProgressBar, { SlaLegend, getSlaStatus } from "@/components/SlaProgressBar";
 import { useLocation } from "wouter";
 import { useState } from "react";
+import { useChartColors } from "@/hooks/useChartColors";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell,
   LineChart, Line, Area, AreaChart,
 } from "recharts";
 
-// Generate a 7-point sparkline with date labels (last 7 days)
-function makeSparkline(base: number, variance = 0.3) {
-  const today = new Date();
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(today);
-    d.setDate(d.getDate() - (6 - i));
-    const label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    return {
-      v: Math.max(0, Math.round(base * (1 + (Math.random() - 0.5) * variance * (i / 3)))),
-      date: label,
-    };
-  });
+// Convert real daily stats to sparkline format
+function toSparkline(dailyStats: { date: string; total: number; opened: number; closed: number }[] | undefined, field: "total" | "opened" | "closed" = "total") {
+  if (!dailyStats?.length) return [];
+  return dailyStats.map(d => ({
+    v: d[field],
+    date: new Date(d.date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+  }));
 }
 
 function SparklineTooltip({ active, payload, metricLabel }: any) {
   if (!active || !payload?.length) return null;
   const { v, date } = payload[0]?.payload ?? {};
-  const color = payload[0]?.stroke ?? "#3b82f6";
+  const color = payload[0]?.stroke ?? "oklch(0.646 0.222 41.116)";  // chart-1 fallback
   return (
     <div className="rounded-lg border bg-white shadow-lg px-3 py-2 text-xs pointer-events-none min-w-[120px]" style={{ borderColor: color + "40" }}>
       <p className="font-semibold text-slate-600 mb-1">{date}</p>
@@ -47,7 +43,7 @@ function SparklineTooltip({ active, payload, metricLabel }: any) {
   );
 }
 
-function Sparkline({ data, color = "#3b82f6", metricLabel }: { data: { v: number; date: string }[]; color?: string; metricLabel?: string }) {
+function Sparkline({ data, color = "oklch(0.646 0.222 41.116)", metricLabel }: { data: { v: number; date: string }[]; color?: string; metricLabel?: string }) {
   const gradId = `sg-${color.replace('#','')}-${metricLabel?.replace(/\s/g,'') ?? 'default'}`;
   return (
     <ResponsiveContainer width="100%" height={44}>
@@ -120,6 +116,7 @@ export default function Dashboard() {
   const { data: notifications } = trpc.notifications.list.useQuery({ unreadOnly: true }, { enabled: isAuthenticated });
   const markReadMutation = trpc.notifications.markAllRead.useMutation();
   const utils = trpc.useUtils();
+  const C = useChartColors();
 
   if (authLoading) return (
     <div className="min-h-screen flex items-center justify-center">
@@ -136,17 +133,21 @@ export default function Dashboard() {
     </div>
   );
 
-  // Sparkline data — seeded from current KPI values so they look realistic
+  // Real 7-day sparkline data from DB
+  const { data: dailyStats } = trpc.dashboard.dailyStats.useQuery({ days: 7 }, { enabled: isAuthenticated });
+  const totalSpark = toSparkline(dailyStats, "total");
+  const openedSpark = toSparkline(dailyStats, "opened");
+  const closedSpark = toSparkline(dailyStats, "closed");
   const sparklines = [
-    makeSparkline(stats?.total ?? 10, 0.15),
-    makeSparkline(stats?.openNegotiation ?? 4, 0.4),
-    makeSparkline(stats?.inIDR ?? 3, 0.4),
-    makeSparkline(stats?.closedThisMonth ?? 2, 0.5),
-    makeSparkline(stats?.dueSoon ?? 1, 0.6),
-    makeSparkline(stats?.overdue ?? 0, 0.8),
-    makeSparkline(stats?.unreadNotifications ?? 0, 0.7),
+    totalSpark,   // Total Disputes
+    openedSpark,  // Open Negotiation
+    openedSpark,  // In IDR Process
+    closedSpark,  // Closed This Month
+    openedSpark,  // Due in 5 Days
+    openedSpark,  // Overdue
+    openedSpark,  // Unread Alerts
   ];
-  const sparkColors = ["#3b82f6","#f59e0b","#8b5cf6","#22c55e","#f59e0b","#ef4444","#6366f1"];
+  const sparkColors = [C.chart1, C.chart3, C.chart4, C.chart2, C.chart3, C.danger, C.primary];
 
   const kpis = [
     { title: "Total Disputes", value: stats?.total ?? 0, icon: FileText, color: "bg-blue-500", urgent: false },
@@ -204,7 +205,7 @@ export default function Dashboard() {
                   <div className="text-xs font-medium text-slate-500 mb-2">{kpi.title}</div>
                   {/* Sparkline */}
                   <div className="-mx-1">
-                    <Sparkline data={sparklines[idx] ?? []} color={sparkColors[idx] ?? "#3b82f6"} metricLabel={kpi.title.toLowerCase().includes("alert") ? "alerts" : kpi.title.toLowerCase().includes("month") ? "closed" : "disputes"} />
+                    <Sparkline data={sparklines[idx] ?? []} color={sparkColors[idx] ?? C.chart1} metricLabel={kpi.title.toLowerCase().includes("alert") ? "alerts" : kpi.title.toLowerCase().includes("month") ? "closed" : "disputes"} />
                   </div>
                 </CardContent>
               </Card>
@@ -247,16 +248,16 @@ export default function Dashboard() {
             ) : (
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis
                     dataKey="month"
-                    tick={{ fontSize: 11, fill: "#94a3b8" }}
+                    tick={{ fontSize: 11, fill: C.muted }}
                     tickFormatter={v => {
                       const [y, m] = v.split("-");
                       return new Date(Number(y), Number(m) - 1).toLocaleString("default", { month: "short", year: "2-digit" });
                     }}
                   />
-                  <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} allowDecimals={false} />
+                  <YAxis tick={{ fontSize: 11, fill: C.muted }} allowDecimals={false} />
                   <Tooltip
                     contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
                     labelFormatter={v => {
@@ -265,10 +266,10 @@ export default function Dashboard() {
                     }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="open_negotiation" name="Open Negotiation" stackId="a" fill="#3b82f6" radius={[0,0,0,0]} />
-                  <Bar dataKey="idr_active" name="IDR Active" stackId="a" fill="#8b5cf6" radius={[0,0,0,0]} />
-                  <Bar dataKey="closed" name="Closed" stackId="a" fill="#22c55e" radius={[0,0,0,0]} />
-                  <Bar dataKey="ineligible" name="Ineligible" stackId="a" fill="#94a3b8" radius={[4,4,0,0]} />
+                  <Bar dataKey="open_negotiation" name="Open Negotiation" stackId="a" fill={C.chart1} radius={[0,0,0,0]} />
+                  <Bar dataKey="idr_active" name="IDR Active" stackId="a" fill={C.chart4} radius={[0,0,0,0]} />
+                  <Bar dataKey="closed" name="Closed" stackId="a" fill={C.chart2} radius={[0,0,0,0]} />
+                  <Bar dataKey="ineligible" name="Ineligible" stackId="a" fill={C.muted} radius={[4,4,0,0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -294,11 +295,11 @@ export default function Dashboard() {
               ) : (
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={outcomeData.byServiceType} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                     <XAxis dataKey="serviceType" tick={{ fontSize: 10 }} tickFormatter={v => v.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()).slice(0, 12)} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
                     <Tooltip formatter={(v: number) => `${Math.round(v * 100)}%`} />
-                    <Bar dataKey="winRate" name="Win Rate" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="winRate" name="Win Rate" fill={C.chart2} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -320,12 +321,12 @@ export default function Dashboard() {
               ) : (
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={outcomeData.byServiceType} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                     <XAxis dataKey="serviceType" tick={{ fontSize: 10 }} tickFormatter={v => v.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()).slice(0, 12)} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
                     <Tooltip formatter={(v: number) => `$${Number(v).toLocaleString()}`} />
-                    <Bar dataKey="avgDeterminationAmount" name="Avg. Determination" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="avgBilledAmount" name="Avg. Billed" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="avgDeterminationAmount" name="Avg. Determination" fill={C.chart1} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="avgBilledAmount" name="Avg. Billed" fill={C.muted} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}

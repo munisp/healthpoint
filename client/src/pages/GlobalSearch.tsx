@@ -14,11 +14,11 @@ import {
   Search, FileText, Scale, Activity, Clock, ChevronRight,
   Loader2, AlertCircle, Zap, CalendarDays, X, SlidersHorizontal,
   LayoutGrid, List, Bookmark, BookmarkCheck, Trash2, FolderOpen,
-  History, RotateCcw
+  History, RotateCcw, Users, Building2, BookOpen, BarChart3, Newspaper
 } from "lucide-react";
 import { toast } from "sonner";
 
-type EntityType = "dispute" | "document" | "audit";
+type EntityType = "dispute" | "document" | "audit" | "payer_contact" | "idr_entity" | "expert" | "regulatory" | "qpa_benchmark";
 
 interface SavedSearch {
   id: string;
@@ -86,6 +86,36 @@ const ENTITY_META: Record<EntityType, { label: string; icon: React.ReactNode; co
     icon: <Activity className="h-4 w-4" />,
     color: "text-amber-700 dark:text-amber-300",
     bgColor: "bg-amber-100 dark:bg-amber-900/40",
+  },
+  payer_contact: {
+    label: "Payer Contacts",
+    icon: <Users className="h-4 w-4" />,
+    color: "text-green-700 dark:text-green-300",
+    bgColor: "bg-green-100 dark:bg-green-900/40",
+  },
+  idr_entity: {
+    label: "IDR Entities",
+    icon: <Building2 className="h-4 w-4" />,
+    color: "text-indigo-700 dark:text-indigo-300",
+    bgColor: "bg-indigo-100 dark:bg-indigo-900/40",
+  },
+  expert: {
+    label: "Expert Panel",
+    icon: <BookOpen className="h-4 w-4" />,
+    color: "text-teal-700 dark:text-teal-300",
+    bgColor: "bg-teal-100 dark:bg-teal-900/40",
+  },
+  regulatory: {
+    label: "Regulatory Updates",
+    icon: <Newspaper className="h-4 w-4" />,
+    color: "text-rose-700 dark:text-rose-300",
+    bgColor: "bg-rose-100 dark:bg-rose-900/40",
+  },
+  qpa_benchmark: {
+    label: "QPA Benchmarks",
+    icon: <BarChart3 className="h-4 w-4" />,
+    color: "text-orange-700 dark:text-orange-300",
+    bgColor: "bg-orange-100 dark:bg-orange-900/40",
   },
 };
 
@@ -159,7 +189,7 @@ export default function GlobalSearch() {
 
   // Category filter — all on by default
   const [activeCategories, setActiveCategories] = useState<Set<EntityType>>(
-    () => new Set<EntityType>(["dispute", "document", "audit"])
+    () => new Set<EntityType>(["dispute", "document", "audit", "payer_contact", "idr_entity", "expert", "regulatory", "qpa_benchmark"])
   );
 
   // Date range filter
@@ -366,6 +396,11 @@ export default function GlobalSearch() {
     if (hit.entityType === "dispute") navigate(`/disputes/${hit.id}`);
     else if (hit.entityType === "document") navigate(`/doc-analyzer`);
     else if (hit.entityType === "audit") navigate(`/audit-trail`);
+    else if (hit.entityType === "payer_contact") navigate(`/payer-contacts`);
+    else if (hit.entityType === "idr_entity") navigate(`/idr-entities`);
+    else if (hit.entityType === "expert") navigate(`/expert-review`);
+    else if (hit.entityType === "regulatory") navigate(`/regulatory-feed`);
+    else if (hit.entityType === "qpa_benchmark") navigate(`/qpa-benchmark`);
   }
 
   function renderHitTitle(hit: typeof hits[0]): string {
@@ -373,6 +408,11 @@ export default function GlobalSearch() {
     if (hit.entityType === "dispute") return (item.referenceNumber as string) ?? hit.id;
     if (hit.entityType === "document") return (item.fileName as string) ?? hit.id;
     if (hit.entityType === "audit") return (item.action as string) ?? hit.id;
+    if (hit.entityType === "payer_contact") return (item.payerName as string) ?? hit.id;
+    if (hit.entityType === "idr_entity") return (item.name as string) ?? hit.id;
+    if (hit.entityType === "expert") return (item.name as string) ?? hit.id;
+    if (hit.entityType === "regulatory") return (item.title as string) ?? hit.id;
+    if (hit.entityType === "qpa_benchmark") return `CPT ${item.cptCode as string ?? hit.id}`;
     return hit.id;
   }
 
@@ -384,6 +424,16 @@ export default function GlobalSearch() {
       return `Dispute: ${item.disputeId ?? "—"} · ${item.documentType ?? ""}`;
     if (hit.entityType === "audit")
       return `${item.entityType ?? ""} ${item.entityId ?? ""} · User: ${item.userId ?? "—"}`;
+    if (hit.entityType === "payer_contact")
+      return `${item.contactName ?? ""} · ${item.email ?? ""}`;
+    if (hit.entityType === "idr_entity")
+      return `Cert: ${item.certificationNumber ?? "—"} · ${item.specialties ?? ""}`;
+    if (hit.entityType === "expert")
+      return `${item.credentials ?? ""} · ${item.specialty ?? ""}`;
+    if (hit.entityType === "regulatory")
+      return `${item.category ?? ""} · Impact: ${item.impactLevel ?? ""}`;
+    if (hit.entityType === "qpa_benchmark")
+      return `${item.serviceType ?? item.specialty ?? ""} · ${item.description ?? ""}`;
     return "";
   }
 

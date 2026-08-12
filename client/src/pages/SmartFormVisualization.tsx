@@ -4,11 +4,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
+import { trpc } from "@/lib/trpc";
 import {
   Upload, FileText, Brain, CheckCircle2, ArrowRight, Sparkles,
   Shield, Clock, Edit3, History, Download, RotateCcw, SplitSquareVertical,
   ChevronDown, ChevronRight as ChevronRightIcon, Zap, Target, AlertTriangle,
-  Info, Eye, GitCompare
+  Info, Eye, GitCompare, Loader2
 } from "lucide-react";
 
 // ─── Flow Step Data ───────────────────────────────────────────────────────────
@@ -267,30 +269,40 @@ function confidenceColor(c: number) {
 
 export default function SmartFormVisualization() {
   const [activeStep, setActiveStep] = useState<number | null>(null);
-  const [simulationState, setSimulationState] = useState<"idle" | "extracting" | "done">("idle");
   const [docText, setDocText] = useState(SAMPLE_EOB);
-  const [selectedFields, setSelectedFields] = useState<Set<number>>(new Set(SIMULATED_FIELDS.map((_, i) => i)));
+  // Real extracted fields from the server-side LLM
+  type ExtractedField = { key: string; value: string | number | null; confidence: number; source: string };
+  const [extractedFields, setExtractedFields] = useState<ExtractedField[]>([]);
+  const [selectedFields, setSelectedFields] = useState<Set<number>>(new Set());
   const [editedFields, setEditedFields] = useState<Record<number, string>>({});
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [editValue, setEditValue] = useState("");
-  const [progress, setProgress] = useState(0);
+  const [extractionMeta, setExtractionMeta] = useState<{ overallConfidence: number; processingMs: number; modelUsed: string } | null>(null);
 
-  const runSimulation = () => {
-    if (simulationState === "extracting") return;
-    setSimulationState("extracting");
-    setProgress(0);
-    setEditedFields({});
-    setSelectedFields(new Set(SIMULATED_FIELDS.map((_, i) => i)));
-    let p = 0;
-    const interval = setInterval(() => {
-      p += Math.random() * 18 + 5;
-      if (p >= 100) {
-        p = 100;
-        clearInterval(interval);
-        setTimeout(() => setSimulationState("done"), 300);
-      }
-      setProgress(Math.min(p, 100));
-    }, 120);
+  const extractMutation = trpc.smartForm.extract.useMutation({
+    onSuccess: (data) => {
+      const fields: ExtractedField[] = Object.entries(data.extractedFields).map(([key, v]) => ({
+        key,
+        value: v.value,
+        confidence: v.confidence,
+        source: v.source,
+      }));
+      setExtractedFields(fields);
+      setSelectedFields(new Set(fields.map((_, i) => i)));
+      setEditedFields({});
+      setExtractionMeta({ overallConfidence: data.overallConfidence, processingMs: data.processingMs, modelUsed: data.modelUsed });
+      toast.success(`${data.fieldCount} fields extracted (${data.overallConfidence}% avg confidence)`);
+    },
+    onError: (e) => toast.error(`Extraction failed: ${e.message}`),
+  });
+
+  const simulationState = extractMutation.isPending ? "extracting" : extractedFields.length > 0 ? "done" : "idle";
+
+  const runExtraction = () => {
+    if (!docText.trim()) { toast.error("Please paste a document first"); return; }
+    setExtractedFields([]);
+    setExtractionMeta(null);
+    extractMutation.mutate({ content: docText, inputType: "text", targetForm: "dispute", documentName: "Pasted document" });
   };
 
   const toggleField = (i: number) => {
@@ -303,11 +315,12 @@ export default function SmartFormVisualization() {
 
   const startEdit = (i: number) => {
     setEditingIdx(i);
-    setEditValue(editedFields[i] ?? SIMULATED_FIELDS[i].value);
+    setEditValue(editedFields[i] ?? String(extractedFields[i]?.value ?? ""));
   };
 
   const commitEdit = (i: number) => {
-    if (editValue !== SIMULATED_FIELDS[i].value) {
+    const original = String(extractedFields[i]?.value ?? "");
+    if (editValue !== original) {
       setEditedFields(prev => ({ ...prev, [i]: editValue }));
     }
     setEditingIdx(null);
@@ -486,14 +499,14 @@ export default function SmartFormVisualization() {
               <CardContent className="space-y-4">
                 <Textarea
                   value={docText}
-                  onChange={e => { setDocText(e.target.value); setSimulationState("idle"); }}
+                  onChange={e => { setDocText(e.target.value); setExtractedFields([]); setExtractionMeta(null); }}
                   rows={8}
                   className="font-mono text-xs"
                   placeholder="Paste an EOB, FHIR JSON, or plain text claim here..."
                 />
                 <div className="flex items-center gap-3">
                   <Button
-                    onClick={runSimulation}
+                    onClick={runExtraction}
                     disabled={simulationState === "extracting" || !docText.trim()}
                     className="bg-purple-600 hover:bg-purple-700"
                   >
@@ -502,7 +515,8 @@ export default function SmartFormVisualization() {
                   </Button>
                   {simulationState === "done" && (
                     <span className="text-sm text-emerald-600 font-medium flex items-center gap-1">
-                      <CheckCircle2 className="w-4 h-4" /> {SIMULATED_FIELDS.length} fields extracted
+                      <CheckCircle2 className="w-4 h-4" /> {extractedFields.length} fields extracted
+                      {extractionMeta && <span className="text-xs text-slate-500 ml-1">· {extractionMeta.overallConfidence}% avg confidence · {extractionMeta.processingMs}ms</span>}
                     </span>
                   )}
                 </div>
@@ -512,12 +526,12 @@ export default function SmartFormVisualization() {
                   <div className="space-y-1">
                     <div className="flex justify-between text-xs text-slate-500">
                       <span>Hermes is reading your document...</span>
-                      <span>{Math.round(progress)}%</span>
+                      <span>Calling Hermes AI...</span>
                     </div>
                     <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-gradient-to-r from-purple-500 to-blue-500 transition-all duration-150 rounded-full"
-                        style={{ width: `${progress}%` }}
+                        style={{ width: simulationState === "extracting" ? "100%" : "0%", transition: "width 2s ease-in-out" }}
                       />
                     </div>
                   </div>
@@ -533,7 +547,7 @@ export default function SmartFormVisualization() {
                     <CardTitle className="text-base">Extracted Fields Preview</CardTitle>
                     <div className="flex items-center gap-2 text-xs text-slate-500">
                       <button
-                        onClick={() => setSelectedFields(new Set(SIMULATED_FIELDS.map((_, i) => i)))}
+                        onClick={() => setSelectedFields(new Set(extractedFields.map((_, i) => i)))}
                         className="text-blue-600 hover:underline"
                       >Select All</button>
                       <span>·</span>
@@ -546,10 +560,10 @@ export default function SmartFormVisualization() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2">
-                    {SIMULATED_FIELDS.map((f, i) => {
+                    {extractedFields.map((f, i) => {
                       const isEdited = i in editedFields;
                       const isEditing = editingIdx === i;
-                      const displayValue = editedFields[i] ?? f.value;
+                      const displayValue = editedFields[i] ?? String(f.value ?? "");
                       return (
                         <div
                           key={f.key}
@@ -599,7 +613,7 @@ export default function SmartFormVisualization() {
                               <div>
                                 <span className={`text-sm font-medium ${isEdited ? "text-blue-700" : "text-slate-800"}`}>{displayValue}</span>
                                 {isEdited && (
-                                  <div className="text-xs text-slate-400 line-through mt-0.5">AI: {f.value}</div>
+                                  <div className="text-xs text-slate-400 line-through mt-0.5">AI: {String(f.value ?? "")}</div>
                                 )}
                               </div>
                             )}
@@ -633,7 +647,7 @@ export default function SmartFormVisualization() {
                   {/* Apply button */}
                   <div className="mt-4 pt-4 border-t border-slate-200 flex items-center justify-between">
                     <p className="text-sm text-slate-500">
-                      {selectedFields.size} of {SIMULATED_FIELDS.length} fields selected
+                      {selectedFields.size} of {extractedFields.length} fields selected
                       {Object.keys(editedFields).length > 0 && (
                         <span className="ml-2 text-blue-600">· {Object.keys(editedFields).length} manually edited</span>
                       )}
@@ -654,12 +668,12 @@ export default function SmartFormVisualization() {
               </Card>
             )}
 
-            {/* Warning callout */}
-            <Card className="border-amber-200 bg-amber-50">
+            {/* Info callout */}
+            <Card className="border-blue-200 bg-blue-50">
               <CardContent className="p-4 flex gap-3">
-                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                <p className="text-sm text-amber-800">
-                  This is a <strong>client-side simulation</strong> using pre-defined sample data to demonstrate the UI flow. In production, the extraction is performed by the Hermes LLM engine via <code className="text-xs bg-amber-100 px-1 rounded">trpc.smartForm.extract</code> and returns real AI-generated values with live confidence scores.
+                <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-blue-800">
+                  This uses the <strong>live Hermes AI engine</strong> via <code className="text-xs bg-blue-100 px-1 rounded">trpc.smartForm.extract</code>. Paste any EOB, FHIR JSON, or plain-text claim and click <strong>Run AI Extraction</strong> to get real AI-generated field values with confidence scores.
                 </p>
               </CardContent>
             </Card>

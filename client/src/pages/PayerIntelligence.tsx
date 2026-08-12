@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useChartColors } from "@/hooks/useChartColors";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
@@ -19,11 +20,7 @@ import {
   BarChart2, LineChart as LineChartIcon, ChevronDown, X,
 } from "lucide-react";
 
-// 10 distinct colors for multi-payer comparison lines
-const PAYER_COLORS = [
-  "#2563eb", "#16a34a", "#d97706", "#dc2626", "#7c3aed",
-  "#0891b2", "#db2777", "#65a30d", "#ea580c", "#6366f1",
-];
+
 
 interface PayerStat {
   payerName: string;
@@ -82,6 +79,13 @@ function SinglePayerTooltip({ active, payload, label }: TooltipProps<number, str
 }
 
 export default function PayerIntelligence() {
+  const C = useChartColors();
+  // 10 distinct colors for multi-payer comparison lines
+  const PAYER_COLORS = [
+    C.chart1, C.chart2, C.chart3, C.danger, C.chart4,
+    C.info, C.chart5, C.chart2, C.chart3, C.primary,
+  ];
+
   const [trendWindow, setTrendWindow] = useState<TrendWindow>("12m");
   const [trendMetric, setTrendMetric] = useState<TrendMetric>("winRate");
   // "all" = single-payer mode showing both win+recovery for one payer
@@ -480,12 +484,12 @@ export default function PayerIntelligence() {
                     <Tooltip content={<SinglePayerTooltip />} />
                     <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
                     <ReferenceLine y={50} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 4" strokeOpacity={0.4} />
-                    <ReferenceLine y={avgWinRate} stroke="#7c3aed" strokeDasharray="6 3" strokeOpacity={0.3}
-                      label={{ value: `Avg ${avgWinRate}%`, position: "insideTopRight", fontSize: 10, fill: "#7c3aed" }} />
-                    <Line type="monotone" dataKey="winRate" name="Win Rate" stroke="#2563eb" strokeWidth={2.5}
-                      dot={{ r: 3, fill: "#2563eb", strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} />
-                    <Line type="monotone" dataKey="recoveryRate" name="Recovery Rate" stroke="#16a34a" strokeWidth={2.5}
-                      strokeDasharray="5 3" dot={{ r: 3, fill: "#16a34a", strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} />
+                    <ReferenceLine y={avgWinRate} stroke={C.chart4} strokeDasharray="6 3" strokeOpacity={0.3}
+                      label={{ value: `Avg ${avgWinRate}%`, position: "insideTopRight", fontSize: 10, fill: C.chart4 }} />
+                    <Line type="monotone" dataKey="winRate" name="Win Rate" stroke={C.chart1} strokeWidth={2.5}
+                      dot={{ r: 3, fill: C.chart1, strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} />
+                    <Line type="monotone" dataKey="recoveryRate" name="Recovery Rate" stroke={C.chart2} strokeWidth={2.5}
+                      strokeDasharray="5 3" dot={{ r: 3, fill: C.chart2, strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} />
                   </LineChart>
                 </ResponsiveContainer>
                 <div className="grid grid-cols-3 gap-3 mt-4 pt-3 border-t border-border">
@@ -594,7 +598,7 @@ export default function PayerIntelligence() {
                     <YAxis type="category" dataKey="payerName" width={120} tick={{ fontSize: 10 }}
                       tickFormatter={v => v.length > 16 ? v.slice(0, 14) + "…" : v} />
                     <Tooltip formatter={(v: number) => [v, "Disputes"]} />
-                    <Bar dataKey="totalDisputes" fill="#2563eb" radius={[0, 4, 4, 0]} />
+                    <Bar dataKey="totalDisputes" fill={C.chart1} radius={[0, 4, 4, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -638,7 +642,7 @@ export default function PayerIntelligence() {
                   <XAxis dataKey="payerName" tick={{ fontSize: 10 }} tickFormatter={v => v.length > 12 ? v.slice(0, 10) + "…" : v} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} tickFormatter={v => `${v}%`} />
                   <Tooltip formatter={(v: number) => [`${v}%`, "Win Rate"]} />
-                  <Bar dataKey="winRate" fill="#16a34a" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="winRate" fill={C.chart2} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}

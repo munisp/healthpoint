@@ -10,11 +10,12 @@ import { APP_LOGO, APP_TITLE, getLoginUrl } from "@/const";
 import {
   AlertTriangle, Bell, ChevronLeft, ChevronRight,
   FileText, Gavel, LogOut, Plus, Scale, Search, X, SlidersHorizontal, Download,
-  ArrowRight, UserCheck, CheckSquare, Square, Trash2
+  ArrowRight, UserCheck, CheckSquare, Square, Trash2, Pin, PinOff
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import EmptyState from "@/components/EmptyState";
+import { usePinnedDisputes } from "@/hooks/usePinnedDisputes";
 
 const DISPUTE_STATUSES = [
   { value: "all", label: "All Disputes" },
@@ -135,6 +136,7 @@ export default function DisputesList() {
   const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -170,6 +172,7 @@ export default function DisputesList() {
 
   const advanceStepMutation = trpc.disputes.advance.useMutation();
   const utils = trpc.useUtils();
+  const { isPinned, toggle: togglePin } = usePinnedDisputes();
 
   const handleExportCSV = async () => {
     setCsvExporting(true);
@@ -337,6 +340,31 @@ export default function DisputesList() {
 
   const handleDeselectAll = () => setSelectedIds(new Set());
 
+  // ── Keyboard shortcuts: N = new dispute, / = focus search, E = export CSV ──
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      const isTyping = tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement).isContentEditable;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "n" || e.key === "N") {
+        if (isTyping) return;
+        e.preventDefault();
+        navigate("/disputes/new");
+      } else if (e.key === "/") {
+        if (isTyping) return;
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      } else if (e.key === "e" || e.key === "E") {
+        if (isTyping) return;
+        e.preventDefault();
+        handleExportCSV();
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="space-y-6">
       {/* Bulk-action sticky toolbar — appears when items are selected */}
@@ -399,8 +427,9 @@ export default function DisputesList() {
               <Download size={15} />
               {csvExporting ? "Exporting..." : `Export CSV${total > 0 ? ` (${total.toLocaleString()})` : ""}`}
             </Button>
-            <Button onClick={() => navigate("/disputes/new")} className="flex items-center gap-2">
+            <Button onClick={() => navigate("/disputes/new")} className="flex items-center gap-2 relative">
               <Plus size={16} />Initiate Dispute
+              <kbd className="hidden sm:inline-flex ml-1 h-4 items-center gap-0.5 rounded border border-primary-foreground/30 bg-primary-foreground/20 px-1 font-mono text-[9px] font-medium text-primary-foreground/70">N</kbd>
             </Button>
           </div>
         </div>
@@ -412,7 +441,8 @@ export default function DisputesList() {
             <div className="relative flex-1 min-w-[220px] max-w-sm">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <Input
-                placeholder="Search reference #, party name..."
+                ref={searchInputRef}
+                placeholder="Search reference #, party name... (press / to focus)"
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
                 className="pl-8 text-sm"
@@ -566,6 +596,24 @@ export default function DisputesList() {
                             {d.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
                           </td>
                           <td className="px-4 py-3 text-sm text-slate-500">{new Date(d.createdAt).toLocaleDateString()}</td>
+                          <td className="px-4 py-3 w-10" onClick={e => e.stopPropagation()}>
+                            <button
+                              onClick={() => togglePin({
+                                id: d.id,
+                                referenceNumber: d.referenceNumber,
+                                serviceType: d.serviceType ?? "",
+                                status: d.status,
+                              })}
+                              title={isPinned(d.id) ? "Unpin" : "Pin to sidebar"}
+                              className={`p-1 rounded transition-colors ${
+                                isPinned(d.id)
+                                  ? "text-amber-500 hover:text-amber-600"
+                                  : "text-slate-300 hover:text-slate-500"
+                              }`}
+                            >
+                              {isPinned(d.id) ? <PinOff size={14} /> : <Pin size={14} />}
+                            </button>
+                          </td>
                           <td className="px-4 py-3">
                             <span className="text-sm text-blue-600 font-medium hover:text-blue-700">View →</span>
                           </td>

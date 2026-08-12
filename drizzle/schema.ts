@@ -122,6 +122,8 @@ export const disputes = pgTable(
     initiatingPartyOffer: numeric("initiatingPartyOffer", { precision: 12, scale: 2 }),
     respondingPartyOffer: numeric("respondingPartyOffer", { precision: 12, scale: 2 }),
     determinationAmount: numeric("determinationAmount", { precision: 12, scale: 2 }),
+    // Cumulative verified payment evidence. This is never a payment instruction.
+    paidAmount: numeric("paidAmount", { precision: 12, scale: 2 }).default("0"),
     adminFeeAmount: numeric("adminFeeAmount", { precision: 12, scale: 2 }),
     // Workflow state
     currentStep: idrStepEnum("currentStep").notNull().default("STEP_01_OPEN_NEGOTIATION_INITIATED"),
@@ -141,6 +143,7 @@ export const disputes = pgTable(
     isEligible: boolean("isEligible"),
     ineligibilityReason: text("ineligibilityReason"),
     determinationBasis: text("determinationBasis"),
+    determinationWinner: varchar("determinationWinner", { length: 32 }), // "initiating_party" | "responding_party" | null
     notes: text("notes"),
     createdBy: varchar("createdBy", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow(),
@@ -153,6 +156,9 @@ export const disputes = pgTable(
     index("disputes_initiating_idx").on(t.initiatingPartyId),
     index("disputes_responding_idx").on(t.respondingPartyId),
     uniqueIndex("disputes_ref_idx").on(t.referenceNumber),
+    index("disputes_createdAt_idx").on(t.createdAt),
+    index("disputes_billedAmount_idx").on(t.billedAmount),
+    index("disputes_respondingName_idx").on(t.respondingPartyName),
   ]
 );
 export type Dispute = typeof disputes.$inferSelect;
@@ -222,23 +228,31 @@ export const disputeDocuments = pgTable(
 export type DisputeDocument = typeof disputeDocuments.$inferSelect;
 
 // ─── IDR Entities ─────────────────────────────────────────────────────────────
-export const idrEntities = pgTable("idr_entities", {
-  id: varchar("id", { length: 64 }).primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  certificationNumber: varchar("certificationNumber", { length: 64 }).unique(),
-  certificationExpiry: timestamp("certificationExpiry"),
-  specialties: jsonb("specialties").$type<string[]>(),
-  states: jsonb("states").$type<string[]>(),
-  contactEmail: varchar("contactEmail", { length: 320 }),
-  contactPhone: varchar("contactPhone", { length: 20 }),
-  website: varchar("website", { length: 512 }),
-  avgResolutionDays: integer("avgResolutionDays"),
-  totalCasesHandled: integer("totalCasesHandled").default(0),
-  maxConcurrentCases: integer("maxConcurrentCases").default(50),
-  currentActiveCases: integer("currentActiveCases").default(0),
-  isActive: boolean("isActive").default(true),
-  createdAt: timestamp("createdAt").defaultNow(),
-});
+export const idrEntities = pgTable(
+  "idr_entities",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    name: varchar("name", { length: 255 }).notNull(),
+    certificationNumber: varchar("certificationNumber", { length: 64 }).unique(),
+    certificationExpiry: timestamp("certificationExpiry"),
+    specialties: jsonb("specialties").$type<string[]>(),
+    states: jsonb("states").$type<string[]>(),
+    contactEmail: varchar("contactEmail", { length: 320 }),
+    contactPhone: varchar("contactPhone", { length: 20 }),
+    website: varchar("website", { length: 512 }),
+    avgResolutionDays: integer("avgResolutionDays"),
+    totalCasesHandled: integer("totalCasesHandled").default(0),
+    maxConcurrentCases: integer("maxConcurrentCases").default(50),
+    currentActiveCases: integer("currentActiveCases").default(0),
+    isActive: boolean("isActive").default(true),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("idr_entities_name_idx").on(t.name),
+    index("idr_entities_active_idx").on(t.isActive),
+    index("idr_entities_expiry_idx").on(t.certificationExpiry),
+  ]
+);
 export type IDREntity = typeof idrEntities.$inferSelect;
 
 // ─── Notifications ────────────────────────────────────────────────────────────
@@ -264,14 +278,21 @@ export const notifications = pgTable(
 export type Notification = typeof notifications.$inferSelect;
 
 // ─── Dispute Drafts ───────────────────────────────────────────────────────────
-export const disputeDrafts = pgTable("dispute_drafts", {
-  id: varchar("id", { length: 64 }).primaryKey(),
-  userId: varchar("userId", { length: 64 }).notNull(),
-  formData: jsonb("formData").$type<Record<string, unknown>>().notNull(),
-  currentStep: integer("currentStep").default(1),
-  lastSavedAt: timestamp("lastSavedAt").defaultNow(),
-  createdAt: timestamp("createdAt").defaultNow(),
-});
+export const disputeDrafts = pgTable(
+  "dispute_drafts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    formData: jsonb("formData").$type<Record<string, unknown>>().notNull(),
+    currentStep: integer("currentStep").default(1),
+    lastSavedAt: timestamp("lastSavedAt").defaultNow(),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  (t) => [
+    index("dispute_drafts_user_idx").on(t.userId),
+    index("dispute_drafts_lastSaved_idx").on(t.lastSavedAt),
+  ]
+);
 export type DisputeDraft = typeof disputeDrafts.$inferSelect;
 export type InsertDisputeDraft = typeof disputeDrafts.$inferInsert;
 
@@ -514,6 +535,7 @@ export const auditLog = pgTable(
     index("audit_log_userId_idx").on(t.userId),
     index("audit_log_entityType_entityId_idx").on(t.entityType, t.entityId),
     index("audit_log_createdAt_idx").on(t.createdAt),
+    index("audit_log_action_idx").on(t.action),
   ]
 );
 export type AuditLogEntry = typeof auditLog.$inferSelect;
@@ -652,6 +674,8 @@ export const ledgerEntries = pgTable(
     description: text("description").notNull(),
     referenceId: varchar("referenceId", { length: 64 }), // offer ID, determination ID, etc.
     referenceType: varchar("referenceType", { length: 64 }), // "offer", "determination", "adjustment"
+    // Required for externally evidenced payment records. Unique per dispute when present.
+    idempotencyKey: varchar("idempotencyKey", { length: 64 }),
     metadata: jsonb("metadata"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -660,13 +684,14 @@ export const ledgerEntries = pgTable(
     index("ledger_entries_debitAccountId_idx").on(t.debitAccountId),
     index("ledger_entries_creditAccountId_idx").on(t.creditAccountId),
     index("ledger_entries_createdAt_idx").on(t.createdAt),
+    uniqueIndex("ledger_entries_dispute_idempotency_idx").on(t.disputeId, t.idempotencyKey),
   ]
 );
 export type LedgerEntry = typeof ledgerEntries.$inferSelect;
 export type InsertLedgerEntry = typeof ledgerEntries.$inferInsert;
 
 // ─── Event Bus (Kafka-style durable event log) ────────────────────────────────
-export const eventStatusEnum = pgEnum("event_status", ["pending", "delivered", "failed", "skipped"]);
+export const eventStatusEnum = pgEnum("event_status", ["pending", "processing", "delivered", "failed", "skipped"]);
 export const eventLog = pgTable(
   "event_log",
   {
@@ -677,21 +702,65 @@ export const eventLog = pgTable(
     aggregateType: varchar("aggregateType", { length: 64 }).notNull(), // "dispute"
     payload: jsonb("payload").notNull(),
     metadata: jsonb("metadata"),
+    // Natural deduplication key for callbacks and other externally delivered events.
+    idempotencyKey: varchar("idempotencyKey", { length: 191 }),
     status: eventStatusEnum().default("pending").notNull(),
     publishedAt: timestamp("publishedAt"),
     failureReason: text("failureReason"),
     retryCount: integer("retryCount").default(0).notNull(),
+    lastAttemptAt: timestamp("lastAttemptAt"),
+    nextAttemptAt: timestamp("nextAttemptAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => [
     index("event_log_topic_idx").on(t.topic),
     index("event_log_aggregateId_idx").on(t.aggregateId),
     index("event_log_status_idx").on(t.status),
+    index("event_log_retry_idx").on(t.status, t.nextAttemptAt),
+    uniqueIndex("event_log_idempotency_idx").on(t.idempotencyKey),
     index("event_log_createdAt_idx").on(t.createdAt),
   ]
 );
 export type EventLogEntry = typeof eventLog.$inferSelect;
 export type InsertEventLogEntry = typeof eventLog.$inferInsert;
+
+// ─── Settlement Callback Reconciliation ──────────────────────────────────────
+// Callback records are written only after an HMAC-authenticated request passes
+// schema validation. They retain the provider payload and link settlement proof
+// to the resulting ledger entry without initiating a funds transfer.
+export const settlementCallbackStatusEnum = pgEnum("settlement_callback_status", [
+  "settled",
+  "failed",
+  "rejected",
+]);
+
+export const settlementCallbacks = pgTable(
+  "settlement_callbacks",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    providerEventId: varchar("providerEventId", { length: 128 }).notNull(),
+    providerTransferId: varchar("providerTransferId", { length: 128 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    amountCents: integer("amountCents").notNull(),
+    currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    status: settlementCallbackStatusEnum("status").notNull(),
+    occurredAt: timestamp("occurredAt").notNull(),
+    signatureVersion: varchar("signatureVersion", { length: 16 }).default("v1").notNull(),
+    rawPayload: jsonb("rawPayload").notNull(),
+    ledgerEntryId: varchar("ledgerEntryId", { length: 64 }),
+    reconciliationNote: text("reconciliationNote"),
+    reconciledAt: timestamp("reconciledAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("settlement_callbacks_provider_event_idx").on(t.provider, t.providerEventId),
+    index("settlement_callbacks_dispute_idx").on(t.disputeId),
+    index("settlement_callbacks_transfer_idx").on(t.providerTransferId),
+    index("settlement_callbacks_status_idx").on(t.status),
+  ]
+);
+export type SettlementCallback = typeof settlementCallbacks.$inferSelect;
 
 // ─── Workflow Step Notes ──────────────────────────────────────────────────────
 export const stepNotes = pgTable(
@@ -1560,3 +1629,30 @@ export const changelogEntries = pgTable(
 );
 export type ChangelogEntry = typeof changelogEntries.$inferSelect;
 export type InsertChangelogEntry = typeof changelogEntries.$inferInsert;
+
+// ─── Document Versions ────────────────────────────────────────────────────────
+/** Tracks every revision of a dispute document for full version history */
+export const documentVersions = pgTable(
+  "document_versions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    versionNumber: integer("versionNumber").notNull().default(1),
+    s3Key: varchar("s3Key", { length: 512 }).notNull(),
+    fileName: varchar("fileName", { length: 255 }).notNull(),
+    fileSize: integer("fileSize"),
+    mimeType: varchar("mimeType", { length: 128 }),
+    uploadedBy: varchar("uploadedBy", { length: 64 }).notNull(),
+    uploadedAt: timestamp("uploadedAt").defaultNow(),
+    changeNote: text("changeNote"),
+    isLatest: boolean("isLatest").default(true),
+  },
+  (t) => [
+    index("doc_versions_documentId_idx").on(t.documentId),
+    index("doc_versions_disputeId_idx").on(t.disputeId),
+    index("doc_versions_latest_idx").on(t.documentId, t.isLatest),
+  ]
+);
+export type DocumentVersion = typeof documentVersions.$inferSelect;
+export type InsertDocumentVersion = typeof documentVersions.$inferInsert;

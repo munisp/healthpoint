@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 // DashboardLayout now provided globally via App.tsx
 import { toast } from "sonner";
+import { useChartColors } from "@/hooks/useChartColors";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Sector
@@ -14,8 +15,6 @@ import {
   BarChart2, Download, RefreshCw, TrendingUp, DollarSign,
   Clock, CheckCircle2, AlertTriangle, FileText, Loader2
 } from "lucide-react";
-
-const COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16"];
 
 const REPORT_TYPES = [
   { id: "volume", label: "Dispute Volume", icon: BarChart2, description: "Monthly dispute counts by status and service type" },
@@ -29,6 +28,9 @@ const REPORT_TYPES = [
 // Empty arrays are shown when no data is available yet (seed via Admin panel)
 
 export default function Reports() {
+  const C = useChartColors();
+  const COLORS = [C.chart1, C.chart2, C.chart3, C.danger, C.chart4, C.info, C.chart5, C.chart2];
+
   const { isAuthenticated } = useAuth();
   const [activeReport, setActiveReport] = useState("volume");
   const [dateRange, setDateRange] = useState("6m");
@@ -186,15 +188,15 @@ export default function Reports() {
               <CardContent>
                 <ResponsiveContainer width="100%" height={280}>
                   <BarChart data={volumeData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                     <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 11 }} />
                     <Tooltip />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
-                    <Bar dataKey="open_negotiation" name="Open Negotiation" stackId="a" fill="#3b82f6" />
-                    <Bar dataKey="idr_active" name="IDR Active" stackId="a" fill="#8b5cf6" />
-                    <Bar dataKey="closed" name="Closed" stackId="a" fill="#22c55e" />
-                    <Bar dataKey="ineligible" name="Ineligible" stackId="a" fill="#94a3b8" radius={[4,4,0,0]} />
+                    <Bar dataKey="open_negotiation" name="Open Negotiation" stackId="a" fill={C.chart1} />
+                    <Bar dataKey="idr_active" name="IDR Active" stackId="a" fill={C.chart4} />
+                    <Bar dataKey="closed" name="Closed" stackId="a" fill={C.chart2} />
+                    <Bar dataKey="ineligible" name="Ineligible" stackId="a" fill={C.muted} radius={[4,4,0,0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -236,14 +238,14 @@ export default function Reports() {
             <CardContent>
               <ResponsiveContainer width="100%" height={320}>
                 <BarChart data={financialData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis dataKey="serviceType" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}k`} />
                   <Tooltip formatter={(v: number) => `$${Number(v).toLocaleString()}`} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="avgBilled" name="Avg. Billed" fill="#e2e8f0" radius={[4,4,0,0]} />
-                  <Bar dataKey="avgQPA" name="Avg. QPA" fill="#f59e0b" radius={[4,4,0,0]} />
-                  <Bar dataKey="avgDetermination" name="Avg. Determination" fill="#3b82f6" radius={[4,4,0,0]} />
+                  <Bar dataKey="avgBilled" name="Avg. Billed" fill={C.muted} radius={[4,4,0,0]} />
+                  <Bar dataKey="avgQPA" name="Avg. QPA" fill={C.chart3} radius={[4,4,0,0]} />
+                  <Bar dataKey="avgDetermination" name="Avg. Determination" fill={C.chart1} radius={[4,4,0,0]} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -258,14 +260,14 @@ export default function Reports() {
             <CardContent>
               <ResponsiveContainer width="100%" height={320}>
                 <LineChart data={outcomeChartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
                   <Tooltip formatter={(v: number) => `${Math.round(v * 100)}%`} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Line type="monotone" dataKey="winRate" name="Win Rate" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} />
-                  <Line type="monotone" dataKey="determinationRate" name="Determination Rate" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4 }} />
-                  <Line type="monotone" dataKey="appealRate" name="Appeal Rate" stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="winRate" name="Win Rate" stroke={C.chart2} strokeWidth={2} dot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="determinationRate" name="Determination Rate" stroke={C.chart1} strokeWidth={2} dot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="appealRate" name="Appeal Rate" stroke={C.danger} strokeWidth={2} dot={{ r: 4 }} />
                 </LineChart>
               </ResponsiveContainer>
             </CardContent>
@@ -280,13 +282,13 @@ export default function Reports() {
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={timelineData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis dataKey="step" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="statutory" name="Statutory Limit (days)" fill="#e2e8f0" radius={[4,4,0,0]} />
-                  <Bar dataKey="actual" name="Actual Avg. (days)" fill="#3b82f6" radius={[4,4,0,0]} />
+                  <Bar dataKey="statutory" name="Statutory Limit (days)" fill={C.muted} radius={[4,4,0,0]} />
+                  <Bar dataKey="actual" name="Actual Avg. (days)" fill={C.chart1} radius={[4,4,0,0]} />
                 </BarChart>
               </ResponsiveContainer>
               <div className="mt-4 grid grid-cols-3 md:grid-cols-6 gap-3">

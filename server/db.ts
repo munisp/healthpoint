@@ -22,14 +22,22 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
-const LOCAL_PG_URL = process.env.DATABASE_URL ?? "postgresql://idr_user:idr_pass123@localhost:5432/idr_demo";
+const LOCAL_PG_URL = "postgresql://idr_user:idr_pass123@localhost:5432/idr_demo";
+
+function resolvePostgresUrl(): string | null {
+  const configured = process.env.DATABASE_URL?.trim();
+  if (!configured) return process.env.NODE_ENV === "production" ? null : LOCAL_PG_URL;
+  if (configured.startsWith("postgresql://") || configured.startsWith("postgres://")) return configured;
+  console.error("[Database] DATABASE_URL is not a PostgreSQL connection string; refusing an incompatible database backend");
+  return null;
+}
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pgClient: ReturnType<typeof postgres> | null = null;
 
 export async function getDb() {
   if (!_db) {
-    const connectionString = LOCAL_PG_URL;
+    const connectionString = resolvePostgresUrl();
     if (!connectionString) {
       console.warn("[Database] DATABASE_URL not set — running without database");
       return null;
