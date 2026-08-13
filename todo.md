@@ -642,7 +642,7 @@
 - [x] Implement fail-closed provider mTLS configuration, certificate validation, and versioned key rotation for settlement callbacks
 - [x] Add automated encrypted PostgreSQL backup, pre-restore verification, restore, and integrity-validation scripts with test coverage; local encrypted recovery drill restored an isolated database with matching critical-table counts
 - [x] Run repeatable API/database load drills against the isolated PostgreSQL deployment and record resilience evidence; 250 concurrent health/database requests completed with 0% errors and 44.6 ms p95 latency
-- [ ] Validate a production PostgreSQL environment-variable contract and deployment configuration without treating the incompatible managed TiDB URL as a PostgreSQL endpoint
+- [x] Validate a production PostgreSQL environment-variable contract and deployment configuration without treating the incompatible managed TiDB URL as a PostgreSQL endpoint; non-local TLS PostgreSQL contract passes with payment execution disabled
 
 ## PostgreSQL-Only Database Correction (Aug 13 2026)
 - [x] Remove incompatible database fallback behavior and make PostgreSQL the exclusive configured application database path
@@ -697,3 +697,6 @@
 - [x] Establish the audited GitHub main revision and run dependency, secret, static-code, configuration, transport, and deployment-path vulnerability scans
 - [x] Remediate verified repository-controlled security findings and retest the affected controls; Node scan is 0 critical/0 high, TypeScript, 163 Vitest tests, build, and Python audit pass; Go and Docker release checks remain externally required
 - [x] Produce a fail-closed production deployment runbook with approval, secret, PostgreSQL, migration, callback, observability, rollback, and post-deploy verification gates
+
+## Security Release GitHub Synchronization (Aug 13 2026)
+- [ ] Commit and push the final security remediation, CI gates, deployment topology, audit report, and runbook to GitHub main
