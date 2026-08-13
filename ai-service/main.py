@@ -562,70 +562,15 @@ class EMRExtractionRequest(BaseModel):
 @app.post("/extract-emr-data")
 async def extract_emr_data(request: EMRExtractionRequest):
     """
-    Simulates a FHIR R4 data pull from a connected EMR system,
-    mapping clinical data to NSA IDR dispute fields.
-    In production, calls the real FHIR endpoint using stored credentials.
+    EMR extraction is unavailable until a real authenticated FHIR R4 provider
+    connector is configured. This endpoint deliberately fails closed rather than
+    returning synthetic patient, payer, or financial data.
     """
-    import random as _r
-    start = time.time()
-    logger.info(f"[EMRExtract] Pulling from {request.emr_system}")
-    emr_profiles = {
-        "epic": {"vendor": "Epic Systems", "fhir_version": "R4", "auth": "SMART on FHIR"},
-        "cerner": {"vendor": "Oracle Cerner", "fhir_version": "R4", "auth": "OAuth 2.0"},
-        "allscripts": {"vendor": "Allscripts", "fhir_version": "R4", "auth": "API Key"},
-        "athenahealth": {"vendor": "athenahealth", "fhir_version": "R4", "auth": "OAuth 2.0"},
-        "eclinicalworks": {"vendor": "eClinicalWorks", "fhir_version": "STU3", "auth": "API Key"},
-        "meditech": {"vendor": "MEDITECH", "fhir_version": "R4", "auth": "SMART on FHIR"},
-        "custom": {"vendor": "Custom FHIR", "fhir_version": "R4", "auth": "Bearer Token"},
-    }
-    profile = emr_profiles.get(request.emr_system, emr_profiles["custom"])
-    service_types = ["emergency_medicine", "anesthesiology", "radiology", "pathology", "hospitalist"]
-    states = ["NY", "CA", "TX", "FL", "IL", "PA", "OH", "GA", "NC", "MI"]
-    payers = ["Aetna Health Insurance", "UnitedHealthcare", "Cigna Health", "Humana", "Blue Cross Blue Shield"]
-    facilities = ["Metro General Hospital", "City Medical Center", "Regional Health System", "University Hospital"]
-    svc_date = request.date_of_service or "2026-04-15"
-    billed = round(_r.uniform(2500, 45000), 2)
-    qpa = round(billed * _r.uniform(0.35, 0.65), 2)
-    extracted = {
-        "initiating_party_name": _r.choice(facilities),
-        "initiating_party_type": "facility",
-        "responding_party_name": _r.choice(payers),
-        "responding_party_type": "payer",
-        "service_type": _r.choice(service_types),
-        "service_date": svc_date,
-        "patient_state": _r.choice(states),
-        "facility_state": _r.choice(states),
-        "billed_amount": billed,
-        "qpa_amount": qpa,
-        "initiating_offer": round(qpa * 1.15, 2),
-        "open_negotiation_start": "2026-05-01",
-        "open_negotiation_end": "2026-05-31",
-        "idr_initiation_date": "2026-06-03",
-        "attached_documents": ["remittance_advice", "eob", "medical_record"],
-        "qpa_methodology": "median_in_network",
-        "submission_narrative": "",
-    }
-    field_confidence = {f: round(_r.uniform(0.82, 0.99), 2) for f in extracted}
-    fields_extracted = len([v for v in extracted.values() if v is not None and v != "" and v != []])
-    elapsed = round(time.time() - start, 2)
-    logger.info(f"[EMRExtract] Done in {elapsed}s - {fields_extracted} fields from {profile['vendor']}")
-    return {
-        "success": True,
-        "processingTimeSeconds": elapsed,
-        "emrSystem": request.emr_system,
-        "vendor": profile["vendor"],
-        "fhirVersion": profile["fhir_version"],
-        "authMethod": profile["auth"],
-        "fieldsExtracted": fields_extracted,
-        "fieldConfidence": field_confidence,
-        "extractedData": extracted,
-        "fhirResources": ["Practitioner", "Organization", "Encounter", "Claim", "ClaimResponse", "DocumentReference"],
-        "summary": f"Extracted {fields_extracted} NSA IDR fields from {profile['vendor']} via FHIR {profile['fhir_version']}.",
-        "warnings": [
-            "submission_narrative must be completed by the submitting party.",
-            "Verify billed_amount and qpa_amount against the official remittance advice.",
-        ],
-    }
+    logger.warning("[EMRExtract] Rejected synthetic extraction request for %s", request.emr_system)
+    raise HTTPException(
+        status_code=503,
+        detail="FHIR R4 extraction is unavailable until an authenticated provider connector is configured; no synthetic clinical or financial data is returned.",
+    )
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

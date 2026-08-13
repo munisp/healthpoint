@@ -658,6 +658,13 @@
 - [x] Add exception review state, immutable reviewer decisions, and operational notifications for unmatched provider reports
 - [x] Add a guarded daily scheduled endpoint and tests for proof generation, exception alerts, and review closure; 161 Vitest and 8 Playwright scenarios pass
 
+## Mission-Critical Assurance Audit (Aug 13 2026)
+- [x] Build a versioned claim-and-coverage manifest for material system, funds-flow, security, deployment, and operations claims
+- [x] Inventory all production paths for stubs, simulations, bypasses, incomplete integrations, permissive controls, and unverified external dependencies
+- [x] Trace funds-flow lifecycle, authorization, durable state, events, compensation, reconciliation, audit, recovery, and operations paths; remediate verified defects within scope
+- [x] Execute clean PostgreSQL migration, build, TypeScript, unit, end-to-end, recovery, load, and configuration verification gates using real local dependencies
+- [x] Produce an evidence-based release decision with reproducible commands, findings severity, blockers, and explicit non-production limitations
+
 ## Settlement Lifecycle, Approval & Reconciliation Controls (Aug 13 2026)
 - [x] Add a durable fail-closed transfer lifecycle with explicit requested, authorized, submitted, accepted, settled, failed, reversed, and reconciled states
 - [x] Add maker-checker approvals with actor separation, immutable decisions, expiration, and server-side state-transition guards

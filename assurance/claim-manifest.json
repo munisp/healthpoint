@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "system": "HealthPoint IDR workflow platform",
+  "lastReviewedRevision": "3cc827f6d3e3ad46387092306835a5d58e0dec50",
+  "claims": [
+    {
+      "id": "MC-POSTGRES-RUNTIME",
+      "claim": "The application persists workflow and settlement state in PostgreSQL.",
+      "source": "drizzle/schema.ts; server/db.ts; docker-compose.yml",
+      "entryPoints": ["server/_core/index.ts", "server/routers.ts"],
+      "evidence": ["PostgreSQL 16 local migrations", "GET /api/health returned db=connected"],
+      "status": "blocked",
+      "limitations": "The platform-managed preview DATABASE_URL remains non-PostgreSQL, so deployed persistence has not been verified."
+    },
+    {
+      "id": "MC-SETTLEMENT-EVIDENCE",
+      "claim": "Signed settlement evidence is idempotent, atomic, auditable, and reversible.",
+      "source": "server/settlement.ts; server/settlement-lifecycle.ts; server/ledger.ts",
+      "entryPoints": ["/api/settlement/callbacks", "/api/settlement/reports"],
+      "evidence": ["161 Vitest tests", "8 Playwright PostgreSQL settlement scenarios", "local migration chain through 0025"],
+      "status": "verified",
+      "limitations": "Evidence covers an isolated PostgreSQL database and development keys; it does not prove a provider or bank transferred funds."
+    },
+    {
+      "id": "MC-TRANSFER-RAIL",
+      "claim": "The platform can initiate and settle real funds through a regulated provider.",
+      "source": "docker-compose.yml; services/go/main.go",
+      "entryPoints": ["/internal/payments/initiate"],
+      "evidence": ["Fail-closed internal service token"],
+      "status": "blocked",
+      "limitations": "Compose config uses a Mojaloop simulator; no contracted provider sandbox, mTLS interoperability certificate, settlement report feed, or regulated-rail acceptance evidence is available."
+    },
+    {
+      "id": "MC-AI-EMR-EXTRACTION",
+      "claim": "EMR/FHIR extraction provides real data to disputes.",
+      "source": "ai-service/main.py; server/routers.ts",
+      "entryPoints": ["ai.pullDisputeData", "/extract-emr-data"],
+      "evidence": ["Synthetic extraction removed; endpoint returns 503 without a real connector"],
+      "status": "retired",
+      "limitations": "No authenticated FHIR provider connector or sandbox evidence is configured."
+    },
+    {
+      "id": "MC-DAILY-BALANCE-PROOF",
+      "claim": "Daily settlement proof and exception review execute durably and alert operators.",
+      "source": "server/settlement-proof.ts; server/scheduled/settlementBalanceProof.ts",
+      "entryPoints": ["/api/scheduled/settlement-balance-proof"],
+      "evidence": ["PostgreSQL-backed 8-scenario settlement E2E suite", "Heartbeat task-UID configuration persistence"],
+      "status": "blocked",
+      "limitations": "The deployed PostgreSQL binding and production Heartbeat job have not been created or observed."
+    },
+    {
+      "id": "MC-COMPOSE-PRODUCTION",
+      "claim": "docker-compose.yml is a production-safe deployment baseline.",
+      "source": "docker-compose.yml",
+      "entryPoints": ["compose services"],
+      "evidence": ["Static configuration audit"],
+      "status": "blocked",
+      "limitations": "The compose topology contains default secrets, development Keycloak, disabled OpenSearch security, unauthenticated etcd, plaintext internal connections, and a payment simulator."
+    },
+    {
+      "id": "MC-BACKUP-RECOVERY",
+      "claim": "Database backup and restore are automated and integrity-checked.",
+      "source": "scripts/db-backup.sh; scripts/db-restore-verify.sh; scripts/db-recovery-drill.sh",
+      "entryPoints": ["recovery drill scripts"],
+      "evidence": ["Encrypted local PostgreSQL recovery drill with critical-table count verification"],
+      "status": "verified",
+      "limitations": "A production backup destination, retention policy, and deployed restore drill have not been observed."
+    }
+  ]
+}

@@ -13,6 +13,8 @@
     "test:e2e": "playwright test",
     "load:drill": "node scripts/load-drill.mjs",
     "validate:production-config": "bash scripts/validate-production-config.sh",
+    "assurance:check": "node scripts/assurance-gate.mjs",
+    "assurance:release": "node scripts/assurance-gate.mjs --release",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"
   },
   "dependencies": {
