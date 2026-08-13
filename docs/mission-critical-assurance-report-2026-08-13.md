@@ -77,6 +77,19 @@ The following changes were made and re-tested within the audited workspace:
 
 The application contains useful and locally validated workflow and settlement-evidence controls. It is **not** a releaseable real-money platform and must not be represented as one. The current score is intentionally not elevated above the blockers: local settlement-control implementation is stronger than the deployed assurance posture, but it cannot establish the safety or irreversibility of an external funds transfer.
 
+## Approved Operating Boundary Without Production Dependencies
+
+The approved operating mode is **local development and controlled testing only**. Local PostgreSQL, encrypted backup/restore drills, the settlement-evidence workflow, and disabled payment execution may be used to develop and demonstrate the platform. They must not be represented as a production deployment or as evidence that a provider, bank, FSP, or government endpoint has accepted a transaction.
+
+| Capability | Permitted now | Explicitly not permitted without external evidence |
+|---|---|---|
+| PostgreSQL | Local development database and isolated recovery drills | Managed production deployment, production migration, or production backup claim |
+| Settlement workflow | Evidence recording, approval, reversal, provider-report reconciliation tests | Real-money initiation, real settlement, or provider acceptance claim |
+| Provider callback path | Local signed/mTLS assertion test coverage | Provider mTLS interoperability or live callback acceptance claim |
+| Scheduled proof | Local task/handler validation | Deployed Heartbeat schedule or operator-alert execution claim |
+
+> **Fail-closed rule:** The release gate must remain `NOT RELEASEABLE`, and `PAYMENT_EXECUTION_MODE` must remain `disabled`, until all release blockers have independently verifiable evidence.
+
 ## Reproducible Commands
 
 ```bash
