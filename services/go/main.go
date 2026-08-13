@@ -10,6 +10,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	tigerbeetle_go "github.com/tigerbeetle/tigerbeetle-go"
 	. "github.com/tigerbeetle/tigerbeetle-go/pkg/types"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -32,22 +34,54 @@ import (
 
 type Config struct {
 	Port              string
+	Environment       string
 	PermifyGRPCURL    string
+	PermifyGRPCTLS    bool
 	TigerBeetleAddr   string
 	KafkaBrokers      string
 	MojaloopURL       string
 	InternalAuthToken string
+	PaymentExecutionMode string
 }
 
-func loadConfig() Config {
-	return Config{
-		Port:            getEnv("GO_SERVICES_PORT", "8001"),
-		PermifyGRPCURL:  getEnv("PERMIFY_GRPC_URL", "localhost:3478"),
-		TigerBeetleAddr: getEnv("TIGERBEETLE_ADDRESS", "localhost:3000"),
-		KafkaBrokers:    getEnv("KAFKA_BROKERS", "localhost:9092"),
-		MojaloopURL:     getEnv("MOJALOOP_URL", "http://localhost:3003"),
-		InternalAuthToken: os.Getenv("INTERNAL_SERVICE_TOKEN"),
+func loadConfig() (Config, error) {
+	environment := getEnv("GO_ENV", "development")
+	allowInsecureDevelopment := environment == "development" && os.Getenv("ALLOW_INSECURE_INTERNAL_TRANSPORT") == "true"
+	config := Config{
+		Port:                 getEnv("GO_SERVICES_PORT", "8001"),
+		Environment:          environment,
+		PermifyGRPCURL:       os.Getenv("PERMIFY_GRPC_URL"),
+		PermifyGRPCTLS:       os.Getenv("PERMIFY_GRPC_TLS") == "true",
+		TigerBeetleAddr:      os.Getenv("TIGERBEETLE_ADDRESS"),
+		KafkaBrokers:         os.Getenv("KAFKA_BROKERS"),
+		MojaloopURL:          os.Getenv("MOJALOOP_URL"),
+		InternalAuthToken:    os.Getenv("INTERNAL_SERVICE_TOKEN"),
+		PaymentExecutionMode: getEnv("PAYMENT_EXECUTION_MODE", "disabled"),
 	}
+	for key, value := range map[string]string{
+		"PERMIFY_GRPC_URL": config.PermifyGRPCURL,
+		"TIGERBEETLE_ADDRESS": config.TigerBeetleAddr,
+		"KAFKA_BROKERS": config.KafkaBrokers,
+	} {
+		if value == "" {
+			return Config{}, fmt.Errorf("%s is required", key)
+		}
+	}
+	if !config.PermifyGRPCTLS && !allowInsecureDevelopment {
+		return Config{}, fmt.Errorf("PERMIFY_GRPC_TLS=true is required outside an explicit insecure development transport")
+	}
+	if config.PaymentExecutionMode != "disabled" && config.PaymentExecutionMode != "sandbox" {
+		return Config{}, fmt.Errorf("PAYMENT_EXECUTION_MODE must be disabled or sandbox; live initiation is not implemented in this sidecar")
+	}
+	if config.PaymentExecutionMode != "disabled" {
+		if config.InternalAuthToken == "" || config.MojaloopURL == "" {
+			return Config{}, fmt.Errorf("INTERNAL_SERVICE_TOKEN and MOJALOOP_URL are required when payment execution is enabled")
+		}
+		if !regexp.MustCompile(`^https://`).MatchString(config.MojaloopURL) && !allowInsecureDevelopment {
+			return Config{}, fmt.Errorf("sandbox payment execution requires an HTTPS provider URL outside explicit development transport")
+		}
+	}
+	return config, nil
 }
 
 func getEnv(key, fallback string) string {
@@ -63,9 +97,13 @@ type PermifyService struct {
 	client *permify.Client
 }
 
-func NewPermifyService(grpcURL string) (*PermifyService, error) {
+func NewPermifyService(grpcURL string, useTLS bool) (*PermifyService, error) {
+	transport := credentials.TransportCredentials(insecure.NewCredentials())
+	if useTLS {
+		transport = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	}
 	conn, err := grpc.Dial(grpcURL,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(transport),
 		grpc.WithBlock(),
 		grpc.WithTimeout(10*time.Second),
 	)
@@ -74,7 +112,7 @@ func NewPermifyService(grpcURL string) (*PermifyService, error) {
 	}
 	client, err := permify.NewClient(
 		permify.Config{Endpoint: grpcURL},
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(transport),
 	)
 	if err != nil {
 		conn.Close()
@@ -334,6 +372,7 @@ type Server struct {
 	mojaloop          *MojaloopService
 	kafka             *KafkaPublisher
 	internalAuthToken string
+	paymentExecutionMode string
 }
 
 func (s *Server) requireInternalAuth(w http.ResponseWriter, r *http.Request) bool {
@@ -361,6 +400,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAuthzCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireInternalAuth(w, r) {
 		return
 	}
 	var req AuthzCheckRequest
@@ -405,14 +447,21 @@ func (s *Server) handleLedgerTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Publish to Kafka
-	_ = s.kafka.Publish(r.Context(), "idr.payments", req.TransferID, map[string]interface{}{
+	if s.kafka == nil {
+		http.Error(w, "payment event publisher unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.kafka.Publish(r.Context(), "idr.payments", req.TransferID, map[string]interface{}{
 		"type":       "payment.transfer",
 		"transferId": req.TransferID,
 		"amount":     req.Amount,
 		"status":     resp.Status,
 		"timestamp":  resp.Timestamp,
-	})
+	}); err != nil {
+		log.Printf("[ledger] payment event publish error: %v", err)
+		http.Error(w, "payment event publication failed", http.StatusServiceUnavailable)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -423,6 +472,14 @@ func (s *Server) handlePaymentInitiate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.requireInternalAuth(w, r) {
+		return
+	}
+	if s.paymentExecutionMode == "disabled" {
+		http.Error(w, "payment execution is disabled until a provider sandbox or live contract is configured", http.StatusServiceUnavailable)
+		return
+	}
+	if s.mojaloop == nil {
+		http.Error(w, "payment provider is unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	var req PaymentInitiateRequest
@@ -440,8 +497,11 @@ func (s *Server) handlePaymentInitiate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Publish to Kafka
-	_ = s.kafka.Publish(r.Context(), "idr.payments", req.TransactionID, map[string]interface{}{
+	if s.kafka == nil {
+		http.Error(w, "payment event publisher unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.kafka.Publish(r.Context(), "idr.payments", req.TransactionID, map[string]interface{}{
 		"type":          "payment.initiated",
 		"transactionId": req.TransactionID,
 		"disputeId":     req.DisputeID,
@@ -449,7 +509,11 @@ func (s *Server) handlePaymentInitiate(w http.ResponseWriter, r *http.Request) {
 		"currency":      req.Currency,
 		"status":        resp.Status,
 		"timestamp":     resp.Timestamp,
-	})
+	}); err != nil {
+		log.Printf("[mojaloop] payment event publish error: %v", err)
+		http.Error(w, "payment event publication failed", http.StatusServiceUnavailable)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -457,11 +521,14 @@ func (s *Server) handlePaymentInitiate(w http.ResponseWriter, r *http.Request) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 func main() {
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Fatalf("[go-services] invalid configuration: %v", err)
+	}
 	log.Printf("[go-services] starting on port %s", cfg.Port)
 
 	// Initialize Permify
-	permifySvc, err := NewPermifyService(cfg.PermifyGRPCURL)
+	permifySvc, err := NewPermifyService(cfg.PermifyGRPCURL, cfg.PermifyGRPCTLS)
 	if err != nil {
 		log.Printf("[go-services] WARNING: permify unavailable: %v", err)
 		permifySvc = nil
@@ -474,8 +541,11 @@ func main() {
 		ledgerSvc = nil
 	}
 
-	// Initialize Mojaloop
-	mojaloopSvc := NewMojaloopService(cfg.MojaloopURL)
+	// Initialize the provider client only after execution is explicitly enabled.
+	var mojaloopSvc *MojaloopService
+	if cfg.PaymentExecutionMode != "disabled" {
+		mojaloopSvc = NewMojaloopService(cfg.MojaloopURL)
+	}
 
 	// Initialize Kafka publisher
 	kafkaPub := NewKafkaPublisher(cfg.KafkaBrokers)
@@ -486,6 +556,7 @@ func main() {
 		mojaloop:          mojaloopSvc,
 		kafka:             kafkaPub,
 		internalAuthToken: cfg.InternalAuthToken,
+		paymentExecutionMode: cfg.PaymentExecutionMode,
 	}
 
 	mux := http.NewServeMux()

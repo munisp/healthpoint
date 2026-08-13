@@ -665,6 +665,13 @@
 - [x] Execute clean PostgreSQL migration, build, TypeScript, unit, end-to-end, recovery, load, and configuration verification gates using real local dependencies
 - [x] Produce an evidence-based release decision with reproducible commands, findings severity, blockers, and explicit non-production limitations
 
+## Mission-Critical Findings Remediation (Aug 13 2026)
+- [x] Replace development-only compose defaults and simulator wiring with a fail-closed production deployment configuration
+- [x] Remove plaintext and fallback behavior from production-capable internal service configuration, retaining only explicit development overrides
+- [x] Add fail-closed AI/EMR, provider, and scheduled-job production guards and cover the controls with automated tests
+- [x] Validate repository-controlled remediations with PostgreSQL, build, unit, E2E, recovery, load, and release-gate evidence; 163 Vitest, 8 Playwright, Go, Python syntax, and production build pass
+- [ ] Record external provider onboarding, managed PostgreSQL binding, and regulated deployment certification as non-fabricable release prerequisites
+
 ## Settlement Lifecycle, Approval & Reconciliation Controls (Aug 13 2026)
 - [x] Add a durable fail-closed transfer lifecycle with explicit requested, authorized, submitted, accepted, settled, failed, reversed, and reconciled states
 - [x] Add maker-checker approvals with actor separation, immutable decisions, expiration, and server-side state-transition guards

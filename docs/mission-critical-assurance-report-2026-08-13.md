@@ -1,7 +1,7 @@
 # HealthPoint Mission-Critical Code Assurance Report
 
 **Decision:** **NOT RELEASEABLE for production or real-money operation.**  
-**Audited revision:** `3cc827f6d3e3ad46387092306835a5d58e0dec50`, plus the uncommitted assurance remediation described below.  
+**Audited revision:** `3cc827f6d3e3ad46387092306835a5d58e0dec50`, plus the subsequent repository-controlled remediation described below.  
 **Audit environment:** Ubuntu sandbox; PostgreSQL 16.14; isolated database `idr_demo`; generated non-production credentials only.
 
 > A passing build or unit suite does not override a release blocker. The release gate intentionally returns `RELEASE_DECISION=NOT_RELEASEABLE` while any material claim is blocked or incomplete.[1]
@@ -14,7 +14,7 @@ The audit examined the active Node/React application, PostgreSQL schema and migr
 |---|---|---|
 | Frozen Node dependency installation | Pass, with build-script approval warning | `pnpm install --frozen-lockfile` completed; dependency build scripts remain subject to explicit approval. |
 | TypeScript compile | Pass | `npx tsc --noEmit` returned zero errors. |
-| Unit suite | Pass | 6 files, 161 assertions, including PostgreSQL configuration, ledger, settlement authentication, lifecycle, proof, and backup tests.[2] |
+| Unit suite | Pass | 7 files, 163 assertions, including PostgreSQL configuration, ledger, settlement authentication, lifecycle, proof, backup, and authenticated EMR credential encryption tests.[2] |
 | Settlement E2E suite | Pass | 8 Playwright scenarios against a real isolated PostgreSQL instance; covers callback rejection, idempotency, failure, reconciliation, exception, reversal, and daily proof behavior.[2] |
 | Go sidecar | Pass, limited | `go test ./...` completed for `services/go`; this is not provider interoperability evidence. |
 | Python AI service | Syntax pass only | `py_compile` passed; no authenticated provider integration or Python behavior suite was available. |
@@ -31,10 +31,11 @@ The version-controlled manifest is the authoritative machine-readable inventory 
 |---|---|---|---|---|
 | MC-POSTGRES-RUNTIME | Workflow and settlement state persist in PostgreSQL. | Local migrations and runtime health check passed. | **Blocked** | The managed preview injects a non-PostgreSQL database URL; deployed persistence was not observed. |
 | MC-SETTLEMENT-EVIDENCE | Settlement evidence is signed, idempotent, atomic, auditable, and reversible. | Local PostgreSQL unit/E2E coverage and lifecycle implementation. | **Verified locally** | No regulated provider or bank transfer was performed. |
-| MC-TRANSFER-RAIL | Real funds can be initiated and settled. | Internal token is fail-closed. | **Blocked** | Compose config points to a Mojaloop simulator; no FSP/bank sandbox certificate or acceptance evidence exists. |
+| MC-TRANSFER-RAIL | Real funds can be initiated and settled. | Go sidecar rejects live initiation and uses explicit disabled/sandbox modes only. | **Blocked** | Provider/FSP onboarding and evidence do not exist; live initiation is intentionally unavailable. |
 | MC-AI-EMR-EXTRACTION | EMR extraction returns real FHIR data. | Synthetic implementation removed during audit. | **Retired** | Endpoint now returns `503` until an authenticated FHIR connector is implemented and tested. |
 | MC-DAILY-BALANCE-PROOF | Daily proof and exception review execute durably. | PostgreSQL proof, immutable review, and task-UID configuration are implemented and locally tested. | **Blocked** | No production PostgreSQL binding or deployed Heartbeat execution exists. |
-| MC-COMPOSE-PRODUCTION | Compose configuration is a production-safe baseline. | Static composition audit. | **Blocked** | Development defaults, disabled security, plaintext internal links, and simulator configuration remain. |
+| MC-COMPOSE-PRODUCTION | Development compose is separate from a fail-closed production overlay. | Production overlay requires secrets/endpoints; simulator is profiled for development only. | **Blocked** | The overlay has not been deployed against hardened external dependencies. |
+| MC-EMR-CREDENTIALS | EMR credentials are encrypted at rest before persistence. | AES-256-GCM versioned envelope and tamper-rejection test. | **Verified locally** | A managed KMS/HSM and rotation service are not configured. |
 | MC-BACKUP-RECOVERY | Backup and restore are automated and integrity checked. | Encrypted local recovery drill passed. | **Verified locally** | Production destination, retention policy, and deployed restore drill remain unobserved. |
 
 ## Findings and Remediation
@@ -48,6 +49,8 @@ The version-controlled manifest is the authoritative machine-readable inventory 
 | MC-005 | High | Python EMR extraction fabricated clinical/financial content with random values. | **Fixed:** removed generated response and changed endpoint to explicit `503` fail-closed behavior. | Implement an authenticated FHIR connector with sandbox contract/E2E evidence before re-enabling. |
 | MC-006 | High | Daily proof handler lacked platform cron identity/task ownership support. | **Fixed:** added Heartbeat SDK bootstrap, cron identity handling, persistent task UID configuration, and guarded handler. | Deploy PostgreSQL-backed app and create/observe the project-level Heartbeat job. |
 | MC-007 | Medium | Browser bundle size exceeds Vite’s performance warning threshold. | Recorded; build remains reproducible. | Establish a performance budget and code-splitting plan; not a financial-integrity blocker. |
+| MC-008 | High | EMR connection credentials were reversibly base64-encoded before persistence. | **Fixed:** replaced with versioned AES-256-GCM encryption, authenticated decryption, tamper detection, and production key validation. | Configure managed KMS/HSM-backed key custody and rotation before production EMR onboarding. |
+| MC-009 | Critical | Go sidecar allowed a configurable live provider mode and ignored Kafka publish failures. | **Fixed:** live initiation is rejected, sandbox mode is explicit, internal auth is required, and event-publisher unavailability fails the request. | Implement a provider-specific durable, idempotent execution adapter only after sandbox certification. |
 
 ## Remediation Implemented During This Audit
 
@@ -59,12 +62,14 @@ The following changes were made and re-tested within the audited workspace:
 | Added material claim manifest and assurance gate | `pnpm assurance:check` validates the inventory; `pnpm assurance:release` fails with the active blockers. |
 | Added daily balance-proof, exception review, scheduled handler, task ownership, and test coverage | PostgreSQL migrations through `0025`; settlement E2E and unit gates passed. |
 | Added provider callback/keyring/mTLS boundary, transfer lifecycle, maker-checker approval, reconciliation, reversals, and recovery tooling | Local PostgreSQL tests and recovery/load evidence passed; external provider assurance remains blocked. |
+| Split development compose from a fail-closed production overlay; hardened Go sidecar configuration and transport rules | Production configuration validation passes only with an explicit managed PostgreSQL-style endpoint and required secrets; live transfer initiation is disabled. |
+| Replaced reversible EMR credential encoding with AES-256-GCM | New encryption/tamper-rejection unit tests pass; production startup rejects absent or malformed encryption keys. |
 
 ## Mandatory Release Blockers
 
 1. Configure the platform-managed `DATABASE_URL` as an SSL-enabled PostgreSQL endpoint, deploy the application, apply migrations, and capture production health/readiness evidence.
-2. Replace the development compose topology with a separately hardened production deployment specification. The current file must not be presented as a production deployment baseline.
-3. Onboard a regulated payment provider/FSP sandbox with provider-issued mTLS material, real callback/report contracts, test accounts, settlement/reversal scenarios, and independent operational approval. Do not enable transfer initiation before this gate passes.
+2. Deploy the repository's production compose overlay against independently hardened identity, search, etcd, Kafka, TigerBeetle, and provider services; capture interoperability evidence.
+3. Onboard a regulated payment provider/FSP sandbox with provider-issued mTLS material, real callback/report contracts, test accounts, settlement/reversal scenarios, and independent operational approval. Do not enable transfer initiation before this gate passes; live initiation is currently disabled in code.
 4. Implement and test a real authenticated FHIR connector before re-enabling EMR extraction. Do not substitute synthetic records for clinical or financial decisions.
 5. Deploy and observe the daily Heartbeat balance-proof job, including retry behavior, task-UID authorization, alert delivery, and an operator exception-review runbook.
 

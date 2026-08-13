@@ -17,7 +17,7 @@
       "claim": "Signed settlement evidence is idempotent, atomic, auditable, and reversible.",
       "source": "server/settlement.ts; server/settlement-lifecycle.ts; server/ledger.ts",
       "entryPoints": ["/api/settlement/callbacks", "/api/settlement/reports"],
-      "evidence": ["161 Vitest tests", "8 Playwright PostgreSQL settlement scenarios", "local migration chain through 0025"],
+      "evidence": ["163 Vitest tests", "8 Playwright PostgreSQL settlement scenarios", "local migration chain through 0025"],
       "status": "verified",
       "limitations": "Evidence covers an isolated PostgreSQL database and development keys; it does not prove a provider or bank transferred funds."
     },
@@ -26,9 +26,9 @@
       "claim": "The platform can initiate and settle real funds through a regulated provider.",
       "source": "docker-compose.yml; services/go/main.go",
       "entryPoints": ["/internal/payments/initiate"],
-      "evidence": ["Fail-closed internal service token"],
+      "evidence": ["Fail-closed internal service token", "live payment mode rejected by the Go sidecar", "sandbox execution requires explicit mode"],
       "status": "blocked",
-      "limitations": "Compose config uses a Mojaloop simulator; no contracted provider sandbox, mTLS interoperability certificate, settlement report feed, or regulated-rail acceptance evidence is available."
+      "limitations": "Live initiation is intentionally unsupported. A contracted provider sandbox, mTLS interoperability certificate, settlement report feed, and regulated-rail acceptance evidence are still required before any provider execution can be enabled."
     },
     {
       "id": "MC-AI-EMR-EXTRACTION",
@@ -50,12 +50,21 @@
     },
     {
       "id": "MC-COMPOSE-PRODUCTION",
-      "claim": "docker-compose.yml is a production-safe deployment baseline.",
-      "source": "docker-compose.yml",
+      "claim": "The repository separates development compose from a fail-closed production overlay.",
+      "source": "docker-compose.yml; docker-compose.production.yml; scripts/validate-production-config.sh",
       "entryPoints": ["compose services"],
-      "evidence": ["Static configuration audit"],
+      "evidence": ["Development compose is explicitly labeled and simulator-profiled", "production overlay requires mandatory secrets and explicit endpoints", "production configuration validator rejects local databases and unsupported live initiation"],
       "status": "blocked",
-      "limitations": "The compose topology contains default secrets, development Keycloak, disabled OpenSearch security, unauthenticated etcd, plaintext internal connections, and a payment simulator."
+      "limitations": "The production overlay has not been deployed against hardened provider, identity, search, etcd, Kafka, and TigerBeetle services; production interoperability evidence remains required."
+    },
+    {
+      "id": "MC-EMR-CREDENTIALS",
+      "claim": "EMR credentials are encrypted at rest before persistence.",
+      "source": "server/credential-crypto.ts; server/routers.ts",
+      "entryPoints": ["emr.create"],
+      "evidence": ["AES-256-GCM versioned envelope", "tamper rejection unit test", "production key validation"],
+      "status": "verified",
+      "limitations": "A managed KMS/HSM and key-rotation service are not configured in the isolated environment."
     },
     {
       "id": "MC-BACKUP-RECOVERY",

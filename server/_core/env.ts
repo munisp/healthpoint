@@ -29,6 +29,7 @@ const envSchema = z.object({
   S3_SECRET_KEY: z.string().optional().default(""),
   S3_BUCKET: z.string().optional().default("healthpoint"),
   S3_REGION: z.string().optional().default("us-east-1"),
+  EMR_CREDENTIALS_ENCRYPTION_KEY: z.string().optional().default(""),
   // Legacy Manus storage vars
   BUILT_IN_STORAGE_API_URL: z.string().optional().default(""),
   BUILT_IN_STORAGE_API_KEY: z.string().optional().default(""),
@@ -73,6 +74,11 @@ if (!_parsed.success) {
 }
 const _env = _parsed.success ? _parsed.data : (process.env as any);
 
+if (process.env.NODE_ENV === "production" && !/^[a-fA-F0-9]{64}$/.test(_env.EMR_CREDENTIALS_ENCRYPTION_KEY ?? "")) {
+  console.error("[ENV] EMR_CREDENTIALS_ENCRYPTION_KEY must be a 64-character hexadecimal AES-256 key in production");
+  process.exit(1);
+}
+
 export const ENV = {
   cookieSecret: _env.JWT_SECRET ?? "",
   databaseUrl: _env.DATABASE_URL ?? "",
@@ -98,6 +104,7 @@ export const ENV = {
   s3Region: _env.S3_REGION || "us-east-1",
   storageApiUrl: _env.BUILT_IN_STORAGE_API_URL || "",
   storageApiKey: _env.BUILT_IN_STORAGE_API_KEY || "",
+  emrCredentialsEncryptionKey: _env.EMR_CREDENTIALS_ENCRYPTION_KEY || "",
 
   // Keycloak OIDC
   keycloakUrl: _env.KEYCLOAK_URL || "http://localhost:8080",

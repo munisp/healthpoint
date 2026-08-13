@@ -3,7 +3,7 @@ set -euo pipefail
 
 missing=()
 invalid=()
-required=(DATABASE_URL JWT_SECRET SETTLEMENT_CALLBACK_KEYRING SETTLEMENT_MTLS_CLIENT_CA_PEM SETTLEMENT_MTLS_CLIENT_FINGERPRINTS SETTLEMENT_MTLS_INGRESS_TOKEN BACKUP_ENCRYPTION_PASSPHRASE)
+required=(DATABASE_URL JWT_SECRET SETTLEMENT_CALLBACK_KEYRING SETTLEMENT_MTLS_CLIENT_CA_PEM SETTLEMENT_MTLS_CLIENT_FINGERPRINTS SETTLEMENT_MTLS_INGRESS_TOKEN BACKUP_ENCRYPTION_PASSPHRASE INTERNAL_SERVICE_TOKEN PAYMENT_EXECUTION_MODE EMR_CREDENTIALS_ENCRYPTION_KEY)
 for key in "${required[@]}"; do
   [[ -n "${!key:-}" ]] || missing+=("$key")
 done
@@ -21,6 +21,22 @@ for key in JWT_SECRET SETTLEMENT_MTLS_INGRESS_TOKEN BACKUP_ENCRYPTION_PASSPHRASE
   value="${!key:-}"
   [[ "${#value}" -ge 32 ]] || invalid+=("$key must contain at least 32 characters")
 done
+[[ "${EMR_CREDENTIALS_ENCRYPTION_KEY:-}" =~ ^[a-fA-F0-9]{64}$ ]] || invalid+=("EMR_CREDENTIALS_ENCRYPTION_KEY must be a 64-character hexadecimal AES-256 key")
+if [[ "${NODE_ENV:-}" != "production" ]]; then
+  invalid+=("NODE_ENV must be production")
+fi
+if [[ "${ALLOW_INSECURE_INTERNAL_TRANSPORT:-false}" == "true" ]]; then
+  invalid+=("ALLOW_INSECURE_INTERNAL_TRANSPORT must not be enabled in production")
+fi
+case "${PAYMENT_EXECUTION_MODE:-}" in
+  disabled) ;;
+  sandbox)
+    [[ -n "${MOJALOOP_URL:-}" ]] || missing+=("MOJALOOP_URL")
+    [[ "${MOJALOOP_URL:-}" =~ ^https:// ]] || invalid+=("MOJALOOP_URL must use HTTPS when payment execution is enabled")
+    [[ "${MOJALOOP_URL:-}" != *"simulator"* ]] || invalid+=("MOJALOOP_URL must not point to a simulator when payment execution is enabled")
+    ;;
+  *) invalid+=("PAYMENT_EXECUTION_MODE must be disabled or sandbox; live initiation is not implemented") ;;
+esac
 
 if ((${#missing[@]} || ${#invalid[@]})); then
   printf 'Production configuration validation failed.\n' >&2
@@ -28,4 +44,4 @@ if ((${#missing[@]} || ${#invalid[@]})); then
   ((${#invalid[@]})) && printf 'Invalid: %s\n' "${invalid[*]}" >&2
   exit 1
 fi
-printf '{"valid":true,"database":"postgresql","settlementMtls":true,"versionedCallbackKeyring":true,"encryptedBackups":true}\n'
+printf '{"valid":true,"database":"postgresql","settlementMtls":true,"versionedCallbackKeyring":true,"encryptedBackups":true,"paymentExecutionMode":"%s"}\n' "$PAYMENT_EXECUTION_MODE"

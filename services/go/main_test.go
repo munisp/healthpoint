@@ -59,3 +59,49 @@ func TestRequireInternalAuthFailsClosed(t *testing.T) {
 		t.Fatalf("expected 503, got %d", disabledRecorder.Code)
 	}
 }
+
+func TestLoadConfigFailsClosedOutsideExplicitDevelopmentTransport(t *testing.T) {
+	t.Setenv("GO_ENV", "production")
+	t.Setenv("PERMIFY_GRPC_URL", "permify:3478")
+	t.Setenv("TIGERBEETLE_ADDRESS", "tigerbeetle:3000")
+	t.Setenv("KAFKA_BROKERS", "kafka:9092")
+	t.Setenv("PERMIFY_GRPC_TLS", "false")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("production configuration without TLS must be rejected")
+	}
+
+	t.Setenv("PERMIFY_GRPC_TLS", "true")
+	t.Setenv("PAYMENT_EXECUTION_MODE", "live")
+	t.Setenv("INTERNAL_SERVICE_TOKEN", "test-internal-token")
+	t.Setenv("MOJALOOP_URL", "https://provider.example")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("unsupported live payment mode must be rejected")
+	}
+}
+
+func TestLoadConfigAllowsOnlyExplicitInsecureDevelopmentTransport(t *testing.T) {
+	t.Setenv("GO_ENV", "development")
+	t.Setenv("ALLOW_INSECURE_INTERNAL_TRANSPORT", "true")
+	t.Setenv("PERMIFY_GRPC_URL", "permify:3478")
+	t.Setenv("TIGERBEETLE_ADDRESS", "tigerbeetle:3000")
+	t.Setenv("KAFKA_BROKERS", "kafka:9092")
+	t.Setenv("PERMIFY_GRPC_TLS", "false")
+	t.Setenv("PAYMENT_EXECUTION_MODE", "disabled")
+	config, err := loadConfig()
+	if err != nil {
+		t.Fatalf("explicit development transport should be usable for local testing: %v", err)
+	}
+	if config.PaymentExecutionMode != "disabled" {
+		t.Fatalf("expected payment execution to remain disabled, got %s", config.PaymentExecutionMode)
+	}
+}
+
+func TestAuthzEndpointRequiresInternalAuthentication(t *testing.T) {
+	srv := &Server{internalAuthToken: "authz-token"}
+	req := httptest.NewRequest(http.MethodPost, "/internal/authz/check", nil)
+	res := httptest.NewRecorder()
+	srv.handleAuthzCheck(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthenticated authorization request to be rejected, got %d", res.Code)
+	}
+}

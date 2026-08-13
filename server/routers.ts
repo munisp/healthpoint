@@ -44,6 +44,7 @@ import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { generateReportsPDF, generateReportsCSV } from "./reports-export";
 import { getDb, checkDbHealth } from "./db";
+import { encryptCredentials } from "./credential-crypto";
 import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
 import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
@@ -1622,8 +1623,7 @@ export const appRouter = router({
         fhirVersion: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        // Encrypt credentials before storing (simple base64 for demo; use KMS in production)
-        const credentialsEncrypted = Buffer.from(JSON.stringify(input.credentials)).toString("base64");
+        const credentialsEncrypted = encryptCredentials(input.credentials);
         const conn = await createEMRConnection({
           id: crypto.randomUUID(),
           name: input.name,

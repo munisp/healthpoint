@@ -1,0 +1,35 @@
+# HealthPoint production overlay. Run only with: docker compose -f docker-compose.yml -f docker-compose.production.yml config
+# All credentials and provider endpoints are mandatory. This overlay deliberately
+# disables the bundled simulator and development-only insecure transport.
+services:
+  mojaloop-simulator:
+    profiles: ["simulation-only-never-enable-in-production"]
+
+  app:
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "${DATABASE_URL:?Set an SSL-enabled managed PostgreSQL URL}"
+      JWT_SECRET: "${JWT_SECRET:?Set a 32+ character production JWT secret}"
+      SETTLEMENT_CALLBACK_SECRET: "${SETTLEMENT_CALLBACK_SECRET:?Set provider callback secret}"
+      SETTLEMENT_CALLBACK_KEYRING: "${SETTLEMENT_CALLBACK_KEYRING:?Set versioned callback keyring JSON}"
+      SETTLEMENT_MTLS_CLIENT_CA_PEM: "${SETTLEMENT_MTLS_CLIENT_CA_PEM:?Set provider CA PEM}"
+      SETTLEMENT_MTLS_CLIENT_FINGERPRINTS: "${SETTLEMENT_MTLS_CLIENT_FINGERPRINTS:?Set provider certificate fingerprints}"
+      SETTLEMENT_MTLS_INGRESS_TOKEN: "${SETTLEMENT_MTLS_INGRESS_TOKEN:?Set trusted mTLS ingress token}"
+      BACKUP_ENCRYPTION_PASSPHRASE: "${BACKUP_ENCRYPTION_PASSPHRASE:?Set backup encryption passphrase}"
+      EMR_CREDENTIALS_ENCRYPTION_KEY: "${EMR_CREDENTIALS_ENCRYPTION_KEY:?Set a 64-character hexadecimal AES-256 key}"
+      INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?Set internal service token}"
+      PAYMENT_EXECUTION_MODE: "${PAYMENT_EXECUTION_MODE:?Set disabled or sandbox; live initiation is not implemented}"
+      MOJALOOP_URL: "${MOJALOOP_URL:?Set HTTPS provider/FSP sandbox or live URL when execution is enabled}"
+      ALLOW_INSECURE_INTERNAL_TRANSPORT: "false"
+
+  go-services:
+    environment:
+      GO_ENV: production
+      ALLOW_INSECURE_INTERNAL_TRANSPORT: "false"
+      PERMIFY_GRPC_TLS: "true"
+      PERMIFY_GRPC_URL: "${PERMIFY_GRPC_URL:?Set TLS Permify endpoint}"
+      TIGERBEETLE_ADDRESS: "${TIGERBEETLE_ADDRESS:?Set TigerBeetle endpoint}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS:?Set authenticated Kafka endpoint}"
+      INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?Set internal service token}"
+      PAYMENT_EXECUTION_MODE: "${PAYMENT_EXECUTION_MODE:?Set disabled or sandbox; live initiation is not implemented}"
+      MOJALOOP_URL: "${MOJALOOP_URL:?Set HTTPS provider/FSP sandbox or live URL when execution is enabled}"

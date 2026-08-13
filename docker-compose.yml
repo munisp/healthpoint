@@ -1,6 +1,7 @@
 ###############################################################################
-# HealthPoint IDR Platform — Full Infrastructure Stack
-# docker compose up -d
+# HealthPoint IDR Platform — Development and Integration Stack Only
+# This file is not a production deployment baseline. Use the production overlay
+# only with mandatory production secrets and non-simulator provider endpoints.
 ###############################################################################
 version: "3.9"
 
@@ -559,6 +560,7 @@ services:
   mojaloop-simulator:
     image: mojaloop/simulator:latest
     restart: unless-stopped
+    profiles: ["simulation"]
     networks: [idr-net]
     environment:
       SIMULATOR_ENDPOINT: http://mojaloop-simulator:3003
@@ -702,12 +704,15 @@ services:
       - tigerbeetle
       - kafka
     environment:
+      GO_ENV: development
+      ALLOW_INSECURE_INTERNAL_TRANSPORT: "true"
       PERMIFY_GRPC_URL: "permify:3478"
+      PERMIFY_GRPC_TLS: "false"
       TIGERBEETLE_ADDRESS: "tigerbeetle:3000"
       KAFKA_BROKERS: "kafka:9092"
-      MOJALOOP_URL: "http://mojaloop-simulator:3003"
+      PAYMENT_EXECUTION_MODE: disabled
       GO_SERVICES_PORT: "8001"
-      # Payment and TigerBeetle execution stay fail-closed until this secret is explicitly supplied.
+      # Payment execution remains fail-closed in the development topology.
       INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?Set INTERNAL_SERVICE_TOKEN before enabling payment execution}"
     ports:
       - "8001:8001"
