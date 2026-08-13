@@ -699,11 +699,11 @@
 - [x] Produce a fail-closed production deployment runbook with approval, secret, PostgreSQL, migration, callback, observability, rollback, and post-deploy verification gates
 
 ## Security Release GitHub Synchronization (Aug 13 2026)
-- [ ] Commit and push the final security remediation, CI gates, deployment topology, audit report, and runbook to GitHub main
-- [ ] Grant GitHub Actions workflow-write permission to the authenticated credential, or manually add `.github/workflows/security.yml`, so the final security release can be pushed
+- [x] Commit and push the final security remediation, CI gates, deployment topology, audit report, and runbook to GitHub main
+- [x] Use a workflow-authorized replacement credential to publish `.github/workflows/security.yml` and the complete security release to GitHub main
 
 ## Authorized Security Release Publication (Aug 13 2026)
-- [ ] Verify the user-authorized GitHub credential can update workflow files, publish the complete security release to main, and confirm the remote state
+- [x] Verify the user-authorized GitHub credential can update workflow files, publish the complete security release to main, and confirm the remote state
 
 ## Replacement Credential Security Release Publication (Aug 13 2026)
-- [ ] Verify the replacement credential can update the GitHub Actions workflow, then push and verify the complete security release on main
+- [x] Verify the replacement credential can update the GitHub Actions workflow, then push and verify the complete security release on main; GitHub main is af14084, divergence is 0/0, no pull requests are open, and only the main remote branch remains
