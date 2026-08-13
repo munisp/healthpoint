@@ -648,3 +648,9 @@
 - [x] Remove incompatible database fallback behavior and make PostgreSQL the exclusive configured application database path
 - [x] Validate PostgreSQL-only runtime startup, full migration state, recovery drill, load drill, and deployment configuration contract; 56 tables migrated on PostgreSQL 16, runtime health reports db=connected, 157 Vitest and 4 Playwright tests pass
 - [ ] Set the platform-managed DATABASE_URL to the production PostgreSQL URI; this built-in deployment setting cannot be changed through the workspace and currently remains incompatible
+
+## Settlement Lifecycle, Approval & Reconciliation Controls (Aug 13 2026)
+- [x] Add a durable fail-closed transfer lifecycle with explicit requested, authorized, submitted, accepted, settled, failed, reversed, and reconciled states
+- [x] Add maker-checker approvals with actor separation, immutable decisions, expiration, and server-side state-transition guards
+- [x] Add independent provider-report reconciliation, exception handling, and immutable audit evidence for settlement state changes
+- [x] Add focused unit and end-to-end tests for lifecycle authorization, dual control, reconciliation, failure, and reversal paths; 160 Vitest and 7 Playwright scenarios pass

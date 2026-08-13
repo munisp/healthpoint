@@ -762,6 +762,126 @@ export const settlementCallbacks = pgTable(
 );
 export type SettlementCallback = typeof settlementCallbacks.$inferSelect;
 
+// ─── Settlement Transfer Lifecycle & Independent Reconciliation ───────────────
+// These rows describe a provider-facing transfer lifecycle. Creating or approving
+// a transfer records an intent only; it never initiates, routes, or releases funds.
+export const settlementTransferStatusEnum = pgEnum("settlement_transfer_status", [
+  "requested",
+  "authorized",
+  "submitted",
+  "accepted",
+  "settled",
+  "failed",
+  "reversed",
+  "reconciled",
+]);
+
+export const settlementTransfers = pgTable(
+  "settlement_transfers",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    providerTransferId: varchar("providerTransferId", { length: 128 }),
+    amountCents: integer("amountCents").notNull(),
+    currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    status: settlementTransferStatusEnum("status").default("requested").notNull(),
+    requestedBy: varchar("requestedBy", { length: 64 }).notNull(),
+    requestedByName: varchar("requestedByName", { length: 255 }).notNull(),
+    requestReason: text("requestReason").notNull(),
+    idempotencyKey: varchar("idempotencyKey", { length: 128 }).notNull(),
+    authorizedAt: timestamp("authorizedAt"),
+    submittedAt: timestamp("submittedAt"),
+    acceptedAt: timestamp("acceptedAt"),
+    settledAt: timestamp("settledAt"),
+    failedAt: timestamp("failedAt"),
+    reversedAt: timestamp("reversedAt"),
+    reconciledAt: timestamp("reconciledAt"),
+    failureCode: varchar("failureCode", { length: 64 }),
+    failureReason: text("failureReason"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("settlement_transfers_idempotency_idx").on(t.idempotencyKey),
+    uniqueIndex("settlement_transfers_provider_transfer_idx").on(t.provider, t.providerTransferId),
+    index("settlement_transfers_dispute_idx").on(t.disputeId),
+    index("settlement_transfers_status_idx").on(t.status),
+    index("settlement_transfers_provider_idx").on(t.provider),
+  ]
+);
+export type SettlementTransfer = typeof settlementTransfers.$inferSelect;
+
+export const settlementApprovalDecisionEnum = pgEnum("settlement_approval_decision", ["approved", "rejected"]);
+export const settlementApprovals = pgTable(
+  "settlement_approvals",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    transferId: varchar("transferId", { length: 64 }).notNull(),
+    decision: settlementApprovalDecisionEnum("decision").notNull(),
+    decidedBy: varchar("decidedBy", { length: 64 }).notNull(),
+    decidedByName: varchar("decidedByName", { length: 255 }).notNull(),
+    decisionReason: text("decisionReason").notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    decidedAt: timestamp("decidedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("settlement_approvals_transfer_idx").on(t.transferId),
+    index("settlement_approvals_decider_idx").on(t.decidedBy),
+    index("settlement_approvals_expiry_idx").on(t.expiresAt),
+  ]
+);
+export type SettlementApproval = typeof settlementApprovals.$inferSelect;
+
+export const settlementProviderReports = pgTable(
+  "settlement_provider_reports",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    providerReportId: varchar("providerReportId", { length: 128 }).notNull(),
+    transferId: varchar("transferId", { length: 64 }).notNull(),
+    providerTransferId: varchar("providerTransferId", { length: 128 }).notNull(),
+    reportedStatus: settlementTransferStatusEnum("reportedStatus").notNull(),
+    amountCents: integer("amountCents").notNull(),
+    currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    reportedAt: timestamp("reportedAt").notNull(),
+    rawPayload: jsonb("rawPayload").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("settlement_provider_reports_event_idx").on(t.provider, t.providerReportId),
+    index("settlement_provider_reports_transfer_idx").on(t.transferId),
+  ]
+);
+export type SettlementProviderReport = typeof settlementProviderReports.$inferSelect;
+
+export const settlementReconciliationStatusEnum = pgEnum("settlement_reconciliation_status", ["matched", "mismatched", "exception"]);
+export const settlementReconciliations = pgTable(
+  "settlement_reconciliations",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    transferId: varchar("transferId", { length: 64 }).notNull(),
+    providerReportId: varchar("providerReportId", { length: 64 }).notNull(),
+    status: settlementReconciliationStatusEnum("status").notNull(),
+    expectedAmountCents: integer("expectedAmountCents").notNull(),
+    reportedAmountCents: integer("reportedAmountCents").notNull(),
+    expectedStatus: settlementTransferStatusEnum("expectedStatus").notNull(),
+    reportedStatus: settlementTransferStatusEnum("reportedStatus").notNull(),
+    exceptionReason: text("exceptionReason"),
+    reconciledBy: varchar("reconciledBy", { length: 64 }).notNull(),
+    reconciledAt: timestamp("reconciledAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("settlement_reconciliations_report_idx").on(t.providerReportId),
+    index("settlement_reconciliations_transfer_idx").on(t.transferId),
+    index("settlement_reconciliations_status_idx").on(t.status),
+  ]
+);
+export type SettlementReconciliation = typeof settlementReconciliations.$inferSelect;
+
 // ─── Workflow Step Notes ──────────────────────────────────────────────────────
 export const stepNotes = pgTable(
   "step_notes",

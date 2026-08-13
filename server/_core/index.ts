@@ -37,6 +37,7 @@ import {
   verifySettlementMtls,
 } from "../settlement-mtls";
 import { reconcileAuthenticatedSettlementCallback, settlementCallbackSchema } from "../settlement";
+import { providerSettlementReportSchema, reconcileProviderSettlementReport } from "../settlement-lifecycle";
 import { LedgerIntegrityError } from "../ledger";
 import { startOutboxWorker } from "../outbox-worker";
 
@@ -268,6 +269,68 @@ async function startServer() {
       const status = error instanceof LedgerIntegrityError ? 409 : 503;
       console.error("[settlement] authenticated callback reconciliation failed", { requestId: (req as any).requestId, message });
       res.status(status).json({ error: "Settlement callback was not reconciled", message });
+    }
+  });
+
+  // Provider reports are independently signed and arrive only through the same
+  // trusted mutual-TLS ingress. They reconcile a pre-authorized transfer; no
+  // browser or internal tRPC procedure can manufacture a provider report.
+  app.post("/api/settlement/reports", express.raw({ type: "application/json", limit: "256kb" }), async (req: Request, res: Response) => {
+    const rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
+    const mtls = verifySettlementMtls({
+      required: ENV.isProduction || process.env.SETTLEMENT_MTLS_REQUIRED === "true",
+      verifiedHeader: req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
+      fingerprintHeader: req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
+      ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
+      expectedIngressToken: process.env.SETTLEMENT_MTLS_INGRESS_TOKEN,
+      allowedFingerprints: parseSettlementMtlsFingerprints(process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS),
+    });
+    if (!mtls.valid) {
+      res.status(401).json({ error: "Invalid settlement mTLS ingress", reason: mtls.reason });
+      return;
+    }
+    const verification = verifySettlementCallbackSignature({
+      secret: process.env.SETTLEMENT_CALLBACK_SECRET,
+      keyring: parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING),
+      keyId: req.header(SETTLEMENT_KEY_ID_HEADER) ?? undefined,
+      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
+      signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+      rawBody,
+    });
+    if (!verification.valid) {
+      res.status(401).json({ error: "Invalid settlement report", reason: verification.reason });
+      return;
+    }
+    let parsedPayload: unknown;
+    try {
+      parsedPayload = JSON.parse(rawBody);
+    } catch {
+      res.status(400).json({ error: "Settlement report body must be valid JSON" });
+      return;
+    }
+    const parsed = providerSettlementReportSchema.safeParse(parsedPayload);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid settlement report payload", issues: parsed.error.issues });
+      return;
+    }
+    if (req.header(SETTLEMENT_EVENT_ID_HEADER) !== parsed.data.reportId) {
+      res.status(400).json({ error: "Settlement report identifier header does not match the signed payload" });
+      return;
+    }
+    const expectedProvider = process.env.SETTLEMENT_CALLBACK_PROVIDER ?? "mojaloop";
+    if (parsed.data.provider !== expectedProvider) {
+      res.status(403).json({ error: "Unexpected settlement provider" });
+      return;
+    }
+    try {
+      const reconciliation = await reconcileProviderSettlementReport(parsed.data, parsedPayload as Record<string, unknown>);
+      res.setHeader("Cache-Control", "no-store");
+      res.status(reconciliation.duplicate ? 200 : reconciliation.reconciliationStatus === "exception" ? 409 : 202).json(reconciliation);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Settlement report reconciliation failed";
+      const status = error instanceof LedgerIntegrityError ? 409 : 503;
+      console.error("[settlement] provider report reconciliation failed", { requestId: (req as any).requestId, message });
+      res.status(status).json({ error: "Settlement report was not reconciled", message });
     }
   });
 

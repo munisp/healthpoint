@@ -35,6 +35,7 @@ import { eventBus } from "./events/bus";
 import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, addBusinessDays, daysUntilDeadline } from "./workflow/idr-workflow";
 import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
 import { dispatchOutboxBatch } from "./outbox";
+import { createSettlementTransfer, decideSettlementTransfer, getSettlementTransfer, listSettlementTransfers, markSettlementTransferSubmitted } from "./settlement-lifecycle";
 import { search, generateLakehouseExport, invalidateSearchIndex, suggest, indexDocument, deleteFromIndex } from "./search";
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
@@ -4529,6 +4530,54 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
       }
       return { seeded: entries.length };
     }),
+  }),
+
+  // ─── Settlement Transfer Controls ───────────────────────────────────────────
+  // Transfers record auditable provider-facing intent only. They do not invoke a
+  // payment rail and remain fail-closed until an approved provider integration is deployed.
+  settlementTransfers: router({
+    listByDispute: protectedProcedure
+      .input(z.object({ disputeId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
+        return listSettlementTransfers(input.disputeId);
+      }),
+    request: protectedProcedure
+      .input(z.object({
+        disputeId: z.string().uuid(),
+        provider: z.string().trim().min(2).max(64),
+        amountCents: z.number().int().positive().max(1_000_000_000),
+        requestReason: z.string().trim().min(5).max(2_000),
+        idempotencyKey: z.string().trim().min(16).max(128),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
+        return createSettlementTransfer({
+          ...input,
+          requestedBy: ctx.user.id,
+          requestedByName: ctx.user.name ?? ctx.user.email ?? ctx.user.id,
+        });
+      }),
+    decide: adminProcedure
+      .input(z.object({
+        transferId: z.string().uuid(),
+        decision: z.enum(["approved", "rejected"]),
+        reason: z.string().trim().min(5).max(2_000),
+        expiresAt: z.string().datetime({ offset: true }),
+      }))
+      .mutation(async ({ ctx, input }) => decideSettlementTransfer({
+        ...input,
+        expiresAt: new Date(input.expiresAt),
+        decidedBy: ctx.user.id,
+        decidedByName: ctx.user.name ?? ctx.user.email ?? ctx.user.id,
+      })),
+    markSubmitted: adminProcedure
+      .input(z.object({ transferId: z.string().uuid(), providerTransferId: z.string().trim().min(3).max(128) }))
+      .mutation(async ({ ctx, input }) => {
+        const transfer = await getSettlementTransfer(input.transferId);
+        if (!transfer) throw new TRPCError({ code: "NOT_FOUND", message: "Settlement transfer not found" });
+        return markSettlementTransferSubmitted({ ...input, actorId: ctx.user.id });
+      }),
   }),
 });
 export type AppRouter = typeof appRouter;

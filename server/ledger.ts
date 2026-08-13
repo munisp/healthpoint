@@ -374,6 +374,65 @@ export async function recordPaymentInTransaction(
   return entries[0];
 }
 
+/**
+ * Reverse previously recorded external payment evidence after a signed provider
+ * report confirms that a settlement was reversed. This is an immutable correcting
+ * entry; it never mutates or deletes the original payment evidence.
+ */
+export async function reversePaymentInTransaction(
+  tx: any,
+  disputeId: string,
+  reversedCents: number,
+  referenceId: string,
+  idempotencyKey: string,
+): Promise<LedgerEntry> {
+  if (!Number.isInteger(reversedCents) || reversedCents <= 0) {
+    throw new LedgerIntegrityError("Reversal amount must be a positive integer number of cents");
+  }
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${disputeId}))`);
+  const existing = await tx.select().from(ledgerEntries).where(and(
+    eq(ledgerEntries.disputeId, disputeId), eq(ledgerEntries.idempotencyKey, idempotencyKey),
+  )).limit(1);
+  if (existing[0]) return existing[0];
+
+  const disputeRows = await tx.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
+  const dispute = disputeRows[0];
+  if (!dispute) throw new LedgerIntegrityError("Dispute not found");
+  const paidToDateCents = dollarsToCents(dispute.paidAmount);
+  if (reversedCents > paidToDateCents) {
+    throw new LedgerIntegrityError("Reversal exceeds payment evidence recorded for the dispute");
+  }
+
+  const accounts = await tx.select().from(ledgerAccounts).where(eq(ledgerAccounts.disputeId, disputeId));
+  const paidAccount = accounts.find((account: LedgerAccount) => account.accountType === "paid");
+  const determinationAccount = accounts.find((account: LedgerAccount) => account.accountType === "determination");
+  if (!paidAccount || !determinationAccount) throw new LedgerIntegrityError("Ledger accounts are unavailable for this reversal");
+
+  const now = new Date();
+  const entryId = crypto.randomUUID();
+  await tx.insert(ledgerEntries).values({
+    id: entryId,
+    disputeId,
+    debitAccountId: determinationAccount.id,
+    creditAccountId: paidAccount.id,
+    amountCents: reversedCents,
+    currency: "USD",
+    entryType: "reversal",
+    description: "Provider-confirmed settlement reversal recorded",
+    referenceId,
+    referenceType: "settlement_reversal",
+    idempotencyKey,
+    metadata: { paymentEvidenceReversal: true, settlementExecution: "external" },
+    createdAt: now,
+  });
+  await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} - ${reversedCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, paidAccount.id));
+  await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} - ${reversedCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, determinationAccount.id));
+  await tx.update(disputes).set({ paidAmount: centsToDecimal(paidToDateCents - reversedCents), updatedAt: now }).where(eq(disputes.id, disputeId));
+  const entries = await tx.select().from(ledgerEntries).where(eq(ledgerEntries.id, entryId)).limit(1);
+  if (!entries[0]) throw new LedgerIntegrityError("Settlement reversal was not persisted");
+  return entries[0];
+}
+
 export async function recordPayment(
   disputeId: string,
   paidCents: number,
