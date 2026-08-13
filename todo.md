@@ -704,3 +704,6 @@
 
 ## Authorized Security Release Publication (Aug 13 2026)
 - [ ] Verify the user-authorized GitHub credential can update workflow files, publish the complete security release to main, and confirm the remote state
+
+## Replacement Credential Security Release Publication (Aug 13 2026)
+- [ ] Verify the replacement credential can update the GitHub Actions workflow, then push and verify the complete security release on main
