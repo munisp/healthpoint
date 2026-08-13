@@ -20,6 +20,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { deadlineCheckHandler } from "../scheduled/deadlineCheck";
 import { weeklyDigestHandler } from "../scheduled/weeklyDigest";
+import { settlementBalanceProofHandler } from "../scheduled/settlementBalanceProof";
 import { ENV } from "./env";
 import {
   SETTLEMENT_EVENT_ID_HEADER,
@@ -464,6 +465,7 @@ async function startServer() {
   // ── Scheduled heartbeat endpoints (auth-guarded in production) ───────────
   app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
+  app.post("/api/scheduled/settlement-balance-proof", scheduledAuth, settlementBalanceProofHandler);
 
   // Durable settlement and payment-evidence events are reconciled after their
   // transaction commits. The worker is single-flight in each process; database

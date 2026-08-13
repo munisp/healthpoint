@@ -653,6 +653,11 @@
 - [x] Install, start, and provision a local PostgreSQL role and HealthPoint database
 - [x] Apply the complete HealthPoint migration chain and verify the local PostgreSQL-backed runtime; PostgreSQL 16.14 has 60 public tables, all 4 settlement-control tables, and `/api/health` returns `db=connected`
 
+## Settlement Balance Proof & Exception Monitoring (Aug 13 2026)
+- [x] Add a daily PostgreSQL settlement balance-proof record with ledger, transfer, and reconciliation invariants
+- [x] Add exception review state, immutable reviewer decisions, and operational notifications for unmatched provider reports
+- [x] Add a guarded daily scheduled endpoint and tests for proof generation, exception alerts, and review closure; 161 Vitest and 8 Playwright scenarios pass
+
 ## Settlement Lifecycle, Approval & Reconciliation Controls (Aug 13 2026)
 - [x] Add a durable fail-closed transfer lifecycle with explicit requested, authorized, submitted, accepted, settled, failed, reversed, and reconciled states
 - [x] Add maker-checker approvals with actor separation, immutable decisions, expiration, and server-side state-transition guards

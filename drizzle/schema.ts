@@ -882,6 +882,71 @@ export const settlementReconciliations = pgTable(
 );
 export type SettlementReconciliation = typeof settlementReconciliations.$inferSelect;
 
+// ─── Daily Settlement Balance Proof & Exception Review ─────────────────────────
+export const settlementBalanceProofStatusEnum = pgEnum("settlement_balance_proof_status", ["passed", "failed"]);
+export const settlementBalanceProofs = pgTable(
+  "settlement_balance_proofs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    proofDate: varchar("proofDate", { length: 10 }).notNull(), // UTC YYYY-MM-DD
+    status: settlementBalanceProofStatusEnum("status").notNull(),
+    transferCount: integer("transferCount").notNull(),
+    reconciledTransferCount: integer("reconciledTransferCount").notNull(),
+    ledgerPaymentCents: integer("ledgerPaymentCents").notNull(),
+    ledgerReversalCents: integer("ledgerReversalCents").notNull(),
+    unresolvedExceptionCount: integer("unresolvedExceptionCount").notNull(),
+    ledgerMismatchCount: integer("ledgerMismatchCount").notNull(),
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    summary: jsonb("summary").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("settlement_balance_proofs_date_idx").on(t.proofDate),
+    index("settlement_balance_proofs_status_idx").on(t.status),
+  ]
+);
+export type SettlementBalanceProof = typeof settlementBalanceProofs.$inferSelect;
+
+export const settlementExceptionReviewStatusEnum = pgEnum("settlement_exception_review_status", ["open", "resolved", "accepted_risk"]);
+export const settlementExceptionReviews = pgTable(
+  "settlement_exception_reviews",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    reconciliationId: varchar("reconciliationId", { length: 64 }).notNull(),
+    status: settlementExceptionReviewStatusEnum("status").default("open").notNull(),
+    reviewReason: text("reviewReason").notNull(),
+    reviewedBy: varchar("reviewedBy", { length: 64 }),
+    reviewedByName: varchar("reviewedByName", { length: 255 }),
+    resolution: text("resolution"),
+    reviewedAt: timestamp("reviewedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("settlement_exception_reviews_reconciliation_idx").on(t.reconciliationId),
+    index("settlement_exception_reviews_status_idx").on(t.status),
+  ]
+);
+export type SettlementExceptionReview = typeof settlementExceptionReviews.$inferSelect;
+
+// ─── Project-Level Settlement Job Configuration ────────────────────────────────
+export const settlementJobConfigs = pgTable(
+  "settlement_job_configs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    name: varchar("name", { length: 128 }).notNull(),
+    cronExpression: varchar("cronExpression", { length: 64 }).notNull(),
+    scheduleCronTaskUid: varchar("scheduleCronTaskUid", { length: 65 }),
+    isEnabled: boolean("isEnabled").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("settlement_job_configs_name_idx").on(t.name),
+    index("settlement_job_configs_task_uid_idx").on(t.scheduleCronTaskUid),
+  ]
+);
+export type SettlementJobConfig = typeof settlementJobConfigs.$inferSelect;
+
 // ─── Workflow Step Notes ──────────────────────────────────────────────────────
 export const stepNotes = pgTable(
   "step_notes",

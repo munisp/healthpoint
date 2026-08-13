@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   eventLog,
   settlementApprovals,
+  settlementExceptionReviews,
   settlementProviderReports,
   settlementReconciliations,
   settlementTransfers,
@@ -213,6 +214,18 @@ export async function reconcileProviderSettlementReport(input: ProviderSettlemen
         expectedAmountCents: transfer.amountCents, reportedAmountCents: input.amountCents,
         expectedStatus, reportedStatus: target, exceptionReason: reason, reconciledBy: "settlement-provider", reconciledAt: now, createdAt: now,
       });
+      const createdException = await tx.select({ id: settlementReconciliations.id }).from(settlementReconciliations).where(and(
+        eq(settlementReconciliations.transferId, transfer.id),
+        eq(settlementReconciliations.providerReportId, reportId),
+      )).limit(1);
+      if (!createdException[0]) throw new LedgerIntegrityError("Settlement reconciliation exception was not persisted");
+      await tx.insert(settlementExceptionReviews).values({
+        id: crypto.randomUUID(),
+        reconciliationId: createdException[0].id,
+        status: "open",
+        reviewReason: reason,
+        createdAt: now,
+      }).onConflictDoNothing();
       await enqueueLifecycleEvent(tx, transfer, "transfer.reconciliation_exception", { providerReportId: input.reportId, reason }, "settlement-provider");
       return { duplicate: false, reconciliationStatus: "exception" as const, transferStatus: transfer.status as SettlementTransferStatus };
     }

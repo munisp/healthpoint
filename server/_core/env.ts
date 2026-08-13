@@ -83,6 +83,8 @@ export const ENV = {
   ollamaDefaultModel: _env.OLLAMA_DEFAULT_MODEL || "gemma3:8b",
   llmApiUrl: _env.LLM_API_URL || _env.BUILT_IN_OPENAI_API_URL || _env.BUILT_IN_FORGE_API_URL || "",
   llmApiKey: _env.LLM_API_KEY || _env.BUILT_IN_OPENAI_API_KEY || _env.BUILT_IN_FORGE_API_KEY || "",
+  forgeApiUrl: _env.BUILT_IN_FORGE_API_URL || "",
+  forgeApiKey: _env.BUILT_IN_FORGE_API_KEY || "",
   llmDefaultModel: _env.LLM_DEFAULT_MODEL || "gpt-4o-mini",
   openAiApiKey: _env.OPENAI_API_KEY || _env.BUILT_IN_OPENAI_API_KEY || _env.BUILT_IN_FORGE_API_KEY || "",
   // Legacy alias — kept so old callers compile

@@ -169,6 +169,20 @@
       "when": 1786614987567,
       "tag": "0023_lame_jack_power",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786616289553,
+      "tag": "0024_supreme_photon",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1786616800977,
+      "tag": "0025_simple_devos",
+      "breakpoints": true
     }
   ]
 }

@@ -36,6 +36,9 @@ import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTrans
 import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
 import { dispatchOutboxBatch } from "./outbox";
 import { createSettlementTransfer, decideSettlementTransfer, getSettlementTransfer, listSettlementTransfers, markSettlementTransferSubmitted } from "./settlement-lifecycle";
+import { listSettlementBalanceProofs, listSettlementExceptionReviews, reviewSettlementException } from "./settlement-proof";
+import { configureDailyBalanceProofSchedule } from "./settlement-proof";
+import { parse as parseCookie } from "cookie";
 import { search, generateLakehouseExport, invalidateSearchIndex, suggest, indexDocument, deleteFromIndex } from "./search";
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
@@ -4577,6 +4580,31 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         const transfer = await getSettlementTransfer(input.transferId);
         if (!transfer) throw new TRPCError({ code: "NOT_FOUND", message: "Settlement transfer not found" });
         return markSettlementTransferSubmitted({ ...input, actorId: ctx.user.id });
+      }),
+  }),
+
+  settlementProofs: router({
+    list: adminProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(90).default(30) }))
+      .query(async ({ input }) => listSettlementBalanceProofs(input.limit)),
+    openExceptions: adminProcedure.query(async () => listSettlementExceptionReviews(true)),
+    decideException: adminProcedure
+      .input(z.object({
+        reconciliationId: z.string().uuid(),
+        status: z.enum(["resolved", "accepted_risk"]),
+        resolution: z.string().trim().min(5).max(4_000),
+      }))
+      .mutation(async ({ ctx, input }) => reviewSettlementException({
+        ...input,
+        reviewedBy: ctx.user.id,
+        reviewedByName: ctx.user.name ?? ctx.user.email ?? ctx.user.id,
+      })),
+    configureDailySchedule: adminProcedure
+      .input(z.object({ cron: z.string().trim().min(11).max(64).default("0 0 2 * * *") }))
+      .mutation(async ({ ctx, input }) => {
+        const sessionToken = parseCookie(ctx.req.headers.cookie ?? "")[COOKIE_NAME] ?? "";
+        if (!sessionToken) throw new TRPCError({ code: "UNAUTHORIZED", message: "A signed-in session is required to configure the schedule" });
+        return configureDailyBalanceProofSchedule({ cron: input.cron, userSession: sessionToken });
       }),
   }),
 });

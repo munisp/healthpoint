@@ -24,6 +24,32 @@ export type SessionPayload = {
   name: string;
 };
 
+export type AuthenticatedUser = User & {
+  taskUid?: string;
+  isCron?: boolean;
+};
+
+const CRON_OPEN_ID_PREFIX = "cron_";
+
+function buildCronUser(userInfo: GetUserInfoWithJwtResponse): AuthenticatedUser {
+  const now = new Date();
+  return {
+    id: userInfo.openId,
+    name: userInfo.name || "Manus Scheduled Task",
+    email: null,
+    passwordHash: null,
+    loginMethod: "heartbeat",
+    role: "user",
+    createdAt: now,
+    lastSignedIn: now,
+    suspendedAt: null,
+    suspendedUntil: null,
+    suspendReason: null,
+    taskUid: userInfo.taskUid ?? undefined,
+    isCron: true,
+  };
+}
+
 const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
 const GET_USER_INFO_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfo`;
 const GET_USER_INFO_WITH_JWT_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfoWithJwt`;
@@ -258,7 +284,7 @@ class SDKServer {
     } as GetUserInfoWithJwtResponse;
   }
 
-  async authenticateRequest(req: Request): Promise<User> {
+  async authenticateRequest(req: Request): Promise<AuthenticatedUser> {
     // Regular authentication flow
     const cookies = this.parseCookies(req.headers.cookie);
     const sessionCookie = cookies.get(COOKIE_NAME);
@@ -266,6 +292,12 @@ class SDKServer {
 
     if (!session) {
       throw ForbiddenError("Invalid session cookie");
+    }
+
+    if (session.openId.startsWith(CRON_OPEN_ID_PREFIX)) {
+      const userInfo = await this.getUserInfoWithJwt(sessionCookie ?? "");
+      if (!userInfo.taskUid) throw ForbiddenError("Cron session missing task UID");
+      return buildCronUser(userInfo);
     }
 
     const sessionUserId = session.openId;

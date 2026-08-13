@@ -13,6 +13,7 @@ const lifecycleDisputeId = randomUUID();
 const lifecycleTransferId = randomUUID();
 const lifecycleProviderTransferId = `provider-${randomUUID()}`;
 const exceptionTransferId = randomUUID();
+const proofDate = "2099-01-01";
 const referenceNumber = `PW-${randomUUID().replace(/-/g, "").slice(0, 24)}`;
 
 function sign(timestamp: string, body: string): string {
@@ -123,6 +124,8 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await sql`DELETE FROM event_log WHERE "aggregateId" = ${disputeId}`;
   await sql`DELETE FROM event_log WHERE "aggregateId" = ${lifecycleDisputeId}`;
+  await sql`DELETE FROM settlement_balance_proofs WHERE "proofDate" = ${proofDate}`;
+  await sql`DELETE FROM settlement_exception_reviews WHERE "reconciliationId" IN (SELECT id FROM settlement_reconciliations WHERE "transferId" IN (${lifecycleTransferId}, ${exceptionTransferId}))`;
   await sql`DELETE FROM settlement_reconciliations WHERE "transferId" IN (${lifecycleTransferId}, ${exceptionTransferId})`;
   await sql`DELETE FROM settlement_provider_reports WHERE "transferId" IN (${lifecycleTransferId}, ${exceptionTransferId})`;
   await sql`DELETE FROM settlement_approvals WHERE "transferId" IN (${lifecycleTransferId}, ${exceptionTransferId})`;
@@ -230,4 +233,17 @@ test("records a signed provider reversal as an immutable correcting entry", asyn
   expect(String(dispute[0].paidAmount)).toBe("0.00");
   const entries = await sql`SELECT "entryType" FROM ledger_entries WHERE "disputeId" = ${lifecycleDisputeId} ORDER BY "createdAt"`;
   expect(entries.map(entry => entry.entryType)).toEqual(["credit", "reversal"]);
+});
+
+test("generates an idempotent daily balance-proof and alerts on an unresolved reconciliation exception", async ({ request }) => {
+  const created = await request.post("/api/scheduled/settlement-balance-proof", { data: { proofDate } });
+  expect(created.status()).toBe(201);
+  await expect(created.json()).resolves.toMatchObject({ duplicate: false, proof: { status: "failed", unresolvedExceptionCount: 1, ledgerMismatchCount: 0 } });
+  const duplicate = await request.post("/api/scheduled/settlement-balance-proof", { data: { proofDate } });
+  expect(duplicate.status()).toBe(200);
+  const proof = await sql`SELECT status, "unresolvedExceptionCount", "evidenceHash" FROM settlement_balance_proofs WHERE "proofDate" = ${proofDate}`;
+  expect(proof[0]).toMatchObject({ status: "failed", unresolvedExceptionCount: 1 });
+  expect(proof[0].evidenceHash).toMatch(/^[a-f0-9]{64}$/);
+  const review = await sql`SELECT status FROM settlement_exception_reviews WHERE "reconciliationId" IN (SELECT id FROM settlement_reconciliations WHERE "transferId" = ${exceptionTransferId})`;
+  expect(review[0]).toMatchObject({ status: "open" });
 });
