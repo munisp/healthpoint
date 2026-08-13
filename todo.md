@@ -700,3 +700,7 @@
 
 ## Security Release GitHub Synchronization (Aug 13 2026)
 - [ ] Commit and push the final security remediation, CI gates, deployment topology, audit report, and runbook to GitHub main
+- [ ] Grant GitHub Actions workflow-write permission to the authenticated credential, or manually add `.github/workflows/security.yml`, so the final security release can be pushed
+
+## Authorized Security Release Publication (Aug 13 2026)
+- [ ] Verify the user-authorized GitHub credential can update workflow files, publish the complete security release to main, and confirm the remote state
