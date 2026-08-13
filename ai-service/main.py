@@ -36,18 +36,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger("idr-ai-service")
 
+# Browser origins are explicit in production. A wildcard origin combined with
+# credentials would allow an untrusted origin to make credentialed browser calls.
+runtime_environment = os.getenv("NODE_ENV", os.getenv("ENVIRONMENT", "development")).lower()
+raw_allowed_origins = os.getenv("AI_ALLOWED_ORIGINS", "").strip()
+if raw_allowed_origins:
+    allowed_origins = [origin.strip() for origin in raw_allowed_origins.split(",") if origin.strip()]
+elif runtime_environment == "production":
+    raise RuntimeError("AI_ALLOWED_ORIGINS is required when NODE_ENV=production")
+else:
+    allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+if "*" in allowed_origins:
+    raise RuntimeError("AI_ALLOWED_ORIGINS must not contain a wildcard origin")
+
 # ─── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="IDR Workflow AI Service",
     description="LangGraph + LangChain agentic AI for the NSA IDR platform",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url=None if runtime_environment == "production" else "/docs",
+    redoc_url=None if runtime_environment == "production" else "/redoc",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
