@@ -680,3 +680,7 @@
 - [x] Add maker-checker approvals with actor separation, immutable decisions, expiration, and server-side state-transition guards
 - [x] Add independent provider-report reconciliation, exception handling, and immutable audit evidence for settlement state changes
 - [x] Add focused unit and end-to-end tests for lifecycle authorization, dual control, reconciliation, failure, and reversal paths; 160 Vitest and 7 Playwright scenarios pass
+
+## Production Transition Documentation (Aug 13 2026)
+- [x] Produce a repository-specific managed PostgreSQL transition checklist with configuration, migration, backup, observability, cutover, and rollback gates
+- [x] Produce a regulated provider/FSP sandbox and mTLS onboarding checklist with contractual, security, callback, report, reconciliation, and acceptance-test gates
