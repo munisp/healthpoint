@@ -3,7 +3,10 @@ import { createHmac, randomUUID } from "node:crypto";
 import postgres from "postgres";
 
 const databaseUrl = process.env.DATABASE_URL ?? "postgresql://idr_user:idr_pass123@127.0.0.1:5432/idr_demo";
-const callbackSecret = process.env.SETTLEMENT_CALLBACK_SECRET;
+const callbackKeyring = JSON.parse(process.env.SETTLEMENT_CALLBACK_KEYRING ?? "{}") as Record<string, string>;
+const [callbackKeyId, callbackSecret] = Object.entries(callbackKeyring)[0] ?? [];
+const mtlsFingerprint = (process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS ?? "").split(",")[0]?.replace(/[^A-Fa-f0-9]/g, "").toUpperCase();
+const mtlsIngressToken = process.env.SETTLEMENT_MTLS_INGRESS_TOKEN;
 const sql = postgres(databaseUrl, { max: 1 });
 const disputeId = randomUUID();
 const referenceNumber = `PW-${randomUUID().replace(/-/g, "").slice(0, 24)}`;
@@ -34,9 +37,13 @@ async function postSignedCallback(request: APIRequestContext, body: Record<strin
   return request.post("/api/settlement/callbacks", {
     headers: {
       "content-type": "application/json",
+      "x-settlement-key-id": callbackKeyId,
       "x-settlement-timestamp": timestamp,
       "x-settlement-signature": options.signature ?? sign(timestamp, raw),
       "x-settlement-event-id": options.eventHeader ?? String(body.eventId),
+      "x-settlement-mtls-verified": "true",
+      "x-settlement-mtls-fingerprint": mtlsFingerprint ?? "",
+      "x-settlement-ingress-token": mtlsIngressToken ?? "",
     },
     data: raw,
   });
@@ -44,6 +51,9 @@ async function postSignedCallback(request: APIRequestContext, body: Record<strin
 
 test.beforeAll(async () => {
   expect(callbackSecret).toBeTruthy();
+  expect(callbackKeyId).toBeTruthy();
+  expect(mtlsFingerprint).toMatch(/^[A-F0-9]{64}$/);
+  expect(mtlsIngressToken).toBeTruthy();
   await sql`INSERT INTO disputes (
     "id", "referenceNumber", "initiatingPartyId", "initiatingPartyType", "initiatingPartyName",
     "serviceType", "serviceDate", "patientState", "facilityState", "cptCodes", "billedAmount",

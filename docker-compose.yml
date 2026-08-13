@@ -491,6 +491,10 @@ services:
       CADDY_DOMAIN: ${CADDY_DOMAIN:-localhost}
       # Optional: Cloudflare API token for ACME DNS challenge (wildcard certs)
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      SETTLEMENT_MTLS_CA_FILE: /run/secrets/settlement_mtls_ca
+      SETTLEMENT_MTLS_INGRESS_TOKEN: "${SETTLEMENT_MTLS_INGRESS_TOKEN:?Set SETTLEMENT_MTLS_INGRESS_TOKEN before starting settlement ingress}"
+    secrets:
+      - settlement_mtls_ca
     ports:
       - "80:80"         # HTTP → HTTPS redirect
       - "443:443"       # HTTPS (HTTP/1.1 + HTTP/2)
@@ -609,6 +613,10 @@ services:
       NODE_ENV: production
       DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
       SETTLEMENT_CALLBACK_SECRET: "${SETTLEMENT_CALLBACK_SECRET:?Set SETTLEMENT_CALLBACK_SECRET before starting the production app}"
+      SETTLEMENT_CALLBACK_KEYRING: "${SETTLEMENT_CALLBACK_KEYRING:?Set SETTLEMENT_CALLBACK_KEYRING before starting the production app}"
+      SETTLEMENT_MTLS_CLIENT_CA_PEM: "${SETTLEMENT_MTLS_CLIENT_CA_PEM:?Set SETTLEMENT_MTLS_CLIENT_CA_PEM before starting the production app}"
+      SETTLEMENT_MTLS_CLIENT_FINGERPRINTS: "${SETTLEMENT_MTLS_CLIENT_FINGERPRINTS:?Set SETTLEMENT_MTLS_CLIENT_FINGERPRINTS before starting the production app}"
+      SETTLEMENT_MTLS_INGRESS_TOKEN: "${SETTLEMENT_MTLS_INGRESS_TOKEN:?Set SETTLEMENT_MTLS_INGRESS_TOKEN before starting the production app}"
       SETTLEMENT_CALLBACK_PROVIDER: "${SETTLEMENT_CALLBACK_PROVIDER:-mojaloop}"
       REDIS_URL: "redis://:${REDIS_PASSWORD:-redis_pass123}@redis:6379"
       KAFKA_BROKERS: "kafka:9092"
@@ -721,3 +729,7 @@ services:
       RUST_SERVICES_PORT: "8002"
     ports:
       - "8002:8002"
+
+secrets:
+  settlement_mtls_ca:
+    environment: SETTLEMENT_MTLS_CLIENT_CA_PEM

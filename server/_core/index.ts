@@ -23,10 +23,19 @@ import { weeklyDigestHandler } from "../scheduled/weeklyDigest";
 import { ENV } from "./env";
 import {
   SETTLEMENT_EVENT_ID_HEADER,
+  SETTLEMENT_KEY_ID_HEADER,
   SETTLEMENT_SIGNATURE_HEADER,
   SETTLEMENT_TIMESTAMP_HEADER,
+  parseSettlementCallbackKeyring,
   verifySettlementCallbackSignature,
 } from "../settlement-auth";
+import {
+  parseSettlementMtlsFingerprints,
+  SETTLEMENT_MTLS_FINGERPRINT_HEADER,
+  SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER,
+  SETTLEMENT_MTLS_VERIFIED_HEADER,
+  verifySettlementMtls,
+} from "../settlement-mtls";
 import { reconcileAuthenticatedSettlementCallback, settlementCallbackSchema } from "../settlement";
 import { LedgerIntegrityError } from "../ledger";
 import { startOutboxWorker } from "../outbox-worker";
@@ -46,8 +55,15 @@ function validateEnv() {
     if (!/^postgres(?:ql)?:\/\//.test(databaseUrl)) {
       throw new Error("Production requires DATABASE_URL to be an open-source PostgreSQL connection string");
     }
-    if (!process.env.SETTLEMENT_CALLBACK_SECRET || process.env.SETTLEMENT_CALLBACK_SECRET.length < 32) {
-      throw new Error("Production requires a high-entropy SETTLEMENT_CALLBACK_SECRET before settlement callbacks are enabled");
+    const keyring = parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING);
+    if (!keyring) {
+      throw new Error("Production requires a versioned SETTLEMENT_CALLBACK_KEYRING before settlement callbacks are enabled");
+    }
+    if (!process.env.SETTLEMENT_MTLS_CLIENT_CA_PEM || !parseSettlementMtlsFingerprints(process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS).length) {
+      throw new Error("Production requires provider mTLS CA material and an allowed certificate fingerprint");
+    }
+    if (!process.env.SETTLEMENT_MTLS_INGRESS_TOKEN || process.env.SETTLEMENT_MTLS_INGRESS_TOKEN.length < 32) {
+      throw new Error("Production requires a high-entropy settlement mTLS ingress token");
     }
   }
 }
@@ -191,8 +207,22 @@ async function startServer() {
   // it never initiates or releases funds.
   app.post("/api/settlement/callbacks", express.raw({ type: "application/json", limit: "256kb" }), async (req: Request, res: Response) => {
     const rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
+    const mtls = verifySettlementMtls({
+      required: ENV.isProduction || process.env.SETTLEMENT_MTLS_REQUIRED === "true",
+      verifiedHeader: req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
+      fingerprintHeader: req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
+      ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
+      expectedIngressToken: process.env.SETTLEMENT_MTLS_INGRESS_TOKEN,
+      allowedFingerprints: parseSettlementMtlsFingerprints(process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS),
+    });
+    if (!mtls.valid) {
+      res.status(401).json({ error: "Invalid settlement mTLS ingress", reason: mtls.reason });
+      return;
+    }
     const verification = verifySettlementCallbackSignature({
       secret: process.env.SETTLEMENT_CALLBACK_SECRET,
+      keyring: parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING),
+      keyId: req.header(SETTLEMENT_KEY_ID_HEADER) ?? undefined,
       timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
       signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
       rawBody,

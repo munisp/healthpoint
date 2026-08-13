@@ -22,12 +22,17 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
-const LOCAL_PG_URL = "postgresql://idr_user:idr_pass123@localhost:5432/idr_demo";
+export function isPostgresConnectionString(value: string | undefined): value is string {
+  return Boolean(value && /^(postgres|postgresql):\/\//.test(value));
+}
 
-function resolvePostgresUrl(): string | null {
+export function resolvePostgresUrl(): string | null {
   const configured = process.env.DATABASE_URL?.trim();
-  if (!configured) return process.env.NODE_ENV === "production" ? null : LOCAL_PG_URL;
-  if (configured.startsWith("postgresql://") || configured.startsWith("postgres://")) return configured;
+  if (!configured) {
+    console.error("[Database] DATABASE_URL is required and must reference PostgreSQL");
+    return null;
+  }
+  if (isPostgresConnectionString(configured)) return configured;
   console.error("[Database] DATABASE_URL is not a PostgreSQL connection string; refusing an incompatible database backend");
   return null;
 }
@@ -39,7 +44,7 @@ export async function getDb() {
   if (!_db) {
     const connectionString = resolvePostgresUrl();
     if (!connectionString) {
-      console.warn("[Database] DATABASE_URL not set — running without database");
+      console.error("[Database] PostgreSQL is not configured; refusing to initialize a database client");
       return null;
     }
     let attempts = 0;

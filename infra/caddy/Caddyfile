@@ -163,6 +163,34 @@ healthpoint.example.com {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Provider-only settlement ingress. The provider must call this hostname with a
+# client certificate chained to SETTLEMENT_MTLS_CA_FILE. Caddy strips spoofable
+# inbound headers and adds trust assertions only after successful mTLS validation.
+# ─────────────────────────────────────────────────────────────────────────────
+settlement.healthpoint.example.com {
+    tls {
+        protocols tls1.2 tls1.3
+        client_auth {
+            mode require_and_verify
+            trust_pool file {env.SETTLEMENT_MTLS_CA_FILE}
+        }
+    }
+
+    @settlement_callback path /api/settlement/callbacks
+    handle @settlement_callback {
+        reverse_proxy openappsec:80 {
+            header_up -X-Settlement-Mtls-Verified
+            header_up -X-Settlement-Mtls-Fingerprint
+            header_up -X-Settlement-Ingress-Token
+            header_up X-Settlement-Mtls-Verified true
+            header_up X-Settlement-Mtls-Fingerprint {tls_client_fingerprint}
+            header_up X-Settlement-Ingress-Token {env.SETTLEMENT_MTLS_INGRESS_TOKEN}
+        }
+    }
+    respond "Not found" 404
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Keycloak admin console — separate subdomain, no WAF bypass
 # ─────────────────────────────────────────────────────────────────────────────
 keycloak.healthpoint.example.com {

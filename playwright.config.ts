@@ -23,6 +23,7 @@ export default defineConfig({
       PORT: "4173",
       DATABASE_URL: databaseUrl,
       SETTLEMENT_CALLBACK_PROVIDER: "mojaloop",
+      SETTLEMENT_MTLS_REQUIRED: "true",
     },
   },
 });

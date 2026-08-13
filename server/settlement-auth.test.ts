@@ -2,13 +2,23 @@ import express from "express";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  parseSettlementCallbackKeyring,
+  SETTLEMENT_KEY_ID_HEADER,
   SETTLEMENT_SIGNATURE_HEADER,
   SETTLEMENT_TIMESTAMP_HEADER,
   signSettlementCallback,
   verifySettlementCallbackSignature,
 } from "./settlement-auth";
+import {
+  parseSettlementMtlsFingerprints,
+  SETTLEMENT_MTLS_FINGERPRINT_HEADER,
+  SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER,
+  SETTLEMENT_MTLS_VERIFIED_HEADER,
+  verifySettlementMtls,
+} from "./settlement-mtls";
 
 const secret = process.env.SETTLEMENT_CALLBACK_SECRET;
+const keyring = parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING);
 
 describe("settlement callback signature verification", () => {
   let server: ReturnType<typeof createServer> | undefined;
@@ -67,6 +77,71 @@ describe("settlement callback signature verification", () => {
       timestamp: String(Date.now() - 10 * 60 * 1000),
       signature: signSettlementCallback(secret!, String(Date.now() - 10 * 60 * 1000), body),
       rawBody: body,
+    })).toMatchObject({ valid: false });
+  });
+
+  it("accepts a configured current or prior key during a key-rotation overlap and rejects unknown key IDs", () => {
+    expect(keyring).toBeTruthy();
+    const timestamp = String(Date.now());
+    const body = '{"status":"settled"}';
+    const [currentKeyId, currentSecret] = Object.entries(keyring!)[0];
+    const verification = verifySettlementCallbackSignature({
+      secret: undefined,
+      keyring,
+      keyId: currentKeyId,
+      timestamp,
+      signature: signSettlementCallback(currentSecret, timestamp, body),
+      rawBody: body,
+    });
+    expect(verification).toEqual({ valid: true });
+    expect(verifySettlementCallbackSignature({
+      secret: undefined,
+      keyring,
+      keyId: "retired-or-unknown-key",
+      timestamp,
+      signature: signSettlementCallback(currentSecret, timestamp, body),
+      rawBody: body,
+    })).toMatchObject({ valid: false });
+    expect(SETTLEMENT_KEY_ID_HEADER).toBe("x-settlement-key-id");
+  });
+
+  it("accepts the configured trusted ingress token and provider fingerprint through an HTTP endpoint", async () => {
+    const fingerprints = parseSettlementMtlsFingerprints(process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS);
+    expect(fingerprints).toHaveLength(1);
+    const ingressToken = process.env.SETTLEMENT_MTLS_INGRESS_TOKEN;
+    expect(ingressToken).toBeTruthy();
+    const app = express();
+    app.post("/verify-mtls", (req, res) => {
+      const result = verifySettlementMtls({
+        required: true,
+        verifiedHeader: req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
+        fingerprintHeader: req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
+        ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
+        expectedIngressToken: ingressToken,
+        allowedFingerprints: fingerprints,
+      });
+      res.status(result.valid ? 200 : 401).json(result);
+    });
+    server = createServer(app);
+    await new Promise<void>(resolve => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server did not expose a TCP address");
+    const response = await fetch(`http://127.0.0.1:${address.port}/verify-mtls`, {
+      method: "POST",
+      headers: {
+        [SETTLEMENT_MTLS_VERIFIED_HEADER]: "true",
+        [SETTLEMENT_MTLS_FINGERPRINT_HEADER]: fingerprints[0],
+        [SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER]: ingressToken!,
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(verifySettlementMtls({
+      required: true,
+      verifiedHeader: "true",
+      fingerprintHeader: "B".repeat(64),
+      ingressTokenHeader: ingressToken,
+      expectedIngressToken: ingressToken,
+      allowedFingerprints: fingerprints,
     })).toMatchObject({ valid: false });
   });
 });

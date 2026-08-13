@@ -637,3 +637,14 @@
 - [x] Add Playwright E2E coverage for payment-evidence idempotency, invalid payment rejection, signed callback acceptance/rejection, and reconciliation outcomes
 - [x] Align runtime configuration and migration workflow with PostgreSQL; validate the migration against a PostgreSQL instance without changing the incompatible managed TiDB target
 - [x] Prepare and validate a non-destructive Git history reconciliation plan that preserves both unrelated histories before any main-branch change; PR #1 merged into GitHub main at 4457403 after TypeScript, Vitest, Playwright, and build validation
+
+## Provider Security, Database Resilience & Production Configuration (Aug 12 2026)
+- [x] Implement fail-closed provider mTLS configuration, certificate validation, and versioned key rotation for settlement callbacks
+- [x] Add automated encrypted PostgreSQL backup, pre-restore verification, restore, and integrity-validation scripts with test coverage; local encrypted recovery drill restored an isolated database with matching critical-table counts
+- [x] Run repeatable API/database load drills against the isolated PostgreSQL deployment and record resilience evidence; 250 concurrent health/database requests completed with 0% errors and 44.6 ms p95 latency
+- [ ] Validate a production PostgreSQL environment-variable contract and deployment configuration without treating the incompatible managed TiDB URL as a PostgreSQL endpoint
+
+## PostgreSQL-Only Database Correction (Aug 13 2026)
+- [x] Remove incompatible database fallback behavior and make PostgreSQL the exclusive configured application database path
+- [x] Validate PostgreSQL-only runtime startup, full migration state, recovery drill, load drill, and deployment configuration contract; 56 tables migrated on PostgreSQL 16, runtime health reports db=connected, 157 Vitest and 4 Playwright tests pass
+- [ ] Set the platform-managed DATABASE_URL to the production PostgreSQL URI; this built-in deployment setting cannot be changed through the workspace and currently remains incompatible
