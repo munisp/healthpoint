@@ -17,8 +17,10 @@ import {
   verifySettlementMtls,
 } from "./settlement-mtls";
 
-const secret = process.env.SETTLEMENT_CALLBACK_SECRET;
-const keyring = parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING);
+const secret = "test-settlement-secret-at-least-thirty-two-characters";
+const keyring = parseSettlementCallbackKeyring(JSON.stringify({ current: secret, prior: "prior-settlement-secret-at-least-thirty-two-chars" }));
+const fingerprints = parseSettlementMtlsFingerprints("a".repeat(64));
+const ingressToken = "test-mtls-ingress-token-at-least-thirty-two-chars";
 
 describe("settlement callback signature verification", () => {
   let server: ReturnType<typeof createServer> | undefined;
@@ -106,9 +108,7 @@ describe("settlement callback signature verification", () => {
   });
 
   it("accepts the configured trusted ingress token and provider fingerprint through an HTTP endpoint", async () => {
-    const fingerprints = parseSettlementMtlsFingerprints(process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS);
     expect(fingerprints).toHaveLength(1);
-    const ingressToken = process.env.SETTLEMENT_MTLS_INGRESS_TOKEN;
     expect(ingressToken).toBeTruthy();
     const app = express();
     app.post("/verify-mtls", (req, res) => {

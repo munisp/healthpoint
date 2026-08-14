@@ -3,7 +3,7 @@ import express from "express";
 import { createServer } from "http";
 import { afterEach, describe, expect, it } from "vitest";
 
-const backupPassphrase = process.env.BACKUP_ENCRYPTION_PASSPHRASE;
+const backupPassphrase = "test-backup-passphrase-at-least-thirty-two-characters";
 
 describe("backup encryption configuration", () => {
   let server: ReturnType<typeof createServer> | undefined;
