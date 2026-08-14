@@ -156,7 +156,7 @@ Because the GitHub App lacks the `workflows` permission, the CI/CD pipeline file
 1. Navigate to `https://github.com/munisp/healthpoint`
 2. Click **Add file → Create new file**
 3. Name it `.github/workflows/ci-cd.yml`
-4. Paste the contents from the local file at `scripts/ci-cd-workflow-content.txt`
+4. Use the tracked `.github/workflows/security.yml` workflow and the current fail-closed deployment runbook; do not restore the retired example CI/CD workflow.
 5. Add the following repository secrets under **Settings → Secrets → Actions**:
    - `DOCKER_USERNAME`, `DOCKER_PASSWORD` — Docker Hub credentials
    - `STAGING_KUBECONFIG`, `PROD_KUBECONFIG` — base64-encoded kubeconfig files

@@ -31,7 +31,7 @@ The `alembic.ini` and `migrations/env.py` are configured for async asyncpg conne
 
 ### P0.3: CI/CD Pipeline
 
-The full 9-job GitHub Actions workflow is in `.github/workflows/ci-cd.yml` (tracked locally; must be added via GitHub UI or with `workflows` permission). The workflow content is also in `scripts/ci-cd-workflow-content.txt` for manual copy-paste. Jobs: lint (ruff + black), security scan (bandit + safety), backend tests with real PostgreSQL/Redis services, frontend build, Docker image builds for 10 services, Trivy container scan, integration tests, staging deploy, production blue/green deploy.
+The active GitHub Actions workflow is `.github/workflows/security.yml`. It enforces Node dependency/application checks, Python dependency audit, Go static/vulnerability checks, and CodeQL. Production deployment is intentionally not automated from source control; it must follow the fail-closed runbook and deployment-evidence preflight.
 
 ---
 
@@ -194,7 +194,7 @@ Two Spark Structured Streaming jobs:
 
 The following items are the only remaining blockers. None require code changes — they are operational prerequisites:
 
-1. **Add CI/CD workflow via GitHub UI** (Settings → Actions → New workflow) — paste content from `scripts/ci-cd-workflow-content.txt`. Estimated effort: 5 minutes.
+1. **Use the active security workflow** at `.github/workflows/security.yml`; do not add a separate CI/CD workflow with permissive checks or source-controlled deployment placeholders.
 2. **Provision AWS KMS key** `alias/healthpoint-vault-unseal` and attach IAM role to Vault pods. Estimated effort: 30 minutes.
 3. **Run `vault_init.sh`** on the first Vault pod after deployment. Estimated effort: 15 minutes.
 4. **Apply `kubectl apply -k kubernetes/`** to a live cluster. Estimated effort: 2 hours (including DNS and TLS validation).

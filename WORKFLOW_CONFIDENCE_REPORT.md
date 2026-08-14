@@ -143,7 +143,7 @@ The CMS submission layer has five layers of resilience:
 
 ### Remaining 5 Points (All Operational)
 
-1. **CI/CD workflow** — Add via GitHub UI (Settings → Actions → New workflow → paste from `scripts/ci-cd-workflow-content.txt`). 5 minutes.
+1. **CI/CD workflow** — Use the tracked `.github/workflows/security.yml`; it is the authoritative fail-closed security workflow.
 2. **K8s live deploy** — Run `kubectl apply -k kubernetes/` against a live cluster. 2 hours.
 3. **Alembic migrations** — Run `alembic upgrade head` against production PostgreSQL. 5 minutes.
 4. **Vault provisioning** — Run `infrastructure/vault/vault_init.sh` on first deploy. 30 minutes.

@@ -722,3 +722,8 @@
 - [x] Add deploy preflight checks that reject non-PostgreSQL endpoints, missing provider mTLS/report contracts, missing Docker validation, and unavailable scheduler evidence
 - [x] Add environment-independent tests proving every unavailable production dependency blocks rather than degrades or substitutes behavior
 - [x] Validate all repository-controlled remediation and update the release decision with explicit external blockers; all unavailable dependencies are now rejected by preflight rather than bypassed or simulated
+
+## Remaining Findings Closure (Aug 14 2026)
+- [x] Scan the repository for any remaining permissive production defaults, placeholder fallbacks, or unguarded external dependencies
+- [x] Add or strengthen fail-closed guards for each verified residual repository finding; the retired permissive CI template and stale deployment references were removed
+- [x] Re-run the full security, dependency, type, unit, build, and release-gate validation suite and record external production blockers; 0 critical/0 high dependencies, 163 unit tests, and TypeScript pass

@@ -318,7 +318,7 @@ The CI/CD workflow file cannot be pushed automatically due to GitHub App permiss
 
 1. Go to [https://github.com/munisp/healthpoint/actions](https://github.com/munisp/healthpoint/actions)
 2. Click **New workflow** → **Set up a workflow yourself**
-3. Copy the full content from `scripts/ci-cd-workflow-content.txt`
+3. Verify the tracked `.github/workflows/security.yml` checks are green and follow the current fail-closed deployment-evidence preflight.
 4. Paste into the editor and commit as `.github/workflows/ci-cd.yml`
 5. Add the following repository secrets in GitHub Settings → Secrets:
    - `GHCR_TOKEN` — GitHub personal access token with `write:packages`
