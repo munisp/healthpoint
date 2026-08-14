@@ -717,6 +717,9 @@
 - [ ] Configure the production database URI through the supported deployment secret path and apply reviewed migrations only after successful compatibility checks
 - [ ] Verify the application health endpoint against the managed PostgreSQL database and record any remaining deployment blocker
 
+## Final Managed Database Release-Gate Validation (Aug 14 2026)
+- [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
+
 ## Comprehensive Remediation & Fail-Closed Gates (Aug 13 2026)
 - [x] Replace failing Node and Go CI security checks with reproducible patched-toolchain and dependency gates; all six GitHub checks on 3987699 pass
 - [x] Add deploy preflight checks that reject non-PostgreSQL endpoints, missing provider mTLS/report contracts, missing Docker validation, and unavailable scheduler evidence
