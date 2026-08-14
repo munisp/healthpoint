@@ -726,6 +726,9 @@
 ## Release Evidence Validation Error Handling (Aug 14 2026)
 - [x] Make malformed external configuration fail with clear validation output instead of parser diagnostics
 
+## Final Managed Database Gate Correction (Aug 14 2026)
+- [x] Ensure startup and migration tooling consistently reject non-PostgreSQL endpoints before any connection attempt; Drizzle now requires an explicit PostgreSQL URI and rejects missing or HTTPS endpoints before migration generation
+
 ## Comprehensive Remediation & Fail-Closed Gates (Aug 13 2026)
 - [x] Replace failing Node and Go CI security checks with reproducible patched-toolchain and dependency gates; all six GitHub checks on 3987699 pass
 - [x] Add deploy preflight checks that reject non-PostgreSQL endpoints, missing provider mTLS/report contracts, missing Docker validation, and unavailable scheduler evidence
