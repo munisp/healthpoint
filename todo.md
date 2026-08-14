@@ -713,9 +713,15 @@
 - [x] Inspect every GitHub Actions check for commit d6fc501; Python dependency audit and all CodeQL jobs pass, while Node application checks and Go vulnerability checks fail and block release
 
 ## Managed PostgreSQL Production Configuration (Aug 13 2026)
-- [ ] Verify TLS PostgreSQL connectivity, server version, database name, role privileges, and extension compatibility using the supplied managed database credentials
-- [ ] Configure the production database URI through the supported deployment secret path and apply reviewed migrations only after successful compatibility checks
-- [ ] Verify the application health endpoint against the managed PostgreSQL database and record any remaining deployment blocker
+- [x] Verify TLS PostgreSQL connectivity, server version, database name, role privileges, and extension compatibility using the supplied managed database credentials
+- [x] Configure the production database URI through the supported deployment secret path and apply reviewed migrations only after successful compatibility checks; 63 tables migrated successfully
+- [x] Verify the application health endpoint against the managed PostgreSQL database and record any remaining deployment blocker; runtime connected successfully and returned HTTP 200
+
+## Direct PostgreSQL Endpoint Validation (Aug 14 2026)
+- [x] Verify the supplied direct PostgreSQL endpoint, then apply reviewed migrations and validate HealthPoint against it if compatibility checks pass
+
+## Managed PostgreSQL Runtime Compatibility (Aug 14 2026)
+- [x] Replace the Express 5-incompatible wildcard route so the PostgreSQL-backed runtime can start and serve its health endpoint
 
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
@@ -730,7 +736,7 @@
 - [x] Ensure startup and migration tooling consistently reject non-PostgreSQL endpoints before any connection attempt; Drizzle now requires an explicit PostgreSQL URI and rejects missing or HTTPS endpoints before migration generation
 
 ## Final GitHub Publication (Aug 14 2026)
-- [ ] Push the latest database guard and release-gate corrections to GitHub main, merge all safe branches and PRs, and verify remote functionality
+- [x] Push the latest database guard and release-gate corrections to GitHub main, merge all safe branches and PRs, and verify remote functionality; main is c51a9b9, divergence is 0/0, no PRs are open, only main remains, and 163 tests plus TypeScript and dependency gate pass
 
 ## Comprehensive Remediation & Fail-Closed Gates (Aug 13 2026)
 - [x] Replace failing Node and Go CI security checks with reproducible patched-toolchain and dependency gates; all six GitHub checks on 3987699 pass
