@@ -718,7 +718,7 @@
 - [ ] Verify the application health endpoint against the managed PostgreSQL database and record any remaining deployment blocker
 
 ## Comprehensive Remediation & Fail-Closed Gates (Aug 13 2026)
-- [x] Replace failing Node and Go CI security checks with reproducible patched-toolchain and dependency gates
+- [x] Replace failing Node and Go CI security checks with reproducible patched-toolchain and dependency gates; all six GitHub checks on 3987699 pass
 - [x] Add deploy preflight checks that reject non-PostgreSQL endpoints, missing provider mTLS/report contracts, missing Docker validation, and unavailable scheduler evidence
 - [x] Add environment-independent tests proving every unavailable production dependency blocks rather than degrades or substitutes behavior
 - [x] Validate all repository-controlled remediation and update the release decision with explicit external blockers; all unavailable dependencies are now rejected by preflight rather than bypassed or simulated
