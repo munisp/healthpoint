@@ -723,6 +723,11 @@
 ## Managed PostgreSQL Runtime Compatibility (Aug 14 2026)
 - [x] Replace the Express 5-incompatible wildcard route so the PostgreSQL-backed runtime can start and serve its health endpoint
 
+## Production Infrastructure Endpoint Validation (Aug 14 2026)
+- [x] Verify supplied TigerBeetle, Kafka, Temporal, and Redis endpoints and authentication non-destructively; all ports are reachable and authenticated Redis PING passed
+- [x] Configure verified infrastructure endpoints through secure deployment settings and retain fail-closed behavior for unavailable services; Redis URL configured securely, while TigerBeetle, Kafka, and Temporal remain unconfigured pending protocol/TLS/authentication evidence
+- [ ] Validate integrated infrastructure health without initiating real settlement transfers
+
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
 
