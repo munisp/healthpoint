@@ -720,6 +720,12 @@
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
 
+## Final Outstanding Gap Closure (Aug 14 2026)
+- [ ] Reconcile all remaining repository-controlled gaps and convert unavailable external dependencies into explicit, testable release blockers
+
+## Release Evidence Validation Error Handling (Aug 14 2026)
+- [x] Make malformed external configuration fail with clear validation output instead of parser diagnostics
+
 ## Comprehensive Remediation & Fail-Closed Gates (Aug 13 2026)
 - [x] Replace failing Node and Go CI security checks with reproducible patched-toolchain and dependency gates; all six GitHub checks on 3987699 pass
 - [x] Add deploy preflight checks that reject non-PostgreSQL endpoints, missing provider mTLS/report contracts, missing Docker validation, and unavailable scheduler evidence

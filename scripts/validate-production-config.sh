@@ -14,7 +14,7 @@ fi
 if [[ "${ALLOW_LOCAL_DATABASE:-false}" != "true" && "${DATABASE_URL:-}" =~ @(localhost|127\.0\.0\.1|postgres): ]]; then
   invalid+=("DATABASE_URL must reference the managed production PostgreSQL endpoint, not a local or compose hostname")
 fi
-if [[ -n "${SETTLEMENT_CALLBACK_KEYRING:-}" ]] && ! node -e 'const value=JSON.parse(process.argv[1]); if (!value || Array.isArray(value) || !Object.values(value).every(v => typeof v === "string" && v.length >= 32)) process.exit(1)' "$SETTLEMENT_CALLBACK_KEYRING"; then
+if [[ -n "${SETTLEMENT_CALLBACK_KEYRING:-}" ]] && ! node -e 'try { const value=JSON.parse(process.argv[1]); if (!value || Array.isArray(value) || !Object.values(value).every(v => typeof v === "string" && v.length >= 32)) process.exit(1); } catch { process.exit(1); }' "$SETTLEMENT_CALLBACK_KEYRING" 2>/dev/null; then
   invalid+=("SETTLEMENT_CALLBACK_KEYRING must be JSON with versioned 32+ character key values")
 fi
 for key in JWT_SECRET SETTLEMENT_MTLS_INGRESS_TOKEN BACKUP_ENCRYPTION_PASSPHRASE; do
