@@ -707,3 +707,18 @@
 
 ## Replacement Credential Security Release Publication (Aug 13 2026)
 - [x] Verify the replacement credential can update the GitHub Actions workflow, then push and verify the complete security release on main; GitHub main is af14084, divergence is 0/0, no pull requests are open, and only the main remote branch remains
+
+## Production Dry-Run & CI Verification (Aug 13 2026)
+- [x] Run a local fail-closed production deployment dry-run for commit d6fc501; configuration, Node dependency gate, TypeScript, Vitest, build, and Python syntax pass; container compose/image checks are unavailable without Docker
+- [x] Inspect every GitHub Actions check for commit d6fc501; Python dependency audit and all CodeQL jobs pass, while Node application checks and Go vulnerability checks fail and block release
+
+## Managed PostgreSQL Production Configuration (Aug 13 2026)
+- [ ] Verify TLS PostgreSQL connectivity, server version, database name, role privileges, and extension compatibility using the supplied managed database credentials
+- [ ] Configure the production database URI through the supported deployment secret path and apply reviewed migrations only after successful compatibility checks
+- [ ] Verify the application health endpoint against the managed PostgreSQL database and record any remaining deployment blocker
+
+## Comprehensive Remediation & Fail-Closed Gates (Aug 13 2026)
+- [x] Replace failing Node and Go CI security checks with reproducible patched-toolchain and dependency gates
+- [x] Add deploy preflight checks that reject non-PostgreSQL endpoints, missing provider mTLS/report contracts, missing Docker validation, and unavailable scheduler evidence
+- [x] Add environment-independent tests proving every unavailable production dependency blocks rather than degrades or substitutes behavior
+- [x] Validate all repository-controlled remediation and update the release decision with explicit external blockers; all unavailable dependencies are now rejected by preflight rather than bypassed or simulated

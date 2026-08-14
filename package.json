@@ -13,6 +13,7 @@
     "test:e2e": "playwright test",
     "load:drill": "node scripts/load-drill.mjs",
     "validate:production-config": "bash scripts/validate-production-config.sh",
+    "validate:deployment-evidence": "bash scripts/validate-deployment-evidence.sh",
     "audit:dependencies": "node scripts/enforce-pnpm-security-audit.mjs",
     "assurance:check": "node scripts/assurance-gate.mjs",
     "assurance:release": "node scripts/assurance-gate.mjs --release",

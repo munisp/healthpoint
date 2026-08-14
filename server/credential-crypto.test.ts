@@ -16,6 +16,10 @@ describe("EMR credential encryption", () => {
 
   it("rejects a modified authenticated envelope", () => {
     const encrypted = encryptCredentials({ token: "sensitive" });
-    expect(() => decryptCredentials(`${encrypted.slice(0, -1)}x`)).toThrow();
+    const [version, iv, tag, ciphertext] = encrypted.split(".");
+    const bytes = Buffer.from(ciphertext, "base64url");
+    bytes[0] ^= 0x01;
+    const tampered = [version, iv, tag, bytes.toString("base64url")].join(".");
+    expect(() => decryptCredentials(tampered)).toThrow();
   });
 });
