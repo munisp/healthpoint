@@ -19,6 +19,13 @@ type RedlockInstance = any;
 let _redis: Redis | null = null;
 let _redlock: RedlockInstance | null = null;
 
+export class DistributedLockUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DistributedLockUnavailableError";
+  }
+}
+
 function getRedisUrl(): string | null {
   return process.env.REDIS_URL ?? null;
 }
@@ -75,8 +82,8 @@ export function getRedlock(): RedlockInstance | null {
 
 /**
  * Acquire a distributed lock for a dispute state transition.
- * Returns a release function; call it when the critical section is done.
- * Falls back to a no-op if Redis is unavailable.
+ * Production state changes require a Redlock lease. Development and test
+ * instances may use their PostgreSQL transaction controls without Redis.
  */
 export async function withDisputeLock<T>(
   disputeId: string,
@@ -85,7 +92,9 @@ export async function withDisputeLock<T>(
 ): Promise<T> {
   const redlock = getRedlock();
   if (!redlock) {
-    // No Redis — run without lock (acceptable in single-instance dev environments)
+    if (process.env.NODE_ENV === "production") {
+      throw new DistributedLockUnavailableError("Redis/Redlock is unavailable; refusing an unprotected production dispute transition");
+    }
     return fn();
   }
 
@@ -95,7 +104,9 @@ export async function withDisputeLock<T>(
     lock = await redlock.acquire([resource], ttlMs);
   } catch (err) {
     console.warn(`[Redlock] Could not acquire lock for dispute ${disputeId}:`, err);
-    // Fall through without lock rather than blocking the request
+    if (process.env.NODE_ENV === "production") {
+      throw new DistributedLockUnavailableError("Redis/Redlock lease was not acquired; refusing an unprotected production dispute transition");
+    }
     return fn();
   }
 

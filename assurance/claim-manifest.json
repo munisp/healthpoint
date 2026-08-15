@@ -17,7 +17,7 @@
       "claim": "Signed settlement evidence is idempotent, atomic, auditable, and reversible.",
       "source": "server/settlement.ts; server/settlement-lifecycle.ts; server/ledger.ts",
       "entryPoints": ["/api/settlement/callbacks", "/api/settlement/reports"],
-      "evidence": ["170 Vitest tests", "8 Playwright PostgreSQL settlement scenarios", "local migration chain through 0025"],
+      "evidence": ["174 Vitest tests", "8 Playwright PostgreSQL settlement scenarios", "local migration chain through 0025", "production fail-closed dispute lock and workflow transition guard tests"],
       "status": "verified",
       "limitations": "Evidence covers an isolated PostgreSQL database and development keys; it does not prove a provider or bank transferred funds."
     },

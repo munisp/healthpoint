@@ -32,7 +32,7 @@ import { invokeLLM } from "./_core/llm";
 import { withDisputeLock } from "./redis";
 import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDisputeAccess, listDisputeAccess } from "./authz";
 import { eventBus } from "./events/bus";
-import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, addBusinessDays, daysUntilDeadline } from "./workflow/idr-workflow";
+import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, getStatusForStep, addBusinessDays, daysUntilDeadline, validateWorkflowTransition } from "./workflow/idr-workflow";
 import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
 import { dispatchOutboxBatch } from "./outbox";
 import { createSettlementTransfer, decideSettlementTransfer, getSettlementTransfer, listSettlementTransfers, markSettlementTransferSubmitted } from "./settlement-lifecycle";
@@ -301,7 +301,8 @@ export const appRouter = router({
 
     getById: protectedProcedure
       .input(z.object({ id: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.id, "read");
         const dispute = await getDisputeById(input.id);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
         return dispute;
@@ -343,9 +344,20 @@ export const appRouter = router({
       .input(advanceStepSchema)
       .mutation(async ({ ctx, input }) => {
         const { disputeId, newStep, newStatus, description, ...additionalData } = input;
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, disputeId, "write");
+        const current = await getDisputeById(disputeId);
+        if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        try {
+          validateWorkflowTransition(current.currentStep, newStep, { ...current, ...additionalData });
+        } catch (error) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: error instanceof Error ? error.message : "Invalid workflow transition",
+          });
+        }
         // Acquire distributed lock (10 s TTL) to prevent concurrent state transitions on the same dispute
         const dispute = await withDisputeLock(disputeId, 10_000, () => advanceDisputeStep(
-          disputeId, newStep, newStatus,
+          disputeId, newStep, getStatusForStep(newStep),
           ctx.user.id, ctx.user.name ?? "Unknown",
           description,
           {
@@ -394,6 +406,7 @@ export const appRouter = router({
     submitOffer: protectedProcedure
       .input(submitOfferSchema)
       .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
         const offerId = await submitOffer({
           disputeId: input.disputeId,
           offerType: input.offerType,
@@ -411,6 +424,7 @@ export const appRouter = router({
         offerId: z.string(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
         const dispute = await acceptOffer(
           input.disputeId,
           input.offerId,
@@ -435,15 +449,29 @@ export const appRouter = router({
         idrEntityName: z.string(),
       }))
       .mutation(async ({ ctx, input }) => {
-        return advanceDisputeStep(
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
+        const current = await getDisputeById(input.disputeId);
+        if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        try {
+          validateWorkflowTransition(current.currentStep, "STEP_07_IDR_ENTITY_SELECTED", {
+            ...current,
+            idrEntityId: input.idrEntityId,
+          });
+        } catch (error) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: error instanceof Error ? error.message : "Invalid workflow transition",
+          });
+        }
+        return withDisputeLock(input.disputeId, 10_000, () => advanceDisputeStep(
           input.disputeId,
           "STEP_07_IDR_ENTITY_SELECTED",
-          "eligibility_review",
+          getStatusForStep("STEP_07_IDR_ENTITY_SELECTED"),
           ctx.user.id,
           ctx.user.name ?? "Unknown",
           `IDR entity selected: ${input.idrEntityName}`,
           { idrEntityId: input.idrEntityId, idrEntityName: input.idrEntityName }
-        );
+        ));
       }),
 
     uploadDocument: protectedProcedure
@@ -457,6 +485,7 @@ export const appRouter = router({
         description: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
         const docId = await addDocument({
           ...input,
           fileSize: input.fileSize ?? null,
@@ -470,7 +499,8 @@ export const appRouter = router({
 
     getTimeline: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
         const dispute = await getDisputeById(input.disputeId);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND" });
         // Build step-by-step timeline with completion status
@@ -490,7 +520,8 @@ export const appRouter = router({
 
     exportPDF: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
         const dispute = await getDisputeById(input.disputeId);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
         const pdfBuffer = await generateDisputePDF(dispute as any);

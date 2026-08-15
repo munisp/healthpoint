@@ -757,6 +757,10 @@
 - [x] Inventory all safe executable platform scenarios, feature coverage, integration gates, and negative/fail-closed controls; 12 Vitest suites, 8 Playwright settlement scenarios, Go sidecar tests, Python services, deployment/release gates, backup/recovery, and controlled load-drill surfaces identified
 - [x] Execute the complete available scenario assurance suite and calculate an evidence-based local-development and production readiness score; 170 Vitest, 8 Playwright, Go test/vet, Python compilation, authenticated infrastructure probes, 63-table recovery drill, 250-request load drill, TypeScript/build/dependency gates, and release-manifest checks completed; scores documented as 72.25 implementation assurance, 45 production tracker launch readiness, and 15 real-money settlement readiness
 
+## Production-Finding Closure Mandate (Aug 15 2026)
+- [x] Reassess every open repository-controlled production finding, remediate all implementable gaps, and enforce each external prerequisite as a fail-closed release condition; dispute object authorization, canonical workflow guards, required-field validation, and production Redlock fail-closed behavior added, while deployment, provider, scheduler, and infrastructure evidence remain enforced release blockers
+- [x] Re-run exhaustive assurance and revise readiness scoring only from independently verified evidence; 174 Vitest assertions including the real TigerBeetle mTLS probe, 8 Playwright settlement scenarios, TypeScript, production build, dependency gate, and release-gate recheck completed; release remains correctly blocked by four external evidence conditions
+
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
 

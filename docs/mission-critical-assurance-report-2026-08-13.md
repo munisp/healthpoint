@@ -136,6 +136,12 @@ The implementation-assurance score is a transparent weighted measure of evidence
 
 > **Hard-gate rule:** A weighted score never overrides a material release blocker. The platform is not releaseable for production or real funds until all four active claims in the manifest are independently evidenced and `assurance:release` succeeds.[1]
 
+## Production Hardening Update — 2026-08-15
+
+Two repository-controlled gaps identified during the remediation pass were corrected and regression-tested. Production dispute state transitions now fail closed when Redis/Redlock protection is unavailable or a lease cannot be acquired; isolated development and test execution retain the explicitly non-production PostgreSQL-backed path. The standard advance and arbitrator-selection routes now require dispute-level write authorization, validate an allowed state transition, validate the current step's required fields, and derive the status from the canonical workflow definition rather than accepting a caller-supplied status. Direct dispute reads, offer submission and acceptance, document upload, timeline reads, and PDF export now enforce dispute-level authorization.[1]
+
+The complete regression run passed with **174 Vitest assertions** across 14 test files, including the real read-only TigerBeetle mutual-TLS probe, 8 PostgreSQL-backed Playwright settlement scenarios, TypeScript, production build, and the dependency-security gate. The release manifest remains valid with four material blockers. These changes improve local implementation assurance, but they do not supply the independent production, provider, scheduler, or deployment evidence required for a 100/100 release claim.
+
 ## References
 
 [1]: ../assurance/claim-manifest.json "Material claim manifest and release gate input"
