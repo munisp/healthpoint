@@ -53,6 +53,17 @@ const envSchema = z.object({
   LEAD_NOTIFICATION_EMAIL: z.string().optional().default("team@healthpoint.io"),
   LEAD_FROM_EMAIL: z.string().optional().default("HealthPoint <noreply@healthpoint.io>"),
 
+  // TigerBeetle: the Node client may communicate only through a local mTLS tunnel.
+  TIGERBEETLE_ENABLED: z.enum(["true", "false"]).optional().default("false"),
+  TIGERBEETLE_ADDRESS: z.string().optional().default("127.0.0.1:16001"),
+  TIGERBEETLE_CLUSTER_ID: z.string().optional().default("145851240909969808468846706535455565498"),
+  TIGERBEETLE_TLS_REMOTE_ADDRESS: z.string().optional().default("173.66.76.192:32052"),
+  TIGERBEETLE_TLS_SERVER_NAME: z.string().optional().default("tigerbeetle.newfire.app"),
+  TIGERBEETLE_CA_PATH: z.string().optional().default("./infra/certs/tigerbeetle-ca.crt"),
+  TIGERBEETLE_CLIENT_CERT_PATH: z.string().optional().default("./infra/certs/tigerbeetle-client.crt"),
+  TIGERBEETLE_CLIENT_KEY_PATH: z.string().optional().default(""),
+  TIGERBEETLE_CLIENT_KEY_PEM: z.string().optional().default(""),
+
   // Legacy Manus-specific vars — accepted but not used
   VITE_APP_ID: z.string().optional().default(""),
   OWNER_OPEN_ID: z.string().optional().default(""),
@@ -127,6 +138,10 @@ export const ENV = {
   resendApiKey: _env.RESEND_API_KEY || "",
   leadNotificationEmail: _env.LEAD_NOTIFICATION_EMAIL || "team@healthpoint.io",
   leadFromEmail: _env.LEAD_FROM_EMAIL || "HealthPoint <noreply@healthpoint.io>",
+
+  // TigerBeetle mutual-TLS transport (the private key is deliberately not exposed here).
+  tigerBeetleEnabled: _env.TIGERBEETLE_ENABLED === "true",
+  tigerBeetleAddress: _env.TIGERBEETLE_ADDRESS || "127.0.0.1:16001",
 
   // Legacy Manus compat (some code may still reference these)
   appId: _env.VITE_APP_ID || "",

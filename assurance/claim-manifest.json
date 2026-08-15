@@ -17,7 +17,7 @@
       "claim": "Signed settlement evidence is idempotent, atomic, auditable, and reversible.",
       "source": "server/settlement.ts; server/settlement-lifecycle.ts; server/ledger.ts",
       "entryPoints": ["/api/settlement/callbacks", "/api/settlement/reports"],
-      "evidence": ["163 Vitest tests", "8 Playwright PostgreSQL settlement scenarios", "local migration chain through 0025"],
+      "evidence": ["170 Vitest tests", "8 Playwright PostgreSQL settlement scenarios", "local migration chain through 0025"],
       "status": "verified",
       "limitations": "Evidence covers an isolated PostgreSQL database and development keys; it does not prove a provider or bank transferred funds."
     },
@@ -67,11 +67,20 @@
       "limitations": "A managed KMS/HSM and key-rotation service are not configured in the isolated environment."
     },
     {
+      "id": "MC-TIGERBEETLE-TRANSPORT",
+      "claim": "TigerBeetle read connectivity uses a loopback-only client behind a CA- and hostname-verified mTLS tunnel.",
+      "source": "server/tigerbeetle.ts; server/tigerbeetle-connectivity.test.ts; Dockerfile",
+      "entryPoints": ["server/_core/index.ts", "server/tigerbeetle.ts"],
+      "evidence": ["Uploaded CA and client certificate verified", "client private key stored as runtime-only secret", "strict stunnel TLS tunnel to tigerbeetle.newfire.app", "read-only lookupAccounts assurance probe passed"],
+      "status": "verified",
+      "limitations": "Only non-mutating client connectivity was exercised. TigerBeetle is not authorized to initiate provider transfers, and external production interoperability still requires deployment evidence."
+    },
+    {
       "id": "MC-BACKUP-RECOVERY",
       "claim": "Database backup and restore are automated and integrity-checked.",
       "source": "scripts/db-backup.sh; scripts/db-restore-verify.sh; scripts/db-recovery-drill.sh",
       "entryPoints": ["recovery drill scripts"],
-      "evidence": ["Encrypted local PostgreSQL recovery drill with critical-table count verification"],
+      "evidence": ["Encrypted local PostgreSQL recovery drill with 63-table and critical-table count verification"],
       "status": "verified",
       "limitations": "A production backup destination, retention policy, and deployed restore drill have not been observed."
     }

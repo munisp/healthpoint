@@ -275,6 +275,9 @@ importers:
       tailwindcss-animate:
         specifier: ^1.0.7
         version: 1.0.7(tailwindcss@4.1.14)
+      tigerbeetle-node:
+        specifier: 0.16.66
+        version: 0.16.66
       topojson-client:
         specifier: ^3.1.0
         version: 3.1.0
@@ -3991,6 +3994,10 @@ packages:
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
+
+  tigerbeetle-node@0.16.66:
+    resolution: {integrity: sha512-udvjrbZjxqbUPfHf9yrF22ajV5BitrPS0eF5ZSIukh66IqYxcMVwGd0Jhd/LDdtmSfTrRFKfGi8Dmi67NlIG4g==}
+    engines: {node: '>=14.0.0'}
 
   tiny-inflate@1.0.3:
     resolution: {integrity: sha512-pkY1fj1cKHb2seWDy0B16HeWyczlJA9/WW3u3c4z/NiWDsO3DOU5D7nhTLE9CF0yXv/QZFY7sEJmj24dK+Rrqw==}
@@ -7840,6 +7847,8 @@ snapshots:
   tailwindcss@4.3.3: {}
 
   tapable@2.3.3: {}
+
+  tigerbeetle-node@0.16.66: {}
 
   tiny-inflate@1.0.3: {}
 

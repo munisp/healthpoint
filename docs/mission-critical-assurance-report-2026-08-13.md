@@ -14,13 +14,14 @@ The audit examined the active Node/React application, PostgreSQL schema and migr
 |---|---|---|
 | Frozen Node dependency installation | Pass, with build-script approval warning | `pnpm install --frozen-lockfile` completed; dependency build scripts remain subject to explicit approval. |
 | TypeScript compile | Pass | `npx tsc --noEmit` returned zero errors. |
-| Unit suite | Pass | 7 files, 163 assertions, including PostgreSQL configuration, ledger, settlement authentication, lifecycle, proof, backup, and authenticated EMR credential encryption tests.[2] |
+| Unit suite | Pass | 12 files, 170 assertions, including PostgreSQL configuration, ledger, settlement authentication, lifecycle, proof, backup, credential encryption, and TigerBeetle mTLS transport tests.[2] |
 | Settlement E2E suite | Pass | 8 Playwright scenarios against a real isolated PostgreSQL instance; covers callback rejection, idempotency, failure, reconciliation, exception, reversal, and daily proof behavior.[2] |
+| TigerBeetle mTLS connectivity | Pass, non-mutating | The Node client connected only to `127.0.0.1:16001`; stunnel performed CA-chain and hostname validation for `tigerbeetle.newfire.app` and authenticated with the client certificate. The probe used only `lookupAccounts` and created no account, transfer, or settlement instruction.[2] |
 | Go sidecar | Pass, limited | `go test ./...` completed for `services/go`; this is not provider interoperability evidence. |
 | Python AI service | Syntax pass only | `py_compile` passed; no authenticated provider integration or Python behavior suite was available. |
 | Build | Pass with performance warning | Production build completed; main JavaScript asset is 4.47 MB uncompressed / 802 KB gzip. |
-| Recovery drill | Pass, local only | Encrypted `pg_dump`/restore drill reproduced critical-table counts in an isolated PostgreSQL restore target.[3] |
-| Load drill | Pass, local only | 250 requests at concurrency 25 to `/api/health`; 0 failures; p95 31.30 ms.[4] |
+| Recovery drill | Pass, local only | Encrypted `pg_dump`/restore drill reproduced 63 public tables and the critical-table counts in an isolated PostgreSQL restore target.[3] |
+| Load drill | Pass, local only | 250 requests at concurrency 25 to `/api/health`; 0 failures; p95 31.25 ms.[4] |
 | Release gate | Expected fail | 4 material blockers prevent a releaseable result.[1] |
 
 ## Claim and Coverage Inventory
@@ -36,6 +37,7 @@ The version-controlled manifest is the authoritative machine-readable inventory 
 | MC-DAILY-BALANCE-PROOF | Daily proof and exception review execute durably. | PostgreSQL proof, immutable review, and task-UID configuration are implemented and locally tested. | **Blocked** | No production PostgreSQL binding or deployed Heartbeat execution exists. |
 | MC-COMPOSE-PRODUCTION | Development compose is separate from a fail-closed production overlay. | Production overlay requires secrets/endpoints; simulator is profiled for development only. | **Blocked** | The overlay has not been deployed against hardened external dependencies. |
 | MC-EMR-CREDENTIALS | EMR credentials are encrypted at rest before persistence. | AES-256-GCM versioned envelope and tamper-rejection test. | **Verified locally** | A managed KMS/HSM and rotation service are not configured. |
+| MC-TIGERBEETLE-TRANSPORT | TigerBeetle client connectivity is constrained by mTLS. | CA/client certificate validation, loopback-only stunnel transport, protected runtime key, and read-only `lookupAccounts` probe. | **Verified locally** | No account or transfer mutation was exercised; the control is not regulated-rail or provider interoperability evidence. |
 | MC-BACKUP-RECOVERY | Backup and restore are automated and integrity checked. | Encrypted local recovery drill passed. | **Verified locally** | Production destination, retention policy, and deployed restore drill remain unobserved. |
 
 ## Findings and Remediation
@@ -64,6 +66,7 @@ The following changes were made and re-tested within the audited workspace:
 | Added provider callback/keyring/mTLS boundary, transfer lifecycle, maker-checker approval, reconciliation, reversals, and recovery tooling | Local PostgreSQL tests and recovery/load evidence passed; external provider assurance remains blocked. |
 | Split development compose from a fail-closed production overlay; hardened Go sidecar configuration and transport rules | Production configuration validation passes only with an explicit managed PostgreSQL-style endpoint and required secrets; live transfer initiation is disabled. |
 | Replaced reversible EMR credential encoding with AES-256-GCM | New encryption/tamper-rejection unit tests pass; production startup rejects absent or malformed encryption keys. |
+| Added TigerBeetle mutual-TLS transport | Public CA/client certificate material is packaged without the private key; the private key is protected runtime configuration. The client is loopback-only, stunnel enforces CA-chain and hostname validation, and a live read-only `lookupAccounts` probe passes. |
 
 ## Mandatory Release Blockers
 
@@ -72,6 +75,8 @@ The following changes were made and re-tested within the audited workspace:
 3. Onboard a regulated payment provider/FSP sandbox with provider-issued mTLS material, real callback/report contracts, test accounts, settlement/reversal scenarios, and independent operational approval. Do not enable transfer initiation before this gate passes; live initiation is currently disabled in code.
 4. Implement and test a real authenticated FHIR connector before re-enabling EMR extraction. Do not substitute synthetic records for clinical or financial decisions.
 5. Deploy and observe the daily Heartbeat balance-proof job, including retry behavior, task-UID authorization, alert delivery, and an operator exception-review runbook.
+
+The newly verified TigerBeetle transport narrows the local integration gap but does **not** remove any mandatory release blocker. In particular, it does not provide a contracted bank/FSP rail, provider acceptance, production deployment evidence, or permission to enable real-money execution.
 
 ## Release Decision
 
@@ -96,7 +101,7 @@ The approved operating mode is **local development and controlled testing only**
 cd /home/ubuntu/idr-workflow-demo
 pnpm install --frozen-lockfile
 npx tsc --noEmit
-DATABASE_URL='postgresql://idr_user:idr_pass123@127.0.0.1:5432/idr_demo' pnpm test
+DATABASE_URL='postgresql://idr_user:idr_pass123@127.0.0.1:5432/idr_demo' TIGERBEETLE_ASSURANCE=true pnpm test
 DATABASE_URL='postgresql://idr_user:idr_pass123@127.0.0.1:5432/idr_demo' pnpm test:e2e
 (cd services/go && go test ./...)
 python3 -m py_compile ai-service/main.py ai-service/cms_validator.py ai-service/agents.py

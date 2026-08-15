@@ -41,6 +41,7 @@ import { reconcileAuthenticatedSettlementCallback, settlementCallbackSchema } fr
 import { providerSettlementReportSchema, reconcileProviderSettlementReport } from "../settlement-lifecycle";
 import { LedgerIntegrityError } from "../ledger";
 import { startOutboxWorker } from "../outbox-worker";
+import { isTigerBeetleEnabled, startTigerBeetleTunnel, stopTigerBeetleTunnel } from "../tigerbeetle";
 
 // ─── Startup ENV validation ──────────────────────────────────────────────────
 function validateEnv() {
@@ -101,6 +102,9 @@ function scheduledAuth(req: Request, res: Response, next: NextFunction) {
 // ─── Server startup ───────────────────────────────────────────────────────────
 async function startServer() {
   validateEnv();
+  if (isTigerBeetleEnabled()) {
+    await startTigerBeetleTunnel();
+  }
 
   const app = express();
   const server = createServer(app);
@@ -612,6 +616,7 @@ async function startServer() {
   // ── Graceful shutdown ─────────────────────────────────────────────────────
   const shutdown = (signal: string) => {
     console.log(`[server] Received ${signal} — shutting down gracefully`);
+    void stopTigerBeetleTunnel();
     server.close(() => {
       console.log("[server] HTTP server closed");
       process.exit(0);

@@ -14,6 +14,10 @@ build/
 .env.test.local
 .env.production.local
 
+# Runtime-only mutual-TLS private keys must never enter source control.
+infra/certs/*client*.key
+*.pem
+
 # IDE and editor files
 .vscode/
 .idea/
