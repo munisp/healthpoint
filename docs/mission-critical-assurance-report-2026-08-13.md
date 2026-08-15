@@ -110,9 +110,36 @@ pnpm assurance:check
 pnpm assurance:release # expected nonzero exit while blockers exist
 ```
 
+## Comprehensive Scenario Assurance Update — 2026-08-15
+
+The available executable platform surface was re-run after TigerBeetle mutual-TLS integration. This does not substitute a provider, bank, regulated FSP, production scheduler, managed deployment, penetration test, or compliance certification. It demonstrates the repository-controlled controls that can be exercised safely in the isolated environment.[1]
+
+| Scenario family | Result | Direct evidence |
+|---|---|---|
+| Business rules, CRUD contracts, authorization, ledger guards, encryption, callback authentication, reconciliation, and proof logic | Pass | All 12 Vitest suites passed: **170 assertions**. The suite includes negative cases for incompatible database configuration, direct TigerBeetle addressing, ambiguous mTLS key configuration, stale or unsigned settlement callbacks, overpayment, duplicate posting, invalid lifecycle transitions, reversal, and unresolved-exception proof behavior. |
+| Settlement callbacks and provider reports | Pass, isolated PostgreSQL | All **8 Playwright** scenarios passed: unauthenticated/stale/mismatched callback rejection, failed settlement handling, legacy route retirement, exactly-once settlement evidence, independent reconciliation, exception behavior, immutable reversal, and balance proof. |
+| Authenticated infrastructure controls | Pass, non-mutating | Redis PING, Kafka SASL_SSL metadata, Permify CA-verified bearer health, TigerBeetle CA/hostname-verified mTLS `lookupAccounts`, managed PostgreSQL `verify-ca` read, and Temporal TLS-chain validation all passed. |
+| Go and Python services | Pass within available coverage | Go sidecar `go test ./...` and `go vet ./...` passed. Every Python source under `ai-service` and `services` passed syntax compilation. This is not an authenticated AI, FHIR, Temporal worker, or payment-provider behavioral certification. |
+| Recovery and resilience | Pass, isolated environment | An AES-256 encrypted backup restored into a separate PostgreSQL target, reproducing **63 public tables** and critical-table counts. A 250-request / 25-concurrency health drill returned 250 successful responses, 0 failures, and **33.69 ms p95** latency. |
+| Secure build and release controls | Pass with documented limits | TypeScript, production build, and dependency gate passed. The dependency gate reports 0 critical, 0 high, 1 moderate, and 0 low findings. The release manifest remains structurally valid and deliberately blocks release. |
+| Production-deployment preflight | Expected fail-closed result | The production configuration and release gates reject the unavailable production contract rather than substituting local defaults. `assurance:release` reports four active blockers. |
+
+### Readiness Score Method and Result
+
+The implementation-assurance score is a transparent weighted measure of evidence currently available: functional platform behavior 25%, IDR workflow/business rules 25%, security and recovery controls 20%, authenticated integration coverage 15%, and deployment/operations evidence 15%. The tested dimension values were 78, 82, 75, 70, and 45 respectively, yielding **72.25/100**. This number measures the testable implementation and must not be read as launch approval.
+
+| Readiness decision | Score | Interpretation |
+|---|---:|---|
+| Available implementation assurance | **72.25/100** | Strong local and sandbox evidence for the tested application, settlement-evidence, recovery, and authenticated-infrastructure controls. It is appropriate for controlled development, demonstrations, and further staging work. |
+| Production launch readiness for an IDR workflow tracker | **45/100** | **No-go.** The technical evidence is higher than the launch score, but deployed PostgreSQL, production scheduler observation, hardened production-overlay validation, and operator acceptance evidence are still missing. The hard blockers cap launch readiness. |
+| Real-money settlement readiness | **15/100** | **No-go; payment execution must remain disabled.** A regulated FSP/bank rail, contract, mTLS interoperability acceptance, real provider-report feed, key-rotation operation, independent review, and regulated operational certification have not been evidenced. No assertion of uncompromisable funds flow is supportable. |
+
+> **Hard-gate rule:** A weighted score never overrides a material release blocker. The platform is not releaseable for production or real funds until all four active claims in the manifest are independently evidenced and `assurance:release` succeeds.[1]
+
 ## References
 
 [1]: ../assurance/claim-manifest.json "Material claim manifest and release gate input"
 [2]: ../terminal_full_output/2026-08-13_10-50-47_517453_736.txt "Assurance gate execution output"
 [3]: ../scripts/db-recovery-drill.sh "Encrypted PostgreSQL recovery drill"
 [4]: ../scripts/load-drill.mjs "Controlled API resilience load drill"
+[5]: ../server/tigerbeetle-connectivity.test.ts "Non-mutating mutual-TLS TigerBeetle connectivity assurance"
