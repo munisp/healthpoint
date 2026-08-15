@@ -13,6 +13,7 @@
  */
 
 import { EventEmitter } from "events";
+import fs from "fs";
 import { Kafka, Producer, Partitioners, logLevel } from "kafkajs";
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "../db";
@@ -27,12 +28,27 @@ async function getKafkaProducer(): Promise<Producer | null> {
   const brokers = process.env.KAFKA_BROKERS;
   if (!brokers) return null;
   if (_kafkaProducer) return _kafkaProducer;
+  const username = process.env.KAFKA_SASL_USERNAME;
+  const password = process.env.KAFKA_SASL_PASSWORD;
+  const caPath = process.env.KAFKA_SSL_CA_PATH;
+  const ca = process.env.KAFKA_SSL_CA_PEM ?? (caPath && fs.existsSync(caPath) ? fs.readFileSync(caPath, "utf8") : undefined);
+  const production = process.env.NODE_ENV === "production";
+  if (production && (!username || !password || !ca)) {
+    console.error("[EventBus] Kafka is configured but TLS CA and SASL credentials are required in production");
+    return null;
+  }
   try {
     const kafka = new Kafka({
       clientId: "idr-app",
       brokers: brokers.split(","),
       logLevel: logLevel.WARN,
       retry: { initialRetryTime: 300, retries: 3 },
+      ssl: ca ? { ca: [ca] } : production,
+      sasl: username && password ? {
+        mechanism: "scram-sha-512" as const,
+        username,
+        password,
+      } : undefined,
     });
     _kafkaProducer = kafka.producer({
       createPartitioner: Partitioners.LegacyPartitioner,

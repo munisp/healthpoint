@@ -728,6 +728,21 @@
 - [x] Configure verified infrastructure endpoints through secure deployment settings and retain fail-closed behavior for unavailable services; Redis URL configured securely, while TigerBeetle, Kafka, and Temporal remain unconfigured pending protocol/TLS/authentication evidence
 - [ ] Validate integrated infrastructure health without initiating real settlement transfers
 
+## Supplied Infrastructure Configuration (Aug 14 2026)
+- [ ] Map HealthPoint production dependencies to the supplied TigerBeetle, Kafka, Temporal, Redis, OpenSearch, Permify, and object-storage endpoints
+- [ ] Validate and configure only required data-plane services with least-privilege runtime credentials
+- [ ] Exclude Vault root, APISIX admin, and database root/control-plane credentials from application configuration and document their operator-only status
+
+## Authenticated Data-Plane Integration (Aug 14 2026)
+- [x] Validate TLS and authenticated health checks for secured Kafka, Permify, Temporal, and TigerBeetle endpoints; Kafka SASL_SSL metadata and Permify authenticated health pass, while Temporal and TigerBeetle TLS chains verify
+- [x] Configure verified secured endpoint addresses, certificates, and least-privilege runtime credentials without exposing source-level secrets; Redis and Kafka are configured, while Temporal, Permify, and TigerBeetle await application client integration
+
+## Certificate-Backed Endpoint Validation (Aug 14 2026)
+- [x] Configure supplied Kafka, Permify, PostgreSQL, and Temporal CA certificates as secure runtime trust material and validate each applicable TLS connection; all certificate chains verify and PostgreSQL verify-ca query passes
+
+## Uploaded Certificate Trust Material (Aug 14 2026)
+- [ ] Extract uploaded CA certificate PEM files into secure runtime configuration and revalidate service connections
+
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
 

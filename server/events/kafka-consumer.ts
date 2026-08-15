@@ -11,6 +11,7 @@
  * Retry policy: exponential back-off, max 3 retries, then DLQ.
  */
 
+import fs from "fs";
 import { Kafka, Consumer, EachMessagePayload, logLevel } from "kafkajs";
 
 const KAFKA_BROKERS = (process.env.KAFKA_BROKERS || "localhost:9092").split(",");
@@ -27,6 +28,10 @@ let _consumer: Consumer | null = null;
 let _running = false;
 
 function buildKafka(): Kafka {
+  const caPath = process.env.KAFKA_SSL_CA_PATH;
+  const ca = process.env.KAFKA_SSL_CA_PEM ?? (caPath && fs.existsSync(caPath) ? fs.readFileSync(caPath, "utf8") : undefined);
+  const username = process.env.KAFKA_SASL_USERNAME;
+  const password = process.env.KAFKA_SASL_PASSWORD;
   return new Kafka({
     clientId: "idr-app",
     brokers: KAFKA_BROKERS,
@@ -35,6 +40,8 @@ function buildKafka(): Kafka {
       initialRetryTime: 300,
       retries: 5,
     },
+    ssl: ca ? { ca: [ca] } : undefined,
+    sasl: username && password ? { mechanism: "scram-sha-512", username, password } : undefined,
   });
 }
 
