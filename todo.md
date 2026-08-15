@@ -741,7 +741,13 @@
 - [x] Configure supplied Kafka, Permify, PostgreSQL, and Temporal CA certificates as secure runtime trust material and validate each applicable TLS connection; all certificate chains verify and PostgreSQL verify-ca query passes
 
 ## Uploaded Certificate Trust Material (Aug 14 2026)
-- [ ] Extract uploaded CA certificate PEM files into secure runtime configuration and revalidate service connections
+- [x] Extract uploaded CA certificate PEM files into secure runtime configuration and revalidate service connections; shared NewWave root validates Permify and Temporal chains
+
+## Re-supplied Secured Service Certificates (Aug 15 2026)
+- [x] Revalidate Permify and Temporal CA certificate identity and endpoint trust before secure client integration; uploaded certificates match the active trust bundle and both TLS chains verify
+
+## Approved Permify & Temporal Credentials (Aug 15 2026)
+- [x] Configure approved Permify and Temporal bearer tokens as secure runtime credentials and validate authenticated service access; Permify bearer health check passes with strict CA verification, Temporal token remains configured for gRPC client integration
 
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
