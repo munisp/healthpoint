@@ -3,13 +3,22 @@ import fs from "fs";
 import { type Server } from "http";
 import { nanoid } from "nanoid";
 import path from "path";
-import { createServer as createViteServer } from "vite";
-import viteConfig from "../../vite.config";
+import { pathToFileURL } from "url";
 
 export async function setupVite(app: Express, server: Server) {
-  // Merge the viteConfig.server.hmr settings (clientPort, protocol) with the
-  // middleware-mode requirement (server handle) so HMR WebSocket works correctly
-  // behind the proxied preview URL (wss on port 443).
+  // Vite is intentionally loaded only when development middleware is started.
+  // The production image prunes development dependencies, so a static Vite
+  // import would make the compiled server fail before it can serve assets.
+  const { createServer: createViteServer } = await import("vite");
+  // A computed URL prevents the production bundler from incorporating the
+  // development Vite config and its plugin dependencies into dist/index.js.
+  const configUrl = pathToFileURL(
+    path.resolve(import.meta.dirname, "../..", "vite.config.ts")
+  ).href;
+  const { default: viteConfig } = await import(configUrl);
+
+  // Development-only middleware mode keeps HMR attached to the application
+  // server while preserving the repository root, aliases, and plugins.
   const baseHmr = typeof viteConfig.server?.hmr === "object" ? viteConfig.server.hmr : {};
   const serverOptions = {
     middlewareMode: true,
