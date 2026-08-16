@@ -26,3 +26,25 @@ curl --fail --silent --show-error https://YOUR_DEPLOYED_DOMAIN/api/health
 ```
 
 The health response must show a successful database check. If it reports a non-PostgreSQL binding or database failure, do not proceed with the daily schedule or any settlement-related operation.
+
+The repository includes a fail-closed convenience verifier for the same check:
+
+```sh
+DEPLOYED_BASE_URL=https://YOUR_DEPLOYED_DOMAIN ./scripts/verify-deployed-postgres-binding.sh
+```
+
+## Post-Publication Daily Balance-Proof Job
+
+Only after the deployed PostgreSQL verifier succeeds, create the project-level Heartbeat job:
+
+```sh
+manus-heartbeat create \
+  --name daily-settlement-balance-proof \
+  --cron "0 0 2 * * *" \
+  --path /api/scheduled/settlement-balance-proof \
+  --method POST \
+  --payload '{}' \
+  --description "Daily PostgreSQL settlement balance proof and exception alert review"
+```
+
+Record the returned `task_uid`, then inspect the next execution and logs with `manus-heartbeat list` and `manus-heartbeat logs --task-uid <task_uid> --with-body`. The schedule must not be created against a preview environment or before `/api/health` verifies the deployed PostgreSQL binding.

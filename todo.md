@@ -778,6 +778,15 @@
 - [x] Implement an isolated test-only provider simulator for signed callbacks and reconciliation reports; it produces valid raw-body HMAC envelopes, models accepted/settled/failed/reversed report statuses, and rejects production or non-disabled payment modes
 - [x] Execute simulator-backed settlement scenarios while retaining disabled payment execution and explicitly excluding simulated results from regulated-provider acceptance evidence; 9 PostgreSQL-backed Playwright settlement scenarios pass, including hermetic signed callback idempotency and simulator-generated reconciliation exception paths
 
+## Publish, Scheduler, and Provider Evidence Handoff (Aug 16 2026)
+- [x] Prepare managed PostgreSQL publish-time binding verification and instruct the user to publish the saved checkpoint through the project UI; added `scripts/verify-deployed-postgres-binding.sh` and the exact environment contract in `docs/managed-postgres-deployment-binding.md`
+- [x] Prepare the exact six-field UTC daily balance-proof Heartbeat command and post-run observation procedure; documented in `docs/managed-postgres-deployment-binding.md`
+- [ ] Create and observe the daily settlement balance-proof Heartbeat job after the site is published and database binding is verified
+- [ ] Provide secure intake requirements for provider/FSP sandbox mTLS materials and reconciliation-report acceptance evidence
+
+## Deployment Build Failure Remediation (Aug 16 2026)
+- [x] Resolve the pnpm overrides/lockfile configuration mismatch that blocks Docker's frozen dependency installation; restored lockfile-recorded `pnpm.overrides` in package metadata and verified `pnpm install --frozen-lockfile` succeeds
+
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
 
