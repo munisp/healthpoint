@@ -8,7 +8,7 @@
       "claim": "The application persists workflow and settlement state in PostgreSQL.",
       "source": "drizzle/schema.ts; server/db.ts; docker-compose.yml",
       "entryPoints": ["server/_core/index.ts", "server/routers.ts"],
-      "evidence": ["PostgreSQL 16 local migrations", "GET /api/health returned db=connected"],
+      "evidence": ["PostgreSQL 16 local migrations", "GET /api/health returned db=connected", "Managed PostgreSQL 18.6 direct strict-CA query verified with 63 public tables on 2026-08-16"],
       "status": "blocked",
       "limitations": "The platform-managed preview DATABASE_URL remains non-PostgreSQL, so deployed persistence has not been verified."
     },

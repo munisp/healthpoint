@@ -142,6 +142,12 @@ Two repository-controlled gaps identified during the remediation pass were corre
 
 The complete regression run passed with **174 Vitest assertions** across 14 test files, including the real read-only TigerBeetle mutual-TLS probe, 8 PostgreSQL-backed Playwright settlement scenarios, TypeScript, production build, and the dependency-security gate. The release manifest remains valid with four material blockers. These changes improve local implementation assurance, but they do not supply the independent production, provider, scheduler, or deployment evidence required for a 100/100 release claim.
 
+## Configured External Resource Re-evaluation — 2026-08-16
+
+All currently configured, non-destructive external acceptance probes were repeated. Authenticated Redis PING, Kafka SASL_SSL metadata, strict-CA Permify bearer health, and the TigerBeetle loopback mTLS read probe passed. Temporal's configured endpoint continues to validate its TLS chain. A new direct managed PostgreSQL probe used strict CA validation and confirmed PostgreSQL 18.6 with 63 public tables, without modifying data. The resource-to-gate mapping is recorded in `docs/configured-external-resource-gate-map-2026-08-15.md`.
+
+This new evidence verifies the managed data-plane endpoint and middleware transport, but it does not alter the release decision. The running platform preview still receives a non-PostgreSQL built-in database binding, no regulated provider or bank rail has authenticated the settlement contract, no deployed daily-proof execution is observable, and the full hardened production overlay has not been deployed as one environment. Accordingly, the release gate remains **NOT RELEASEABLE** and real-money payment mode remains disabled.
+
 ## References
 
 [1]: ../assurance/claim-manifest.json "Material claim manifest and release gate input"

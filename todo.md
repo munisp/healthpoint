@@ -761,11 +761,15 @@
 - [x] Reassess every open repository-controlled production finding, remediate all implementable gaps, and enforce each external prerequisite as a fail-closed release condition; dispute object authorization, canonical workflow guards, required-field validation, and production Redlock fail-closed behavior added, while deployment, provider, scheduler, and infrastructure evidence remain enforced release blockers
 - [x] Re-run exhaustive assurance and revise readiness scoring only from independently verified evidence; 174 Vitest assertions including the real TigerBeetle mTLS probe, 8 Playwright settlement scenarios, TypeScript, production build, dependency gate, and release-gate recheck completed; release remains correctly blocked by four external evidence conditions
 
+## Configured External Resource Release-Gate Re-evaluation (Aug 15 2026)
+- [x] Map every configured PostgreSQL, Redis, Kafka, Permify, Temporal, and TigerBeetle resource to the four remaining production release-gate evidence requirements; documented in `docs/configured-external-resource-gate-map-2026-08-15.md`
+- [x] Execute all safe production-compatible acceptance checks against the configured resources and close only independently evidenced release gates; authenticated Redis, Kafka, Permify, and TigerBeetle probes pass, Temporal TLS verifies, and strict-CA PostgreSQL 18.6 query confirms 63 public tables; deployed runtime/provider/scheduler/overlay gates remain independently blocked
+
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
 
 ## Final Outstanding Gap Closure (Aug 14 2026)
-- [ ] Reconcile all remaining repository-controlled gaps and convert unavailable external dependencies into explicit, testable release blockers
+- [x] Reconcile all remaining repository-controlled gaps and convert unavailable external dependencies into explicit, testable release blockers; configured-resource acceptance checks, direct managed PostgreSQL verification, and four independently enforced deployment/provider/scheduler/overlay gates are documented
 
 ## Release Evidence Validation Error Handling (Aug 14 2026)
 - [x] Make malformed external configuration fail with clear validation output instead of parser diagnostics
