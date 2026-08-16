@@ -782,7 +782,7 @@
 - [x] Prepare managed PostgreSQL publish-time binding verification and instruct the user to publish the saved checkpoint through the project UI; added `scripts/verify-deployed-postgres-binding.sh` and the exact environment contract in `docs/managed-postgres-deployment-binding.md`
 - [x] Prepare the exact six-field UTC daily balance-proof Heartbeat command and post-run observation procedure; documented in `docs/managed-postgres-deployment-binding.md`
 - [ ] Create and observe the daily settlement balance-proof Heartbeat job after the site is published and database binding is verified
-- [ ] Provide secure intake requirements for provider/FSP sandbox mTLS materials and reconciliation-report acceptance evidence
+- [x] Provide secure intake requirements for provider/FSP sandbox mTLS materials and reconciliation-report acceptance evidence; documented in `docs/provider-sandbox-evidence-intake.md` with the fail-closed `scripts/validate-provider-sandbox-evidence.sh` credential-chain and key-pair validator
 
 ## Deployment Build Failure Remediation (Aug 16 2026)
 - [x] Resolve the pnpm overrides/lockfile configuration mismatch that blocks Docker's frozen dependency installation; restored lockfile-recorded `pnpm.overrides` in package metadata and verified `pnpm install --frozen-lockfile` succeeds
