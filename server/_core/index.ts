@@ -42,6 +42,7 @@ import { providerSettlementReportSchema, reconcileProviderSettlementReport } fro
 import { LedgerIntegrityError } from "../ledger";
 import { startOutboxWorker } from "../outbox-worker";
 import { isTigerBeetleEnabled, startTigerBeetleTunnel, stopTigerBeetleTunnel } from "../tigerbeetle";
+import { createScheduledAuth } from "../scheduled-auth";
 
 // ─── Startup ENV validation ──────────────────────────────────────────────────
 function validateEnv() {
@@ -98,15 +99,7 @@ async function findAvailablePort(startPort = 3000): Promise<number> {
 
 // ─── Scheduled endpoint auth ─────────────────────────────────────────────────
 const SCHEDULED_SECRET = process.env.SCHEDULED_SECRET ?? "dev-scheduled-secret";
-function scheduledAuth(req: Request, res: Response, next: NextFunction) {
-  const auth = req.headers.authorization ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (ENV.isProduction && token !== SCHEDULED_SECRET) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-  next();
-}
+const scheduledAuth = createScheduledAuth(ENV.isProduction, SCHEDULED_SECRET);
 
 // ─── Server startup ───────────────────────────────────────────────────────────
 async function startServer() {
