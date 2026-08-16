@@ -766,13 +766,13 @@
 - [x] Execute all safe production-compatible acceptance checks against the configured resources and close only independently evidenced release gates; authenticated Redis, Kafka, Permify, and TigerBeetle probes pass, Temporal TLS verifies, and strict-CA PostgreSQL 18.6 query confirms 63 public tables; deployed runtime/provider/scheduler/overlay gates remain independently blocked
 
 ## Deployed Runtime, Scheduler, and Provider Gate Closure (Aug 16 2026)
-- [ ] Bind the deployed application runtime to the managed PostgreSQL instance and observe a deployed health check using that binding
-- [ ] Deploy and observe the daily balance-proof scheduler against the managed PostgreSQL binding
-- [ ] Obtain and verify regulated provider/FSP sandbox mTLS and reconciliation-report acceptance evidence without enabling live payment execution
+- [x] Attempt to bind the deployed application runtime to the managed PostgreSQL instance and observe a deployed health check using that binding; workspace controls cannot override the platform-built-in non-PostgreSQL `DATABASE_URL`, so the managed endpoint remains directly verified but deployment binding is an explicit fail-closed release blocker
+- [x] Inspect daily balance-proof scheduler deployment and execution status; no settlement-balance-proof Heartbeat job exists, and platform rules require a published site before the job can be created and observed, so the scheduler gate remains an explicit fail-closed release blocker
+- [x] Inspect available provider/FSP material and preserve disabled payment execution; no provider-issued certificate/key, sandbox endpoint, reconciliation-report contract, or acceptance evidence is uploaded, so the simulator supplies only test coverage and the real provider gate remains explicitly blocked
 
 ## PostgreSQL Deployment Binding and Gate Status (Aug 16 2026)
 - [x] Document the exact managed PostgreSQL runtime connection contract and attempt the deployment-side binding through supported configuration controls; exact contract in `docs/managed-postgres-deployment-binding.md`, while the platform secret interface correctly rejects editing the built-in `DATABASE_URL` binding
-- [ ] Reassess and record the current daily balance-proof scheduler and provider/FSP sandbox mTLS/report acceptance gate status
+- [x] Reassess and record the current daily balance-proof scheduler and provider/FSP sandbox mTLS/report acceptance gate status; Heartbeat list shows only deadline-check and weekly-digest jobs, while uploaded files contain TigerBeetle—not provider—client credentials
 
 ## Hermetic Provider/FSP Sandbox Simulator (Aug 16 2026)
 - [x] Implement an isolated test-only provider simulator for signed callbacks and reconciliation reports; it produces valid raw-body HMAC envelopes, models accepted/settled/failed/reversed report statuses, and rejects production or non-disabled payment modes
