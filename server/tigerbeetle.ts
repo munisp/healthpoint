@@ -38,6 +38,7 @@ type TunnelState = {
 
 let tunnelState: TunnelState | null = null;
 let startingTunnel: Promise<void> | null = null;
+let lastTunnelError: string | null = null;
 
 function readEnabledFlag(): boolean {
   return process.env.TIGERBEETLE_ENABLED === "true";
@@ -145,6 +146,7 @@ export async function startTigerBeetleTunnel(): Promise<void> {
   if (startingTunnel) return startingTunnel;
 
   startingTunnel = (async () => {
+    lastTunnelError = null;
     const config = getTigerBeetleConfiguration();
     if (!config.clientKeyPath && !config.clientKeyPem) {
       throw new TigerBeetleConfigurationError("TigerBeetle mTLS client key is required before the tunnel can start");
@@ -207,6 +209,9 @@ export async function startTigerBeetleTunnel(): Promise<void> {
 
   try {
     await startingTunnel;
+  } catch (error) {
+    lastTunnelError = error instanceof Error ? error.message : "TigerBeetle tunnel initialization failed";
+    throw error;
   } finally {
     startingTunnel = null;
   }
@@ -252,4 +257,19 @@ export async function verifyTigerBeetleReadConnectivity(timeoutMs = 10_000): Pro
 
 export function isTigerBeetleEnabled(): boolean {
   return readEnabledFlag();
+}
+
+export function getTigerBeetleReadiness(): {
+  enabled: boolean;
+  ready: boolean;
+  state: "disabled" | "starting" | "ready" | "unavailable";
+  reason?: string;
+} {
+  const enabled = readEnabledFlag();
+  if (!enabled) return { enabled, ready: false, state: "disabled" };
+  if (tunnelState) return { enabled, ready: true, state: "ready" };
+  if (startingTunnel) return { enabled, ready: false, state: "starting" };
+  return lastTunnelError
+    ? { enabled, ready: false, state: "unavailable", reason: lastTunnelError }
+    : { enabled, ready: false, state: "unavailable", reason: "TigerBeetle tunnel has not started" };
 }

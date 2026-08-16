@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { TigerBeetleConfigurationError, getTigerBeetleConfiguration } from "./tigerbeetle";
+import { TigerBeetleConfigurationError, getTigerBeetleConfiguration, getTigerBeetleReadiness } from "./tigerbeetle";
 
 const originalEnv = { ...process.env };
 
@@ -11,6 +11,11 @@ afterEach(() => {
 });
 
 describe("TigerBeetle transport configuration", () => {
+  it("reports disabled readiness when the optional capability is not enabled", () => {
+    delete process.env.TIGERBEETLE_ENABLED;
+    expect(getTigerBeetleReadiness()).toEqual({ enabled: false, ready: false, state: "disabled" });
+  });
+
   it("uses a loopback-only client address and the configured cluster identifier", () => {
     process.env.TIGERBEETLE_ADDRESS = "127.0.0.1:16001";
     process.env.TIGERBEETLE_CLUSTER_ID = "145851240909969808468846706535455565498";

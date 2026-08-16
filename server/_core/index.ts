@@ -112,7 +112,14 @@ function scheduledAuth(req: Request, res: Response, next: NextFunction) {
 async function startServer() {
   validateEnv();
   if (isTigerBeetleEnabled()) {
-    await startTigerBeetleTunnel();
+    // TigerBeetle is an optional ledger acceleration capability while payment
+    // execution is disabled. Its mTLS proxy must never make the HTTP service
+    // unavailable; any TigerBeetle-dependent operation observes readiness and
+    // fails closed instead of substituting another settlement path.
+    void startTigerBeetleTunnel().then(
+      () => console.info("[startup] TigerBeetle mTLS tunnel is ready"),
+      error => console.error("[startup] TigerBeetle mTLS tunnel unavailable; dependent operations remain fail-closed", error)
+    );
   }
 
   const app = express();
