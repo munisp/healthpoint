@@ -765,6 +765,19 @@
 - [x] Map every configured PostgreSQL, Redis, Kafka, Permify, Temporal, and TigerBeetle resource to the four remaining production release-gate evidence requirements; documented in `docs/configured-external-resource-gate-map-2026-08-15.md`
 - [x] Execute all safe production-compatible acceptance checks against the configured resources and close only independently evidenced release gates; authenticated Redis, Kafka, Permify, and TigerBeetle probes pass, Temporal TLS verifies, and strict-CA PostgreSQL 18.6 query confirms 63 public tables; deployed runtime/provider/scheduler/overlay gates remain independently blocked
 
+## Deployed Runtime, Scheduler, and Provider Gate Closure (Aug 16 2026)
+- [ ] Bind the deployed application runtime to the managed PostgreSQL instance and observe a deployed health check using that binding
+- [ ] Deploy and observe the daily balance-proof scheduler against the managed PostgreSQL binding
+- [ ] Obtain and verify regulated provider/FSP sandbox mTLS and reconciliation-report acceptance evidence without enabling live payment execution
+
+## PostgreSQL Deployment Binding and Gate Status (Aug 16 2026)
+- [x] Document the exact managed PostgreSQL runtime connection contract and attempt the deployment-side binding through supported configuration controls; exact contract in `docs/managed-postgres-deployment-binding.md`, while the platform secret interface correctly rejects editing the built-in `DATABASE_URL` binding
+- [ ] Reassess and record the current daily balance-proof scheduler and provider/FSP sandbox mTLS/report acceptance gate status
+
+## Hermetic Provider/FSP Sandbox Simulator (Aug 16 2026)
+- [x] Implement an isolated test-only provider simulator for signed callbacks and reconciliation reports; it produces valid raw-body HMAC envelopes, models accepted/settled/failed/reversed report statuses, and rejects production or non-disabled payment modes
+- [x] Execute simulator-backed settlement scenarios while retaining disabled payment execution and explicitly excluding simulated results from regulated-provider acceptance evidence; 9 PostgreSQL-backed Playwright settlement scenarios pass, including hermetic signed callback idempotency and simulator-generated reconciliation exception paths
+
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
 

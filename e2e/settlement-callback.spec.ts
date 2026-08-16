@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { createHmac, randomUUID } from "node:crypto";
 import postgres from "postgres";
+import { createHermeticProviderSandbox, type SignedProviderEnvelope } from "../server/provider-sandbox-simulator";
 
 const databaseUrl = process.env.DATABASE_URL ?? "postgresql://idr_user:idr_pass123@127.0.0.1:5432/idr_demo";
 const callbackKeyring = JSON.parse(process.env.SETTLEMENT_CALLBACK_KEYRING ?? "{}") as Record<string, string>;
@@ -9,6 +10,7 @@ const mtlsFingerprint = (process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS ?? "").
 const mtlsIngressToken = process.env.SETTLEMENT_MTLS_INGRESS_TOKEN;
 const sql = postgres(databaseUrl, { max: 1 });
 const disputeId = randomUUID();
+const simulatorDisputeId = randomUUID();
 const lifecycleDisputeId = randomUUID();
 const lifecycleTransferId = randomUUID();
 const lifecycleProviderTransferId = `provider-${randomUUID()}`;
@@ -86,6 +88,22 @@ async function postSignedReport(request: APIRequestContext, body: Record<string,
   });
 }
 
+async function postHermeticEnvelope(
+  request: APIRequestContext,
+  path: "/api/settlement/callbacks" | "/api/settlement/reports",
+  envelope: SignedProviderEnvelope<Record<string, unknown>>,
+) {
+  return request.post(path, {
+    headers: {
+      ...envelope.headers,
+      "x-settlement-mtls-verified": "true",
+      "x-settlement-mtls-fingerprint": mtlsFingerprint ?? "",
+      "x-settlement-ingress-token": mtlsIngressToken ?? "",
+    },
+    data: envelope.rawBody,
+  });
+}
+
 test.beforeAll(async () => {
   expect(callbackSecret).toBeTruthy();
   expect(callbackKeyId).toBeTruthy();
@@ -97,6 +115,15 @@ test.beforeAll(async () => {
     "determinationAmount", "paidAmount", "currentStep", "status", "createdAt", "updatedAt"
   ) VALUES (
     ${disputeId}, ${referenceNumber}, 'e2e-provider', 'provider', 'Playwright Provider',
+    'emergency_medicine', NOW(), 'NY', 'NY', ${JSON.stringify(["99285"])}::jsonb, '200.00',
+    '120.00', '0.00', 'STEP_14_PAYMENT_DETERMINATION', 'payment_pending', NOW(), NOW()
+  )`;
+  await sql`INSERT INTO disputes (
+    "id", "referenceNumber", "initiatingPartyId", "initiatingPartyType", "initiatingPartyName",
+    "serviceType", "serviceDate", "patientState", "facilityState", "cptCodes", "billedAmount",
+    "determinationAmount", "paidAmount", "currentStep", "status", "createdAt", "updatedAt"
+  ) VALUES (
+    ${simulatorDisputeId}, ${`SIM-${randomUUID().replace(/-/g, "").slice(0, 24)}`}, 'simulator-provider', 'provider', 'Hermetic Simulator Provider',
     'emergency_medicine', NOW(), 'NY', 'NY', ${JSON.stringify(["99285"])}::jsonb, '200.00',
     '120.00', '0.00', 'STEP_14_PAYMENT_DETERMINATION', 'payment_pending', NOW(), NOW()
   )`;
@@ -135,6 +162,12 @@ test.afterAll(async () => {
   await sql`DELETE FROM ledger_entries WHERE "disputeId" = ${disputeId}`;
   await sql`DELETE FROM ledger_accounts WHERE "disputeId" = ${disputeId}`;
   await sql`DELETE FROM disputes WHERE "id" = ${disputeId}`;
+  await sql`DELETE FROM event_log WHERE "aggregateId" = ${simulatorDisputeId}`;
+  await sql`DELETE FROM settlement_callbacks WHERE "disputeId" = ${simulatorDisputeId}`;
+  await sql`DELETE FROM dispute_events WHERE "disputeId" = ${simulatorDisputeId}`;
+  await sql`DELETE FROM ledger_entries WHERE "disputeId" = ${simulatorDisputeId}`;
+  await sql`DELETE FROM ledger_accounts WHERE "disputeId" = ${simulatorDisputeId}`;
+  await sql`DELETE FROM disputes WHERE "id" = ${simulatorDisputeId}`;
   await sql`DELETE FROM ledger_entries WHERE "disputeId" = ${lifecycleDisputeId}`;
   await sql`DELETE FROM ledger_accounts WHERE "disputeId" = ${lifecycleDisputeId}`;
   await sql`DELETE FROM disputes WHERE "id" = ${lifecycleDisputeId}`;
@@ -155,6 +188,25 @@ test("rejects unsigned, stale, and header/body-mismatched callbacks before recon
   expect(mismatched.status()).toBe(400);
   const callbacks = await sql`SELECT count(*)::int AS count FROM settlement_callbacks WHERE "disputeId" = ${disputeId}`;
   expect(callbacks[0].count).toBe(0);
+});
+
+test("accepts a hermetic provider-simulator failure callback exactly once without initiating a payment", async ({ request }) => {
+  const simulator = createHermeticProviderSandbox({
+    callbackSecret: callbackSecret!, keyId: callbackKeyId!, provider: "mojaloop", runtime: "test", paymentExecutionMode: "disabled",
+  });
+  const envelope = simulator.emitCallback({
+    disputeId: simulatorDisputeId,
+    transferId: `simulated-${randomUUID()}`,
+    amountCents: 1,
+    status: "failed",
+    eventId: `simulated-${randomUUID()}`,
+  });
+  const first = await postHermeticEnvelope(request, "/api/settlement/callbacks", envelope);
+  expect(first.status()).toBe(202);
+  const duplicate = await postHermeticEnvelope(request, "/api/settlement/callbacks", envelope);
+  expect(duplicate.status()).toBe(200);
+  const callback = await sql`SELECT status, "ledgerEntryId" FROM settlement_callbacks WHERE "providerEventId" = ${envelope.payload.eventId}`;
+  expect(callback[0]).toMatchObject({ status: "failed", ledgerEntryId: null });
 });
 
 test("reconciles a signed settlement exactly once and preserves ledger/outbox invariants", async ({ request }) => {
@@ -215,8 +267,17 @@ test("reconciles a signed provider report exactly once and records a matching in
 });
 
 test("persists a provider-report exception without changing the submitted transfer", async ({ request }) => {
-  const body = reportBody({ transferId: exceptionTransferId, providerTransferId: `provider-${exceptionTransferId}`, amountCents: 3_999 });
-  const response = await postSignedReport(request, body);
+  const simulator = createHermeticProviderSandbox({
+    callbackSecret: callbackSecret!, keyId: callbackKeyId!, provider: "mojaloop", runtime: "test", paymentExecutionMode: "disabled",
+  });
+  const envelope = simulator.emitReport({
+    transferId: exceptionTransferId,
+    providerTransferId: `provider-${exceptionTransferId}`,
+    amountCents: 3_999,
+    status: "settled",
+    reportId: `simulated-report-${randomUUID()}`,
+  });
+  const response = await postHermeticEnvelope(request, "/api/settlement/reports", envelope);
   expect(response.status()).toBe(409);
   await expect(response.json()).resolves.toMatchObject({ reconciliationStatus: "exception", transferStatus: "submitted" });
   const reconciliation = await sql`SELECT status, "exceptionReason" FROM settlement_reconciliations WHERE "transferId" = ${exceptionTransferId}`;

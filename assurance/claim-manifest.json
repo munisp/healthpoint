@@ -17,7 +17,7 @@
       "claim": "Signed settlement evidence is idempotent, atomic, auditable, and reversible.",
       "source": "server/settlement.ts; server/settlement-lifecycle.ts; server/ledger.ts",
       "entryPoints": ["/api/settlement/callbacks", "/api/settlement/reports"],
-      "evidence": ["174 Vitest tests", "8 Playwright PostgreSQL settlement scenarios", "local migration chain through 0025", "production fail-closed dispute lock and workflow transition guard tests"],
+      "evidence": ["176 Vitest tests", "9 Playwright PostgreSQL settlement scenarios including hermetic provider-simulator coverage", "local migration chain through 0025", "production fail-closed dispute lock and workflow transition guard tests"],
       "status": "verified",
       "limitations": "Evidence covers an isolated PostgreSQL database and development keys; it does not prove a provider or bank transferred funds."
     },
@@ -26,7 +26,7 @@
       "claim": "The platform can initiate and settle real funds through a regulated provider.",
       "source": "docker-compose.yml; services/go/main.go",
       "entryPoints": ["/internal/payments/initiate"],
-      "evidence": ["Fail-closed internal service token", "live payment mode rejected by the Go sidecar", "sandbox execution requires explicit mode"],
+      "evidence": ["Fail-closed internal service token", "live payment mode rejected by the Go sidecar", "sandbox execution requires explicit mode", "hermetic test-only provider simulator rejects production and non-disabled execution modes"],
       "status": "blocked",
       "limitations": "Live initiation is intentionally unsupported. A contracted provider sandbox, mTLS interoperability certificate, settlement report feed, and regulated-rail acceptance evidence are still required before any provider execution can be enabled."
     },
