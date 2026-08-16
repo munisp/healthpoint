@@ -787,6 +787,7 @@
 ## Deployment Build Failure Remediation (Aug 16 2026)
 - [x] Resolve the pnpm overrides/lockfile configuration mismatch that blocks Docker's frozen dependency installation; restored lockfile-recorded `pnpm.overrides` in package metadata and verified `pnpm install --frozen-lockfile` succeeds
 - [x] Restore lockfile-recorded pnpm patchedDependencies metadata to package configuration and revalidate deterministic frozen installation; restored the `wouter@3.7.1` patch declaration and verified frozen install, TypeScript, and production build succeed
+- [x] Copy the pnpm patch directory before Docker frozen dependency installation and validate the revised production build contract; Docker now copies `patches/` before frozen installation, while frozen install, TypeScript, and production build pass locally
 
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
