@@ -793,6 +793,9 @@
 - [x] Prevent TigerBeetle's native Node client from loading in managed containers unless the optional TigerBeetle capability is explicitly enabled and compatible; native module loading is dynamic and read-probe-only, while a pruned production-dependency smoke test reaches the listener without `/proc/self/map_files` access
 - [x] Provision a protected 64-character hexadecimal EMR credential-encryption key required by production startup validation and recheck the deployment contract; generated and stored as a protected deployment secret, then validated by AES-GCM credential tests
 - [x] Add a test-only encrypted EMR credential simulation that never contacts an EMR or uses clinical records; encrypted lifecycle and production refusal tests pass
+- [x] Identify and attempt every supported workspace-level external PostgreSQL binding; the platform explicitly rejects editing built-in `DATABASE_URL`, so the PostgreSQL-only startup rejection remains correct and deployment binding must be performed through the hosting database/deployment configuration
+- [x] Add a protected `EXTERNAL_POSTGRES_URL` override that accepts only a strict PostgreSQL URI and takes precedence over the platform-managed incompatible `DATABASE_URL`; protected runtime override is configured and validated by authenticated `SELECT 1`
+- [x] Parse `sslrootcert` and require a TLS server name for the external PostgreSQL override so the driver performs strict CA and hostname validation rather than relying on unsupported URL parameters; driver strips libpq-only query parameters and passed strict CA/hostname verification against `pg-oracle-rw`
 
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL

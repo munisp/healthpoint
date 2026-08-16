@@ -1,6 +1,7 @@
 import { eq, desc, and, or, like, count, sql, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { readFileSync } from "node:fs";
 import {
   InsertUser, users,
   disputes, InsertDispute, Dispute,
@@ -27,14 +28,60 @@ export function isPostgresConnectionString(value: string | undefined): value is 
 }
 
 export function resolvePostgresUrl(): string | null {
-  const configured = process.env.DATABASE_URL?.trim();
+  const externalOverride = process.env.EXTERNAL_POSTGRES_URL?.trim();
+  const configured = externalOverride || process.env.DATABASE_URL?.trim();
   if (!configured) {
-    console.error("[Database] DATABASE_URL is required and must reference PostgreSQL");
+    console.error("[Database] A PostgreSQL database URL is required");
     return null;
   }
   if (isPostgresConnectionString(configured)) return configured;
-  console.error("[Database] DATABASE_URL is not a PostgreSQL connection string; refusing an incompatible database backend");
+  console.error(`[Database] ${externalOverride ? "EXTERNAL_POSTGRES_URL" : "DATABASE_URL"} is not a PostgreSQL connection string; refusing an incompatible database backend`);
   return null;
+}
+
+/**
+ * postgres-js does not consume libpq's sslrootcert query parameter itself.
+ * For the protected external override, load that CA explicitly and require
+ * verify-ca semantics instead of accepting a self-signed certificate.
+ */
+export function resolvePostgresTlsOptions(connectionString: string): { ssl?: { rejectUnauthorized: true; ca: string; servername: string } } {
+  const externalOverride = process.env.EXTERNAL_POSTGRES_URL?.trim();
+  if (!externalOverride || connectionString !== externalOverride) return {};
+
+  let parsed: URL;
+  try {
+    parsed = new URL(connectionString);
+  } catch {
+    throw new Error("EXTERNAL_POSTGRES_URL must be a valid PostgreSQL URI");
+  }
+  if (parsed.searchParams.get("sslmode") !== "verify-ca") {
+    throw new Error("EXTERNAL_POSTGRES_URL requires sslmode=verify-ca");
+  }
+  const rootCertPath = parsed.searchParams.get("sslrootcert");
+  if (!rootCertPath) {
+    throw new Error("EXTERNAL_POSTGRES_URL requires sslrootcert for strict CA validation");
+  }
+  const servername = process.env.EXTERNAL_POSTGRES_TLS_SERVER_NAME?.trim();
+  if (!servername || !/^(?:[a-z0-9-]+\.)*[a-z0-9-]+$/i.test(servername)) {
+    throw new Error("EXTERNAL_POSTGRES_TLS_SERVER_NAME is required for strict certificate hostname validation");
+  }
+  let ca: string;
+  try {
+    ca = readFileSync(rootCertPath, "utf8");
+  } catch {
+    throw new Error("EXTERNAL_POSTGRES_URL sslrootcert is not readable");
+  }
+  return { ssl: { rejectUnauthorized: true, ca, servername } };
+}
+
+/** postgres-js forwards unknown URI parameters as PostgreSQL startup settings. */
+export function resolvePostgresDriverUrl(connectionString: string): string {
+  const externalOverride = process.env.EXTERNAL_POSTGRES_URL?.trim();
+  if (!externalOverride || connectionString !== externalOverride) return connectionString;
+  const parsed = new URL(connectionString);
+  parsed.searchParams.delete("sslmode");
+  parsed.searchParams.delete("sslrootcert");
+  return parsed.toString();
 }
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -51,12 +98,13 @@ export async function getDb() {
     const maxAttempts = 5;
     while (attempts < maxAttempts) {
       try {
-        _pgClient = postgres(connectionString, {
+        _pgClient = postgres(resolvePostgresDriverUrl(connectionString), {
           max: 20,                  // connection pool size
           idle_timeout: 30,         // seconds before idle connection is closed
           connect_timeout: 10,      // seconds to wait for a connection
           max_lifetime: 1800,       // seconds before connection is recycled
           onnotice: () => {},       // suppress NOTICE messages
+          ...resolvePostgresTlsOptions(connectionString),
         });
         _db = drizzle(_pgClient);
         // Verify connectivity with a lightweight query

@@ -54,9 +54,18 @@ function validateEnv() {
     console.warn("[startup] JWT_SECRET is weak or missing — using insecure default in dev");
   }
   if (ENV.isProduction) {
-    const databaseUrl = process.env.DATABASE_URL ?? "";
+    const databaseUrl = process.env.EXTERNAL_POSTGRES_URL?.trim() || (process.env.DATABASE_URL ?? "");
     if (!/^postgres(?:ql)?:\/\//.test(databaseUrl)) {
-      throw new Error("Production requires DATABASE_URL to be an open-source PostgreSQL connection string");
+      throw new Error("Production requires EXTERNAL_POSTGRES_URL or DATABASE_URL to be an open-source PostgreSQL connection string");
+    }
+    if (process.env.EXTERNAL_POSTGRES_URL?.trim()) {
+      const external = new URL(process.env.EXTERNAL_POSTGRES_URL);
+      if (external.searchParams.get("sslmode") !== "verify-ca" || !external.searchParams.get("sslrootcert")) {
+        throw new Error("Production EXTERNAL_POSTGRES_URL requires sslmode=verify-ca and sslrootcert");
+      }
+      if (!process.env.EXTERNAL_POSTGRES_TLS_SERVER_NAME?.trim()) {
+        throw new Error("Production EXTERNAL_POSTGRES_TLS_SERVER_NAME is required for strict certificate hostname validation");
+      }
     }
     const keyring = parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING);
     if (!keyring) {

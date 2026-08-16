@@ -5,6 +5,7 @@ const envSchema = z.object({
   // Core
   JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  EXTERNAL_POSTGRES_URL: z.string().optional().default(""),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
   // LLM backends — priority: Ollama > LLM_API > OpenAI
@@ -92,7 +93,7 @@ if (process.env.NODE_ENV === "production" && !/^[a-fA-F0-9]{64}$/.test(_env.EMR_
 
 export const ENV = {
   cookieSecret: _env.JWT_SECRET ?? "",
-  databaseUrl: _env.DATABASE_URL ?? "",
+  databaseUrl: _env.EXTERNAL_POSTGRES_URL || _env.DATABASE_URL || "",
   isProduction: _env.NODE_ENV === "production",
 
   // LLM — Ollama first, then generic, then OpenAI, then legacy Manus vars
