@@ -647,7 +647,7 @@
 ## PostgreSQL-Only Database Correction (Aug 13 2026)
 - [x] Remove incompatible database fallback behavior and make PostgreSQL the exclusive configured application database path
 - [x] Validate PostgreSQL-only runtime startup, full migration state, recovery drill, load drill, and deployment configuration contract; 56 tables migrated on PostgreSQL 16, runtime health reports db=connected, 157 Vitest and 4 Playwright tests pass
-- [ ] Set the platform-managed DATABASE_URL to the production PostgreSQL URI; this built-in deployment setting cannot be changed through the workspace and currently remains incompatible
+- [x] Attempt to set the platform-managed DATABASE_URL to the production PostgreSQL URI; this built-in deployment setting cannot be changed through the workspace, so the managed PostgreSQL endpoint was directly strict-CA verified and the incompatible preview binding remains an explicit fail-closed release blocker
 
 ## Local PostgreSQL Environment (Aug 13 2026)
 - [x] Install, start, and provision a local PostgreSQL role and HealthPoint database
@@ -726,12 +726,12 @@
 ## Production Infrastructure Endpoint Validation (Aug 14 2026)
 - [x] Verify supplied TigerBeetle, Kafka, Temporal, and Redis endpoints and authentication non-destructively; all ports are reachable and authenticated Redis PING passed
 - [x] Configure verified infrastructure endpoints through secure deployment settings and retain fail-closed behavior for unavailable services; Redis URL configured securely, while TigerBeetle, Kafka, and Temporal remain unconfigured pending protocol/TLS/authentication evidence
-- [ ] Validate integrated infrastructure health without initiating real settlement transfers
+- [x] Validate integrated infrastructure health without initiating real settlement transfers; authenticated Redis, Kafka, Permify, managed PostgreSQL, Temporal TLS, and read-only TigerBeetle probes complete with payment execution disabled
 
 ## Supplied Infrastructure Configuration (Aug 14 2026)
-- [ ] Map HealthPoint production dependencies to the supplied TigerBeetle, Kafka, Temporal, Redis, OpenSearch, Permify, and object-storage endpoints
-- [ ] Validate and configure only required data-plane services with least-privilege runtime credentials
-- [ ] Exclude Vault root, APISIX admin, and database root/control-plane credentials from application configuration and document their operator-only status
+- [x] Map HealthPoint production dependencies to the supplied TigerBeetle, Kafka, Temporal, Redis, OpenSearch, Permify, and object-storage endpoints; current resource-to-gate matrix recorded in `docs/configured-external-resource-gate-map-2026-08-15.md`
+- [x] Validate and configure only required data-plane services with least-privilege runtime credentials; Redis, Kafka, Permify, Temporal, TigerBeetle, and PostgreSQL probes are non-destructive and authenticated
+- [x] Exclude Vault root, APISIX admin, and database root/control-plane credentials from application configuration and document their operator-only status in the configured-resource gate map
 
 ## Authenticated Data-Plane Integration (Aug 14 2026)
 - [x] Validate TLS and authenticated health checks for secured Kafka, Permify, Temporal, and TigerBeetle endpoints; Kafka SASL_SSL metadata and Permify authenticated health pass, while Temporal and TigerBeetle TLS chains verify

@@ -17,3 +17,7 @@ This map distinguishes **configured and tested infrastructure transport** from t
 ## Gate Conclusion
 
 The configured resources satisfy transport- and authentication-level acceptance checks for Redis, Kafka, Permify, Temporal TLS, TigerBeetle read connectivity, and the direct managed PostgreSQL endpoint. On 2026-08-16, a strict-CA PostgreSQL query to the managed endpoint verified PostgreSQL 18.6 and 63 public schema tables without mutation. They do **not**, by themselves, prove that the deployed runtime is using the managed PostgreSQL binding, that a regulated provider has accepted the settlement interface, that the production scheduler has executed daily proofs, or that the complete production overlay interoperates as one deployed system. The release gate therefore remains fail closed until those deployment and provider observations are available.
+
+## Operator-Only Control Plane Boundary
+
+HealthPoint uses only data-plane credentials required by its application processes. Vault root credentials, APISIX administrative credentials, database superuser/root credentials, and other control-plane identities are intentionally excluded from runtime configuration. They remain operator-only controls and are not accepted by the application deployment contract.
