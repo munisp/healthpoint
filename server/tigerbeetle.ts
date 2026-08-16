@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile, chmod, access } from "node:fs/promise
 import { constants as fsConstants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createClient, type Client } from "tigerbeetle-node";
+import type { Client } from "tigerbeetle-node";
 
 const DEFAULT_CLUSTER_ID = "145851240909969808468846706535455565498";
 const DEFAULT_LOCAL_ADDRESS = "127.0.0.1:16001";
@@ -220,9 +220,15 @@ export async function stopTigerBeetleTunnel(): Promise<void> {
   await rm(state.workspace, { recursive: true, force: true });
 }
 
-/** Creates a TigerBeetle client that can only use the already verified loopback tunnel. */
-export function createTigerBeetleReadClient(): Client {
+/**
+ * Creates a TigerBeetle client only after a caller explicitly requests a
+ * read-only probe. The package uses native process inspection at import time,
+ * which is unavailable in managed serverless containers; importing it here
+ * keeps disabled integrations from preventing application startup.
+ */
+export async function createTigerBeetleReadClient(): Promise<Client> {
   const config = getTigerBeetleConfiguration();
+  const { createClient } = await import("tigerbeetle-node");
   return createClient({ cluster_id: config.clusterId, replica_addresses: [config.localAddress] });
 }
 
@@ -232,7 +238,7 @@ export function createTigerBeetleReadClient(): Client {
  * account, transfer, or settlement instruction.
  */
 export async function verifyTigerBeetleReadConnectivity(timeoutMs = 10_000): Promise<{ address: string; accountsReturned: number }> {
-  const client = createTigerBeetleReadClient();
+  const client = await createTigerBeetleReadClient();
   const timer = new Promise<never>((_, reject) => {
     setTimeout(() => reject(new TigerBeetleConfigurationError(`TigerBeetle read connectivity timed out after ${timeoutMs}ms`)), timeoutMs);
   });

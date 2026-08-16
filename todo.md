@@ -790,6 +790,7 @@
 - [x] Copy the pnpm patch directory before Docker frozen dependency installation and validate the revised production build contract; Docker now copies `patches/` before frozen installation, while frozen install, TypeScript, and production build pass locally
 - [x] Preserve every runtime-required dependency in the production image and validate that the bundled server can start without missing modules; Vite is dynamically imported only in development, and an isolated `pnpm install --prod` server smoke test reached its listener without Vite installed
 - [x] Restore development preview Vite configuration through an unbundled dynamic import and verify it does not reintroduce a production Vite dependency; TypeScript/build pass, the bundle retains only dynamic Vite/config imports, the preview server restarts, and `/src/main.tsx` resolves with HTTP 200
+- [x] Prevent TigerBeetle's native Node client from loading in managed containers unless the optional TigerBeetle capability is explicitly enabled and compatible; native module loading is dynamic and read-probe-only, while a pruned production-dependency smoke test reaches the listener without `/proc/self/map_files` access
 
 ## Final Managed Database Release-Gate Validation (Aug 14 2026)
 - [x] Verify that a non-PostgreSQL endpoint is rejected before connection, migration, or runtime startup, and document the exact direct PostgreSQL connection information required; db-config tests pass and the supplied host presents an HTTPS certificate rather than PostgreSQL
