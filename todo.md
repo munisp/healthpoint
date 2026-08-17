@@ -785,6 +785,10 @@
 - [x] Authenticate the balance-proof Heartbeat callback through the platform cron identity before observing the scheduled execution; platform cron identity is accepted, regular unauthenticated requests are rejected, and focused tests, TypeScript, and production build pass
 - [x] Provide secure intake requirements for provider/FSP sandbox mTLS materials and reconciliation-report acceptance evidence; documented in `docs/provider-sandbox-evidence-intake.md` with the fail-closed `scripts/validate-provider-sandbox-evidence.sh` credential-chain and key-pair validator
 
+## Onboarding and Keycloak Flow Verification (Aug 16 2026)
+- [x] Trace and present the implemented onboarding UI/persistence flow and Keycloak backend authentication routes; verified `LoginPage`, `Onboarding`, profile tRPC procedures, Keycloak PKCE routes, and protected route registration
+- [x] Execute safe provider-role onboarding simulation coverage without creating a real user account; isolated local PostgreSQL simulation persisted provider organization choices, marked completion, verified provider dashboard destination, and cleaned up its synthetic test identity
+
 ## Deployment Build Failure Remediation (Aug 16 2026)
 - [x] Resolve the pnpm overrides/lockfile configuration mismatch that blocks Docker's frozen dependency installation; restored lockfile-recorded `pnpm.overrides` in package metadata and verified `pnpm install --frozen-lockfile` succeeds
 - [x] Restore lockfile-recorded pnpm patchedDependencies metadata to package configuration and revalidate deterministic frozen installation; restored the `wouter@3.7.1` patch declaration and verified frozen install, TypeScript, and production build succeed
