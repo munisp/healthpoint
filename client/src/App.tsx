@@ -10,110 +10,112 @@ import LoginPage from "./pages/LoginPage";
 import { SessionExpiryWarning } from "./components/SessionExpiryWarning";
 import { useSessionExpiry } from "./hooks/useSessionExpiry";
 import { useAuth } from "./_core/hooks/useAuth";
-import Onboarding from "./pages/Onboarding";
-import IDREntityDashboard from "@/pages/IDREntityDashboard";
-import Notifications from "@/pages/Notifications";
-import Admin from "@/pages/Admin";
-import Dashboard from "./pages/Dashboard";
-import DisputesList from "./pages/DisputesList";
-import DisputeDetail from "./pages/DisputeDetail";
-import NewDispute from "./pages/NewDispute";
-import AIAssistant from "./pages/AIAssistant";
-import StakeholderUpload from "./pages/StakeholderUpload";
-import CMSSubmissionTracker from "./pages/CMSSubmissionTracker";
-import EMRConnections from "./pages/EMRConnections";
-import EMROnboarding from "./pages/EMROnboarding";
-import StateBalanceBilling from "./pages/StateBalanceBilling";
-import ExpertReview from "./pages/ExpertReview";
-import Reports from "./pages/Reports";
-import DisputeTemplates from "./pages/DisputeTemplates";
-import LeadsManager from "./pages/LeadsManager";
-import DocumentAnalyzer from "./pages/DocumentAnalyzer";
-import AuditTrail from "./pages/AuditTrail";
-import PayerIntelligence from "./pages/PayerIntelligence";
-import WebhookManager from "@/pages/WebhookManager";
-import FinancialLedger from "@/pages/FinancialLedger";
-import GlobalSearch from "@/pages/GlobalSearch";
-import LakehouseExport from "@/pages/LakehouseExport";
-import AdminUserManagement from "@/pages/AdminUserManagement";
-import SystemHealthMonitor from "@/pages/SystemHealthMonitor";
-import GlobalSettings from "@/pages/GlobalSettings";
-import Changelog from "@/pages/Changelog";
-import HelpCenter from "@/pages/HelpCenter";
-import OfferNegotiationThread from "@/pages/OfferNegotiationThread";
-import PayerContactBook from "@/pages/PayerContactBook";
-import APIKeyManagement from "@/pages/APIKeyManagement";
-import SLABreachMonitor from "@/pages/SLABreachMonitor";
-import NSAComplianceChecklist from "@/pages/NSAComplianceChecklist";
-import PaymentReconciliation from "@/pages/PaymentReconciliation";
-import CustomReportBuilder from "@/pages/CustomReportBuilder";
-import BulkStatusChange from "@/pages/BulkStatusChange";
-import CSVImport from "@/pages/CSVImport";
-import WebhookEventReplay from "@/pages/WebhookEventReplay";
-import EmailDigestPreferences from "@/pages/EmailDigestPreferences";
-import DisputeMerge from "@/pages/DisputeMerge";
-import ArbitratorScorecard from "@/pages/ArbitratorScorecard";
-import SplitBillAnalysis from "@/pages/SplitBillAnalysis";
-import TwoFactorAuth from "@/pages/TwoFactorAuth";
-import MobileDisputeWizard from "@/pages/MobileDisputeWizard";
-import DisputeClone from "@/pages/DisputeClone";
-import PayerResponseTimeAnalytics from "@/pages/PayerResponseTimeAnalytics";
-import DisputeAnnotations from "@/pages/DisputeAnnotations";
-import BatchEvidenceUpload from "@/pages/BatchEvidenceUpload";
-import DisputeActivityFeed from "@/pages/DisputeActivityFeed";
-import PrintableDisputeSummary from "@/pages/PrintableDisputeSummary";
-import ArbitratorAssignmentHistory from "@/pages/ArbitratorAssignmentHistory";
-import DisputeWatchlist from "@/pages/DisputeWatchlist";
-import EscalationManager from "@/pages/EscalationManager";
-import AppealTracker from "@/pages/AppealTracker";
-import NarrativeGenerator from "@/pages/NarrativeGenerator";
-import DocumentExpiryTracker from "@/pages/DocumentExpiryTracker";
-import DisputeKanban from "@/pages/DisputeKanban";
-import QPABenchmarkLookup from "@/pages/QPABenchmarkLookup";
-import IDRCostEstimator from "@/pages/IDRCostEstimator";
-import NSADeadlineCalendar from "@/pages/NSADeadlineCalendar";
-import ClaimAgingReport from "@/pages/ClaimAgingReport";
-import ContractRateComparison from "@/pages/ContractRateComparison";
-import DisputeRiskHeatmap from "@/pages/DisputeRiskHeatmap";
-import BatchNotificationSender from "@/pages/BatchNotificationSender";
-import RegulatoryChangeFeed from "@/pages/RegulatoryChangeFeed";
-import OfferCounterWizard from "@/pages/OfferCounterWizard";
-import MultiPartyCoordinator from "@/pages/MultiPartyCoordinator";
-import ProviderNetworkGapAnalyzer from "@/pages/ProviderNetworkGapAnalyzer";
-import SmartDeadlineCalculator from "@/pages/SmartDeadlineCalculator";
-import PayerScorecard from "@/pages/PayerScorecard";
-import DisputeStatusTimeline from "@/pages/DisputeStatusTimeline";
-import AuditTrailViewer from "@/pages/AuditTrailViewer";
-import DisputeSearchAdvanced from "@/pages/DisputeSearchAdvanced";
-import DisputeFavorites from "@/pages/DisputeFavorites";
-import DisputeCompareView from "@/pages/DisputeCompareView";
-import DisputeTagManager from "@/pages/DisputeTagManager";
-import PerformanceBenchmarks from "@/pages/PerformanceBenchmarks";
-import DisputeReminders from "@/pages/DisputeReminders";
-import DisputeExportCenter from "@/pages/DisputeExportCenter";
-import UserRoleMatrix from "@/pages/UserRoleMatrix";
-import SystemHealthDashboard from "@/pages/SystemHealthDashboard";
-import LastEHRIntegration from "@/pages/LastEHRIntegration";
-import FHIRCapabilityExplorer from "@/pages/FHIRCapabilityExplorer";
-import BulkFHIRExport from "@/pages/BulkFHIRExport";
-import CDSHooksManager from "@/pages/CDSHooksManager";
-import USCDICompleteness from "@/pages/USCDICompleteness";
-import OllamaManager from "@/pages/OllamaManager";
-import DaVinciTransactions from "@/pages/DaVinciTransactions";
-import FHIRCacheViewer from "@/pages/FHIRCacheViewer";
-import SMARTTokenManager from "@/pages/SMARTTokenManager";
-import DisputeAccessControl from "@/pages/DisputeAccessControl";
-import HermesAssistant from "@/pages/HermesAssistant";
-import SmartFormVisualization from "@/pages/SmartFormVisualization";
-import CohortAnalysis from "@/pages/CohortAnalysis";
-import HeartbeatOperations from "@/pages/HeartbeatOperations";
-import ProviderDisputeManagement from "@/pages/ProviderDisputeManagement";
-import ProviderSandboxAcceptance from "@/pages/ProviderSandboxAcceptance";
 import ProtectedRoute from "./components/ProtectedRoute";
 import DashboardLayout from "./components/DashboardLayout";
+import { lazy, Suspense, type ComponentType } from "react";
+
+const Onboarding = lazy(() => import("./pages/Onboarding"));
+const IDREntityDashboard = lazy(() => import("./pages/IDREntityDashboard"));
+const Notifications = lazy(() => import("./pages/Notifications"));
+const Admin = lazy(() => import("./pages/Admin"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const DisputesList = lazy(() => import("./pages/DisputesList"));
+const DisputeDetail = lazy(() => import("./pages/DisputeDetail"));
+const NewDispute = lazy(() => import("./pages/NewDispute"));
+const AIAssistant = lazy(() => import("./pages/AIAssistant"));
+const StakeholderUpload = lazy(() => import("./pages/StakeholderUpload"));
+const CMSSubmissionTracker = lazy(() => import("./pages/CMSSubmissionTracker"));
+const EMRConnections = lazy(() => import("./pages/EMRConnections"));
+const EMROnboarding = lazy(() => import("./pages/EMROnboarding"));
+const StateBalanceBilling = lazy(() => import("./pages/StateBalanceBilling"));
+const ExpertReview = lazy(() => import("./pages/ExpertReview"));
+const Reports = lazy(() => import("./pages/Reports"));
+const DisputeTemplates = lazy(() => import("./pages/DisputeTemplates"));
+const LeadsManager = lazy(() => import("./pages/LeadsManager"));
+const DocumentAnalyzer = lazy(() => import("./pages/DocumentAnalyzer"));
+const AuditTrail = lazy(() => import("./pages/AuditTrail"));
+const PayerIntelligence = lazy(() => import("./pages/PayerIntelligence"));
+const WebhookManager = lazy(() => import("./pages/WebhookManager"));
+const FinancialLedger = lazy(() => import("./pages/FinancialLedger"));
+const GlobalSearch = lazy(() => import("./pages/GlobalSearch"));
+const LakehouseExport = lazy(() => import("./pages/LakehouseExport"));
+const AdminUserManagement = lazy(() => import("./pages/AdminUserManagement"));
+const SystemHealthMonitor = lazy(() => import("./pages/SystemHealthMonitor"));
+const GlobalSettings = lazy(() => import("./pages/GlobalSettings"));
+const Changelog = lazy(() => import("./pages/Changelog"));
+const HelpCenter = lazy(() => import("./pages/HelpCenter"));
+const OfferNegotiationThread = lazy(() => import("./pages/OfferNegotiationThread"));
+const PayerContactBook = lazy(() => import("./pages/PayerContactBook"));
+const APIKeyManagement = lazy(() => import("./pages/APIKeyManagement"));
+const SLABreachMonitor = lazy(() => import("./pages/SLABreachMonitor"));
+const NSAComplianceChecklist = lazy(() => import("./pages/NSAComplianceChecklist"));
+const PaymentReconciliation = lazy(() => import("./pages/PaymentReconciliation"));
+const CustomReportBuilder = lazy(() => import("./pages/CustomReportBuilder"));
+const BulkStatusChange = lazy(() => import("./pages/BulkStatusChange"));
+const CSVImport = lazy(() => import("./pages/CSVImport"));
+const WebhookEventReplay = lazy(() => import("./pages/WebhookEventReplay"));
+const EmailDigestPreferences = lazy(() => import("./pages/EmailDigestPreferences"));
+const DisputeMerge = lazy(() => import("./pages/DisputeMerge"));
+const ArbitratorScorecard = lazy(() => import("./pages/ArbitratorScorecard"));
+const SplitBillAnalysis = lazy(() => import("./pages/SplitBillAnalysis"));
+const TwoFactorAuth = lazy(() => import("./pages/TwoFactorAuth"));
+const MobileDisputeWizard = lazy(() => import("./pages/MobileDisputeWizard"));
+const DisputeClone = lazy(() => import("./pages/DisputeClone"));
+const PayerResponseTimeAnalytics = lazy(() => import("./pages/PayerResponseTimeAnalytics"));
+const DisputeAnnotations = lazy(() => import("./pages/DisputeAnnotations"));
+const BatchEvidenceUpload = lazy(() => import("./pages/BatchEvidenceUpload"));
+const DisputeActivityFeed = lazy(() => import("./pages/DisputeActivityFeed"));
+const PrintableDisputeSummary = lazy(() => import("./pages/PrintableDisputeSummary"));
+const ArbitratorAssignmentHistory = lazy(() => import("./pages/ArbitratorAssignmentHistory"));
+const DisputeWatchlist = lazy(() => import("./pages/DisputeWatchlist"));
+const EscalationManager = lazy(() => import("./pages/EscalationManager"));
+const AppealTracker = lazy(() => import("./pages/AppealTracker"));
+const NarrativeGenerator = lazy(() => import("./pages/NarrativeGenerator"));
+const DocumentExpiryTracker = lazy(() => import("./pages/DocumentExpiryTracker"));
+const DisputeKanban = lazy(() => import("./pages/DisputeKanban"));
+const QPABenchmarkLookup = lazy(() => import("./pages/QPABenchmarkLookup"));
+const IDRCostEstimator = lazy(() => import("./pages/IDRCostEstimator"));
+const NSADeadlineCalendar = lazy(() => import("./pages/NSADeadlineCalendar"));
+const ClaimAgingReport = lazy(() => import("./pages/ClaimAgingReport"));
+const ContractRateComparison = lazy(() => import("./pages/ContractRateComparison"));
+const DisputeRiskHeatmap = lazy(() => import("./pages/DisputeRiskHeatmap"));
+const BatchNotificationSender = lazy(() => import("./pages/BatchNotificationSender"));
+const RegulatoryChangeFeed = lazy(() => import("./pages/RegulatoryChangeFeed"));
+const OfferCounterWizard = lazy(() => import("./pages/OfferCounterWizard"));
+const MultiPartyCoordinator = lazy(() => import("./pages/MultiPartyCoordinator"));
+const ProviderNetworkGapAnalyzer = lazy(() => import("./pages/ProviderNetworkGapAnalyzer"));
+const SmartDeadlineCalculator = lazy(() => import("./pages/SmartDeadlineCalculator"));
+const PayerScorecard = lazy(() => import("./pages/PayerScorecard"));
+const DisputeStatusTimeline = lazy(() => import("./pages/DisputeStatusTimeline"));
+const AuditTrailViewer = lazy(() => import("./pages/AuditTrailViewer"));
+const DisputeSearchAdvanced = lazy(() => import("./pages/DisputeSearchAdvanced"));
+const DisputeFavorites = lazy(() => import("./pages/DisputeFavorites"));
+const DisputeCompareView = lazy(() => import("./pages/DisputeCompareView"));
+const DisputeTagManager = lazy(() => import("./pages/DisputeTagManager"));
+const PerformanceBenchmarks = lazy(() => import("./pages/PerformanceBenchmarks"));
+const DisputeReminders = lazy(() => import("./pages/DisputeReminders"));
+const DisputeExportCenter = lazy(() => import("./pages/DisputeExportCenter"));
+const UserRoleMatrix = lazy(() => import("./pages/UserRoleMatrix"));
+const SystemHealthDashboard = lazy(() => import("./pages/SystemHealthDashboard"));
+const LastEHRIntegration = lazy(() => import("./pages/LastEHRIntegration"));
+const FHIRCapabilityExplorer = lazy(() => import("./pages/FHIRCapabilityExplorer"));
+const BulkFHIRExport = lazy(() => import("./pages/BulkFHIRExport"));
+const CDSHooksManager = lazy(() => import("./pages/CDSHooksManager"));
+const USCDICompleteness = lazy(() => import("./pages/USCDICompleteness"));
+const OllamaManager = lazy(() => import("./pages/OllamaManager"));
+const DaVinciTransactions = lazy(() => import("./pages/DaVinciTransactions"));
+const FHIRCacheViewer = lazy(() => import("./pages/FHIRCacheViewer"));
+const SMARTTokenManager = lazy(() => import("./pages/SMARTTokenManager"));
+const DisputeAccessControl = lazy(() => import("./pages/DisputeAccessControl"));
+const HermesAssistant = lazy(() => import("./pages/HermesAssistant"));
+const SmartFormVisualization = lazy(() => import("./pages/SmartFormVisualization"));
+const CohortAnalysis = lazy(() => import("./pages/CohortAnalysis"));
+const HeartbeatOperations = lazy(() => import("./pages/HeartbeatOperations"));
+const ProviderDisputeManagement = lazy(() => import("./pages/ProviderDisputeManagement"));
+const ProviderSandboxAcceptance = lazy(() => import("./pages/ProviderSandboxAcceptance"));
 
 /** Helper: wraps a component in ProtectedRoute */
-function P({ component: C, admin }: { component: React.ComponentType; admin?: boolean }) {
+function P({ component: C, admin }: { component: ComponentType; admin?: boolean }) {
   return (
     <ProtectedRoute adminOnly={admin}>
       <C />
@@ -122,7 +124,7 @@ function P({ component: C, admin }: { component: React.ComponentType; admin?: bo
 }
 
 /** Helper: wraps a component in ProtectedRoute + DashboardLayout (left sidebar) */
-function PL({ component: C, admin }: { component: React.ComponentType; admin?: boolean }) {
+function PL({ component: C, admin }: { component: ComponentType; admin?: boolean }) {
   return (
     <ProtectedRoute adminOnly={admin}>
       <DashboardLayout>
@@ -256,7 +258,9 @@ function AppInner() {
 
   return (
     <>
-      <Router />
+      <Suspense fallback={<RouteLoading />}> 
+        <Router />
+      </Suspense>
       <SessionExpiryWarning
         open={showWarning}
         remainingMs={warningRemainingMs}
@@ -280,3 +284,7 @@ function App() {
 }
 
 export default App;
+
+function RouteLoading() {
+  return <div className="flex min-h-[14rem] items-center justify-center text-sm text-muted-foreground" role="status">Loading workspace…</div>;
+}

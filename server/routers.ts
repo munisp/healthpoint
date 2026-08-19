@@ -49,6 +49,7 @@ import { encryptCredentials } from "./credential-crypto";
 import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
 import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections, providerSandboxAcceptances } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
+import { getDisputeTemporalWorkflow, getTemporalConfiguration, isTemporalDispatchEnabled, listTemporalWorkflows, startDisputeTemporalWorkflow } from "./temporal";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
 
@@ -2791,31 +2792,37 @@ Based on NSA IDR historical data and legal precedent, provide:
   }),
   // ── Temporal workflow run status ──────────────────────────────────────────────────
   temporal: router({
+    readiness: adminProcedure.query(() => {
+      try {
+        const config = getTemporalConfiguration();
+        return {
+          configured: true,
+          dispatchEnabled: isTemporalDispatchEnabled(),
+          namespace: config.namespace,
+          taskQueue: config.taskQueue,
+          workflowType: config.workflowType,
+          serverName: config.serverName,
+        };
+      } catch (error) {
+        return {
+          configured: false,
+          dispatchEnabled: false,
+          reason: error instanceof Error ? error.message : "Temporal configuration is invalid",
+        };
+      }
+    }),
     workflowStatus: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
       .query(async ({ ctx, input }) => {
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
-        const temporalUrl = process.env.TEMPORAL_UI_URL || "http://localhost:8088";
         try {
-          const res = await fetch(
-            `${temporalUrl}/api/v1/namespaces/idr/workflows?query=DisputeId%3D%22${encodeURIComponent(input.disputeId)}%22`,
-            { signal: AbortSignal.timeout(5_000) }
-          );
-          if (!res.ok) throw new Error(`Temporal API ${res.status}`);
-          const data = await res.json() as { executions?: Array<{ workflowId: string; runId: string; status: string; startTime: string; closeTime?: string }> };
-          return data.executions ?? [];
-        } catch {
-          // Temporal not running — return workflow progress from DB
-          const dispute = await getDisputeById(input.disputeId);
-          if (!dispute) return [];
-          return [{
-            workflowId: `idr-${input.disputeId}`,
-            runId: "local",
-            status: dispute.status,
-            startTime: dispute.createdAt?.toISOString() ?? new Date().toISOString(),
-            closeTime: dispute.status === 'closed' ? dispute.updatedAt?.toISOString() : undefined,
-            currentStep: dispute.currentStep,
-          }];
+          return [await getDisputeTemporalWorkflow(input.disputeId)];
+        } catch (error) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Temporal workflow status is unavailable; strict TLS connectivity and a deployed workflow execution are required",
+            cause: error,
+          });
         }
       }),
     allWorkflows: protectedProcedure
@@ -2825,35 +2832,43 @@ Based on NSA IDR historical data and legal precedent, provide:
       }))
       .query(async ({ ctx, input }) => {
         if (ctx.user.role !== 'admin') throw new TRPCError({ code: 'FORBIDDEN', message: 'Admin only' });
-        const temporalUrl = process.env.TEMPORAL_UI_URL || "http://localhost:8088";
         try {
-          const statusFilter = input.status ? `&status=${input.status}` : '';
-          const res = await fetch(
-            `${temporalUrl}/api/v1/namespaces/idr/workflows?pageSize=${input.limit}${statusFilter}`,
-            { signal: AbortSignal.timeout(5_000) }
-          );
-          if (!res.ok) throw new Error(`Temporal API ${res.status}`);
-          const data = await res.json() as { executions?: unknown[] };
-          return data.executions ?? [];
-        } catch {
-          // Fallback: return disputes as pseudo-workflow runs
-          const db = await getDb();
-          if (!db) return [];
-          const rows = await db.select({
-            id: disputesTable.id,
-            status: disputesTable.status,
-            currentStep: disputesTable.currentStep,
-            createdAt: disputesTable.createdAt,
-            updatedAt: disputesTable.updatedAt,
-          }).from(disputesTable).limit(input.limit);
-          return rows.map(r => ({
-            workflowId: `idr-${r.id}`,
-            runId: "local",
-            status: r.status,
-            currentStep: r.currentStep,
-            startTime: r.createdAt?.toISOString() ?? '',
-            closeTime: r.status === 'closed' ? r.updatedAt?.toISOString() : undefined,
-          }));
+          return await listTemporalWorkflows(input.limit, input.status);
+        } catch (error) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Temporal workflow listing is unavailable; strict TLS connectivity is required",
+            cause: error,
+          });
+        }
+      }),
+    startDisputeWorkflow: adminProcedure
+      .input(z.object({ disputeId: z.string().min(1) }))
+      .mutation(async ({ ctx, input }) => {
+        if (process.env.PAYMENT_EXECUTION_MODE && process.env.PAYMENT_EXECUTION_MODE !== "disabled") {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Temporal dispatch is restricted to the current non-payment execution mode" });
+        }
+        const dispute = await getDisputeById(input.disputeId);
+        if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        try {
+          const result = await startDisputeTemporalWorkflow(input.disputeId, ctx.user.id);
+          await createAuditEntry({
+            userId: ctx.user.id,
+            action: "temporal.workflow_dispatched",
+            entityType: "dispute",
+            entityId: input.disputeId,
+            oldValue: null,
+            newValue: JSON.stringify(result),
+            ipAddress: null,
+            userAgent: null,
+          });
+          return result;
+        } catch (error) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: error instanceof Error ? error.message : "Temporal workflow dispatch is unavailable",
+            cause: error,
+          });
         }
       }),
   }),
@@ -3456,7 +3471,7 @@ Based on NSA IDR historical data and legal precedent, provide:
     submitEvidence: adminProcedure
       .input(z.object({
         providerName: z.string().trim().min(2).max(160),
-        sandboxBaseUrl: z.string().url().optional(),
+        sandboxBaseUrl: z.string().url().refine(value => new URL(value).protocol === "https:", "Sandbox URL must use HTTPS").optional(),
         providerReference: z.string().trim().max(160).optional(),
         mtlsEvidenceState: z.enum(["pending", "submitted", "verified_by_provider", "rejected"]),
         reconciliationEvidenceState: z.enum(["pending", "submitted", "verified_by_provider", "rejected"]),
@@ -3470,7 +3485,12 @@ Based on NSA IDR historical data and legal precedent, provide:
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
         const { nanoid } = await import("nanoid");
-        const { computeAcceptanceStatus } = await import("./provider-acceptance");
+        const { computeAcceptanceStatus, validateProviderEvidenceInput } = await import("./provider-acceptance");
+        try {
+          validateProviderEvidenceInput(input);
+        } catch (error) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : "Invalid provider acceptance evidence" });
+        }
         const status = computeAcceptanceStatus(input.mtlsEvidenceState, input.reconciliationEvidenceState, input.bilateralAttestationReference);
         const [record] = await db.insert(providerSandboxAcceptances).values({ id: nanoid(), submittedBy: ctx.user.id, status, ...input, updatedAt: new Date() }).returning();
         return record;

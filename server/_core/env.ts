@@ -65,6 +65,17 @@ const envSchema = z.object({
   TIGERBEETLE_CLIENT_KEY_PATH: z.string().optional().default(""),
   TIGERBEETLE_CLIENT_KEY_PEM: z.string().optional().default(""),
 
+  // Temporal workflow client. Dispatch remains independently opt-in and
+  // production validation is enforced by server/temporal.ts.
+  TEMPORAL_ADDRESS: z.string().optional().default(""),
+  TEMPORAL_AUTH_TOKEN: z.string().optional().default(""),
+  TEMPORAL_TLS_SERVER_NAME: z.string().optional().default(""),
+  TEMPORAL_NAMESPACE: z.string().optional().default(""),
+  TEMPORAL_TASK_QUEUE: z.string().optional().default(""),
+  TEMPORAL_WORKFLOW_TYPE: z.string().optional().default(""),
+  TEMPORAL_CA_PATH: z.string().optional().default(""),
+  TEMPORAL_EXECUTION_ENABLED: z.enum(["true", "false"]).optional().default("false"),
+
   // Legacy Manus-specific vars — accepted but not used
   VITE_APP_ID: z.string().optional().default(""),
   OWNER_OPEN_ID: z.string().optional().default(""),

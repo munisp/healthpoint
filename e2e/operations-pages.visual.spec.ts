@@ -47,3 +47,12 @@ test("renders the provider dispute workspace with filters and CSV export", async
   await expect(page.getByRole("button", { name: "Export CSV" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("provider-disputes.png"), fullPage: true });
 });
+
+test("renders the provider sandbox acceptance workspace with hardened evidence guidance", async ({ page }, testInfo) => {
+  await page.goto("/admin/provider-acceptance");
+  await expect(page.getByRole("heading", { name: "Provider/FSP Sandbox Acceptance" })).toBeVisible();
+  await expect(page.getByText("Fail-closed settlement posture.")).toBeVisible();
+  await expect(page.getByText("Evidence requirements")).toBeVisible();
+  await expect(page.getByText("Do not submit certificates, private keys, or bearer tokens.")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("provider-sandbox-acceptance.png"), fullPage: true });
+});

@@ -806,6 +806,13 @@
 - [x] Add real-time search and advanced filtering to the Heartbeat operations dashboard; live schedule search plus state, execution-window, and proof-status filters are present
 - [x] Add a persisted provider-to-administrator comment section to dispute management; the review dialog embeds existing PostgreSQL-backed comments with author, reply, edit, and access controls
 
+## Release-Readiness Follow-Through (Aug 19 2026)
+- [x] Integrate the verified Temporal gRPC client with strict TLS, authenticated workflow execution, and fail-closed handling when Temporal is unavailable; client-backed status/listing replaces HTTP UI fallbacks, dispatch is audit-logged and explicitly opt-in
+- [x] Establish development-only Temporal defaults for namespace, task queue, and workflow type; production requires operator-supplied values and cannot dispatch without exact strict-TLS configuration
+- [x] Add route-level client code splitting and quantify the resulting production bundle reduction; inactive pages now emit separate route chunks (for example, 21.28 kB Provider Acceptance and 29.31 kB Heartbeat) while the primary module is 918.67 kB / 247.59 kB gzip, down from the prior 4.46 MB all-pages client bundle
+- [x] Harden the provider/FSP acceptance workflow for real externally issued mTLS and reconciliation-report evidence without enabling payment execution; secret material, local/non-HTTPS endpoints, missing provider references, and incomplete bilateral attestations are rejected
+- [ ] Run TypeScript, regression, visual E2E, production build, and GitHub-main synchronization validation for the release-readiness follow-through
+
 ## Deployment Build Failure Remediation (Aug 16 2026)
 - [x] Resolve the pnpm overrides/lockfile configuration mismatch that blocks Docker's frozen dependency installation; restored lockfile-recorded `pnpm.overrides` in package metadata and verified `pnpm install --frozen-lockfile` succeeds
 - [x] Restore lockfile-recorded pnpm patchedDependencies metadata to package configuration and revalidate deterministic frozen installation; restored the `wouter@3.7.1` patch declaration and verified frozen install, TypeScript, and production build succeed
