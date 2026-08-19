@@ -16,6 +16,7 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
+import { validateOrganizationDetails } from "@shared/onboardingValidation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -114,6 +115,7 @@ export default function Onboarding() {
   const [orgName, setOrgName] = useState("");
   const [orgType, setOrgType] = useState("");
   const [saving, setSaving] = useState(false);
+  const [orgNameTouched, setOrgNameTouched] = useState(false);
 
   // Read role from URL query param (passed from marketing site registration)
   useEffect(() => {
@@ -133,10 +135,13 @@ export default function Onboarding() {
 
   const saveProfileMutation = trpc.profiles.save.useMutation();
   const completeOnboardingMutation = trpc.profiles.completeOnboarding.useMutation();
+  const orgNameError = validateOrganizationDetails(orgName);
+  const canSaveOrganization = !orgNameError && !saving;
 
   const handleSaveOrg = async () => {
-    if (!orgName.trim()) {
-      toast.error("Please enter your organization name.");
+    setOrgNameTouched(true);
+    if (orgNameError) {
+      toast.error(orgNameError);
       return;
     }
     setSaving(true);
@@ -158,7 +163,8 @@ export default function Onboarding() {
     try {
       await completeOnboardingMutation.mutateAsync();
     } catch {
-      // non-blocking — proceed even if the mutation fails
+      toast.error("We could not record onboarding completion. Please retry before leaving this setup.");
+      return;
     }
     const config = ROLE_CONFIG[role];
     navigate(config?.redirectTo || "/");
@@ -178,7 +184,14 @@ export default function Onboarding() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-sky-50 flex flex-col items-center justify-center p-4">
       {/* Progress bar */}
       <div className="w-full max-w-lg mb-8">
-        <div className="flex items-center justify-between mb-2">
+        <div className="mb-3 flex items-center justify-between text-sm">
+          <span className="font-medium text-slate-700">Step {step + 1} of {STEPS.length}: {STEPS[step]}</span>
+          <span className="font-semibold text-sky-700">{Math.round(((step + 1) / STEPS.length) * 100)}% complete</span>
+        </div>
+        <div className="mb-2 h-2 overflow-hidden rounded-full bg-slate-200" aria-label={`Onboarding progress: step ${step + 1} of ${STEPS.length}`}>
+          <div className="h-full rounded-full bg-sky-500 transition-all duration-300" style={{ width: `${((step + 1) / STEPS.length) * 100}%` }} />
+        </div>
+        <div className="flex items-center justify-between mb-2" aria-hidden="true">
           {STEPS.map((s, i) => (
             <div key={s} className="flex items-center gap-2">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-colors ${
@@ -259,9 +272,15 @@ export default function Onboarding() {
                   id="orgName"
                   placeholder="e.g., Regional Medical Center"
                   value={orgName}
-                  onChange={e => setOrgName(e.target.value)}
-                  className="mt-1.5"
+                  onChange={e => { setOrgName(e.target.value); setOrgNameTouched(true); }}
+                  onBlur={() => setOrgNameTouched(true)}
+                  aria-invalid={orgNameTouched && Boolean(orgNameError)}
+                  aria-describedby="org-name-feedback"
+                  className={`mt-1.5 ${orgNameTouched && orgNameError ? "border-destructive focus-visible:ring-destructive" : orgNameTouched && !orgNameError ? "border-emerald-500" : ""}`}
                 />
+                <p id="org-name-feedback" role={orgNameTouched && orgNameError ? "alert" : undefined} className={`mt-1.5 text-xs ${orgNameTouched && orgNameError ? "text-destructive" : orgNameTouched ? "text-emerald-700" : "text-muted-foreground"}`}>
+                  {orgNameTouched && orgNameError ? orgNameError : orgNameTouched ? "Organization name looks good." : "Use the legal or operating name used for IDR communications."}
+                </p>
               </div>
               <div>
                 <Label htmlFor="orgType">Organization Type</Label>
@@ -299,7 +318,7 @@ export default function Onboarding() {
               </div>
               <div className="flex gap-3 pt-2">
                 <Button variant="outline" onClick={() => setStep(0)} className="flex-1">Back</Button>
-                <Button onClick={handleSaveOrg} disabled={saving} className="flex-1">
+                <Button onClick={handleSaveOrg} disabled={!canSaveOrganization} className="flex-1">
                   {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                   Continue <ArrowRight className="w-4 h-4 ml-2" />
                 </Button>
@@ -346,7 +365,8 @@ export default function Onboarding() {
               <CardDescription>Your HealthPoint account is ready. Let's start managing your NSA/IDR disputes.</CardDescription>
             </CardHeader>
             <CardContent className="pt-4">
-              <Button onClick={handleFinish} className="w-full" size="lg">
+              <Button onClick={handleFinish} disabled={completeOnboardingMutation.isPending} className="w-full" size="lg">
+                {completeOnboardingMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Open My Dashboard <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </CardContent>

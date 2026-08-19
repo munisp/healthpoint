@@ -790,6 +790,12 @@
 - [x] Trace and present the implemented onboarding UI/persistence flow and Keycloak backend authentication routes; verified `LoginPage`, `Onboarding`, profile tRPC procedures, Keycloak PKCE routes, and protected route registration
 - [x] Execute safe provider-role onboarding simulation coverage without creating a real user account; isolated local PostgreSQL simulation persisted provider organization choices, marked completion, verified provider dashboard destination, and cleaned up its synthetic test identity
 
+## Provider Operations UX and Production Readiness Reassessment (Aug 19 2026)
+- [x] Build an admin interface for Heartbeat execution history and balance-proof evidence; `/admin/heartbeat` uses authenticated owner schedule data plus durable PostgreSQL proof and exception records, with a focused summary test and TypeScript validation
+- [x] Add visible multi-step progress and real-time validation feedback to provider onboarding; visible percentage/step labels, accessible organization-name feedback, save gating, completion retry protection, TypeScript, and shared validation test pass
+- [x] Build a provider disputes management page with persisted tracking, filtering, and controlled resolution actions; `/provider/disputes` uses real dispute queries, filter state, deadline/payment summaries, controlled record routing, TypeScript, and persisted-summary test coverage
+- [x] Test the new interfaces end to end and reassess production readiness, including an explicit inventory of test-only simulations, mocks, or stubs; 188 tests pass (2 connectivity probes intentionally skipped), production build passes, and findings are documented in `docs/production-readiness-reassessment-2026-08-19.md`
+
 ## Deployment Build Failure Remediation (Aug 16 2026)
 - [x] Resolve the pnpm overrides/lockfile configuration mismatch that blocks Docker's frozen dependency installation; restored lockfile-recorded `pnpm.overrides` in package metadata and verified `pnpm install --frozen-lockfile` succeeds
 - [x] Restore lockfile-recorded pnpm patchedDependencies metadata to package configuration and revalidate deterministic frozen installation; restored the `wouter@3.7.1` patch declaration and verified frozen install, TypeScript, and production build succeed

@@ -107,6 +107,8 @@ import DisputeAccessControl from "@/pages/DisputeAccessControl";
 import HermesAssistant from "@/pages/HermesAssistant";
 import SmartFormVisualization from "@/pages/SmartFormVisualization";
 import CohortAnalysis from "@/pages/CohortAnalysis";
+import HeartbeatOperations from "@/pages/HeartbeatOperations";
+import ProviderDisputeManagement from "@/pages/ProviderDisputeManagement";
 import ProtectedRoute from "./components/ProtectedRoute";
 import DashboardLayout from "./components/DashboardLayout";
 
@@ -150,7 +152,8 @@ function Router() {
       <Route path={"/disputes/clone"} component={() => <PL component={DisputeClone} />} />
       <Route path={"/disputes/:id/negotiate"} component={() => <PL component={OfferNegotiationThread} />} />
       <Route path={"/disputes/:id"} component={() => <PL component={DisputeDetail} />} />
-      <Route path={"/disputes"} component={() => <PL component={DisputesList} />} />
+      <Route path="/disputes" component={() => <PL component={DisputesList} />} />
+      <Route path="/provider/disputes" component={() => <PL component={ProviderDisputeManagement} />} />
       <Route path="/idr-entities" component={() => <PL component={IDREntityDashboard} />} />
       <Route path="/notifications" component={() => <PL component={Notifications} />} />
       <Route path="/ai-assistant" component={() => <PL component={AIAssistant} />} />
@@ -237,6 +240,7 @@ function Router() {
 
       {/* Admin-only routes */}
       <Route path="/admin/leads" component={() => <PL component={LeadsManager} admin />} />
+      <Route path="/admin/heartbeat" component={() => <PL component={HeartbeatOperations} admin />} />
       <Route path={"/admin/users"} component={() => <PL component={AdminUserManagement} admin />} />
       <Route path="/admin" component={() => <PL component={Admin} admin />} />
 

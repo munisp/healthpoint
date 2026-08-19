@@ -38,6 +38,7 @@ import { dispatchOutboxBatch } from "./outbox";
 import { createSettlementTransfer, decideSettlementTransfer, getSettlementTransfer, listSettlementTransfers, markSettlementTransferSubmitted } from "./settlement-lifecycle";
 import { listSettlementBalanceProofs, listSettlementExceptionReviews, reviewSettlementException } from "./settlement-proof";
 import { configureDailyBalanceProofSchedule } from "./settlement-proof";
+import { listHeartbeatJobs } from "./_core/heartbeat";
 import { parse as parseCookie } from "cookie";
 import { search, generateLakehouseExport, invalidateSearchIndex, suggest, indexDocument, deleteFromIndex } from "./search";
 import { storagePut, storageGet } from "./storage";
@@ -4637,6 +4638,13 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         if (!sessionToken) throw new TRPCError({ code: "UNAUTHORIZED", message: "A signed-in session is required to configure the schedule" });
         return configureDailyBalanceProofSchedule({ cron: input.cron, userSession: sessionToken });
       }),
+  }),
+
+  heartbeatOperations: router({
+    list: adminProcedure.query(async ({ ctx }) => {
+      const sessionToken = parseCookie(ctx.req.headers.cookie ?? "")[COOKIE_NAME] ?? "";
+      return listHeartbeatJobs(sessionToken, { page: 1, pageSize: 100 });
+    }),
   }),
 });
 export type AppRouter = typeof appRouter;

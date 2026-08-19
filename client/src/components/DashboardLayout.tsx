@@ -30,6 +30,7 @@ import {
   BarChart3,
   Bell,
   BellRing,
+  BriefcaseBusiness,
   BookMarked,
   BookOpen,
   BookTemplate,
@@ -57,6 +58,7 @@ import {
   FileDown,
   FileUp,
   FileWarning,
+  Gavel,
   GitBranch,
   GitCompare,
   GitMerge,
@@ -140,7 +142,8 @@ const NAV_GROUPS: NavGroup[] = [
     defaultOpen: true,
     items: [
       { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
-      { icon: Scale, label: "Disputes", path: "/disputes" },
+      { icon: Gavel, label: "Disputes", path: "/disputes" },
+      { icon: BriefcaseBusiness, label: "Provider Workspace", path: "/provider/disputes" },
       { icon: PlusCircle, label: "New Dispute", path: "/disputes/new" },
       { icon: Smartphone, label: "Dispute Wizard", path: "/disputes/wizard" },
       { icon: Kanban, label: "Kanban Board", path: "/kanban" },
@@ -284,6 +287,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { icon: ShieldCheck, label: "Admin", path: "/admin", adminOnly: true },
       { icon: Users, label: "User Mgmt", path: "/admin/users", adminOnly: true },
+      { icon: Clock, label: "Heartbeats & Proofs", path: "/admin/heartbeat", adminOnly: true },
       { icon: BookOpen, label: "Fin. Ledger", path: "/ledger" },
       { icon: Receipt, label: "Transaction History", path: "/transactions" },
       { icon: Activity, label: "System Health", path: "/system-health" },
