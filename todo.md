@@ -811,7 +811,7 @@
 - [x] Establish development-only Temporal defaults for namespace, task queue, and workflow type; production requires operator-supplied values and cannot dispatch without exact strict-TLS configuration
 - [x] Add route-level client code splitting and quantify the resulting production bundle reduction; inactive pages now emit separate route chunks (for example, 21.28 kB Provider Acceptance and 29.31 kB Heartbeat) while the primary module is 918.67 kB / 247.59 kB gzip, down from the prior 4.46 MB all-pages client bundle
 - [x] Harden the provider/FSP acceptance workflow for real externally issued mTLS and reconciliation-report evidence without enabling payment execution; secret material, local/non-HTTPS endpoints, missing provider references, and incomplete bilateral attestations are rejected
-- [ ] Run TypeScript, regression, visual E2E, production build, and GitHub-main synchronization validation for the release-readiness follow-through
+- [x] Run TypeScript, regression, visual E2E, production build, and GitHub-main synchronization validation for the release-readiness follow-through; 194 Vitest tests passed with 2 documented skips, 3 visual E2E scenarios passed, build passed, and GitHub main is 7195880 with 0/0 divergence and no open PRs
 
 ## Deployment Build Failure Remediation (Aug 16 2026)
 - [x] Resolve the pnpm overrides/lockfile configuration mismatch that blocks Docker's frozen dependency installation; restored lockfile-recorded `pnpm.overrides` in package metadata and verified `pnpm install --frozen-lockfile` succeeds
