@@ -287,6 +287,7 @@ const NAV_GROUPS: NavGroup[] = [
       { icon: ShieldCheck, label: "Admin", path: "/admin", adminOnly: true },
       { icon: Users, label: "User Mgmt", path: "/admin/users", adminOnly: true },
       { icon: Clock, label: "Heartbeats & Proofs", path: "/admin/heartbeat", adminOnly: true },
+      { icon: Workflow, label: "Temporal Operations", path: "/admin/temporal-operations", adminOnly: true },
       { icon: ShieldCheck, label: "Provider Acceptance", path: "/admin/provider-acceptance", adminOnly: true },
       { icon: BookOpen, label: "Fin. Ledger", path: "/ledger" },
       { icon: Receipt, label: "Transaction History", path: "/transactions" },

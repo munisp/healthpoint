@@ -56,3 +56,13 @@ test("renders the provider sandbox acceptance workspace with hardened evidence g
   await expect(page.getByText("Do not submit certificates, private keys, or bearer tokens.")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("provider-sandbox-acceptance.png"), fullPage: true });
 });
+
+test("renders the controlled Temporal dispatch operations dashboard", async ({ page }, testInfo) => {
+  await page.goto("/admin/temporal-operations");
+  await expect(page.getByRole("heading", { name: "Temporal Dispatch Operations" })).toBeVisible();
+  await expect(page.getByText("Safety boundary:")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run controlled mock drill" })).toBeVisible();
+  await expect(page.getByText("Connection recovery")).toBeVisible();
+  await expect(page.getByText("Dispatch and drill history")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("temporal-operations.png"), fullPage: true });
+});

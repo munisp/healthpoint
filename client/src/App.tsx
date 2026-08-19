@@ -113,6 +113,7 @@ const CohortAnalysis = lazy(() => import("./pages/CohortAnalysis"));
 const HeartbeatOperations = lazy(() => import("./pages/HeartbeatOperations"));
 const ProviderDisputeManagement = lazy(() => import("./pages/ProviderDisputeManagement"));
 const ProviderSandboxAcceptance = lazy(() => import("./pages/ProviderSandboxAcceptance"));
+const TemporalOperations = lazy(() => import("./pages/TemporalOperations"));
 
 /** Helper: wraps a component in ProtectedRoute */
 function P({ component: C, admin }: { component: ComponentType; admin?: boolean }) {
@@ -243,6 +244,7 @@ function Router() {
       <Route path="/admin/leads" component={() => <PL component={LeadsManager} admin />} />
       <Route path="/admin/heartbeat" component={() => <PL component={HeartbeatOperations} admin />} />
       <Route path="/admin/provider-acceptance" component={() => <PL component={ProviderSandboxAcceptance} admin />} />
+      <Route path="/admin/temporal-operations" component={() => <PL component={TemporalOperations} admin />} />
       <Route path={"/admin/users"} component={() => <PL component={AdminUserManagement} admin />} />
       <Route path="/admin" component={() => <PL component={Admin} admin />} />
 

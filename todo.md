@@ -813,6 +813,12 @@
 - [x] Harden the provider/FSP acceptance workflow for real externally issued mTLS and reconciliation-report evidence without enabling payment execution; secret material, local/non-HTTPS endpoints, missing provider references, and incomplete bilateral attestations are rejected
 - [x] Run TypeScript, regression, visual E2E, production build, and GitHub-main synchronization validation for the release-readiness follow-through; 194 Vitest tests passed with 2 documented skips, 3 visual E2E scenarios passed, build passed, and GitHub main is 7195880 with 0/0 divergence and no open PRs
 
+## Controlled Temporal Operations (Aug 19 2026)
+- [x] Implement a synthetic, non-payment Temporal workflow dispatch drill that cannot advance a real dispute or create a settlement instruction; uses a mock transport and a synthetic identifier only, requires disabled payment execution, and emits a SHA-256 evidence hash
+- [x] Add an admin Temporal operations dashboard showing readiness, dispatch history, controlled-drill results, and workflow status; the route is lazy-loaded at `/admin/temporal-operations` and backed by durable PostgreSQL audit evidence
+- [x] Improve Temporal client failures with user-friendly error guidance, bounded connection retries, and audit evidence for failed attempts; connection establishment uses at most three retries while workflow start remains non-retried and explicit
+- [x] Add unit and visual E2E coverage for the controlled drill, Temporal operations dashboard, and connection-recovery states; PostgreSQL-backed drill evidence, 4 authenticated operations visual scenarios, 197 Vitest tests, TypeScript, and build pass
+
 ## Deployment Build Failure Remediation (Aug 16 2026)
 - [x] Resolve the pnpm overrides/lockfile configuration mismatch that blocks Docker's frozen dependency installation; restored lockfile-recorded `pnpm.overrides` in package metadata and verified `pnpm install --frozen-lockfile` succeeds
 - [x] Restore lockfile-recorded pnpm patchedDependencies metadata to package configuration and revalidate deterministic frozen installation; restored the `wouter@3.7.1` patch declaration and verified frozen install, TypeScript, and production build succeed

@@ -49,7 +49,7 @@ import { encryptCredentials } from "./credential-crypto";
 import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
 import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections, providerSandboxAcceptances } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
-import { getDisputeTemporalWorkflow, getTemporalConfiguration, isTemporalDispatchEnabled, listTemporalWorkflows, startDisputeTemporalWorkflow } from "./temporal";
+import { describeTemporalFailure, getDisputeTemporalWorkflow, getTemporalClient, getTemporalConfiguration, isTemporalDispatchEnabled, listTemporalWorkflows, runControlledTemporalDispatchDrill, startDisputeTemporalWorkflow } from "./temporal";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
 
@@ -2811,6 +2811,54 @@ Based on NSA IDR historical data and legal precedent, provide:
         };
       }
     }),
+    checkConnection: adminProcedure.mutation(async () => {
+      try {
+        const { config } = await getTemporalClient();
+        return {
+          reachable: true,
+          message: "Temporal accepted a strictly authenticated connection.",
+          namespace: config.namespace,
+          taskQueue: config.taskQueue,
+        };
+      } catch (error) {
+        return {
+          reachable: false,
+          recovery: describeTemporalFailure(error, (error as { recovery?: { attempts?: number } })?.recovery?.attempts ?? 1),
+        };
+      }
+    }),
+    dispatchHistory: adminProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(100).default(30) }).optional())
+      .query(async ({ input }) => {
+        const rows = await listAuditEntries({ entityType: "temporal_dispatch", limit: input?.limit ?? 30 });
+        return rows.map(row => {
+          let details: Record<string, unknown> | null = null;
+          try { details = row.newValue ? JSON.parse(row.newValue) as Record<string, unknown> : null; } catch { details = null; }
+          return { ...row, details };
+        });
+      }),
+    runControlledDrill: adminProcedure.mutation(async ({ ctx }) => {
+      try {
+        const drill = runControlledTemporalDispatchDrill(ctx.user.id);
+        const audit = await createAuditEntry({
+          userId: ctx.user.id,
+          action: "temporal.controlled_drill.verified",
+          entityType: "temporal_dispatch",
+          entityId: drill.drillId,
+          oldValue: null,
+          newValue: JSON.stringify(drill),
+          ipAddress: null,
+          userAgent: null,
+        });
+        return { drill, auditId: audit.id };
+      } catch (error) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: error instanceof Error ? error.message : "Controlled Temporal drill could not be completed",
+          cause: error,
+        });
+      }
+    }),
     workflowStatus: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
       .query(async ({ ctx, input }) => {
@@ -2855,7 +2903,7 @@ Based on NSA IDR historical data and legal precedent, provide:
           await createAuditEntry({
             userId: ctx.user.id,
             action: "temporal.workflow_dispatched",
-            entityType: "dispute",
+            entityType: "temporal_dispatch",
             entityId: input.disputeId,
             oldValue: null,
             newValue: JSON.stringify(result),
