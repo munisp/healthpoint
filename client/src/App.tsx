@@ -108,6 +108,7 @@ import SmartFormVisualization from "@/pages/SmartFormVisualization";
 import CohortAnalysis from "@/pages/CohortAnalysis";
 import HeartbeatOperations from "@/pages/HeartbeatOperations";
 import ProviderDisputeManagement from "@/pages/ProviderDisputeManagement";
+import ProviderSandboxAcceptance from "@/pages/ProviderSandboxAcceptance";
 import ProtectedRoute from "./components/ProtectedRoute";
 import DashboardLayout from "./components/DashboardLayout";
 
@@ -239,6 +240,7 @@ function Router() {
       {/* Admin-only routes */}
       <Route path="/admin/leads" component={() => <PL component={LeadsManager} admin />} />
       <Route path="/admin/heartbeat" component={() => <PL component={HeartbeatOperations} admin />} />
+      <Route path="/admin/provider-acceptance" component={() => <PL component={ProviderSandboxAcceptance} admin />} />
       <Route path={"/admin/users"} component={() => <PL component={AdminUserManagement} admin />} />
       <Route path="/admin" component={() => <PL component={Admin} admin />} />
 

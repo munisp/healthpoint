@@ -992,6 +992,32 @@ export const disputeComments = pgTable(
 export type DisputeComment = typeof disputeComments.$inferSelect;
 export type InsertDisputeComment = typeof disputeComments.$inferInsert;
 
+// ─── Provider/FSP Sandbox Acceptance Evidence ────────────────────────────────
+// Evidence collection only: no database field can enable payment execution or
+// self-certify a provider relationship.
+export const providerSandboxAcceptances = pgTable(
+  "provider_sandbox_acceptances",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    providerName: varchar("providerName", { length: 160 }).notNull(),
+    sandboxBaseUrl: text("sandboxBaseUrl"),
+    providerReference: varchar("providerReference", { length: 160 }),
+    mtlsEvidenceState: varchar("mtlsEvidenceState", { length: 32 }).notNull().default("pending"),
+    reconciliationEvidenceState: varchar("reconciliationEvidenceState", { length: 32 }).notNull().default("pending"),
+    bilateralAttestationReference: varchar("bilateralAttestationReference", { length: 160 }),
+    evidenceNotes: text("evidenceNotes"),
+    status: varchar("status", { length: 32 }).notNull().default("draft"),
+    submittedBy: varchar("submittedBy", { length: 64 }).notNull(),
+    submittedAt: timestamp("submittedAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("provider_sandbox_acceptances_status_idx").on(t.status),
+    index("provider_sandbox_acceptances_submittedAt_idx").on(t.submittedAt),
+  ]
+);
+export type ProviderSandboxAcceptance = typeof providerSandboxAcceptances.$inferSelect;
+
 // ─── Payer Contact Book ───────────────────────────────────────────────────────
 export const payerContacts = pgTable(
   "payer_contacts",

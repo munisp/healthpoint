@@ -47,7 +47,7 @@ import { generateReportsPDF, generateReportsCSV } from "./reports-export";
 import { getDb, checkDbHealth } from "./db";
 import { encryptCredentials } from "./credential-crypto";
 import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
-import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections } from "../drizzle/schema";
+import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections, providerSandboxAcceptances } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
@@ -3446,6 +3446,37 @@ Based on NSA IDR historical data and legal precedent, provide:
         return { success: true };
       }),
   }),
+
+  providerAcceptance: router({
+    list: adminProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) return [];
+      return db.select().from(providerSandboxAcceptances).orderBy(desc(providerSandboxAcceptances.submittedAt));
+    }),
+    submitEvidence: adminProcedure
+      .input(z.object({
+        providerName: z.string().trim().min(2).max(160),
+        sandboxBaseUrl: z.string().url().optional(),
+        providerReference: z.string().trim().max(160).optional(),
+        mtlsEvidenceState: z.enum(["pending", "submitted", "verified_by_provider", "rejected"]),
+        reconciliationEvidenceState: z.enum(["pending", "submitted", "verified_by_provider", "rejected"]),
+        bilateralAttestationReference: z.string().trim().max(160).optional(),
+        evidenceNotes: z.string().trim().max(5000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        if (process.env.PAYMENT_EXECUTION_MODE && process.env.PAYMENT_EXECUTION_MODE !== "disabled") {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Provider evidence recording is permitted only while payment execution remains disabled" });
+        }
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const { nanoid } = await import("nanoid");
+        const { computeAcceptanceStatus } = await import("./provider-acceptance");
+        const status = computeAcceptanceStatus(input.mtlsEvidenceState, input.reconciliationEvidenceState, input.bilateralAttestationReference);
+        const [record] = await db.insert(providerSandboxAcceptances).values({ id: nanoid(), submittedBy: ctx.user.id, status, ...input, updatedAt: new Date() }).returning();
+        return record;
+      }),
+  }),
+
   // ── Dispute Watchlist ────────────────────────────────────────────────────────
   watchlist: router({
     list: protectedProcedure.query(async ({ ctx }) => {

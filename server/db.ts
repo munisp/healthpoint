@@ -1,7 +1,8 @@
 import { eq, desc, and, or, like, count, sql, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import {
   InsertUser, users,
   disputes, InsertDispute, Dispute,
@@ -57,10 +58,13 @@ export function resolvePostgresTlsOptions(connectionString: string): { ssl?: { r
   if (parsed.searchParams.get("sslmode") !== "verify-ca") {
     throw new Error("EXTERNAL_POSTGRES_URL requires sslmode=verify-ca");
   }
-  const rootCertPath = parsed.searchParams.get("sslrootcert");
-  if (!rootCertPath) {
+  const configuredRootCertPath = parsed.searchParams.get("sslrootcert");
+  if (!configuredRootCertPath) {
     throw new Error("EXTERNAL_POSTGRES_URL requires sslrootcert for strict CA validation");
   }
+  const rootCertPath = !existsSync(configuredRootCertPath) && process.env.NODE_ENV !== "production" && configuredRootCertPath.startsWith("/app/infra/")
+    ? path.resolve(process.cwd(), configuredRootCertPath.replace("/app/", ""))
+    : configuredRootCertPath;
   const servername = process.env.EXTERNAL_POSTGRES_TLS_SERVER_NAME?.trim();
   if (!servername || !/^(?:[a-z0-9-]+\.)*[a-z0-9-]+$/i.test(servername)) {
     throw new Error("EXTERNAL_POSTGRES_TLS_SERVER_NAME is required for strict certificate hostname validation");

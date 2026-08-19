@@ -34,6 +34,9 @@ test("renders the Heartbeat operations dashboard with durable proof controls", a
   await expect(page.getByRole("heading", { name: "Heartbeat & Balance Proofs" })).toBeVisible();
   await expect(page.getByText("Heartbeat execution state")).toBeVisible();
   await expect(page.getByText("Durable balance-proof evidence")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Search Heartbeat records" })).toBeVisible();
+  await expect(page.getByText("All schedule states")).toBeVisible();
+  await expect(page.getByText("All proof statuses")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("heartbeat-operations.png"), fullPage: true });
 });
 
