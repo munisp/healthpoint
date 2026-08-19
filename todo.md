@@ -781,7 +781,8 @@
 ## Publish, Scheduler, and Provider Evidence Handoff (Aug 16 2026)
 - [x] Prepare managed PostgreSQL publish-time binding verification and instruct the user to publish the saved checkpoint through the project UI; added `scripts/verify-deployed-postgres-binding.sh` and the exact environment contract in `docs/managed-postgres-deployment-binding.md`
 - [x] Prepare the exact six-field UTC daily balance-proof Heartbeat command and post-run observation procedure; documented in `docs/managed-postgres-deployment-binding.md`
-- [ ] Create and observe the daily settlement balance-proof Heartbeat job after the site is published and database binding is verified
+- [x] Create and observe the daily settlement balance-proof Heartbeat job after the site is published and database binding is verified; deployed health reports PostgreSQL connected and the Heartbeat returned HTTP 201 with a passed balance proof on 2026-08-19
+- [x] Persist the deployed Heartbeat task UID in the balance-proof scheduler configuration so authenticated invocations run the proof rather than returning `orphaned_or_disabled_schedule`; task `FxWajBTUrTopJHkcxzhgDy` is durably bound and both platform and database schedules are restored to `0 0 2 * * *` UTC
 - [x] Authenticate the balance-proof Heartbeat callback through the platform cron identity before observing the scheduled execution; platform cron identity is accepted, regular unauthenticated requests are rejected, and focused tests, TypeScript, and production build pass
 - [x] Provide secure intake requirements for provider/FSP sandbox mTLS materials and reconciliation-report acceptance evidence; documented in `docs/provider-sandbox-evidence-intake.md` with the fail-closed `scripts/validate-provider-sandbox-evidence.sh` credential-chain and key-pair validator
 
