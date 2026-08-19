@@ -76,7 +76,6 @@ import ClaimAgingReport from "@/pages/ClaimAgingReport";
 import ContractRateComparison from "@/pages/ContractRateComparison";
 import DisputeRiskHeatmap from "@/pages/DisputeRiskHeatmap";
 import BatchNotificationSender from "@/pages/BatchNotificationSender";
-import DisputeOutcomeSimulator from "@/pages/DisputeOutcomeSimulator";
 import RegulatoryChangeFeed from "@/pages/RegulatoryChangeFeed";
 import OfferCounterWizard from "@/pages/OfferCounterWizard";
 import MultiPartyCoordinator from "@/pages/MultiPartyCoordinator";
@@ -206,7 +205,6 @@ function Router() {
       <Route path="/contract-rates" component={() => <PL component={ContractRateComparison} />} />
       <Route path="/risk-heatmap" component={() => <PL component={DisputeRiskHeatmap} />} />
       <Route path="/batch-notify" component={() => <PL component={BatchNotificationSender} />} />
-      <Route path="/outcome-simulator" component={() => <PL component={DisputeOutcomeSimulator} />} />
       <Route path="/regulatory-feed" component={() => <PL component={RegulatoryChangeFeed} />} />
       <Route path="/counter-offer" component={() => <PL component={OfferCounterWizard} />} />
       <Route path="/multi-party" component={() => <PL component={MultiPartyCoordinator} />} />

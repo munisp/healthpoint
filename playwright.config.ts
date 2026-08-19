@@ -22,6 +22,7 @@ export default defineConfig({
       NODE_ENV: "development",
       PORT: "4173",
       DATABASE_URL: databaseUrl,
+      JWT_SECRET: "visual-e2e-session-secret-32-characters-minimum",
       SETTLEMENT_CALLBACK_PROVIDER: "mojaloop",
       SETTLEMENT_MTLS_REQUIRED: "true",
     },

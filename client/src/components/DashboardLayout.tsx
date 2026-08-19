@@ -178,7 +178,6 @@ const NAV_GROUPS: NavGroup[] = [
       { icon: Group, label: "Cohort Analysis", path: "/cohort-analysis" },
       { icon: Building2, label: "Payer Intel", path: "/payer-intelligence" },
       { icon: Target, label: "Risk Heatmap", path: "/risk-heatmap" },
-      { icon: Shuffle, label: "Outcome Simulator", path: "/outcome-simulator" },
       { icon: TrendingDown, label: "Claim Aging", path: "/claim-aging" },
       { icon: Clock, label: "Payer Response Times", path: "/payer-response-times" },
       { icon: Star, label: "Payer Scorecard", path: "/payer-scorecard" },

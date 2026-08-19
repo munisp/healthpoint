@@ -796,6 +796,11 @@
 - [x] Build a provider disputes management page with persisted tracking, filtering, and controlled resolution actions; `/provider/disputes` uses real dispute queries, filter state, deadline/payment summaries, controlled record routing, TypeScript, and persisted-summary test coverage
 - [x] Test the new interfaces end to end and reassess production readiness, including an explicit inventory of test-only simulations, mocks, or stubs; 188 tests pass (2 connectivity probes intentionally skipped), production build passes, and findings are documented in `docs/production-readiness-reassessment-2026-08-19.md`
 
+## Legacy Service Remediation, Provider Export, and Visual E2E (Aug 19 2026)
+- [x] Inventory and remove from the production release surface any simulated legacy services that are not real PostgreSQL-backed integrations; production Docker copies only `dist`, production dependencies, and trusted infrastructure certificates, active TypeScript simulators refuse production use, and the legacy outcome simulator was removed from production routing/navigation
+- [x] Add a CSV export to the provider disputes workspace that honors active persisted filters; reuses authorized `disputes.exportCSV`, exports exactly active search/status results, and passed TypeScript plus 151 focused router/workspace tests
+- [x] Add visual E2E coverage for Heartbeat operations and provider dispute-management pages; isolated admin session fixture verified both live page layouts and controls in Playwright Chromium with 2 passing screenshots
+
 ## Deployment Build Failure Remediation (Aug 16 2026)
 - [x] Resolve the pnpm overrides/lockfile configuration mismatch that blocks Docker's frozen dependency installation; restored lockfile-recorded `pnpm.overrides` in package metadata and verified `pnpm install --frozen-lockfile` succeeds
 - [x] Restore lockfile-recorded pnpm patchedDependencies metadata to package configuration and revalidate deterministic frozen installation; restored the `wouter@3.7.1` patch declaration and verified frozen install, TypeScript, and production build succeed

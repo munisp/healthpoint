@@ -16,13 +16,15 @@
 
 The active web application is backed by PostgreSQL and uses authenticated route procedures for disputes, profiles, settlement proofs, and administrative scheduling. The deployed health endpoint reported a connected PostgreSQL database, and the registered balance-proof Heartbeat was bound to durable configuration, executed with HTTP 201, and restored to its daily 02:00 UTC cadence. The current assurance run completed **188 passing tests with 2 intentionally skipped connectivity probes**, and the production build completed successfully.
 
+The production Docker image copies only `package.json`, production `node_modules`, `dist`, and `infra` from the build stage. It does not include the repository’s legacy Python service directories. The two simulator modules in the active TypeScript server are explicitly test-only and reject production invocation; they do not provide fallback business or settlement behavior.
+
 ## Simulated, Test-Only, and Placeholder Inventory
 
 | Location or feature | Classification | Production impact |
 |---|---|---|
 | `server/provider-sandbox-simulator.ts` | **Intentional test-only simulator**; refuses production/non-disabled execution | Does not establish provider acceptance and cannot authorize payment execution. |
 | `server/emr-sandbox-simulator.ts` | **Intentional test-only encryption lifecycle simulator**; refuses production | Does not connect to an EMR or process clinical records. |
-| `client/src/pages/DisputeOutcomeSimulator.tsx` | User-facing scenario/decision simulation | Must be labeled as illustrative decision support unless fed by validated, governed model data. |
+| `client/src/pages/DisputeOutcomeSimulator.tsx` | Legacy scenario/decision simulation | Removed from the production route and navigation surface; it is not an active deployed feature. |
 | `ai-ml-dl-implementation/`, legacy top-level Python services, and several `backend/core-services` modules | Contains explicit mock, placeholder, random/simulated, or demonstration logic | Not part of the active TypeScript deployment evidence; cannot be represented as production services without separate integration, security review, test coverage, and removal/replacement of simulated logic. |
 | Provider/FSP integration | No provider-issued certificate/key, provider sandbox endpoint, reconciliation report schema, or signed acceptance record | External release blocker. Real-money execution remains disabled. |
 
