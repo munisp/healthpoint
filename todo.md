@@ -822,7 +822,7 @@
 ## Live Temporal Configuration and Alerting (Aug 19 2026)
 - [ ] Configure approved Temporal namespace, task queue, workflow type, and strict TLS server identity through protected runtime configuration without enabling settlement execution
 - [ ] Run and record a supervised read-only Temporal workflow status check using the approved worker configuration
-- [ ] Persist repeated Temporal connection-failure evidence and add visible threshold-based alerts to the admin Temporal operations dashboard
+- [x] Persist repeated Temporal connection-failure evidence and add visible threshold-based alerts to the admin Temporal operations dashboard; verified with three PostgreSQL-backed supervised default-mode failures and authenticated visual coverage
 - [ ] Validate live-configuration guards, status-check evidence, alert behavior, TypeScript, regression, visual E2E, production build, and GitHub-main synchronization
 
 ## Default-Mode Temporal Alerting (Aug 19 2026)
