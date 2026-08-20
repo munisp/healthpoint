@@ -11,6 +11,7 @@ export type TemporalConfiguration = {
   taskQueue: string;
   workflowType: string;
   caPath: string;
+  usingDevelopmentDefaults: boolean;
 };
 
 const DEVELOPMENT_DEFAULTS = {
@@ -33,6 +34,25 @@ export type TemporalRecoveryDetails = {
   message: string;
   guidance: string;
 };
+
+export type TemporalConnectionFailureRecord = {
+  action: string;
+  createdAt: Date | string;
+  newValue?: string | null;
+};
+
+export function summarizeTemporalConnectionFailures(records: TemporalConnectionFailureRecord[], now = new Date(), threshold = 3, windowMinutes = 15) {
+  const since = now.getTime() - windowMinutes * 60_000;
+  const failures = records.filter(record => record.action === "temporal.connection_check.failed" && new Date(record.createdAt).getTime() >= since);
+  return {
+    threshold,
+    windowMinutes,
+    failureCount: failures.length,
+    visible: failures.length >= threshold,
+    severity: failures.length >= threshold ? "critical" as const : failures.length > 0 ? "warning" as const : "clear" as const,
+    failures,
+  };
+}
 
 export class TemporalClientFailure extends Error {
   constructor(public readonly recovery: TemporalRecoveryDetails, cause?: unknown) {
@@ -76,6 +96,14 @@ export function getTemporalConfiguration(): TemporalConfiguration {
     throw new Error("TEMPORAL_AUTH_TOKEN is required for Temporal in production");
   }
 
+  const usingDevelopmentDefaults = ![
+    "TEMPORAL_ADDRESS",
+    "TEMPORAL_TLS_SERVER_NAME",
+    "TEMPORAL_NAMESPACE",
+    "TEMPORAL_TASK_QUEUE",
+    "TEMPORAL_WORKFLOW_TYPE",
+  ].every(name => Boolean(process.env[name]?.trim()));
+
   return {
     address: configuredValue("TEMPORAL_ADDRESS", DEVELOPMENT_DEFAULTS.address),
     authToken,
@@ -84,6 +112,7 @@ export function getTemporalConfiguration(): TemporalConfiguration {
     taskQueue: configuredValue("TEMPORAL_TASK_QUEUE", DEVELOPMENT_DEFAULTS.taskQueue),
     workflowType: configuredValue("TEMPORAL_WORKFLOW_TYPE", DEVELOPMENT_DEFAULTS.workflowType),
     caPath: resolveCaPath(),
+    usingDevelopmentDefaults,
   };
 }
 

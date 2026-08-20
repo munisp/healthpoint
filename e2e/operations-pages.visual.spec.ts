@@ -61,8 +61,10 @@ test("renders the controlled Temporal dispatch operations dashboard", async ({ p
   await page.goto("/admin/temporal-operations");
   await expect(page.getByRole("heading", { name: "Temporal Dispatch Operations" })).toBeVisible();
   await expect(page.getByText("Safety boundary:")).toBeVisible();
+  await expect(page.getByText("Unverified default worker configuration")).toBeVisible();
   await expect(page.getByRole("button", { name: "Run controlled mock drill" })).toBeVisible();
   await expect(page.getByText("Connection recovery")).toBeVisible();
+  await expect(page.getByText("Connection alert status")).toBeVisible();
   await expect(page.getByText("Dispatch and drill history")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("temporal-operations.png"), fullPage: true });
 });

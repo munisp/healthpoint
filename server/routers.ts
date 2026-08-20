@@ -49,7 +49,7 @@ import { encryptCredentials } from "./credential-crypto";
 import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
 import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections, providerSandboxAcceptances } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
-import { describeTemporalFailure, getDisputeTemporalWorkflow, getTemporalClient, getTemporalConfiguration, isTemporalDispatchEnabled, listTemporalWorkflows, runControlledTemporalDispatchDrill, startDisputeTemporalWorkflow } from "./temporal";
+import { describeTemporalFailure, getDisputeTemporalWorkflow, getTemporalClient, getTemporalConfiguration, isTemporalDispatchEnabled, listTemporalWorkflows, runControlledTemporalDispatchDrill, startDisputeTemporalWorkflow, summarizeTemporalConnectionFailures, type TemporalRecoveryDetails } from "./temporal";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
 
@@ -2797,6 +2797,7 @@ Based on NSA IDR historical data and legal precedent, provide:
         const config = getTemporalConfiguration();
         return {
           configured: true,
+          verification: config.usingDevelopmentDefaults ? "unverified_default" as const : "operator_configured" as const,
           dispatchEnabled: isTemporalDispatchEnabled(),
           namespace: config.namespace,
           taskQueue: config.taskQueue,
@@ -2811,21 +2812,84 @@ Based on NSA IDR historical data and legal precedent, provide:
         };
       }
     }),
-    checkConnection: adminProcedure.mutation(async () => {
+    checkConnection: adminProcedure.mutation(async ({ ctx }) => {
       try {
         const { config } = await getTemporalClient();
-        return {
-          reachable: true,
-          message: "Temporal accepted a strictly authenticated connection.",
+        const verification = config.usingDevelopmentDefaults ? "unverified_default" as const : "operator_configured" as const;
+        const evidence = {
+          kind: "TEMPORAL_SUPERVISED_READ_ONLY_STATUS_CHECK",
+          outcome: "secure_connection_verified",
+          verification,
+          address: config.address,
+          serverName: config.serverName,
           namespace: config.namespace,
           taskQueue: config.taskQueue,
+          dispatchEnabled: isTemporalDispatchEnabled(),
+          checkedAt: new Date().toISOString(),
+        };
+        const audit = await createAuditEntry({
+          userId: ctx.user.id,
+          action: "temporal.connection_check.verified",
+          entityType: "temporal_connection",
+          entityId: config.serverName,
+          oldValue: null,
+          newValue: JSON.stringify(evidence),
+          ipAddress: null,
+          userAgent: null,
+        });
+        return {
+          reachable: true,
+          message: config.usingDevelopmentDefaults ? "Temporal accepted a strictly authenticated connection using unverified defaults." : "Temporal accepted a strictly authenticated connection.",
+          verification,
+          namespace: config.namespace,
+          taskQueue: config.taskQueue,
+          auditId: audit.id,
         };
       } catch (error) {
+        const recovery = describeTemporalFailure(error, (error as { recovery?: { attempts?: number } })?.recovery?.attempts ?? 1);
+        const evidence = {
+          kind: "TEMPORAL_SUPERVISED_READ_ONLY_STATUS_CHECK",
+          outcome: "secure_connection_failed",
+          verification: "unverified_default",
+          recovery,
+          dispatchEnabled: isTemporalDispatchEnabled(),
+          checkedAt: new Date().toISOString(),
+        };
+        const audit = await createAuditEntry({
+          userId: ctx.user.id,
+          action: "temporal.connection_check.failed",
+          entityType: "temporal_connection",
+          entityId: "temporal-default-status-check",
+          oldValue: null,
+          newValue: JSON.stringify(evidence),
+          ipAddress: null,
+          userAgent: null,
+        });
         return {
           reachable: false,
-          recovery: describeTemporalFailure(error, (error as { recovery?: { attempts?: number } })?.recovery?.attempts ?? 1),
+          recovery,
+          auditId: audit.id,
         };
       }
+    }),
+    connectionAlerts: adminProcedure.query(async () => {
+      const rows = await listAuditEntries({ entityType: "temporal_connection", limit: 100 });
+      const summary = summarizeTemporalConnectionFailures(rows);
+      const lastFailure = summary.failures[0];
+      let recovery: TemporalRecoveryDetails | null = null;
+      try {
+        const details = lastFailure?.newValue ? JSON.parse(lastFailure.newValue) as { recovery?: TemporalRecoveryDetails } : null;
+        recovery = details?.recovery ?? null;
+      } catch { recovery = null; }
+      return {
+        threshold: summary.threshold,
+        windowMinutes: summary.windowMinutes,
+        failureCount: summary.failureCount,
+        visible: summary.visible,
+        severity: summary.severity,
+        lastFailureAt: lastFailure?.createdAt ?? null,
+        recovery,
+      };
     }),
     dispatchHistory: adminProcedure
       .input(z.object({ limit: z.number().int().min(1).max(100).default(30) }).optional())
