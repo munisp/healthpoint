@@ -829,7 +829,7 @@
 - [x] Preserve development-safe Temporal defaults and label all live status output as unverified until approved worker configuration is supplied
 - [x] Add persistent threshold-based Temporal connection-failure alerts and recovery evidence while keeping all checks read-only; PostgreSQL evidence is summarized over 15 minutes and becomes critical after 3 failures
 - [x] Run a supervised read-only default-mode status check without dispatching workflows or enabling settlement execution; current default-mode check correctly recorded secure-connectivity failure with three bounded attempts and recovery guidance
-- [x] Validate the default-mode alerting flow and dashboard presentation; 199 Vitest tests passed with 2 documented skips, 4 visual E2E scenarios passed, TypeScript and production build passed
+- [x] Validate the default-mode alerting flow and dashboard presentation; three supervised default-mode failures were durably recorded within 15 minutes and rendered the critical dashboard alert, while 199 Vitest tests passed with 2 documented skips, 4 visual E2E scenarios passed, TypeScript, and production build passed
 
 ## Deployment Build Failure Remediation (Aug 16 2026)
 - [x] Resolve the pnpm overrides/lockfile configuration mismatch that blocks Docker's frozen dependency installation; restored lockfile-recorded `pnpm.overrides` in package metadata and verified `pnpm install --frozen-lockfile` succeeds

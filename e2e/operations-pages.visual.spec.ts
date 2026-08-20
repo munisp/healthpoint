@@ -65,6 +65,7 @@ test("renders the controlled Temporal dispatch operations dashboard", async ({ p
   await expect(page.getByRole("button", { name: "Run controlled mock drill" })).toBeVisible();
   await expect(page.getByText("Connection recovery")).toBeVisible();
   await expect(page.getByText("Connection alert status")).toBeVisible();
+  await expect(page.getByText("Repeated Temporal connection failures detected")).toBeVisible();
   await expect(page.getByText("Dispatch and drill history")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("temporal-operations.png"), fullPage: true });
 });
