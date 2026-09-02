@@ -1,4 +1,5 @@
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -35,15 +36,20 @@ describe("settlement callback signature verification", () => {
   it("accepts a correctly signed callback through an HTTP endpoint using the configured secret", async () => {
     expect(secret).toBeTruthy();
     const app = express();
-    app.post("/verify-settlement-callback", express.raw({ type: "application/json" }), (req, res) => {
-      const result = verifySettlementCallbackSignature({
-        secret,
-        timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
-        signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
-        rawBody: (req.body as Buffer).toString("utf8"),
-      });
-      res.status(result.valid ? 200 : 401).json(result);
-    });
+    app.post(
+      "/verify-settlement-callback",
+      rateLimit({ windowMs: 60_000, max: 20, standardHeaders: false, legacyHeaders: false }),
+      express.raw({ type: "application/json" }),
+      (req, res) => {
+        const result = verifySettlementCallbackSignature({
+          secret,
+          timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
+          signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+          rawBody: (req.body as Buffer).toString("utf8"),
+        });
+        res.status(result.valid ? 200 : 401).json(result);
+      },
+    );
     server = createServer(app);
     await new Promise<void>(resolve => server!.listen(0, "127.0.0.1", resolve));
     const address = server.address();
@@ -111,17 +117,21 @@ describe("settlement callback signature verification", () => {
     expect(fingerprints).toHaveLength(1);
     expect(ingressToken).toBeTruthy();
     const app = express();
-    app.post("/verify-mtls", (req, res) => {
-      const result = verifySettlementMtls({
-        required: true,
-        verifiedHeader: req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
-        fingerprintHeader: req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
-        ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
-        expectedIngressToken: ingressToken,
-        allowedFingerprints: fingerprints,
-      });
-      res.status(result.valid ? 200 : 401).json(result);
-    });
+    app.post(
+      "/verify-mtls",
+      rateLimit({ windowMs: 60_000, max: 20, standardHeaders: false, legacyHeaders: false }),
+      (req, res) => {
+        const result = verifySettlementMtls({
+          required: true,
+          verifiedHeader: req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
+          fingerprintHeader: req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
+          ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
+          expectedIngressToken: ingressToken,
+          allowedFingerprints: fingerprints,
+        });
+        res.status(result.valid ? 200 : 401).json(result);
+      },
+    );
     server = createServer(app);
     await new Promise<void>(resolve => server!.listen(0, "127.0.0.1", resolve));
     const address = server.address();

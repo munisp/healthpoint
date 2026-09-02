@@ -1,5 +1,6 @@
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
+import { randomBytes } from "node:crypto";
 import { hermesRouter } from "./routers/hermes";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
@@ -4012,7 +4013,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        const secret = `whsec_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+        const secret = `whsec_${randomBytes(32).toString("base64url")}`;
         return createWebhook({
           userId: ctx.user.id,
           name: input.name,

@@ -196,19 +196,24 @@ async function startServer() {
   // ── Security headers (helmet) ──────────────────────────────────────────────
   app.use(
     helmet({
-      contentSecurityPolicy: ENV.isProduction
-        ? {
-            directives: {
-              defaultSrc: ["'self'"],
-              scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // Vite HMR needs unsafe-eval in dev
-              styleSrc: ["'self'", "'unsafe-inline'"],
-              imgSrc: ["'self'", "data:", "blob:", "https:"],
-              connectSrc: ["'self'", "https:"],
-              fontSrc: ["'self'", "data:", "https:"],
-              frameSrc: ["'none'"],
-            },
-          }
-        : false, // Disable CSP in dev to allow Vite HMR
+      // Keep CSP enabled in every environment. Development permits the minimum
+      // Vite runtime behavior; production never permits inline or evaluated scripts.
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ENV.isProduction
+            ? ["'self'"]
+            : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", "data:", "blob:", "https:"],
+          connectSrc: ["'self'", "https:"],
+          fontSrc: ["'self'", "data:", "https:"],
+          frameSrc: ["'none'"],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+          frameAncestors: ["'none'"],
+        },
+      },
       crossOriginEmbedderPolicy: false, // Allow embedding for dashboard iframes
     })
   );
@@ -338,6 +343,14 @@ async function startServer() {
   // it never initiates or releases funds.
   app.post(
     "/api/settlement/callbacks",
+    rateLimit({
+      windowMs: 60_000,
+      max: 120,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: "Too many settlement callbacks" },
+      skip: () => !ENV.isProduction,
+    }),
     express.raw({ type: "application/json", limit: "256kb" }),
     async (req: Request, res: Response) => {
       const rawBody = Buffer.isBuffer(req.body)
