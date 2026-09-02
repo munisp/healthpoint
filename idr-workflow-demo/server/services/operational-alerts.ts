@@ -127,7 +127,8 @@ export async function recordAlertmanagerDelivery(rawBody: unknown): Promise<numb
   if (!Buffer.isBuffer(rawBody)) {
     throw new Error("Alertmanager body must be an unmodified binary request payload");
   }
-  if (rawBody.length === 0 || rawBody.length > MAX_BODY_BYTES) {
+  const rawBodyLength = Buffer.byteLength(rawBody);
+  if (rawBodyLength === 0 || rawBodyLength > MAX_BODY_BYTES) {
     throw new Error(`Alertmanager body must contain at most ${MAX_BODY_BYTES} bytes`);
   }
   let parsed: unknown;
