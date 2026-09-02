@@ -71,6 +71,19 @@ SELECT 'required_triggers=' || count(*)
    );
 SQL
 
+psql "$MIGRATION_TEST_DATABASE_URL" --set ON_ERROR_STOP=1 --file scripts/verify-stakeholder-evidence-and-mapping-activation-triggers-rollback.sql 2>&1 | tee "$LOG_DIR/0047-trigger-behavior.log"
+for expected in \
+  'PASS mapping digest mismatch rejected: sqlstate=P0001 message=TigerBeetle finality mapping verification digest must match activation evidence bundle' \
+  'PASS active mapping evidence mutation rejected: sqlstate=P0001 message=Active TigerBeetle finality mapping verification evidence is immutable' \
+  'validated_bundle_status=validated' \
+  'active_mapping=true' \
+  'ROLLBACK'; do
+  if ! grep -Fq "$expected" "$LOG_DIR/0047-trigger-behavior.log"; then
+    echo "0047 trigger verifier did not emit expected result: $expected" >&2
+    exit 1
+  fi
+done
+
 MIGRATION_ROWS="$(grep '^drizzle_migration_rows=' "$LOG_DIR/verification.txt" | cut -d= -f2)"
 TABLES="$(grep '^required_tables=' "$LOG_DIR/verification.txt" | cut -d= -f2)"
 TRIGGERS="$(grep '^required_triggers=' "$LOG_DIR/verification.txt" | cut -d= -f2)"
@@ -87,4 +100,4 @@ if [[ "$TRIGGERS" -ne 7 ]]; then
   exit 1
 fi
 
-echo "Clean PostgreSQL migration verification passed: $EXPECTED_MIGRATION_ROWS migrations, 18 required tables, 7 required evidence/finality triggers."
+echo "Clean PostgreSQL migration verification passed: $EXPECTED_MIGRATION_ROWS migrations, 18 required tables, 7 required evidence/finality triggers, and 0047 rollback-only trigger behavior."
