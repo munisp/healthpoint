@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   node-security:
-    name: Nested Node dependency and application checks
+    name: Node quality and hermetic integration tests
     runs-on: ubuntu-latest
     defaults:
       run:
