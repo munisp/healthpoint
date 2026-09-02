@@ -1,0 +1,67 @@
+// TEMPLATE ONLY — integrate into a component after it has mutual-authentication and
+// message-origin verification. Do not propagate tenant identity, HMAC tenant scope,
+// baggage, users, disputes, documents, payments, authorization, SQL, or error text.
+import {
+  ROOT_CONTEXT,
+  context,
+  propagation,
+  trace,
+  type Context,
+  type TextMapGetter,
+  type TextMapSetter,
+} from "@opentelemetry/api";
+
+const TRACE_HEADERS = new Set(["traceparent", "tracestate"]);
+type HeaderCarrier = Record<string, string>;
+
+const setter: TextMapSetter<HeaderCarrier> = {
+  set(carrier, key, value) {
+    const normalized = key.toLowerCase();
+    if (TRACE_HEADERS.has(normalized)) carrier[normalized] = value;
+  },
+};
+const getter: TextMapGetter<HeaderCarrier> = {
+  get(carrier, key) { return carrier[key.toLowerCase()]; },
+  keys(carrier) { return Object.keys(carrier).filter(key => TRACE_HEADERS.has(key.toLowerCase())); },
+};
+
+export function injectTrustedTraceHeaders(): HeaderCarrier {
+  const carrier: HeaderCarrier = {};
+  propagation.inject(context.active(), carrier, setter);
+  return carrier;
+}
+
+export function extractTrustedTraceContext(headers: Record<string, string | undefined>): Context {
+  // Call only after mTLS/SASL/ACL identity or trusted gateway authentication has verified
+  // the source. Otherwise use ROOT_CONTEXT and create a new trace.
+  const carrier: HeaderCarrier = {};
+  for (const key of TRACE_HEADERS) {
+    const value = headers[key];
+    if (typeof value === "string" && value.length <= 512) carrier[key] = value;
+  }
+  return propagation.extract(ROOT_CONTEXT, carrier, getter);
+}
+
+export async function consumeWithTrustedTrace<T>(
+  headers: Record<string, string | undefined>,
+  operation: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const parent = extractTrustedTraceContext(headers);
+  return context.with(parent, async () => {
+    const span = trace.getTracer("healthpoint.propagation").startSpan(`healthpoint.${operation}`);
+    try { return await fn(); }
+    finally { span.end(); }
+  });
+}
+
+// Kafka producer: copy only traceparent/tracestate into record.headers after a local span.
+export function kafkaTraceHeaders(): Record<string, Buffer> {
+  return Object.fromEntries(Object.entries(injectTrustedTraceHeaders()).map(([key, value]) => [key, Buffer.from(value, "ascii")]));
+}
+
+// Kafka consumer: decode only allow-listed ASCII headers, verify broker/client identity,
+// call consumeWithTrustedTrace(), then remove tracing headers before domain processing.
+// Dapr: attach injectTrustedTraceHeaders() to a trusted in-cluster invocation only.
+// Temporal: store the two values in workflow headers/search metadata only when the caller
+// and worker are mutually authenticated; never pass the carrier in workflow arguments.

@@ -1,0 +1,871 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: healthpoint-observability
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: healthpoint
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: healthpoint-otel-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: healthpoint-otel-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: healthpoint-otel-collector
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: healthpoint-observability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: healthpoint
+data:
+  collector.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      basicauth/opensearch:
+        client_auth:
+          username: ${env:OPENSEARCH_USERNAME}
+          password: ${env:OPENSEARCH_PASSWORD}
+      file_storage/exporter_queue:
+        directory: /var/lib/otelcol/queue
+        timeout: 10s
+        compaction:
+          on_start: true
+          on_rebound: true
+          directory: /var/lib/otelcol/queue
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+            tls:
+              cert_file: /etc/otel/tls/tls.crt
+              key_file: /etc/otel/tls/tls.key
+              client_ca_file: /etc/otel/tls/ca.crt
+              client_auth_type: require_and_verify_client_cert
+          http:
+            endpoint: 0.0.0.0:4318
+            tls:
+              cert_file: /etc/otel/tls/tls.crt
+              key_file: /etc/otel/tls/tls.key
+              client_ca_file: /etc/otel/tls/ca.crt
+              client_auth_type: require_and_verify_client_cert
+      prometheus:
+        config:
+          global:
+            scrape_interval: 30s
+            scrape_timeout: 10s
+          scrape_configs:
+            - job_name: healthpoint-postgres-exporter
+              kubernetes_sd_configs:
+                - role: endpoints
+                  namespaces:
+                    names: [healthpoint-observability]
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+                  regex: postgres-exporter
+                  action: keep
+            - job_name: healthpoint-redis-exporter
+              kubernetes_sd_configs:
+                - role: endpoints
+                  namespaces:
+                    names: [healthpoint-observability]
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+                  regex: redis-exporter
+                  action: keep
+            - job_name: healthpoint-kafka-exporter
+              kubernetes_sd_configs:
+                - role: endpoints
+                  namespaces:
+                    names: [healthpoint-observability]
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+                  regex: kafka-exporter
+                  action: keep
+            - job_name: healthpoint-platform-metrics
+              kubernetes_sd_configs:
+                - role: endpoints
+                  namespaces:
+                    names: [healthpoint]
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_service_label_observability_healthpoint_io_scrape]
+                  regex: "true"
+                  action: keep
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 768
+        spike_limit_mib: 256
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.deployment.name
+            - k8s.pod.name
+            - k8s.pod.uid
+      resource/healthpoint:
+        attributes:
+          - key: service.namespace
+            value: healthpoint
+            action: upsert
+          - key: telemetry.distro.name
+            value: healthpoint-otel
+            action: upsert
+      attributes/privacy:
+        actions:
+          - key: healthpoint.tenant.id
+            action: delete
+          - key: user.id
+            action: delete
+          - key: enduser.id
+            action: delete
+          - key: enduser.email
+            action: delete
+          - key: dispute.id
+            action: delete
+          - key: document.id
+            action: delete
+          - key: payment.id
+            action: delete
+          - key: db.statement
+            action: delete
+          - key: http.request.header.authorization
+            action: delete
+          - key: http.request.body
+            action: delete
+          - key: http.response.body
+            action: delete
+          - key: url.query
+            action: delete
+      filter/healthpoint-safety:
+        error_mode: ignore
+        traces:
+          span:
+            - 'IsMatch(name, ".*(patient|member|document-content|cms-payload).*" )'
+        logs:
+          log_record:
+            - 'IsMatch(body.string, ".*(SSN|social security|member id|patient).*" )'
+      tail_sampling:
+        decision_wait: 10s
+        num_traces: 50000
+        expected_new_traces_per_sec: 500
+        policies:
+          - name: preserve-errors
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: preserve-slow
+            type: latency
+            latency:
+              threshold_ms: 1000
+          - name: bounded-root-sample
+            type: probabilistic
+            probabilistic:
+              sampling_percentage: 10
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+    exporters:
+      prometheusremotewrite:
+        endpoint: http://prometheus.healthpoint-observability.svc.cluster.local:9090/api/v1/write
+        sending_queue:
+          enabled: true
+          storage: file_storage/exporter_queue
+          queue_size: 5000
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 10m
+      opensearch/logs:
+        http:
+          endpoint: ${env:OPENSEARCH_ENDPOINT}
+          auth:
+            authenticator: basicauth/opensearch
+          tls:
+            ca_file: /etc/otel/opensearch-ca/ca.crt
+        logs_index: healthpoint-otel-logs
+        sending_queue:
+          enabled: true
+          storage: file_storage/exporter_queue
+          queue_size: 5000
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 10m
+      opensearch/traces:
+        http:
+          endpoint: ${env:OPENSEARCH_ENDPOINT}
+          auth:
+            authenticator: basicauth/opensearch
+          tls:
+            ca_file: /etc/otel/opensearch-ca/ca.crt
+        traces_index: healthpoint-otel-traces
+        sending_queue:
+          enabled: true
+          storage: file_storage/exporter_queue
+          queue_size: 5000
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 10m
+    service:
+      extensions: [health_check, basicauth/opensearch, file_storage/exporter_queue]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, resource/healthpoint, attributes/privacy, filter/healthpoint-safety, tail_sampling, batch]
+          exporters: [opensearch/traces]
+        metrics:
+          receivers: [otlp, prometheus]
+          processors: [memory_limiter, k8sattributes, resource/healthpoint, attributes/privacy, batch]
+          exporters: [prometheusremotewrite]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, resource/healthpoint, attributes/privacy, filter/healthpoint-safety, batch]
+          exporters: [opensearch/logs]
+      telemetry:
+        metrics:
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: otel-collector
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  serviceName: otel-collector
+  podManagementPolicy: Parallel
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+        app.kubernetes.io/part-of: healthpoint
+    spec:
+      serviceAccountName: otel-collector
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib@sha256:213886eb6407af91b87fa47551c3632be1a6419ff3a5114ef1e6fc364628496f
+          args: ["--config=/etc/otel/collector.yaml"]
+          env:
+            - name: OPENSEARCH_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-observability
+                  key: endpoint
+            - name: OPENSEARCH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-observability
+                  key: username
+            - name: OPENSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-observability
+                  key: password
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+            - name: metrics
+              containerPort: 8888
+            - name: health
+              containerPort: 13133
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+              readOnly: true
+            - name: otlp-tls
+              mountPath: /etc/otel/tls
+              readOnly: true
+            - name: opensearch-ca
+              mountPath: /etc/otel/opensearch-ca
+              readOnly: true
+            - name: exporter-queue
+              mountPath: /var/lib/otelcol/queue
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+        - name: otlp-tls
+          secret:
+            secretName: otel-collector-server-tls
+        - name: opensearch-ca
+          secret:
+            secretName: opensearch-observability-ca
+  volumeClaimTemplates:
+    - metadata:
+        name: exporter-queue
+        labels:
+          app.kubernetes.io/name: otel-collector
+          app.kubernetes.io/part-of: healthpoint
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+    - name: metrics
+      port: 8888
+      targetPort: metrics
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: healthpoint
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 30s
+      scrape_timeout: 10s
+    rule_files:
+      - /etc/prometheus/rules/*.yaml
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: [alertmanager.healthpoint-observability.svc.cluster.local:9093]
+    scrape_configs:
+      - job_name: otel-collector
+        static_configs:
+          - targets: [otel-collector.healthpoint-observability.svc.cluster.local:8888]
+      - job_name: alertmanager
+        dns_sd_configs:
+          - names: [alertmanager.healthpoint-observability.svc.cluster.local]
+            type: A
+            port: 9093
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: healthpoint
+data:
+  healthpoint-alerts.yaml: |
+    groups:
+      - name: healthpoint.platform
+        rules:
+          - alert: HealthPointObservabilityDeadMan
+            expr: vector(1)
+            labels:
+              severity: info
+              service: observability
+            annotations:
+              summary: HealthPoint observability heartbeat
+              runbook: https://healthpoint.invalid/runbooks/observability-deadman
+          - alert: HealthPointOtelCollectorUnavailable
+            expr: up{job="otel-collector"} == 0
+            for: 5m
+            labels:
+              severity: critical
+              service: otel-collector
+            annotations:
+              summary: OpenTelemetry Collector is unavailable
+              runbook: https://healthpoint.invalid/runbooks/otel-collector
+          - alert: HealthPointOtelExporterSendFailures
+            expr: increase(otelcol_exporter_send_failed_spans_total[5m]) + increase(otelcol_exporter_send_failed_metric_points_total[5m]) + increase(otelcol_exporter_send_failed_log_records_total[5m]) > 0
+            for: 10m
+            labels:
+              severity: critical
+              service: otel-collector
+            annotations:
+              summary: OpenTelemetry Collector cannot export one or more telemetry signals
+              runbook: https://healthpoint.invalid/runbooks/otel-export-failure
+          - alert: HealthPointOtelExporterQueueNearCapacity
+            expr: max(otelcol_exporter_queue_size / clamp_min(otelcol_exporter_queue_capacity, 1)) > 0.80
+            for: 10m
+            labels:
+              severity: warning
+              service: otel-collector
+            annotations:
+              summary: OpenTelemetry Collector exporter queue exceeds 80 percent capacity
+              runbook: https://healthpoint.invalid/runbooks/otel-export-queue
+          - alert: HealthPointAlertmanagerUnavailable
+            expr: up{job="alertmanager"} == 0
+            for: 5m
+            labels:
+              severity: critical
+              service: alertmanager
+            annotations:
+              summary: All Alertmanager replicas are unavailable
+              runbook: https://healthpoint.invalid/runbooks/alertmanager-unavailable
+          - alert: HealthPointAlertmanagerNotificationFailures
+            expr: increase(alertmanager_notifications_failed_total[10m]) > 0
+            for: 10m
+            labels:
+              severity: critical
+              service: alertmanager
+            annotations:
+              summary: Alertmanager notification delivery is failing
+              runbook: https://healthpoint.invalid/runbooks/alertmanager-notifications
+          - alert: HealthPointAlertmanagerAlertLimitReached
+            expr: increase(alertmanager_alerts_limited_total[10m]) > 0
+            for: 1m
+            labels:
+              severity: critical
+              service: alertmanager
+            annotations:
+              summary: Alertmanager dropped alerts because a per-alert limit was reached
+              runbook: https://healthpoint.invalid/runbooks/alertmanager-alert-limit
+          - alert: HealthPointTraceContextValidationSpike
+            expr: sum by (healthpoint_component) (increase(healthpoint_trace_validation_total{healthpoint_component=~"kafka|dapr|api-gateway"}[5m])) > 25
+            for: 5m
+            labels:
+              severity: warning
+              service: event-mesh
+            annotations:
+              summary: Trace-context validation failures exceeded 25 in five minutes
+              runbook: https://healthpoint.invalid/runbooks/trace-context-validation
+          - alert: HealthPointTraceContextValidationFlood
+            expr: sum by (healthpoint_component) (increase(healthpoint_trace_validation_total{healthpoint_component=~"kafka|dapr|api-gateway"}[5m])) > 100
+            for: 2m
+            labels:
+              severity: critical
+              service: event-mesh
+            annotations:
+              summary: Trace-context validation failures exceeded 100 in five minutes
+              runbook: https://healthpoint.invalid/runbooks/trace-context-validation
+          - alert: HealthPointHighServerErrorRate
+            expr: sum(rate(healthpoint_operation_total{healthpoint_component="application",healthpoint_operation="http.request",healthpoint_status="error"}[5m])) / clamp_min(sum(rate(healthpoint_operation_total{healthpoint_component="application",healthpoint_operation="http.request"}[5m])), 1) > 0.05
+            for: 10m
+            labels:
+              severity: critical
+              service: healthpoint-api
+            annotations:
+              summary: HealthPoint API server-error rate exceeds 5 percent
+              runbook: https://healthpoint.invalid/runbooks/api-errors
+          - alert: HealthPointKafkaExporterUnavailable
+            expr: up{job="healthpoint-kafka-exporter"} == 0
+            for: 10m
+            labels:
+              severity: warning
+              service: kafka
+            annotations:
+              summary: Kafka exporter is unavailable
+              runbook: https://healthpoint.invalid/runbooks/kafka
+          - alert: HealthPointPostgresExporterUnavailable
+            expr: up{job="healthpoint-postgres-exporter"} == 0
+            for: 10m
+            labels:
+              severity: critical
+              service: postgresql
+            annotations:
+              summary: PostgreSQL exporter is unavailable
+              runbook: https://healthpoint.invalid/runbooks/postgresql
+          - alert: HealthPointRedisExporterUnavailable
+            expr: up{job="healthpoint-redis-exporter"} == 0
+            for: 10m
+            labels:
+              severity: warning
+              service: redis
+            annotations:
+              summary: Redis exporter is unavailable
+              runbook: https://healthpoint.invalid/runbooks/redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+        app.kubernetes.io/part-of: healthpoint
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --web.enable-remote-write-receiver
+            - --storage.tsdb.retention.time=15d
+            - --storage.tsdb.path=/prometheus
+          ports:
+            - name: web
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: web
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: rules
+              mountPath: /etc/prometheus/rules
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: rules
+          configMap:
+            name: prometheus-rules
+        - name: data
+          persistentVolumeClaim:
+            claimName: prometheus-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  selector:
+    app.kubernetes.io/name: prometheus
+  ports:
+    - name: web
+      port: 9090
+      targetPort: web
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/part-of: healthpoint
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: healthpoint-operations
+      group_by: [alertname, service, severity]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        - matchers: [alertname="HealthPointObservabilityDeadMan"]
+          receiver: healthpoint-observability-deadman
+          repeat_interval: 2m
+        - matchers: [severity="critical"]
+          receiver: healthpoint-critical-operations
+          continue: true
+          repeat_interval: 1h
+        - matchers: [severity="critical"]
+          receiver: healthpoint-critical-fallback
+          repeat_interval: 1h
+    receivers:
+      - name: healthpoint-operations
+        webhook_configs:
+          - url_file: /etc/alertmanager/receivers/operations-webhook-url
+            send_resolved: true
+      - name: healthpoint-critical-operations
+        webhook_configs:
+          - url_file: /etc/alertmanager/receivers/critical-webhook-url
+            send_resolved: true
+      - name: healthpoint-critical-fallback
+        webhook_configs:
+          - url_file: /etc/alertmanager/receivers/critical-fallback-webhook-url
+            send_resolved: true
+      - name: healthpoint-observability-deadman
+        webhook_configs:
+          - url_file: /etc/alertmanager/receivers/observability-deadman-webhook-url
+            send_resolved: false
+            http_config:
+              authorization:
+                type: Bearer
+                credentials_file: /etc/alertmanager/deadman-relay/auth-token
+              tls_config:
+                ca_file: /etc/alertmanager/deadman-relay/ca.crt
+                cert_file: /etc/alertmanager/deadman-relay/tls.crt
+                key_file: /etc/alertmanager/deadman-relay/tls.key
+                min_version: TLS12
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: alertmanager
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  serviceName: alertmanager
+  podManagementPolicy: Parallel
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alertmanager
+        app.kubernetes.io/part-of: healthpoint
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+            - --cluster.listen-address=0.0.0.0:9094
+            - --cluster.peer=alertmanager-0.alertmanager.healthpoint-observability.svc.cluster.local:9094
+            - --cluster.peer=alertmanager-1.alertmanager.healthpoint-observability.svc.cluster.local:9094
+            - --cluster.reconnect-timeout=5m
+            - --alerts.per-alertname-limit=1000
+          ports:
+            - name: web
+              containerPort: 9093
+            - name: cluster
+              containerPort: 9094
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: web
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+              readOnly: true
+            - name: receiver-urls
+              mountPath: /etc/alertmanager/receivers
+              readOnly: true
+            - name: deadman-relay-tls
+              mountPath: /etc/alertmanager/deadman-relay
+              readOnly: true
+            - name: data
+              mountPath: /alertmanager
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: receiver-urls
+          secret:
+            secretName: alertmanager-receiver-urls
+        - name: deadman-relay-tls
+          secret:
+            secretName: alertmanager-deadman-relay-client-tls
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: alertmanager
+          app.kubernetes.io/part-of: healthpoint
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: alertmanager
+  ports:
+    - name: web
+      port: 9093
+      targetPort: web
+    - name: cluster
+      port: 9094
+      targetPort: cluster
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: otel-collector
+  namespace: healthpoint-observability
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector

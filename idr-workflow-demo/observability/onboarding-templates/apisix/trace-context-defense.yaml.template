@@ -1,0 +1,60 @@
+# Template only: apply after the APISIX CRD version and OpenAppSec policy binding are
+# verified in the staging cluster. It is not active in the current HealthPoint deployment.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: healthpoint-trace-context-defense
+  namespace: ${HEALTHPOINT_GATEWAY_NAMESPACE}
+  annotations:
+    openappsec.io/policy: ${OPENAPPSEC_POLICY_NAME}
+spec:
+  ingressClassName: appsec-apisix
+  http:
+    - name: healthpoint-api
+      match:
+        paths:
+          - /api/*
+      plugins:
+        - name: serverless-pre-function
+          enable: true
+          config:
+            phase: rewrite
+            functions:
+              - |
+                return function()
+                  local header = ngx.req.get_headers(0, true)["traceparent"]
+                  local reason = nil
+                  if type(header) == "table" then
+                    reason = "duplicate"
+                  elseif type(header) == "string" then
+                    if #header > 55 then
+                      reason = "oversized"
+                    elseif not ngx.re.find(header, [[^00-[0-9a-fA-F]{32}-[0-9a-fA-F]{16}-0[01]$]], "jo") then
+                      reason = "malformed"
+                    end
+                  end
+                  if reason then
+                    -- Never log header values, cookies, authorization, client body, or identity.
+                    ngx.log(ngx.WARN, "healthpoint_trace_context_rejected reason=", reason)
+                    ngx.header["Cache-Control"] = "no-store"
+                    return ngx.exit(ngx.HTTP_BAD_REQUEST)
+                  end
+                end
+        - name: limit-req
+          enable: true
+          config:
+            rate: 50
+            burst: 20
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+        - name: opentelemetry
+          enable: true
+          config:
+            trace_id_source: x-request-id
+            resource:
+              service.name: healthpoint-api-gateway
+              service.namespace: healthpoint
+      upstreams:
+        - name: healthpoint-api
+          weight: 100

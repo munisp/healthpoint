@@ -4,18 +4,17 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import DashboardLayout from "@/components/DashboardLayout";
+// DashboardLayout now provided globally via App.tsx
 import { toast } from "sonner";
+import { useChartColors } from "@/hooks/useChartColors";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Sector
 } from "recharts";
 import {
   BarChart2, Download, RefreshCw, TrendingUp, DollarSign,
-  Clock, CheckCircle2, AlertTriangle, FileText
+  Clock, CheckCircle2, AlertTriangle, FileText, Loader2
 } from "lucide-react";
-
-const COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16"];
 
 const REPORT_TYPES = [
   { id: "volume", label: "Dispute Volume", icon: BarChart2, description: "Monthly dispute counts by status and service type" },
@@ -25,52 +24,13 @@ const REPORT_TYPES = [
   { id: "emr", label: "EMR Integration", icon: CheckCircle2, description: "Data pull success rates and field extraction quality" },
 ];
 
-// Mock report data — in production these would come from tRPC procedures
-const MOCK_VOLUME_DATA = [
-  { month: "Jan", open_negotiation: 12, idr_active: 8, closed: 15, ineligible: 3 },
-  { month: "Feb", open_negotiation: 15, idr_active: 11, closed: 18, ineligible: 2 },
-  { month: "Mar", open_negotiation: 9, idr_active: 14, closed: 22, ineligible: 4 },
-  { month: "Apr", open_negotiation: 18, idr_active: 9, closed: 19, ineligible: 1 },
-  { month: "May", open_negotiation: 21, idr_active: 16, closed: 25, ineligible: 3 },
-  { month: "Jun", open_negotiation: 17, idr_active: 13, closed: 28, ineligible: 2 },
-];
-
-const MOCK_FINANCIAL_DATA = [
-  { serviceType: "Emergency", avgBilled: 4200, avgQPA: 2800, avgDetermination: 3100 },
-  { serviceType: "Anesthesiology", avgBilled: 6800, avgQPA: 4200, avgDetermination: 4900 },
-  { serviceType: "Air Ambulance", avgBilled: 38000, avgQPA: 22000, avgDetermination: 26500 },
-  { serviceType: "Radiology", avgBilled: 2100, avgQPA: 1400, avgDetermination: 1650 },
-  { serviceType: "Pathology", avgBilled: 1800, avgQPA: 1100, avgDetermination: 1300 },
-];
-
-const MOCK_OUTCOME_DATA = [
-  { month: "Jan", winRate: 0.72, determinationRate: 0.85, appealRate: 0.08 },
-  { month: "Feb", winRate: 0.68, determinationRate: 0.82, appealRate: 0.11 },
-  { month: "Mar", winRate: 0.75, determinationRate: 0.88, appealRate: 0.07 },
-  { month: "Apr", winRate: 0.71, determinationRate: 0.84, appealRate: 0.09 },
-  { month: "May", winRate: 0.79, determinationRate: 0.91, appealRate: 0.06 },
-  { month: "Jun", winRate: 0.77, determinationRate: 0.89, appealRate: 0.07 },
-];
-
-const MOCK_TIMELINE_DATA = [
-  { step: "Open Neg.", statutory: 30, actual: 24, onTime: 0.88 },
-  { step: "IDR Init.", statutory: 4, actual: 3.2, onTime: 0.94 },
-  { step: "Entity Sel.", statutory: 4, actual: 3.8, onTime: 0.91 },
-  { step: "Eligibility", statutory: 3, actual: 2.9, onTime: 0.97 },
-  { step: "Offer Sub.", statutory: 10, actual: 8.4, onTime: 0.93 },
-  { step: "Determination", statutory: 30, actual: 26, onTime: 0.89 },
-];
-
-const MOCK_SERVICE_PIE = [
-  { name: "Emergency Medicine", value: 34 },
-  { name: "Anesthesiology", value: 22 },
-  { name: "Air Ambulance", value: 18 },
-  { name: "Radiology", value: 12 },
-  { name: "Pathology", value: 8 },
-  { name: "Other", value: 6 },
-];
+// All chart data is now DB-driven via trpc.reports.summary and trpc.dashboard.*
+// Empty arrays are shown when no data is available yet (seed via Admin panel)
 
 export default function Reports() {
+  const C = useChartColors();
+  const COLORS = [C.chart1, C.chart2, C.chart3, C.danger, C.chart4, C.info, C.chart5, C.chart2];
+
   const { isAuthenticated } = useAuth();
   const [activeReport, setActiveReport] = useState("volume");
   const [dateRange, setDateRange] = useState("6m");
@@ -89,17 +49,54 @@ export default function Reports() {
   // Build live service-type pie data from report summary
   const livePieData = reportSummary?.byServiceType?.length
     ? reportSummary.byServiceType.map((item: { type: string; count: number }) => ({ name: item.type.replace(/_/g, " "), value: item.count }))
-    : MOCK_SERVICE_PIE;
+    : [];
+
+  const volumeData = reportSummary?.byMonth ?? [];
+  const financialData = reportSummary?.financialByServiceType ?? [];
+  const outcomeChartData = (reportSummary?.outcomeByMonth ?? []).map((r: { month: string; won: number; lost: number; pending: number }) => ({ month: r.month, winRate: (r.won + r.lost) > 0 ? r.won / (r.won + r.lost) : 0, determinationRate: (r.won + r.lost + r.pending) > 0 ? (r.won + r.lost) / (r.won + r.lost + r.pending) : 0, appealRate: 0 }));
+  const timelineData = (reportSummary?.avgDaysByStep ?? []).map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 }));
+
+  const dateRangeLabel = dateRange === "3m" ? "Last 3 months" : dateRange === "6m" ? "Last 6 months" : dateRange === "ytd" ? "Year to date" : "Last 12 months";
+
+  const exportCSV = trpc.reports.exportCSV.useMutation({
+    onSuccess: (data) => {
+      const blob = new Blob([data.csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = data.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`CSV exported — ${data.rowCount} disputes`);
+    },
+    onError: (err) => toast.error(`CSV export failed: ${err.message}`),
+  });
+
+  const exportPDF = trpc.reports.exportPDF.useMutation({
+    onSuccess: (data) => {
+      const bytes = Uint8Array.from(atob(data.base64), c => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = data.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`PDF exported — ${data.pageCount} pages`);
+    },
+    onError: (err) => toast.error(`PDF export failed: ${err.message}`),
+  });
 
   const handleExport = (format: "csv" | "pdf") => {
-    toast.success(`Exporting ${activeReport} report as ${format.toUpperCase()}…`);
+    const input = { startDate, dateRangeLabel };
+    if (format === "csv") exportCSV.mutate(input);
+    else exportPDF.mutate(input);
   };
 
   if (!isAuthenticated) return null;
 
   return (
-    <DashboardLayout>
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
@@ -122,11 +119,23 @@ export default function Reports() {
               <option value="12m">Last 12 months</option>
               <option value="ytd">Year to date</option>
             </select>
-            <Button size="sm" variant="outline" onClick={() => handleExport("csv")}>
-              <Download size={13} className="mr-1.5" />CSV
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handleExport("csv")}
+              disabled={exportCSV.isPending || exportPDF.isPending}
+            >
+              {exportCSV.isPending ? <Loader2 size={13} className="mr-1.5 animate-spin" /> : <Download size={13} className="mr-1.5" />}
+              Export CSV
             </Button>
-            <Button size="sm" variant="outline" onClick={() => handleExport("pdf")}>
-              <FileText size={13} className="mr-1.5" />PDF
+            <Button
+              size="sm"
+              onClick={() => handleExport("pdf")}
+              disabled={exportCSV.isPending || exportPDF.isPending}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              {exportPDF.isPending ? <Loader2 size={13} className="mr-1.5 animate-spin" /> : <FileText size={13} className="mr-1.5" />}
+              Export PDF
             </Button>
           </div>
         </div>
@@ -178,16 +187,16 @@ export default function Reports() {
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={reportSummary?.byMonth?.length ? reportSummary.byMonth : MOCK_VOLUME_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <BarChart data={volumeData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                     <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 11 }} />
                     <Tooltip />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
-                    <Bar dataKey="open_negotiation" name="Open Negotiation" stackId="a" fill="#3b82f6" />
-                    <Bar dataKey="idr_active" name="IDR Active" stackId="a" fill="#8b5cf6" />
-                    <Bar dataKey="closed" name="Closed" stackId="a" fill="#22c55e" />
-                    <Bar dataKey="ineligible" name="Ineligible" stackId="a" fill="#94a3b8" radius={[4,4,0,0]} />
+                    <Bar dataKey="open_negotiation" name="Open Negotiation" stackId="a" fill={C.chart1} />
+                    <Bar dataKey="idr_active" name="IDR Active" stackId="a" fill={C.chart4} />
+                    <Bar dataKey="closed" name="Closed" stackId="a" fill={C.chart2} />
+                    <Bar dataKey="ineligible" name="Ineligible" stackId="a" fill={C.muted} radius={[4,4,0,0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -228,15 +237,15 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={reportSummary?.financialByServiceType?.length ? reportSummary.financialByServiceType : MOCK_FINANCIAL_DATA} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <BarChart data={financialData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis dataKey="serviceType" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}k`} />
                   <Tooltip formatter={(v: number) => `$${Number(v).toLocaleString()}`} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="avgBilled" name="Avg. Billed" fill="#e2e8f0" radius={[4,4,0,0]} />
-                  <Bar dataKey="avgQPA" name="Avg. QPA" fill="#f59e0b" radius={[4,4,0,0]} />
-                  <Bar dataKey="avgDetermination" name="Avg. Determination" fill="#3b82f6" radius={[4,4,0,0]} />
+                  <Bar dataKey="avgBilled" name="Avg. Billed" fill={C.muted} radius={[4,4,0,0]} />
+                  <Bar dataKey="avgQPA" name="Avg. QPA" fill={C.chart3} radius={[4,4,0,0]} />
+                  <Bar dataKey="avgDetermination" name="Avg. Determination" fill={C.chart1} radius={[4,4,0,0]} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -250,15 +259,15 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={320}>
-                <LineChart data={reportSummary?.outcomeByMonth?.length ? reportSummary.outcomeByMonth.map((r: { month: string; won: number; lost: number; pending: number }) => ({ month: r.month, winRate: (r.won + r.lost) > 0 ? r.won / (r.won + r.lost) : 0, determinationRate: (r.won + r.lost + r.pending) > 0 ? (r.won + r.lost) / (r.won + r.lost + r.pending) : 0, appealRate: 0 })) : MOCK_OUTCOME_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <LineChart data={outcomeChartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
                   <Tooltip formatter={(v: number) => `${Math.round(v * 100)}%`} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Line type="monotone" dataKey="winRate" name="Win Rate" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} />
-                  <Line type="monotone" dataKey="determinationRate" name="Determination Rate" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4 }} />
-                  <Line type="monotone" dataKey="appealRate" name="Appeal Rate" stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="winRate" name="Win Rate" stroke={C.chart2} strokeWidth={2} dot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="determinationRate" name="Determination Rate" stroke={C.chart1} strokeWidth={2} dot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="appealRate" name="Appeal Rate" stroke={C.danger} strokeWidth={2} dot={{ r: 4 }} />
                 </LineChart>
               </ResponsiveContainer>
             </CardContent>
@@ -272,18 +281,18 @@ export default function Reports() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={reportSummary?.avgDaysByStep?.length ? reportSummary.avgDaysByStep.map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 })) : MOCK_TIMELINE_DATA} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <BarChart data={timelineData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis dataKey="step" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="statutory" name="Statutory Limit (days)" fill="#e2e8f0" radius={[4,4,0,0]} />
-                  <Bar dataKey="actual" name="Actual Avg. (days)" fill="#3b82f6" radius={[4,4,0,0]} />
+                  <Bar dataKey="statutory" name="Statutory Limit (days)" fill={C.muted} radius={[4,4,0,0]} />
+                  <Bar dataKey="actual" name="Actual Avg. (days)" fill={C.chart1} radius={[4,4,0,0]} />
                 </BarChart>
               </ResponsiveContainer>
               <div className="mt-4 grid grid-cols-3 md:grid-cols-6 gap-3">
-                {(reportSummary?.avgDaysByStep?.length ? reportSummary.avgDaysByStep.map((r: { step: string; avgDays: number }) => ({ step: r.step, statutory: 30, actual: r.avgDays, onTime: r.avgDays <= 30 ? 0.95 : 0.75 })) : MOCK_TIMELINE_DATA).map(row => (
+                {timelineData.map(row => (
                   <div key={row.step} className="text-center">
                     <div className={`text-sm font-bold ${row.onTime >= 0.95 ? "text-green-600" : row.onTime >= 0.85 ? "text-amber-600" : "text-red-600"}`}>
                       {Math.round(row.onTime * 100)}%
@@ -316,6 +325,5 @@ export default function Reports() {
           </div>
         )}
       </div>
-    </DashboardLayout>
   );
 }

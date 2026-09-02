@@ -1,0 +1,140 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "11.2.0",
+      "targets": [{ "editorMode": "code", "expr": "max(ALERTS{alertname=\"HealthPointObservabilityDeadMan\",alertstate=\"firing\"})", "legendFormat": "dead-man firing", "refId": "A" }],
+      "title": "External Dead-Man Heartbeat Is Firing",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "11.2.0",
+      "targets": [{ "editorMode": "code", "expr": "max(ALERTS{alertname=\"HealthPointOtelCollectorUnavailable\",alertstate=\"firing\"})", "legendFormat": "collector unavailable", "refId": "A" }],
+      "title": "Collector Unavailable Alert",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.8 }, { "color": "red", "value": 0.95 }] }, "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "11.2.0",
+      "targets": [{ "editorMode": "code", "expr": "max(otelcol_exporter_queue_size / clamp_min(otelcol_exporter_queue_capacity, 1))", "legendFormat": "queue utilization", "refId": "A" }],
+      "title": "Collector Export Queue Utilization",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.0001 }] }, "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": { "colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "11.2.0",
+      "targets": [{ "editorMode": "code", "expr": "sum(rate(otelcol_exporter_send_failed_spans_total[5m])) + sum(rate(otelcol_exporter_send_failed_metric_points_total[5m])) + sum(rate(otelcol_exporter_send_failed_log_records_total[5m]))", "legendFormat": "export failures", "refId": "A" }],
+      "title": "Collector Export Failures / Second",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }, "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 8 },
+      "id": 5,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "pluginVersion": "11.2.0",
+      "targets": [{ "editorMode": "code", "expr": "sum by (healthpoint_component) (rate(healthpoint_operation_total{healthpoint_component=~\"$component\"}[5m]))", "legendFormat": "{{healthpoint_component}}", "refId": "A" }],
+      "title": "Aggregate HealthPoint Operations by Component (No Tenant Labels)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }, "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 8 },
+      "id": 6,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        { "editorMode": "code", "expr": "sum(rate(otelcol_receiver_accepted_spans_total{receiver=~\"otlp.*\"}[5m]))", "legendFormat": "accepted spans", "refId": "A" },
+        { "editorMode": "code", "expr": "sum(rate(otelcol_receiver_refused_spans_total{receiver=~\"otlp.*\"}[5m]))", "legendFormat": "refused spans", "refId": "B" },
+        { "editorMode": "code", "expr": "sum(rate(otelcol_receiver_accepted_metric_points_total{receiver=~\"otlp.*\"}[5m]))", "legendFormat": "accepted metric points", "refId": "C" }
+      ],
+      "title": "Aggregate OTLP Ingestion (No Tenant Dimension)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }, "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 17 },
+      "id": 7,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "pluginVersion": "11.2.0",
+      "targets": [{ "editorMode": "code", "expr": "sum(rate(alertmanager_notifications_failed_total[5m]))", "legendFormat": "notification failures", "refId": "A" }],
+      "title": "Alertmanager Notification Failures / Second",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 17 },
+      "id": 8,
+      "options": { "colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "11.2.0",
+      "targets": [{ "editorMode": "code", "expr": "sum(ALERTS{alertname=\"HealthPointOtelCollectorUnavailable\",alertstate=\"firing\"}) + sum(ALERTS{alertname=\"HealthPointOtelExporterSendFailures\",alertstate=\"firing\"}) + sum(ALERTS{alertname=\"HealthPointAlertmanagerUnavailable\",alertstate=\"firing\"}) + sum(ALERTS{alertname=\"HealthPointAlertmanagerNotificationFailures\",alertstate=\"firing\"}) + sum(ALERTS{alertname=\"HealthPointAlertmanagerAlertLimitReached\",alertstate=\"firing\"})", "legendFormat": "active critical observability alerts", "refId": "A" }],
+      "title": "Active Critical Observability Alerts",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }, "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 26 },
+      "id": 9,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "pluginVersion": "11.2.0",
+      "targets": [{ "editorMode": "code", "expr": "sum by (healthpoint_component, healthpoint_operation) (rate(healthpoint_operation_total{healthpoint_component=~\"$component\",healthpoint_status=\"error\"}[5m]))", "legendFormat": "{{healthpoint_component}} / {{healthpoint_operation}}", "refId": "A" }],
+      "title": "Application Trace-Error Outcomes by Component and Operation (No Tenant Labels)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["healthpoint", "observability", "dead-man", "privacy-safe"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "All", "value": ".*" },
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "definition": "label_values(healthpoint_operation_total, healthpoint_component)",
+        "includeAll": true,
+        "label": "Component",
+        "multi": true,
+        "name": "component",
+        "options": [],
+        "query": { "query": "label_values(healthpoint_operation_total, healthpoint_component)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+        "refresh": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "utc",
+  "title": "HealthPoint Observability and Dead-Man Health",
+  "uid": "healthpoint-observability-deadman",
+  "version": 1,
+  "weekStart": ""
+}

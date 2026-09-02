@@ -1,0 +1,135 @@
+# TEMPLATE-ONLY. Do not deploy until the chrony exporter, node exporter timex
+# collector, role labels, scrape intervals, and time-source authentication are
+# verified in the actual staging cluster. All thresholds are proposed controls
+# from healthpoint.tigerbeetle.drill.timing.v1, not current measurements.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: healthpoint-tigerbeetle-clock-synchronization
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-drill-time-guards
+spec:
+  groups:
+    - name: healthpoint.tigerbeetle.clock-synchronization
+      interval: 5s
+      rules:
+        # Chrony's documented absolute clock error bound:
+        # |system time correction| + root dispersion + (0.5 * root delay)
+        - record: healthpoint:chrony_clock_error_bound_seconds
+          expr: |-
+            abs(chrony_tracking_system_time_seconds{job="${CHRONY_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"})
+            + chrony_tracking_root_dispersion_seconds{job="${CHRONY_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"}
+            + (0.5 * chrony_tracking_root_delay_seconds{job="${CHRONY_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"})
+        - record: healthpoint:chrony_time_source_sample_age_seconds
+          expr: |-
+            time() - chrony_tracking_reference_timestamp_seconds{job="${CHRONY_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"}
+        - record: healthpoint:node_kernel_time_error_bound_seconds
+          expr: |-
+            max by (instance, job, healthpoint_timing_role) (
+              abs(node_timex_offset_seconds{job="${NODE_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"}),
+              node_timex_maxerror_seconds{job="${NODE_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"},
+              node_timex_estimated_error_seconds{job="${NODE_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"}
+            )
+        - alert: HealthPointTigerBeetleClockAccuracyPrecheckRisk
+          expr: |-
+            max by (healthpoint_timing_role) (healthpoint:chrony_clock_error_bound_seconds) > 0.025
+          for: 2m
+          labels:
+            severity: warning
+            environment: staging
+            service: tigerbeetle
+            timing_gate: "advisory"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+          annotations:
+            summary: Staging TigerBeetle pre-check clock accuracy is above 25 ms
+            description: Investigate the time source before the 50 ms pre-check no-go threshold is reached.
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetleClockAccuracyWarning
+          expr: |-
+            max by (healthpoint_timing_role) (healthpoint:chrony_clock_error_bound_seconds) > 0.05
+          for: 30s
+          labels:
+            severity: warning
+            environment: staging
+            service: tigerbeetle
+            timing_gate: "warning"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+          annotations:
+            summary: Staging time accuracy bound exceeds 50 ms for a TigerBeetle drill correlation role
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetleClockAccuracyAbort
+          expr: |-
+            (
+              max by (healthpoint_timing_role) (healthpoint:chrony_clock_error_bound_seconds) > 0.25
+            )
+            and on ()
+            (
+              max(healthpoint_tigerbeetle_partition_drill_active{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",statefulset="${TIGERBEETLE_STATEFULSET}"} == 1)
+            )
+          for: 5s
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            drill_abort: "true"
+            timing_gate: "abort"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+          annotations:
+            summary: "Staging TigerBeetle drill abort: clock accuracy bound exceeds 250 ms"
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetleChronyUnavailable
+          expr: |-
+            min by (healthpoint_timing_role) (chrony_up{job="${CHRONY_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"}) != 1
+            or absent(chrony_up{job="${CHRONY_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"}) == 1
+          for: 30s
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            timing_gate: "no_go"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+          annotations:
+            summary: Chrony monitoring is unavailable for a required TigerBeetle drill correlation role
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetleChronyNotSynchronised
+          expr: |-
+            min by (healthpoint_timing_role) (chrony_tracking_remote_reference{job="${CHRONY_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"}) != 1
+          for: 30s
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            timing_gate: "no_go"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+          annotations:
+            summary: A required TigerBeetle drill correlation role has no remote chrony reference source
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetleChronyReferenceStale
+          expr: |-
+            max by (healthpoint_timing_role) (healthpoint:chrony_time_source_sample_age_seconds) > 180
+          for: 30s
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            timing_gate: "no_go"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+          annotations:
+            summary: Chrony reference sample is older than three minutes for a required drill correlation role
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetleKernelTimeUnsynchronised
+          expr: |-
+            min by (healthpoint_timing_role) (node_timex_sync_status{job="${NODE_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"}) != 1
+            or absent(node_timex_sync_status{job="${NODE_EXPORTER_JOB}",healthpoint_timing_role=~"application|cni|otel_collector|prometheus"}) == 1
+          for: 30s
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            timing_gate: "no_go"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+          annotations:
+            summary: Linux kernel time synchronization is unavailable for a required drill correlation role
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}

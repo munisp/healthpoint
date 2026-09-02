@@ -1,0 +1,7 @@
+{
+  "fixture_class": "synthetic-negative-test",
+  "non_production": true,
+  "purpose": "Proves protected preflight rejects placeholder external evidence.",
+  "evidence_name": "regulatory_content_governance",
+  "prohibited_for_release": true
+}

@@ -1,0 +1,82 @@
+# TEMPLATE ONLY — Apache Sedona/Spark is not currently an active HealthPoint service.
+# Adopt this only in an approved Python/Spark workload with pinned dependencies and a
+# dedicated non-production mTLS collector test. Never record geometry, WKT/WKB, URIs,
+# Spark SQL, tenant IDs, user IDs, case IDs, or input/output dataset names.
+from __future__ import annotations
+
+import os
+from typing import Callable, TypeVar
+
+from opentelemetry import metrics, trace
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.trace import Status, StatusCode
+
+T = TypeVar("T")
+
+_ALLOWED_OUTCOMES = {"ok", "error", "blocked"}
+
+def _require(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    return value
+
+def initialize_sedona_telemetry() -> None:
+    endpoint = _require("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if not endpoint.startswith("https://"):
+        raise RuntimeError("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTPS")
+    cert = _require("OTEL_CLIENT_CERT_PATH")
+    key = _require("OTEL_CLIENT_KEY_PATH")
+    ca = _require("OTEL_CA_PATH")
+    for path in (cert, key, ca):
+        if not os.path.isfile(path):
+            raise RuntimeError("configured OTLP mTLS material is not readable")
+    tenant_key = _require("OTEL_TENANT_HMAC_KEY")
+    if len(tenant_key) < 32:
+        raise RuntimeError("OTEL_TENANT_HMAC_KEY must have at least 32 characters")
+
+    resource = Resource.create({
+        "service.name": _require("OTEL_SERVICE_NAME"),
+        "service.version": os.environ.get("OTEL_SERVICE_VERSION", "unknown"),
+        "deployment.environment": _require("OTEL_DEPLOYMENT_ENVIRONMENT"),
+        "healthpoint.component": "apache-sedona",
+    })
+    # Client certificate configuration is supplied by the approved OTLP exporter
+    # transport in the workload image. Do not pass a bearer token in headers.
+    tracer_provider = TracerProvider(resource=resource)
+    tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
+    trace.set_tracer_provider(tracer_provider)
+
+    metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=endpoint))
+    metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[metric_reader]))
+
+def observe_sedona_stage(operation: str, action: Callable[[], T]) -> T:
+    if operation not in {"spark_job_submit", "sedona_spatial_stage", "result_publish"}:
+        raise ValueError("operation is not an approved bounded Sedona operation")
+    tracer = trace.get_tracer("healthpoint.sedona")
+    meter = metrics.get_meter("healthpoint.sedona")
+    counter = meter.create_counter("healthpoint.operation", unit="1")
+    with tracer.start_as_current_span(f"healthpoint.sedona.{operation}") as span:
+        span.set_attribute("healthpoint.component", "apache-sedona")
+        span.set_attribute("healthpoint.operation", operation)
+        try:
+            result = action()
+            outcome = "ok"
+            return result
+        except Exception:
+            # Do not call span.record_exception(): exception strings can contain
+            # input paths, geometry, job arguments, or tenant-derived values.
+            outcome = "error"
+            span.set_status(Status(StatusCode.ERROR))
+            raise
+        finally:
+            if outcome not in _ALLOWED_OUTCOMES:
+                outcome = "blocked"
+            span.set_attribute("healthpoint.outcome", outcome)
+            counter.add(1, {"healthpoint.component": "apache-sedona", "healthpoint.operation": operation, "healthpoint.outcome": outcome})

@@ -50,6 +50,265 @@
       "when": 1783519471694,
       "tag": "0006_bent_shinko_yamashiro",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783526274844,
+      "tag": "0007_keen_paper_doll",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783535295192,
+      "tag": "0008_cheerful_apocalypse",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783541043219,
+      "tag": "0009_woozy_sway",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783542524088,
+      "tag": "0010_smart_multiple_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1783561064840,
+      "tag": "0011_safe_whiplash",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1783561231058,
+      "tag": "0012_little_cardiac",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1783566019557,
+      "tag": "0013_lovely_robbie_robertson",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1783568851131,
+      "tag": "0014_even_mindworm",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1783901811144,
+      "tag": "0015_little_epoch",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1784195589460,
+      "tag": "0016_melodic_ender_wiggin",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1784602604375,
+      "tag": "0017_striped_molten_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1784603245495,
+      "tag": "0018_next_omega_flight",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1784605442417,
+      "tag": "0019_new_surge",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786569142626,
+      "tag": "0020_living_human_cannonball",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1786571176022,
+      "tag": "0021_keen_roxanne_simpson",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1786571232110,
+      "tag": "0022_fat_robbie_robertson",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1786614987567,
+      "tag": "0023_lame_jack_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786616289553,
+      "tag": "0024_supreme_photon",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1786616800977,
+      "tag": "0025_simple_devos",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1787164447205,
+      "tag": "0026_luxuriant_invisible_woman",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1787164447207,
+      "tag": "0030_cms_submission_outbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1787164447208,
+      "tag": "0031_document_analysis_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1787164447209,
+      "tag": "0033_idr_quarantine_workflow",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1787164447210,
+      "tag": "0034_model_governance",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1787164447211,
+      "tag": "0035_document_validation_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1787164447212,
+      "tag": "0036_governed_outcome_predictions",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1787164447213,
+      "tag": "0037_stakeholder_claim_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1787164447214,
+      "tag": "0038_stakeholder_attestation_signatures",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1787164447215,
+      "tag": "0039_external_evidence_release_controls",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1787164447216,
+      "tag": "0040_cms_manual_handoff_enforcement",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1788264357835,
+      "tag": "0041_operational_alert_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1788279137204,
+      "tag": "0042_dapr_durable_event_inbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1788280216049,
+      "tag": "0043_ledger_bigint_double_entry_enforcement",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1788280419683,
+      "tag": "0044_ledger_balance_cache_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1788282710560,
+      "tag": "0045_settlement_native_bigint_cents",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1788314200000,
+      "tag": "0046_tigerbeetle_durable_finality_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1788385892502,
+      "tag": "0047_stakeholder_evidence_integrity_trigger_enforcement",
+      "breakpoints": true
     }
   ]
 }

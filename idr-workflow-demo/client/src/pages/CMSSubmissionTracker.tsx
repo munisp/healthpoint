@@ -185,6 +185,7 @@ export default function CMSSubmissionTracker() {
     setValidatingId(draft.disputeId);
     const ff = draft.draft.formFields;
     validateMutation.mutate({
+      disputeId: draft.disputeId,
       submission: {
         initiating_party_name: ff.initiatingParty ?? ff.initiating_party_name ?? "",
         initiating_party_type: ff.initiatingPartyType ?? ff.initiating_party_type ?? "provider",
@@ -257,6 +258,7 @@ export default function CMSSubmissionTracker() {
     setAutoFixResult(null);
     const ff = draft.draft.formFields;
     autoFixMutation.mutate({
+      disputeId: draft.disputeId,
       submission: {
         initiating_party_name: ff.initiatingParty ?? ff.initiating_party_name ?? "",
         initiating_party_type: ff.initiatingPartyType ?? ff.initiating_party_type ?? "provider",

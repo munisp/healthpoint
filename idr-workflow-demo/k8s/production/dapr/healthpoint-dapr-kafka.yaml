@@ -1,0 +1,85 @@
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: healthpoint-dapr-config
+  namespace: healthpoint
+spec:
+  mtls:
+    enabled: true
+  accessControl:
+    defaultAction: deny
+    trustDomain: public
+    policies:
+      - appId: healthpoint-api
+        defaultAction: deny
+        operations:
+          - name: /api/events/*
+            httpVerb: [POST]
+            action: allow
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: idr-kafka-pubsub
+  namespace: healthpoint
+spec:
+  type: pubsub.kafka
+  version: v1
+  initTimeout: 30s
+  ignoreErrors: false
+  metadata:
+    - name: brokers
+      secretKeyRef:
+        name: healthpoint-dapr-kafka
+        key: brokers
+    - name: consumerGroup
+      value: healthpoint-idr-{namespace}
+    - name: clientID
+      value: healthpoint-api
+    - name: authType
+      value: mtls
+    - name: caCert
+      secretKeyRef:
+        name: healthpoint-dapr-kafka
+        key: ca.crt
+    - name: clientCert
+      secretKeyRef:
+        name: healthpoint-dapr-kafka
+        key: tls.crt
+    - name: clientKey
+      secretKeyRef:
+        name: healthpoint-dapr-kafka
+        key: tls.key
+    - name: disableTls
+      value: "false"
+    - name: skipVerify
+      value: "false"
+    - name: maxMessageBytes
+      value: "262144"
+    - name: consumeRetryEnabled
+      value: "true"
+    - name: consumeRetryInterval
+      value: 500ms
+    - name: sessionTimeout
+      value: 20s
+    - name: heartbeatInterval
+      value: 5s
+    - name: consumerGroupRebalanceStrategy
+      value: sticky
+scopes:
+  - healthpoint-api
+---
+# The deployment annotation must use Dapr's documented app-token key. The actual
+# secret is provisioned by an approved ExternalSecret/Vault workflow and is never
+# committed to source control.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: healthpoint-dapr-component-contract
+  namespace: healthpoint
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+data:
+  required-secrets: healthpoint-dapr-app-token,healthpoint-dapr-kafka
+  pubsub-component: idr-kafka-pubsub
+  ingress-topics: idr.dispute.events,idr.payments,idr.audit

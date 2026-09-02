@@ -1,0 +1,182 @@
+# Render only for an approved staging cluster. This package supports mTLS
+# read-connectivity and telemetry evidence, not TigerBeetle posting/finality or
+# permanent-loss recovery. Every *_IMAGE_DIGEST must resolve to @sha256:<64hex>.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: tigerbeetle-readonly-mtls
+  namespace: ${TIGERBEETLE_NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: ClusterSecretStore, name: healthpoint-staging }
+  target: { name: tigerbeetle-readonly-mtls, creationPolicy: Owner }
+  data:
+    - secretKey: ca.crt
+      remoteRef: { key: ${TIGERBEETLE_SECRET_PREFIX}, property: tls_ca }
+    - secretKey: tls.crt
+      remoteRef: { key: ${TIGERBEETLE_SECRET_PREFIX}, property: client_certificate }
+    - secretKey: tls.key
+      remoteRef: { key: ${TIGERBEETLE_SECRET_PREFIX}, property: client_key }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tigerbeetle-readiness
+  namespace: ${TIGERBEETLE_NAMESPACE}
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tigerbeetle-readiness-${RELEASE_ID}
+  namespace: ${TIGERBEETLE_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: tigerbeetle-readiness
+    healthpoint.io/verification: non-destructive
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  activeDeadlineSeconds: 60
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: tigerbeetle-readiness }
+    spec:
+      serviceAccountName: tigerbeetle-readiness
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: readiness
+          image: ${HEALTHPOINT_APP_IMAGE_DIGEST}
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/tigerbeetle-readiness.js"]
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PAYMENT_EXECUTION_MODE, value: disabled }
+            - { name: TIGERBEETLE_READINESS_MODE, value: read-only }
+            - { name: TIGERBEETLE_ENABLED, value: "true" }
+            - { name: TIGERBEETLE_ADDRESS, value: "127.0.0.1:3000" }
+            - { name: TIGERBEETLE_TLS_REMOTE_ADDRESS, value: ${TIGERBEETLE_MTLS_PROXY_HOSTPORT} }
+            - { name: TIGERBEETLE_TLS_SERVER_NAME, value: ${TIGERBEETLE_MTLS_PROXY_DNS_NAME} }
+            - { name: TIGERBEETLE_CLUSTER_ID, value: "${TIGERBEETLE_CLUSTER_ID}" }
+            - { name: TIGERBEETLE_CA_PATH, value: /var/run/tigerbeetle/ca.crt }
+            - { name: TIGERBEETLE_CLIENT_CERT_PATH, value: /var/run/tigerbeetle/tls.crt }
+            - { name: TIGERBEETLE_CLIENT_KEY_PATH, value: /var/run/tigerbeetle/tls.key }
+          volumeMounts: [{ name: mtls, mountPath: /var/run/tigerbeetle, readOnly: true }]
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+      volumes: [{ name: mtls, secret: { secretName: tigerbeetle-readonly-mtls, defaultMode: 0400 } }]
+---
+# Direct TigerBeetle TCP access is prohibited. Read-only clients may reach only
+# the staging mTLS proxy address, which authenticates them before proxying to replicas.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tigerbeetle-readiness-egress-only-to-mtls-boundary
+  namespace: ${TIGERBEETLE_NAMESPACE}
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: tigerbeetle-readiness } }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ${TIGERBEETLE_MTLS_NAMESPACE} } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: tigerbeetle-mtls-proxy } }
+      ports: [{ protocol: TCP, port: ${TIGERBEETLE_MTLS_PROXY_PORT} }]
+    - to:
+        - podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tigerbeetle-replica-ingress-only-from-mtls-boundary
+  namespace: ${TIGERBEETLE_REPLICA_NAMESPACE}
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: tigerbeetle } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ${TIGERBEETLE_MTLS_NAMESPACE} } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: tigerbeetle-mtls-proxy } }
+      ports: [{ protocol: TCP, port: 3000 }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tigerbeetle-statsd-mapping
+  namespace: ${TIGERBEETLE_NAMESPACE}
+data:
+  mappings.yml: |
+    mappings:
+      - match: "tigerbeetle.replica.*.requests"
+        name: "healthpoint_tigerbeetle_replica_requests_total"
+        match_type: glob
+        labels: { replica: "$1" }
+      - match: "tigerbeetle.replica.*.errors"
+        name: "healthpoint_tigerbeetle_replica_errors_total"
+        match_type: glob
+        labels: { replica: "$1" }
+      - match: "tigerbeetle.replica.*.latency_ms"
+        name: "healthpoint_tigerbeetle_replica_latency_milliseconds"
+        match_type: glob
+        labels: { replica: "$1" }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigerbeetle-statsd-exporter
+  namespace: ${TIGERBEETLE_NAMESPACE}
+  labels: { app.kubernetes.io/name: tigerbeetle-statsd-exporter }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: tigerbeetle-statsd-exporter } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: tigerbeetle-statsd-exporter } }
+    spec:
+      automountServiceAccountToken: false
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: statsd-exporter
+          image: ${STATSD_EXPORTER_IMAGE_DIGEST}
+          args: ["--statsd.mapping-config=/etc/statsd/mappings.yml"]
+          ports:
+            - { name: statsd-udp, containerPort: 9125, protocol: UDP }
+            - { name: metrics, containerPort: 9102, protocol: TCP }
+          volumeMounts: [{ name: config, mountPath: /etc/statsd, readOnly: true }]
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] }, readOnlyRootFilesystem: true, runAsNonRoot: true }
+      volumes: [{ name: config, configMap: { name: tigerbeetle-statsd-mapping } }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tigerbeetle-statsd-exporter
+  namespace: ${TIGERBEETLE_NAMESPACE}
+  labels: { app.kubernetes.io/name: tigerbeetle-statsd-exporter }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: tigerbeetle-statsd-exporter }
+  ports:
+    - { name: statsd-udp, port: 9125, targetPort: statsd-udp, protocol: UDP }
+    - { name: metrics, port: 9102, targetPort: metrics, protocol: TCP }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: tigerbeetle-statsd-exporter
+  namespace: ${TIGERBEETLE_NAMESPACE}
+spec:
+  selector: { matchLabels: { app.kubernetes.io/name: tigerbeetle-statsd-exporter } }
+  endpoints: [{ port: metrics, interval: 30s, scrapeTimeout: 10s }]
+# Metrics bridge requires a vetted replica-side StatsD emitter. Do not invent
+# TigerBeetle protocol metrics; its availability and semantics must be confirmed
+# with the cluster operator before collecting production evidence.

@@ -240,6 +240,27 @@ export interface WorkflowAdvanceResult {
   message: string;
 }
 
+export function validateWorkflowTransition(
+  currentStep: IDRStep,
+  targetStep: IDRStep,
+  dispute: Record<string, unknown>
+): void {
+  const stepDef = IDR_WORKFLOW_STEPS[currentStep];
+  if (!stepDef) throw new Error(`Unknown step: ${currentStep}`);
+  if (stepDef.isTerminal) throw new Error(`Dispute is in terminal step ${currentStep} and cannot be advanced`);
+  if (!stepDef.allowedTransitions.includes(targetStep)) {
+    throw new Error(`Invalid transition from ${currentStep} to ${targetStep}. Allowed: ${stepDef.allowedTransitions.join(", ")}`);
+  }
+
+  const missing = stepDef.requiredFields.filter(field => {
+    const value = dispute[field];
+    return value === undefined || value === null || value === "";
+  });
+  if (missing.length) {
+    throw new Error(`Cannot advance from ${currentStep}; missing required field(s): ${missing.join(", ")}`);
+  }
+}
+
 /**
  * Advance a dispute to the next workflow step.
  * Acquires a distributed lock to prevent concurrent state transitions.
@@ -267,20 +288,8 @@ export async function advanceWorkflow(
     const dispute = rows[0];
     const currentStep = dispute.currentStep as IDRStep;
 
-    // Validate transition
+    validateWorkflowTransition(currentStep, targetStep, dispute as Record<string, unknown>);
     const stepDef = IDR_WORKFLOW_STEPS[currentStep];
-    if (!stepDef) throw new Error(`Unknown step: ${currentStep}`);
-
-    if (!stepDef.allowedTransitions.includes(targetStep)) {
-      throw new Error(
-        `Invalid transition from ${currentStep} to ${targetStep}. ` +
-        `Allowed: ${stepDef.allowedTransitions.join(", ")}`
-      );
-    }
-
-    if (stepDef.isTerminal) {
-      throw new Error(`Dispute is in terminal step ${currentStep} and cannot be advanced`);
-    }
 
     // Calculate deadline for new step
     const targetStepDef = IDR_WORKFLOW_STEPS[targetStep];

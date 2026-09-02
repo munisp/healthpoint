@@ -1,0 +1,34 @@
+# TEMPLATE-ONLY. This Application is manual-sync-only because spec.syncPolicy.automated
+# is intentionally absent. It deploys the reviewed log-access bundle only; it must
+# never reference a drill runner, recovery action, CronJob, or a financial workload.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ${ARGOCD_APPLICATION_NAME}
+  namespace: ${ARGOCD_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    healthpoint.io/environment: staging
+    healthpoint.io/component: tigerbeetle-drill-log-access
+  annotations:
+    healthpoint.io/source-commit-sha: ${GIT_COMMIT_SHA}
+    healthpoint.io/manifest-bundle-sha256: ${MANIFEST_BUNDLE_SHA256}
+    healthpoint.io/source-validation-artifact-sha256: ${SOURCE_VALIDATION_ARTIFACT_SHA256}
+spec:
+  project: ${ARGOCD_PROJECT}
+  source:
+    repoURL: ${GIT_REPOSITORY_URL}
+    targetRevision: ${GIT_COMMIT_SHA}
+    path: ${RENDERED_MANIFEST_BUNDLE_PATH}
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: healthpoint-observability
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false
+      - PrunePropagationPolicy=foreground
+      - ServerSideApply=true
+      - Validate=true
+  revisionHistoryLimit: 5

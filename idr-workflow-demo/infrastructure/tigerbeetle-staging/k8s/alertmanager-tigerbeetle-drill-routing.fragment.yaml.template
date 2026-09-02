@@ -1,0 +1,162 @@
+# MERGE-ONLY ALERTMANAGER FRAGMENT.
+# Insert route entries at the START of the existing top-level route.routes list,
+# before generic severity="critical" routes. Append the receivers to the existing
+# top-level receivers list. This is not a standalone Alertmanager configuration.
+#
+# Required Kubernetes Secret volume contract (already mounted at
+# /etc/alertmanager/receivers in the current observability StatefulSet):
+#   tigerbeetle-drill-pagerduty-routing-key            -> PagerDuty Events API v2 routing key for active drill aborts
+#   tigerbeetle-drill-slack-webhook-url                -> approved private Slack incoming-webhook URL for active drill aborts
+#   tigerbeetle-clock-no-go-pagerduty-routing-key      -> PagerDuty Events API v2 routing key for critical clock pre-check failures
+#   tigerbeetle-clock-no-go-slack-webhook-url          -> approved private Slack incoming-webhook URL for critical clock pre-check failures
+#   tigerbeetle-clock-warning-slack-webhook-url        -> approved private Slack incoming-webhook URL for advisory/warning clock degradation
+# Secret values must be projected by the approved secret-management workflow and
+# must never be rendered into this file, committed, or written to drill artifacts.
+#
+# Dashboard panels visualize metric and alert state but do not dispatch alerts.
+# Alertmanager owns notification delivery. Required alert labels:
+# environment="staging", service="tigerbeetle", severity, and timing_gate.
+route:
+  routes:
+    # Critical five-second active-drill abort: PagerDuty immediately, then the
+    # dedicated Slack incident channel. Stop before generic critical routes.
+    - matchers:
+        - environment="staging"
+        - service="tigerbeetle"
+        - severity="critical"
+        - drill_abort="true"
+      receiver: healthpoint-tigerbeetle-drill-pagerduty
+      group_by: [alertname, cluster, namespace, statefulset]
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 5m
+      continue: true
+    - matchers:
+        - environment="staging"
+        - service="tigerbeetle"
+        - severity="critical"
+        - drill_abort="true"
+      receiver: healthpoint-tigerbeetle-drill-slack
+      group_by: [alertname, cluster, namespace, statefulset]
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 5m
+      continue: false
+    # Critical no-go before a drill: page the on-call operator immediately and
+    # post to the pre-check incident channel. This does not start or stop a drill.
+    - matchers:
+        - environment="staging"
+        - service="tigerbeetle"
+        - severity="critical"
+        - timing_gate="no_go"
+      receiver: healthpoint-tigerbeetle-clock-no-go-pagerduty
+      group_by: [alertname, cluster, namespace, statefulset, healthpoint_timing_role]
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 15m
+      continue: true
+    - matchers:
+        - environment="staging"
+        - service="tigerbeetle"
+        - severity="critical"
+        - timing_gate="no_go"
+      receiver: healthpoint-tigerbeetle-clock-no-go-slack
+      group_by: [alertname, cluster, namespace, statefulset, healthpoint_timing_role]
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 15m
+      continue: false
+    # Advisory/warning timing degradation is a Slack-only operator signal. It
+    # deliberately does not page until the critical no-go condition is met.
+    - matchers:
+        - environment="staging"
+        - service="tigerbeetle"
+        - severity="warning"
+        - timing_gate=~"advisory|warning"
+      receiver: healthpoint-tigerbeetle-clock-warning-slack
+      group_by: [alertname, cluster, namespace, statefulset, healthpoint_timing_role]
+      group_wait: 0s
+      group_interval: 5m
+      repeat_interval: 30m
+      continue: false
+receivers:
+  - name: healthpoint-tigerbeetle-drill-pagerduty
+    pagerduty_configs:
+      - routing_key_file: /etc/alertmanager/receivers/tigerbeetle-drill-pagerduty-routing-key
+        send_resolved: true
+        severity: critical
+        component: tigerbeetle
+        class: partition-recovery-drill
+        group: '{{ .CommonLabels.cluster }}'
+        source: '{{ .CommonLabels.namespace }}/{{ .CommonLabels.statefulset }}'
+        description: '{{ .CommonLabels.alertname }}: TigerBeetle staging drill abort condition'
+        details:
+          alertname: '{{ .CommonLabels.alertname }}'
+          environment: '{{ .CommonLabels.environment }}'
+          namespace: '{{ .CommonLabels.namespace }}'
+          statefulset: '{{ .CommonLabels.statefulset }}'
+          runbook: '{{ .CommonAnnotations.runbook }}'
+        timeout: 10s
+  - name: healthpoint-tigerbeetle-drill-slack
+    slack_configs:
+      - api_url_file: /etc/alertmanager/receivers/tigerbeetle-drill-slack-webhook-url
+        channel: '#staging-tigerbeetle-incidents'
+        send_resolved: true
+        username: healthpoint-alertmanager
+        icon_emoji: ':rotating_light:'
+        title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
+        title_link: '{{ .CommonAnnotations.runbook }}'
+        text: |-
+          *Component:* {{ .CommonLabels.service }}
+          *Environment:* {{ .CommonLabels.environment }}
+          *Namespace:* {{ .CommonLabels.namespace }}
+          *StatefulSet:* {{ .CommonLabels.statefulset }}
+          *Action:* abort any active partition drill and verify removal of the exact run-specific NetworkPolicy.
+        timeout: 10s
+  - name: healthpoint-tigerbeetle-clock-no-go-pagerduty
+    pagerduty_configs:
+      - routing_key_file: /etc/alertmanager/receivers/tigerbeetle-clock-no-go-pagerduty-routing-key
+        send_resolved: true
+        severity: critical
+        component: tigerbeetle
+        class: clock-synchronization-precheck
+        group: '{{ .CommonLabels.cluster }}'
+        source: '{{ .CommonLabels.namespace }}/{{ .CommonLabels.statefulset }}'
+        description: '{{ .CommonLabels.alertname }}: TigerBeetle staging pre-check is no-go due to clock correlation degradation'
+        details:
+          alertname: '{{ .CommonLabels.alertname }}'
+          environment: '{{ .CommonLabels.environment }}'
+          timing_gate: '{{ .CommonLabels.timing_gate }}'
+          timing_role: '{{ .CommonLabels.healthpoint_timing_role }}'
+          runbook: '{{ .CommonAnnotations.runbook }}'
+        timeout: 10s
+  - name: healthpoint-tigerbeetle-clock-no-go-slack
+    slack_configs:
+      - api_url_file: /etc/alertmanager/receivers/tigerbeetle-clock-no-go-slack-webhook-url
+        channel: '#staging-tigerbeetle-incidents'
+        send_resolved: true
+        username: healthpoint-alertmanager
+        icon_emoji: ':warning:'
+        title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
+        title_link: '{{ .CommonAnnotations.runbook }}'
+        text: |-
+          *Component:* {{ .CommonLabels.service }}
+          *Environment:* {{ .CommonLabels.environment }}
+          *Timing role:* {{ .CommonLabels.healthpoint_timing_role }}
+          *Action:* do not start a partition drill. Remediate the clock or telemetry condition, then restart the full protected 15-minute pre-check.
+        timeout: 10s
+  - name: healthpoint-tigerbeetle-clock-warning-slack
+    slack_configs:
+      - api_url_file: /etc/alertmanager/receivers/tigerbeetle-clock-warning-slack-webhook-url
+        channel: '#staging-tigerbeetle-clock-observability'
+        send_resolved: true
+        username: healthpoint-alertmanager
+        icon_emoji: ':warning:'
+        title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
+        title_link: '{{ .CommonAnnotations.runbook }}'
+        text: |-
+          *Component:* {{ .CommonLabels.service }}
+          *Environment:* {{ .CommonLabels.environment }}
+          *Timing role:* {{ .CommonLabels.healthpoint_timing_role }}
+          *Action:* investigate before the 50 ms pre-check no-go threshold is reached.
+        timeout: 10s

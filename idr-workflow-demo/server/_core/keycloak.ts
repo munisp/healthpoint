@@ -19,7 +19,7 @@
 
 import type { Express, Request, Response } from "express";
 import * as client from "openid-client";
-import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { COOKIE_NAME, ONE_YEAR_MS, SESSION_DURATION_MS } from "@shared/const";
 import * as db from "../db";
 import { ENV } from "./env";
 import { SignJWT, jwtVerify } from "jose";
@@ -27,17 +27,43 @@ import { parse as parseCookieHeader } from "cookie";
 import type { User } from "../../drizzle/schema";
 import { ForbiddenError } from "@shared/_core/errors";
 
-// ─── PKCE state store (in-memory; replace with Redis for multi-instance) ─────
-const pkceStore = new Map<string, { codeVerifier: string; redirectTo: string }>();
+// ─── PKCE state store backed only by the configured shared Redis service ────
+// PKCE is an ephemeral one-time secret. It must never fall back to process memory,
+// which loses state on restart and creates inconsistent multi-replica behavior.
+import { cacheGet, cacheSet, cacheDel } from "../redis";
+
+async function pkceSet(state: string, data: { codeVerifier: string; redirectTo: string }): Promise<void> {
+  await cacheSet(`pkce:${state}`, data, 600); // 10 min TTL
+}
+
+async function pkceGet(state: string): Promise<{ codeVerifier: string; redirectTo: string } | null> {
+  return await cacheGet<{ codeVerifier: string; redirectTo: string }>(`pkce:${state}`);
+}
+
+async function pkceDelete(state: string): Promise<void> {
+  await cacheDel(`pkce:${state}`);
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getKeycloakConfig() {
+  const config = {
+    url: process.env.KEYCLOAK_URL?.trim(),
+    realm: process.env.KEYCLOAK_REALM?.trim(),
+    clientId: process.env.KEYCLOAK_CLIENT_ID?.trim(),
+    clientSecret: process.env.KEYCLOAK_CLIENT_SECRET,
+  };
+  if (process.env.NODE_ENV === "production") {
+    const missing = Object.entries(config).filter(([, value]) => !value?.trim()).map(([name]) => name);
+    if (missing.length) throw new Error(`Keycloak production configuration missing: ${missing.join(", ")}`);
+    if (!config.url?.startsWith("https://")) throw new Error("KEYCLOAK_URL must use https:// in production");
+    if ((config.clientSecret?.length ?? 0) < 32) throw new Error("KEYCLOAK_CLIENT_SECRET must contain at least 32 characters in production");
+  }
   return {
-    url: ENV.keycloakUrl || "https://auth.placeholder.example.com",
-    realm: ENV.keycloakRealm || "healthpoint",
-    clientId: ENV.keycloakClientId || "healthpoint-app",
-    clientSecret: ENV.keycloakClientSecret || "placeholder-secret",
+    url: config.url || "http://localhost:8080",
+    realm: config.realm || "healthpoint",
+    clientId: config.clientId || "healthpoint-app",
+    clientSecret: config.clientSecret || "development-keycloak-client-secret-only",
   };
 }
 
@@ -46,32 +72,64 @@ function getIssuerUrl(): string {
   return `${url}/realms/${realm}`;
 }
 
+function trustedPublicOrigin(req: Request): string {
+  const configured = process.env.HEALTHPOINT_PUBLIC_URL?.trim();
+  if (configured) {
+    const parsed = new URL(configured);
+    if (process.env.NODE_ENV === "production" && parsed.protocol !== "https:") {
+      throw new Error("HEALTHPOINT_PUBLIC_URL must use https:// in production");
+    }
+    return parsed.origin;
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("HEALTHPOINT_PUBLIC_URL is required in production");
+  }
+  return `${req.protocol}://${req.get("host") || "localhost"}`;
+}
+
 function getCallbackUrl(req: Request): string {
-  const proto = req.get("x-forwarded-proto") || req.protocol;
-  const host = req.get("x-forwarded-host") || req.get("host");
-  return `${proto}://${host}/api/auth/callback`;
+  return `${trustedPublicOrigin(req)}/api/auth/callback`;
+}
+
+function safeLocalRedirect(value: unknown): string {
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || /[\\\\\r\n]/.test(value)) return "/";
+  const url = new URL(value, "https://healthpoint.invalid");
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 function getSessionSecret(): Uint8Array {
-  return new TextEncoder().encode(ENV.cookieSecret || "placeholder-jwt-secret-change-me");
+  const secret = ENV.cookieSecret;
+  if (process.env.NODE_ENV === "production" && (!secret || secret.length < 32)) {
+    throw new Error("COOKIE_SECRET must contain at least 32 characters in production");
+  }
+  return new TextEncoder().encode(secret || "development-session-secret-not-for-production");
 }
 
 // ─── Session JWT (internal, not Keycloak token) ───────────────────────────────
 
 export async function createSessionToken(userId: string, name: string, email: string): Promise<string> {
-  const expiresAt = Math.floor((Date.now() + ONE_YEAR_MS) / 1000);
-  return new SignJWT({ sub: userId, name, email, type: "session" })
+  const expiresAt = Math.floor((Date.now() + SESSION_DURATION_MS) / 1000);
+  const jti = crypto.randomUUID();
+  return new SignJWT({ sub: userId, name, email, type: "session", jti })
     .setProtectedHeader({ alg: "HS256" })
     .setExpirationTime(expiresAt)
+    .setJti(jti)
     .sign(getSessionSecret());
 }
 
-export async function verifySessionToken(token: string): Promise<{ sub: string; name: string; email: string } | null> {
+export async function verifySessionToken(token: string): Promise<{ sub: string; name: string; email: string; jti?: string } | null> {
   try {
     const { payload } = await jwtVerify(token, getSessionSecret(), { algorithms: ["HS256"] });
-    const { sub, name, email } = payload as Record<string, unknown>;
+    const { sub, name, email, jti } = payload as Record<string, unknown>;
     if (typeof sub !== "string" || !sub) return null;
-    return { sub, name: String(name || ""), email: String(email || "") };
+    // A revocation-store outage is an authentication outage. Failing open would
+    // accept a session that may have been explicitly revoked.
+    if (typeof jti === "string" && jti) {
+      const { isTokenRevoked } = await import("../redis");
+      const revoked = await isTokenRevoked(jti);
+      if (revoked) return null;
+    }
+    return { sub, name: String(name || ""), email: String(email || ""), jti: typeof jti === "string" ? jti : undefined };
   } catch {
     return null;
   }
@@ -115,7 +173,7 @@ export function registerKeycloakRoutes(app: Express) {
   // GET /api/auth/login — initiate OIDC Authorization Code + PKCE flow
   app.get("/api/auth/login", async (req: Request, res: Response) => {
     try {
-      const redirectTo = (req.query.redirectTo as string) || "/";
+      const redirectTo = safeLocalRedirect(req.query.redirectTo);
       const issuerUrl = new URL(getIssuerUrl());
       const config = await client.discovery(issuerUrl, kc.clientId, kc.clientSecret);
 
@@ -123,10 +181,8 @@ export function registerKeycloakRoutes(app: Express) {
       const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
       const state = client.randomState();
 
-      // Store PKCE verifier keyed by state
-      pkceStore.set(state, { codeVerifier, redirectTo });
-      // Clean up after 10 minutes
-      setTimeout(() => pkceStore.delete(state), 10 * 60 * 1000);
+      // Store the one-time verifier in shared Redis; unavailable storage fails closed.
+      await pkceSet(state, { codeVerifier, redirectTo });
 
       const callbackUrl = getCallbackUrl(req);
       const authUrl = client.buildAuthorizationUrl(config, {
@@ -147,7 +203,7 @@ export function registerKeycloakRoutes(app: Express) {
   // GET /api/auth/register — redirect to Keycloak registration page
   app.get("/api/auth/register", async (req: Request, res: Response) => {
     try {
-      const redirectTo = (req.query.redirectTo as string) || "/";
+      const redirectTo = safeLocalRedirect(req.query.redirectTo);
       const role = (req.query.role as string) || "";
       const issuerUrl = new URL(getIssuerUrl());
       const config = await client.discovery(issuerUrl, kc.clientId, kc.clientSecret);
@@ -156,8 +212,7 @@ export function registerKeycloakRoutes(app: Express) {
       const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
       const state = client.randomState();
 
-      pkceStore.set(state, { codeVerifier, redirectTo: `${redirectTo}?role=${role}` });
-      setTimeout(() => pkceStore.delete(state), 10 * 60 * 1000);
+      await pkceSet(state, { codeVerifier, redirectTo: `${redirectTo}?role=${role}` });
 
       const callbackUrl = getCallbackUrl(req);
       // Keycloak supports ?kc_action=register to go directly to registration
@@ -182,7 +237,7 @@ export function registerKeycloakRoutes(app: Express) {
   // GET /api/auth/callback — exchange code for tokens, set session cookie
   app.get("/api/auth/callback", async (req: Request, res: Response) => {
     const state = req.query.state as string;
-    const stored = pkceStore.get(state);
+    const stored = await pkceGet(state);
 
     if (!stored) {
       console.error("[Keycloak] Unknown or expired state:", state);
@@ -190,7 +245,7 @@ export function registerKeycloakRoutes(app: Express) {
       return;
     }
 
-    pkceStore.delete(state);
+    await pkceDelete(state);
 
     try {
       const issuerUrl = new URL(getIssuerUrl());
@@ -234,7 +289,7 @@ export function registerKeycloakRoutes(app: Express) {
         httpOnly: true,
         sameSite: "lax",
         secure: isSecure,
-        maxAge: ONE_YEAR_MS,
+        maxAge: SESSION_DURATION_MS,
         path: "/",
       });
 
@@ -260,9 +315,7 @@ export function registerKeycloakRoutes(app: Express) {
     try {
       const issuerUrl = new URL(getIssuerUrl());
       const config = await client.discovery(issuerUrl, kc.clientId, kc.clientSecret);
-      const proto = req.get("x-forwarded-proto") || req.protocol;
-      const host = req.get("x-forwarded-host") || req.get("host");
-      const postLogoutUri = `${proto}://${host}/`;
+      const postLogoutUri = `${trustedPublicOrigin(req)}/`;
 
       const endSessionUrl = client.buildEndSessionUrl(config, {
         post_logout_redirect_uri: postLogoutUri,
@@ -273,6 +326,72 @@ export function registerKeycloakRoutes(app: Express) {
       // Fallback: just redirect home if end-session endpoint is unavailable
       res.redirect(302, "/");
     }
+  });
+
+  // GET /api/auth/session — returns session TTL info for the frontend expiry warning
+  app.get("/api/auth/session", async (req: Request, res: Response) => {
+    const cookies = req.cookies as Record<string, string>;
+    const sessionCookie = cookies[COOKIE_NAME];
+    if (!sessionCookie) {
+      res.status(401).json({ authenticated: false });
+      return;
+    }
+    const session = await verifySessionToken(sessionCookie).catch(() => null);
+    if (!session) {
+      res.status(401).json({ authenticated: false });
+      return;
+    }
+    // Decode JWT payload to read exp without re-verifying (already verified above)
+    let exp = 0;
+    try {
+      const parts = sessionCookie.split(".");
+      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+      exp = payload.exp as number;
+    } catch {
+      exp = Math.floor((Date.now() + SESSION_DURATION_MS) / 1000);
+    }
+    const nowSec = Math.floor(Date.now() / 1000);
+    const remainingMs = Math.max(0, (exp - nowSec) * 1000);
+    res.json({
+      authenticated: true,
+      expiresAt: exp * 1000,   // ms epoch
+      remainingMs,
+      userId: session.sub,
+    });
+  });
+
+  // GET /api/auth/refresh — silently re-issue a fresh session cookie if current one is valid
+  app.get("/api/auth/refresh", async (req: Request, res: Response) => {
+    const cookies = req.cookies as Record<string, string>;
+    const sessionCookie = cookies[COOKIE_NAME];
+    if (!sessionCookie) {
+      res.status(401).json({ refreshed: false, reason: "no_session" });
+      return;
+    }
+    const session = await verifySessionToken(sessionCookie).catch(() => null);
+    if (!session) {
+      res.status(401).json({ refreshed: false, reason: "invalid_session" });
+      return;
+    }
+    // Re-issue a fresh 8-hour JWT — no Keycloak round-trip needed for internal sessions
+    const user = await db.getUser(session.sub).catch(() => null);
+    const name = user?.name || session.name || "";
+    const email = user?.email || session.email || "";
+    const newToken = await createSessionToken(session.sub, name, email);
+    const isSecure = req.get("x-forwarded-proto") === "https" || req.protocol === "https";
+    res.cookie(COOKIE_NAME, newToken, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: isSecure,
+      maxAge: SESSION_DURATION_MS,
+      path: "/",
+    });
+    const exp = Math.floor((Date.now() + SESSION_DURATION_MS) / 1000);
+    res.json({
+      refreshed: true,
+      expiresAt: exp * 1000,
+      remainingMs: SESSION_DURATION_MS,
+    });
   });
 
   // Keep legacy /api/oauth/callback as a redirect alias for backwards compatibility

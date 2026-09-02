@@ -1,0 +1,291 @@
+{
+  "annotations": { "list": [] },
+  "description": "Template-only staging dashboard for the TigerBeetle partition-recovery timing contract. Import only after Chrony exporter, Node Exporter timex, monitor, and alert metrics/labels are verified in staging. It contains no tenant, patient, dispute, account, transfer, certificate, or endpoint dimensions.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "red", "index": 0, "text": "TELEMETRY UNAVAILABLE" }, "1": { "color": "green", "index": 1, "text": "HEALTHY" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }, "textMode": "value_and_name" },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "healthpoint_tigerbeetle_clock_monitor_status{status=\"healthy\",instance=~\"$instance\"}", "legendFormat": "monitor healthy", "range": true, "refId": "A" } ],
+      "title": "Continuous Clock Monitor Health",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "decimals": 3,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.025 }, { "color": "orange", "value": 0.05 }, { "color": "red", "value": 0.25 } ] },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }, "textMode": "value_and_name" },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "max(healthpoint_tigerbeetle_clock_monitor_clock_error_bound_seconds{instance=~\"$instance\"})", "legendFormat": "monitor maximum", "range": true, "refId": "A" } ],
+      "title": "Current Maximum Clock Error Bound",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": [ "min" ], "fields": "", "values": false }, "textMode": "value_and_name" },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "min(healthpoint_tigerbeetle_clock_monitor_kernel_synchronized{instance=~\"$instance\"})", "legendFormat": "kernel synchronization", "range": true, "refId": "A" } ],
+      "title": "Kernel Time Synchronization",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": [ "min" ], "fields": "", "values": false }, "textMode": "value_and_name" },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "min(healthpoint_tigerbeetle_clock_monitor_remote_references{instance=~\"$instance\"})", "legendFormat": "remote Chrony reference", "range": true, "refId": "A" } ],
+      "title": "Remote Chrony Reference",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "seconds", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 4, "showPoints": "auto", "spanNulls": false, "stacking": { "group": "A", "mode": "none" }, "thresholdsStyle": { "mode": "area+line" } }, "decimals": 3, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.025 }, { "color": "orange", "value": 0.05 }, { "color": "red", "value": 0.25 } ] }, "unit": "s" },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 5 },
+      "id": 5,
+      "options": { "legend": { "calcs": [ "lastNotNull", "max" ], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        { "editorMode": "code", "expr": "max by (healthpoint_timing_role, source_node_name) (healthpoint:chrony_clock_error_bound_seconds{healthpoint_timing_role=~\"$timing_role\",source_node_name=~\"$source_node\"})", "legendFormat": "{{healthpoint_timing_role}} / {{source_node_name}}", "range": true, "refId": "A" },
+        { "editorMode": "code", "expr": "max(healthpoint_tigerbeetle_clock_monitor_clock_error_bound_seconds{instance=~\"$instance\"})", "legendFormat": "continuous monitor maximum", "range": true, "refId": "B" }
+      ],
+      "title": "Chrony Clock Error Bound by Correlation Role",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "decimals": 0, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 4 }, { "color": "green", "value": 4 } ] }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 5 },
+      "id": 6,
+      "options": { "orientation": "horizontal", "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }, "showThresholdLabels": true, "showThresholdMarkers": true },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "healthpoint_tigerbeetle_clock_monitor_healthy_targets{instance=~\"$instance\"}", "legendFormat": "healthy Chrony targets", "range": true, "refId": "A" } ],
+      "title": "Chrony Target Coverage (Expected Count Is Deployment-Specific)",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "decimals": 0, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 30 }, { "color": "red", "value": 60 } ] }, "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 14 },
+      "id": 7,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }, "textMode": "value_and_name" },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "time() - max(healthpoint_tigerbeetle_clock_monitor_last_poll_success_timestamp_seconds{instance=~\"$instance\"})", "legendFormat": "seconds since successful monitor evaluation", "range": true, "refId": "A" } ],
+      "title": "Clock Monitor Evaluation Age",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "decimals": 0, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 } ] }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 14 },
+      "id": 8,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }, "textMode": "value_and_name" },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "sum(healthpoint_tigerbeetle_clock_monitor_failures_total{instance=~\"$instance\"})", "legendFormat": "query failures since monitor start", "range": true, "refId": "A" } ],
+      "title": "Clock Monitor Query Failures",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "decimals": 0, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 14 },
+      "id": 9,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": [ "last" ], "fields": "", "values": false }, "textMode": "value_and_name" },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "sum(ALERTS{alertstate=\"firing\",environment=\"staging\",service=\"tigerbeetle\",timing_gate=~\"warning|no_go|abort\"}) or vector(0)", "legendFormat": "active timing alerts", "range": true, "refId": "A" } ],
+      "title": "Active TigerBeetle Timing Alerts",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": true, "axisColorMode": "text", "axisLabel": "synchronization state", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 8, "lineInterpolation": "stepAfter", "lineWidth": 2, "pointSize": 3, "showPoints": "never", "spanNulls": false, "stacking": { "group": "A", "mode": "none" }, "thresholdsStyle": { "mode": "off" } }, "decimals": 0, "max": 1, "min": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "id": 10,
+      "options": { "legend": { "calcs": [ "lastNotNull", "min" ], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        { "editorMode": "code", "expr": "min by (healthpoint_timing_role, source_node_name) (node_timex_sync_status{job=\"node-exporter\",healthpoint_timing_role=~\"$timing_role\",source_node_name=~\"$source_node\"})", "legendFormat": "kernel / {{healthpoint_timing_role}} / {{source_node_name}}", "range": true, "refId": "A" },
+        { "editorMode": "code", "expr": "min by (healthpoint_timing_role, source_node_name) (chrony_tracking_remote_reference{job=\"chrony-exporter\",healthpoint_timing_role=~\"$timing_role\",source_node_name=~\"$source_node\"})", "legendFormat": "Chrony remote / {{healthpoint_timing_role}} / {{source_node_name}}", "range": true, "refId": "B" }
+      ],
+      "title": "Kernel and Chrony Source Synchronization by Role",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false } }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "id": 11,
+      "options": { "cellHeight": "sm", "showHeader": true, "sortBy": [ { "desc": true, "displayName": "Time" } ] },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "ALERTS{alertstate=\"firing\",environment=\"staging\",service=\"tigerbeetle\",timing_gate=~\"advisory|warning|no_go|abort\"}", "format": "table", "instant": true, "legendFormat": "", "refId": "A" } ],
+      "title": "Firing Timing-Gate Alerts",
+      "transformations": [],
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "decimals": 0, "min": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "id": 12,
+      "options": { "legend": { "calcs": [ "lastNotNull", "max" ], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "max(healthpoint_tigerbeetle_read_client_active{instance=~\"$instance\"})", "legendFormat": "in-flight explicit read clients", "range": true, "refId": "A" } ],
+      "title": "Explicit Read-Client Concurrency (Not a General-Purpose Pool)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "decimals": 0, "min": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "id": 13,
+      "options": { "legend": { "calcs": [ "lastNotNull", "max" ], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        { "editorMode": "code", "expr": "healthpoint_tigerbeetle_tunnel_active{instance=~\"$instance\"}", "legendFormat": "active supervised tunnels", "range": true, "refId": "A" },
+        { "editorMode": "code", "expr": "sum(increase(healthpoint_tigerbeetle_tunnel_lifecycle_total{healthpoint_event=\"stopped\",healthpoint_reason=\"unexpected_exit\"}[5m]))", "legendFormat": "unexpected tunnel exits / 5m", "range": true, "refId": "B" }
+      ],
+      "title": "Single-Tunnel Lifecycle and Unexpected Exits",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "decimals": 0, "min": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "id": 14,
+      "options": { "legend": { "calcs": [ "lastNotNull", "max" ], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "pluginVersion": "11.3.0",
+      "targets": [ { "editorMode": "code", "expr": "sum by (healthpoint_outcome) (increase(healthpoint_tigerbeetle_read_probe_total{healthpoint_outcome=~\"error|timeout\"}[5m]))", "legendFormat": "{{healthpoint_outcome}} probes / 5m", "range": true, "refId": "A" } ],
+      "title": "Read-Only Probe Errors and Timeouts",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "tags": [ "healthpoint", "tigerbeetle", "staging", "clock-synchronization", "template-only" ],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "", "value": "" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Prometheus",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      },
+      {
+        "allValue": ".+",
+        "current": { "selected": true, "text": "All", "value": [ "$__all" ] },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(healthpoint_tigerbeetle_clock_monitor_status, instance)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Monitor instance",
+        "multi": true,
+        "name": "instance",
+        "options": [],
+        "query": { "qryType": 1, "query": "label_values(healthpoint_tigerbeetle_clock_monitor_status, instance)", "refId": "VariableQueryEditor-Instance" },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": "application|cni|otel_collector|prometheus",
+        "current": { "selected": true, "text": "All", "value": [ "$__all" ] },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(healthpoint:chrony_clock_error_bound_seconds, healthpoint_timing_role)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Timing role",
+        "multi": true,
+        "name": "timing_role",
+        "options": [],
+        "query": { "qryType": 1, "query": "label_values(healthpoint:chrony_clock_error_bound_seconds, healthpoint_timing_role)", "refId": "VariableQueryEditor-TimingRole" },
+        "refresh": 2,
+        "regex": "^(application|cni|otel_collector|prometheus)$",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".+",
+        "current": { "selected": true, "text": "All", "value": [ "$__all" ] },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(healthpoint:chrony_clock_error_bound_seconds, source_node_name)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Source node",
+        "multi": true,
+        "name": "source_node",
+        "options": [],
+        "query": { "qryType": 1, "query": "label_values(healthpoint:chrony_clock_error_bound_seconds, source_node_name)", "refId": "VariableQueryEditor-SourceNode" },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": { "refresh_intervals": [ "5s", "15s", "30s", "1m", "5m" ], "time_options": [ "15m", "1h", "6h", "24h" ] },
+  "timezone": "utc",
+  "title": "TigerBeetle Staging — Clock Synchronization and Drill Timing",
+  "uid": "healthpoint-tigerbeetle-clock-staging",
+  "version": 1,
+  "weekStart": ""
+}

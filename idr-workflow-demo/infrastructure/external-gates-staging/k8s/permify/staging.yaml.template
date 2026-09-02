@@ -1,0 +1,159 @@
+# Render this template only through the approved staging release pipeline. The
+# rendered output must contain immutable image digests and no unresolved tokens.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PERMIFY_NAMESPACE}
+  labels:
+    healthpoint.io/environment: staging
+    healthpoint.io/component: permify
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: permify-runtime
+  namespace: ${PERMIFY_NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: healthpoint-staging
+  target:
+    name: permify-runtime
+    creationPolicy: Owner
+  data:
+    - secretKey: database_uri
+      remoteRef: { key: ${PERMIFY_SECRET_PREFIX}, property: database_uri }
+    - secretKey: runtime_bearer_token
+      remoteRef: { key: ${PERMIFY_SECRET_PREFIX}, property: runtime_bearer_token }
+    - secretKey: tls.crt
+      remoteRef: { key: ${PERMIFY_SECRET_PREFIX}, property: tls_crt }
+    - secretKey: tls.key
+      remoteRef: { key: ${PERMIFY_SECRET_PREFIX}, property: tls_key }
+    - secretKey: ca.crt
+      remoteRef: { key: ${PERMIFY_SECRET_PREFIX}, property: ca_crt }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: permify
+  namespace: ${PERMIFY_NAMESPACE}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: permify
+  namespace: ${PERMIFY_NAMESPACE}
+  labels: { app.kubernetes.io/name: permify }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: permify } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: permify } }
+    spec:
+      serviceAccountName: permify
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: permify
+          image: ${PERMIFY_IMAGE_DIGEST}
+          imagePullPolicy: IfNotPresent
+          args: ["serve"]
+          ports:
+            - { name: https, containerPort: 3476 }
+            - { name: grpcs, containerPort: 3478 }
+          env:
+            - { name: PERMIFY_DATABASE_ENGINE, value: postgres }
+            - { name: PERMIFY_DATABASE_URI, valueFrom: { secretKeyRef: { name: permify-runtime, key: database_uri } } }
+            - { name: PERMIFY_DATABASE_AUTO_MIGRATE, value: "false" }
+            - { name: PERMIFY_AUTHN_ENABLED, value: "true" }
+            - { name: PERMIFY_AUTHN_METHOD, value: preshared }
+            - { name: PERMIFY_AUTHN_PRESHARED_KEYS, valueFrom: { secretKeyRef: { name: permify-runtime, key: runtime_bearer_token } } }
+            - { name: PERMIFY_HTTP_TLS_ENABLED, value: "true" }
+            - { name: PERMIFY_HTTP_TLS_CERT_PATH, value: /var/run/permify-tls/tls.crt }
+            - { name: PERMIFY_HTTP_TLS_KEY_PATH, value: /var/run/permify-tls/tls.key }
+            - { name: PERMIFY_GRPC_TLS_ENABLED, value: "true" }
+            - { name: PERMIFY_GRPC_TLS_CERT_PATH, value: /var/run/permify-tls/tls.crt }
+            - { name: PERMIFY_GRPC_TLS_KEY_PATH, value: /var/run/permify-tls/tls.key }
+            - { name: PERMIFY_TRACER_ENABLED, value: "true" }
+            - { name: PERMIFY_TRACER_EXPORTER, value: otlp }
+            - { name: PERMIFY_TRACER_INSECURE, value: "false" }
+            - { name: PERMIFY_TRACER_ENDPOINT, value: ${OTLP_HTTPS_ENDPOINT} }
+            - { name: PERMIFY_METER_ENABLED, value: "true" }
+            - { name: PERMIFY_METER_EXPORTER, value: otlp }
+            - { name: PERMIFY_METER_INSECURE, value: "false" }
+            - { name: PERMIFY_METER_ENDPOINT, value: ${OTLP_HTTPS_ENDPOINT} }
+          volumeMounts:
+            - { name: runtime, mountPath: /var/run/permify-tls, readOnly: true }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          readinessProbe: { httpGet: { scheme: HTTPS, path: /healthz, port: https }, initialDelaySeconds: 10, periodSeconds: 10 }
+          livenessProbe: { httpGet: { scheme: HTTPS, path: /healthz, port: https }, initialDelaySeconds: 30, periodSeconds: 20 }
+      volumes:
+        - name: runtime
+          secret: { secretName: permify-runtime }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: permify
+  namespace: ${PERMIFY_NAMESPACE}
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: permify }
+  ports:
+    - { name: https, port: 3476, targetPort: https }
+    - { name: grpcs, port: 3478, targetPort: grpcs }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: permify-default-deny
+  namespace: ${PERMIFY_NAMESPACE}
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: permify } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: healthpoint-staging } }
+      ports: [{ protocol: TCP, port: 3476 }, { protocol: TCP, port: 3478 }]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: healthpoint-staging-data } }
+      ports: [{ protocol: TCP, port: 5432 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: healthpoint-staging-observability } }
+      ports: [{ protocol: TCP, port: 4318 }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: permify-readonly-verification-${RELEASE_ID}
+  namespace: ${PERMIFY_NAMESPACE}
+  labels: { healthpoint.io/verification: non-destructive }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: verify
+          image: ${CURL_IMAGE_DIGEST}
+          command: ["sh", "-ec"]
+          args:
+            - >-
+              curl --fail --silent --show-error --cacert /var/run/permify/ca.crt
+              --header "Authorization: Bearer $(cat /var/run/permify/runtime_bearer_token)"
+              https://permify.${PERMIFY_NAMESPACE}.svc.cluster.local:3476/healthz
+          volumeMounts: [{ name: runtime, mountPath: /var/run/permify, readOnly: true }]
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] }, readOnlyRootFilesystem: true, runAsNonRoot: true }
+      volumes: [{ name: runtime, secret: { secretName: permify-runtime } }]

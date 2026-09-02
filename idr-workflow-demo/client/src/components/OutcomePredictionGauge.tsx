@@ -135,16 +135,7 @@ export default function OutcomePredictionGauge({ disputeId, billedAmount, qpaAmo
               variant="outline"
               size="sm"
               className="w-full"
-    onClick={() => generateMutation.mutate({
-              disputeId,
-              billedAmount: parseFloat(billedAmount ?? "0") || 0,
-              qpaAmount: parseFloat(qpaAmount ?? "0") || 0,
-              serviceType: serviceType ?? "unknown",
-              patientState: patientState ?? "XX",
-              currentStep: currentStep ?? "open_negotiation",
-              cptCodes: cptCodes ?? undefined,
-              payerName: payerName ?? undefined,
-            })}
+    onClick={() => generateMutation.mutate({ disputeId })}
             disabled={generateMutation.isPending}
           >
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${generateMutation.isPending ? "animate-spin" : ""}`} />
@@ -154,21 +145,12 @@ export default function OutcomePredictionGauge({ disputeId, billedAmount, qpaAmo
         ) : (
           <div className="text-center space-y-3 py-2">
             <p className="text-sm text-muted-foreground">
-              AI-powered win probability analysis using QPA ratio, service type, and historical outcomes.
+              Decision support is available only when approved governance, validation evidence, and authorized dispute data are present.
             </p>
             <Button
               size="sm"
               className="w-full"
-              onClick={() => generateMutation.mutate({
-                disputeId,
-                billedAmount: parseFloat(billedAmount ?? "0") || 0,
-                qpaAmount: parseFloat(qpaAmount ?? "0") || 0,
-                serviceType: serviceType ?? "unknown",
-                patientState: patientState ?? "XX",
-                currentStep: currentStep ?? "open_negotiation",
-                cptCodes: cptCodes ?? undefined,
-                payerName: payerName ?? undefined,
-              })}
+              onClick={() => generateMutation.mutate({ disputeId })}
               disabled={generateMutation.isPending}
             >
               <Sparkles className={`h-3.5 w-3.5 mr-1.5 ${generateMutation.isPending ? "animate-spin" : ""}`} />

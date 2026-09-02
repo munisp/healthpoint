@@ -1,0 +1,99 @@
+# Render only in staging after review of the exact OpenAppSec/APISIX chart version.
+# Start in detect-learn mode. Prevent mode requires documented false-positive,
+# latency, and security-event review, and a parallel protected ingress test.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${OPENAPPSEC_NAMESPACE}
+  labels:
+    healthpoint.io/environment: staging
+    healthpoint.io/component: openappsec
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: openappsec-runtime
+  namespace: ${OPENAPPSEC_NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: ClusterSecretStore, name: healthpoint-staging }
+  target: { name: openappsec-runtime, creationPolicy: Owner }
+  data:
+    - secretKey: agent_token
+      remoteRef: { key: ${OPENAPPSEC_SECRET_PREFIX}, property: management_token }
+    - secretKey: tls.crt
+      remoteRef: { key: ${OPENAPPSEC_SECRET_PREFIX}, property: tls_crt }
+    - secretKey: tls.key
+      remoteRef: { key: ${OPENAPPSEC_SECRET_PREFIX}, property: tls_key }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openappsec-apisix-staging-release-contract
+  namespace: ${OPENAPPSEC_NAMESPACE}
+data:
+  environment: staging
+  helm_chart: ${OPENAPPSEC_APISIX_CHART_REFERENCE}
+  helm_chart_provenance_sha256: ${OPENAPPSEC_CHART_PROVENANCE_SHA256}
+  workload_image_provenance_sha256: ${OPENAPPSEC_IMAGE_PROVENANCE_SHA256}
+  ingress_class: ${OPENAPPSEC_APISIX_INGRESS_CLASS}
+  management_mode: ${OPENAPPSEC_MANAGEMENT_MODE}
+  protection_mode: detect-learn
+  prevent_mode_promotion_requires: reviewed-security-events-false-positive-sample-latency-report-approved-change
+  protected_ingress_strategy: parallel-ingress-before-cutover
+  admin_api_exposure: cluster-internal-only
+  trace_context_policy: ${OPENAPPSEC_TRACE_CONTEXT_POLICY_CONFIGMAP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openappsec-apisix-restrict-control-plane
+  namespace: ${OPENAPPSEC_NAMESPACE}
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/part-of: openappsec-apisix } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: healthpoint-staging-gateway } }
+      ports: [{ protocol: TCP, port: 443 }]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: healthpoint-staging-observability } }
+      ports: [{ protocol: TCP, port: 4318 }]
+    - to:
+        - ipBlock: { cidr: ${OPENAPPSEC_MANAGEMENT_CIDR} }
+      ports: [{ protocol: TCP, port: 443 }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openappsec-apisix-readiness-verification-${RELEASE_ID}
+  namespace: ${OPENAPPSEC_NAMESPACE}
+  labels: { healthpoint.io/verification: non-destructive }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: verify
+          image: ${CURL_IMAGE_DIGEST}
+          command: ["sh", "-ec"]
+          args:
+            - >-
+              curl --fail --silent --show-error --proto '=https' --tlsv1.2
+              --cacert /var/run/openappsec/tls.crt
+              https://${OPENAPPSEC_STAGING_HOST}/healthz &&
+              curl --fail --silent --show-error --proto '=https' --tlsv1.2
+              --cacert /var/run/openappsec/tls.crt
+              --header 'traceparent: 00-0123456789abcdef0123456789abcdef-0123456789abcdef-01'
+              https://${OPENAPPSEC_STAGING_HOST}${OPENAPPSEC_SAFE_READ_PATH} >/dev/null
+          volumeMounts: [{ name: runtime, mountPath: /var/run/openappsec, readOnly: true }]
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] }, readOnlyRootFilesystem: true, runAsNonRoot: true }
+      volumes: [{ name: runtime, secret: { secretName: openappsec-runtime } }]
+# This contract does not claim that OpenAppSec is currently deployed or in
+# prevent mode. It must be rendered with a digest-pinned chart/image provenance
+# record and validated against the installed OpenAppSec/APISIX CRD/chart schema.

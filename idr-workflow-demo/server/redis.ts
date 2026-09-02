@@ -19,6 +19,25 @@ type RedlockInstance = any;
 let _redis: Redis | null = null;
 let _redlock: RedlockInstance | null = null;
 
+export class DistributedLockUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DistributedLockUnavailableError";
+  }
+}
+
+export class RedisUnavailableError extends Error {
+  constructor(operation: string, cause?: unknown) {
+    super(`Redis is unavailable for ${operation}`);
+    this.name = "RedisUnavailableError";
+    this.cause = cause;
+  }
+}
+
+function failClosedInProduction(operation: string, cause?: unknown): void {
+  if (process.env.NODE_ENV === "production") throw new RedisUnavailableError(operation, cause);
+}
+
 function getRedisUrl(): string | null {
   return process.env.REDIS_URL ?? null;
 }
@@ -75,8 +94,8 @@ export function getRedlock(): RedlockInstance | null {
 
 /**
  * Acquire a distributed lock for a dispute state transition.
- * Returns a release function; call it when the critical section is done.
- * Falls back to a no-op if Redis is unavailable.
+ * Production state changes require a Redlock lease. Development and test
+ * instances may use their PostgreSQL transaction controls without Redis.
  */
 export async function withDisputeLock<T>(
   disputeId: string,
@@ -85,7 +104,9 @@ export async function withDisputeLock<T>(
 ): Promise<T> {
   const redlock = getRedlock();
   if (!redlock) {
-    // No Redis — run without lock (acceptable in single-instance dev environments)
+    if (process.env.NODE_ENV === "production") {
+      throw new DistributedLockUnavailableError("Redis/Redlock is unavailable; refusing an unprotected production dispute transition");
+    }
     return fn();
   }
 
@@ -95,7 +116,9 @@ export async function withDisputeLock<T>(
     lock = await redlock.acquire([resource], ttlMs);
   } catch (err) {
     console.warn(`[Redlock] Could not acquire lock for dispute ${disputeId}:`, err);
-    // Fall through without lock rather than blocking the request
+    if (process.env.NODE_ENV === "production") {
+      throw new DistributedLockUnavailableError("Redis/Redlock lease was not acquired; refusing an unprotected production dispute transition");
+    }
     return fn();
   }
 
@@ -119,11 +142,12 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24; // 24 hours
  */
 export async function sessionSet(key: string, value: string, ttlSeconds = SESSION_TTL_SECONDS): Promise<void> {
   const client = getRedisClient();
-  if (!client) return;
+  if (!client) return failClosedInProduction("sessionSet");
   try {
     await client.set(`session:${key}`, value, "EX", ttlSeconds);
   } catch (err) {
     console.warn("[Redis] sessionSet error:", err);
+    failClosedInProduction("sessionSet", err);
   }
 }
 
@@ -132,11 +156,15 @@ export async function sessionSet(key: string, value: string, ttlSeconds = SESSIO
  */
 export async function sessionGet(key: string): Promise<string | null> {
   const client = getRedisClient();
-  if (!client) return null;
+  if (!client) {
+    failClosedInProduction("sessionGet");
+    return null;
+  }
   try {
     return await client.get(`session:${key}`);
   } catch (err) {
     console.warn("[Redis] sessionGet error:", err);
+    failClosedInProduction("sessionGet", err);
     return null;
   }
 }
@@ -146,11 +174,12 @@ export async function sessionGet(key: string): Promise<string | null> {
  */
 export async function sessionDel(key: string): Promise<void> {
   const client = getRedisClient();
-  if (!client) return;
+  if (!client) return failClosedInProduction("sessionDel");
   try {
     await client.del(`session:${key}`);
   } catch (err) {
     console.warn("[Redis] sessionDel error:", err);
+    failClosedInProduction("sessionDel", err);
   }
 }
 
@@ -160,11 +189,12 @@ export async function sessionDel(key: string): Promise<void> {
  */
 export async function revokeToken(jti: string, ttlSeconds: number): Promise<void> {
   const client = getRedisClient();
-  if (!client) return;
+  if (!client) return failClosedInProduction("revokeToken");
   try {
     await client.set(`revoked:${jti}`, "1", "EX", ttlSeconds);
   } catch (err) {
     console.warn("[Redis] revokeToken error:", err);
+    failClosedInProduction("revokeToken", err);
   }
 }
 
@@ -173,12 +203,16 @@ export async function revokeToken(jti: string, ttlSeconds: number): Promise<void
  */
 export async function isTokenRevoked(jti: string): Promise<boolean> {
   const client = getRedisClient();
-  if (!client) return false;
+  if (!client) {
+    failClosedInProduction("isTokenRevoked");
+    return false;
+  }
   try {
     const val = await client.get(`revoked:${jti}`);
     return val === "1";
   } catch (err) {
     console.warn("[Redis] isTokenRevoked error:", err);
+    failClosedInProduction("isTokenRevoked", err);
     return false;
   }
 }
@@ -191,7 +225,10 @@ export async function isTokenRevoked(jti: string): Promise<boolean> {
  */
 export async function rateLimitIncr(key: string, windowSeconds: number): Promise<number> {
   const client = getRedisClient();
-  if (!client) return 0;
+  if (!client) {
+    failClosedInProduction("rateLimitIncr");
+    return 0;
+  }
   try {
     const fullKey = `ratelimit:${key}`;
     const count = await client.incr(fullKey);
@@ -201,6 +238,7 @@ export async function rateLimitIncr(key: string, windowSeconds: number): Promise
     return count;
   } catch (err) {
     console.warn("[Redis] rateLimitIncr error:", err);
+    failClosedInProduction("rateLimitIncr", err);
     return 0;
   }
 }
@@ -221,11 +259,12 @@ type NotificationPayload = {
  */
 export async function publishNotification(payload: NotificationPayload): Promise<void> {
   const client = getRedisClient();
-  if (!client) return;
+  if (!client) return failClosedInProduction("publishNotification");
   try {
     await client.publish("idr:notifications", JSON.stringify(payload));
   } catch (err) {
     console.warn("[Redis] publishNotification error:", err);
+    failClosedInProduction("publishNotification", err);
   }
 }
 
@@ -236,13 +275,17 @@ export async function publishNotification(payload: NotificationPayload): Promise
  */
 export async function cacheGet<T>(key: string): Promise<T | null> {
   const client = getRedisClient();
-  if (!client) return null;
+  if (!client) {
+    failClosedInProduction("cacheGet");
+    return null;
+  }
   try {
     const raw = await client.get(`cache:${key}`);
     if (!raw) return null;
     return JSON.parse(raw) as T;
   } catch (err) {
     console.warn("[Redis] cacheGet error:", err);
+    failClosedInProduction("cacheGet", err);
     return null;
   }
 }
@@ -252,11 +295,12 @@ export async function cacheGet<T>(key: string): Promise<T | null> {
  */
 export async function cacheSet<T>(key: string, value: T, ttlSeconds = 300): Promise<void> {
   const client = getRedisClient();
-  if (!client) return;
+  if (!client) return failClosedInProduction("cacheSet");
   try {
     await client.set(`cache:${key}`, JSON.stringify(value), "EX", ttlSeconds);
   } catch (err) {
     console.warn("[Redis] cacheSet error:", err);
+    failClosedInProduction("cacheSet", err);
   }
 }
 
@@ -265,11 +309,12 @@ export async function cacheSet<T>(key: string, value: T, ttlSeconds = 300): Prom
  */
 export async function cacheDel(key: string): Promise<void> {
   const client = getRedisClient();
-  if (!client) return;
+  if (!client) return failClosedInProduction("cacheDel");
   try {
     await client.del(`cache:${key}`);
   } catch (err) {
     console.warn("[Redis] cacheDel error:", err);
+    failClosedInProduction("cacheDel", err);
   }
 }
 

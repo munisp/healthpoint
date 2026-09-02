@@ -1,0 +1,95 @@
+# TEMPLATE-ONLY. Fluvio is not an active HealthPoint data path. Do not render
+# with enabled=true until an application producer/consumer is implemented,
+# reviewed, and passed through the source-policy integration approval gate.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${FLUVIO_NAMESPACE}
+  labels:
+    healthpoint.io/environment: staging
+    healthpoint.io/component: fluvio
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: fluvio-client-mtls
+  namespace: ${FLUVIO_NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: ClusterSecretStore, name: healthpoint-staging }
+  target: { name: fluvio-client-mtls, creationPolicy: Owner }
+  data:
+    - secretKey: ca.crt
+      remoteRef: { key: ${FLUVIO_SECRET_PREFIX}, property: tls_ca }
+    - secretKey: tls.crt
+      remoteRef: { key: ${FLUVIO_SECRET_PREFIX}, property: client_certificate }
+    - secretKey: tls.key
+      remoteRef: { key: ${FLUVIO_SECRET_PREFIX}, property: client_key }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluvio-staging-release-contract
+  namespace: ${FLUVIO_NAMESPACE}
+data:
+  enabled: "false"
+  environment: staging
+  helm_chart: ${FLUVIO_CHART_REFERENCE}
+  helm_chart_provenance_sha256: ${FLUVIO_CHART_PROVENANCE_SHA256}
+  workload_image_provenance_sha256: ${FLUVIO_IMAGE_PROVENANCE_SHA256}
+  application_integration: absent
+  activation_requires: verified-healthpoint-producer-consumer-security-review-and-staging-evidence
+  verification_scope: cluster-metadata-and-dedicated-health-topic-only
+  financial_or_idr_events: prohibited
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fluvio-client-restrict-egress
+  namespace: ${FLUVIO_NAMESPACE}
+spec:
+  podSelector: { matchLabels: { healthpoint.io/component: fluvio-healthcheck } }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - ipBlock: { cidr: ${FLUVIO_CLUSTER_CIDR} }
+      ports: [{ protocol: TCP, port: ${FLUVIO_CLUSTER_PORT} }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fluvio-health-topic-verification-${RELEASE_ID}
+  namespace: ${FLUVIO_NAMESPACE}
+  labels:
+    healthpoint.io/component: fluvio-healthcheck
+    healthpoint.io/verification: non-destructive
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: { labels: { healthpoint.io/component: fluvio-healthcheck } }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: verify
+          image: ${FLUVIO_CLI_IMAGE_DIGEST}
+          command: ["sh", "-ec"]
+          args:
+            - >-
+              fluvio cluster status &&
+              fluvio topic list | grep -Fx ${FLUVIO_HEALTH_TOPIC} &&
+              printf '%s\n' "staging-health-${RELEASE_ID}" | fluvio produce ${FLUVIO_HEALTH_TOPIC} &&
+              fluvio consume ${FLUVIO_HEALTH_TOPIC} -B -d | grep -F "staging-health-${RELEASE_ID}"
+          env:
+            - { name: FLUVIO_CLUSTER_ADDR, value: ${FLUVIO_CLUSTER_ENDPOINT} }
+            - { name: FLUVIO_TLS_CA_PATH, value: /var/run/fluvio/ca.crt }
+            - { name: FLUVIO_TLS_CERT_PATH, value: /var/run/fluvio/tls.crt }
+            - { name: FLUVIO_TLS_KEY_PATH, value: /var/run/fluvio/tls.key }
+          volumeMounts: [{ name: mtls, mountPath: /var/run/fluvio, readOnly: true }]
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] }, readOnlyRootFilesystem: true, runAsNonRoot: true }
+      volumes: [{ name: mtls, secret: { secretName: fluvio-client-mtls } }]
+# The health topic must have a documented retention policy and must carry no
+# patient, tenant, financial, dispute, document, or production event data.

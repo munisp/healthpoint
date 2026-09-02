@@ -1,0 +1,133 @@
+{
+  "fixture_kind": "test_only",
+  "clock_observations": {
+    "safe": [
+      {"role": "application_node", "node": "staging-app-01", "offset_seconds": 0.012},
+      {"role": "cni_node", "node": "staging-cni-01", "offset_seconds": -0.018},
+      {"role": "otel_collector_node", "node": "staging-otel-01", "offset_seconds": 0.008},
+      {"role": "prometheus_node", "node": "staging-prom-01", "offset_seconds": -0.006}
+    ],
+    "abort": [
+      {"role": "application_node", "node": "staging-app-01", "offset_seconds": 0.012},
+      {"role": "cni_node", "node": "staging-cni-01", "offset_seconds": -0.311},
+      {"role": "otel_collector_node", "node": "staging-otel-01", "offset_seconds": 0.008},
+      {"role": "prometheus_node", "node": "staging-prom-01", "offset_seconds": -0.006}
+    ]
+  },
+  "out_of_order_arrivals": [
+    {
+      "source": "cni",
+      "arrival_timestamp": "2026-09-01T12:00:08Z",
+      "event_timestamp": "2026-09-01T12:00:05Z",
+      "correlation_key": "tbdrill:chg-1234-replica-2",
+      "policy_uid": "11111111-1111-1111-1111-111111111111",
+      "destination_pod": "tigerbeetle-2",
+      "verdict": "DROPPED"
+    },
+    {
+      "source": "application",
+      "arrival_timestamp": "2026-09-01T12:00:11Z",
+      "event_timestamp": "2026-09-01T12:00:04Z",
+      "correlation_key": "tbdrill:chg-1234-replica-2",
+      "policy_uid": "11111111-1111-1111-1111-111111111111",
+      "event_type": "healthpoint.tigerbeetle.drill.policy_applied"
+    },
+    {
+      "source": "cni",
+      "arrival_timestamp": "2026-09-01T12:00:09Z",
+      "event_timestamp": "2026-09-01T12:00:06Z",
+      "correlation_key": "tbdrill:chg-1234-replica-2",
+      "policy_uid": "22222222-2222-2222-2222-222222222222",
+      "destination_pod": "tigerbeetle-4",
+      "verdict": "DROPPED"
+    }
+  ],
+  "records": [
+    {
+      "schema_version": "healthpoint.tigerbeetle.drill.v1",
+      "timestamp": "2026-09-01T12:00:05Z",
+      "severity": "WARN",
+      "event_type": "healthpoint.tigerbeetle.drill.policy_applied",
+      "event_phase": "partition",
+      "outcome": "started",
+      "environment": "staging",
+      "service_name": "healthpoint-tigerbeetle-drill",
+      "drill_run_id": "chg-1234-replica-2",
+      "change_ticket": "CHG-1234",
+      "k8s_namespace": "healthpoint-staging",
+      "workload_name": "tigerbeetle",
+      "target_pod": "tigerbeetle-2",
+      "target_ordinal": 2,
+      "network_policy_name": "tbdrill-chg-1234-r2",
+      "network_policy_uid": "11111111-1111-1111-1111-111111111111",
+      "network_policy_resource_version": "10001",
+      "probe_job_name": "tigerbeetle-readiness-before",
+      "probe_result": "succeeded",
+      "reason_code": "none",
+      "trace_id": "0123456789abcdef0123456789abcdef",
+      "correlation_key": "tbdrill:chg-1234-replica-2",
+      "cni": {
+        "verdict": "DROPPED",
+        "destination_namespace": "healthpoint-staging",
+        "destination_pod": "tigerbeetle-2",
+        "policy_uid": "11111111-1111-1111-1111-111111111111"
+      }
+    },
+    {
+      "schema_version": "healthpoint.tigerbeetle.drill.v1",
+      "timestamp": "2026-09-01T12:00:06Z",
+      "severity": "INFO",
+      "event_type": "healthpoint.tigerbeetle.drill.policy_applied",
+      "event_phase": "partition",
+      "outcome": "started",
+      "environment": "staging",
+      "service_name": "healthpoint-tigerbeetle-drill",
+      "drill_run_id": "chg-1234-replica-2",
+      "change_ticket": "CHG-1234",
+      "k8s_namespace": "healthpoint-staging",
+      "workload_name": "tigerbeetle",
+      "target_pod": "tigerbeetle-2",
+      "target_ordinal": 2,
+      "network_policy_name": "unrelated-test-policy",
+      "network_policy_uid": "22222222-2222-2222-2222-222222222222",
+      "probe_job_name": "tigerbeetle-readiness-before",
+      "probe_result": "succeeded",
+      "reason_code": "none",
+      "correlation_key": "tbdrill:chg-1234-replica-2",
+      "cni": {
+        "verdict": "DROPPED",
+        "destination_namespace": "healthpoint-staging",
+        "destination_pod": "tigerbeetle-4",
+        "policy_uid": "22222222-2222-2222-2222-222222222222"
+      }
+    },
+    {
+      "schema_version": "healthpoint.tigerbeetle.drill.v1",
+      "timestamp": "2026-09-01T12:00:07Z",
+      "severity": "WARN",
+      "event_type": "healthpoint.tigerbeetle.drill.abort_observed",
+      "event_phase": "abort",
+      "outcome": "aborted",
+      "environment": "staging",
+      "service_name": "healthpoint-tigerbeetle-drill",
+      "drill_run_id": "chg-1234-replica-2",
+      "change_ticket": "CHG-1234",
+      "k8s_namespace": "healthpoint-staging",
+      "workload_name": "tigerbeetle",
+      "target_pod": "tigerbeetle-2",
+      "target_ordinal": 2,
+      "network_policy_name": "tbdrill-chg-1234-r2",
+      "network_policy_uid": "11111111-1111-1111-1111-111111111111",
+      "probe_result": "failed",
+      "reason_code": "read_probe_failed",
+      "correlation_key": "tbdrill:chg-1234-replica-2",
+      "cni": {
+        "verdict": "DENIED",
+        "destination_namespace": "healthpoint-staging",
+        "destination_pod": "tigerbeetle-2",
+        "policy_uid": "11111111-1111-1111-1111-111111111111"
+      },
+      "tenant_id": "must-be-rejected"
+    }
+  ]
+}

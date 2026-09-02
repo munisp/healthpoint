@@ -1,0 +1,179 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${DEADMAN_RELAY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint-external-observability
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deadman-relay
+  namespace: ${DEADMAN_RELAY_NAMESPACE}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deadman-relay
+  namespace: ${DEADMAN_RELAY_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: deadman-relay
+    app.kubernetes.io/part-of: healthpoint-external-observability
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: deadman-relay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: deadman-relay
+        app.kubernetes.io/part-of: healthpoint-external-observability
+    spec:
+      serviceAccountName: deadman-relay
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: relay
+          image: ${DEADMAN_RELAY_IMAGE}
+          imagePullPolicy: IfNotPresent
+          args: []
+          ports:
+            - name: https-heartbeat
+              containerPort: 8443
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: DEADMAN_RELAY_LISTEN_ADDR
+              value: ":8443"
+            - name: DEADMAN_RELAY_HEALTH_LISTEN_ADDR
+              value: ":8081"
+            - name: DEADMAN_RELAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: deadman-relay-runtime
+                  key: DEADMAN_RELAY_TOKEN
+            - name: HEALTHCHECKS_PING_URL
+              valueFrom:
+                secretKeyRef:
+                  name: deadman-relay-runtime
+                  key: HEALTHCHECKS_PING_URL
+            - name: DEADMAN_RELAY_TLS_CERT_PATH
+              value: /etc/deadman-relay/server-tls/tls.crt
+            - name: DEADMAN_RELAY_TLS_KEY_PATH
+              value: /etc/deadman-relay/server-tls/tls.key
+            - name: DEADMAN_RELAY_CLIENT_CA_PATH
+              value: /etc/deadman-relay/alertmanager-client-ca/ca.crt
+          volumeMounts:
+            - name: server-tls
+              mountPath: /etc/deadman-relay/server-tls
+              readOnly: true
+            - name: alertmanager-client-ca
+              mountPath: /etc/deadman-relay/alertmanager-client-ca
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+              scheme: HTTP
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: server-tls
+          secret:
+            secretName: deadman-relay-server-tls
+        - name: alertmanager-client-ca
+          secret:
+            secretName: deadman-relay-alertmanager-client-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: deadman-relay
+  namespace: ${DEADMAN_RELAY_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: deadman-relay
+    app.kubernetes.io/part-of: healthpoint-external-observability
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: deadman-relay
+  ports:
+    - name: https-heartbeat
+      port: 8443
+      targetPort: https-heartbeat
+      protocol: TCP
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: deadman-relay
+  namespace: ${DEADMAN_RELAY_NAMESPACE}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: deadman-relay
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deadman-relay-restrict-ingress-and-egress
+  namespace: ${DEADMAN_RELAY_NAMESPACE}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: deadman-relay
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: ${APPROVED_ALERTMANAGER_EGRESS_CIDR}
+      ports:
+        - protocol: TCP
+          port: 8443
+    - from:
+        - ipBlock:
+            cidr: ${APPROVED_HEALTH_PROBE_EGRESS_CIDR}
+      ports:
+        - protocol: TCP
+          port: 8081
+  egress:
+    - to:
+        - ipBlock:
+            cidr: ${APPROVED_HEALTHCHECKS_EGRESS_CIDR}
+      ports:
+        - protocol: TCP
+          port: 443

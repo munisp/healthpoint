@@ -5,25 +5,127 @@ import net from "net";
 import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import slowDown from "express-slow-down";
+import compression from "compression";
+import hpp from "hpp";
 import morgan from "morgan";
+import { v4 as uuidv4 } from "uuid";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerKeycloakRoutes } from "./keycloak";
+import { bootstrapOpenSearchIndices } from "../search";
+import { assertDaprIngressConfiguration, createDaprEventHandler, DAPR_JSON_CONTENT_TYPES, daprSubscriptionManifest } from "../dapr-inbox";
+import { startKafkaConsumer } from "../events/kafka-consumer";
+import { bootstrapPermifySchema } from "../authz";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { deadlineCheckHandler } from "../scheduled/deadlineCheck";
 import { weeklyDigestHandler } from "../scheduled/weeklyDigest";
-import { ENV } from "./env";
+import { settlementBalanceProofHandler } from "../scheduled/settlementBalanceProof";
+import { assertProductionRuntimeConfig, ENV } from "./env";
+import {
+  SETTLEMENT_EVENT_ID_HEADER,
+  SETTLEMENT_KEY_ID_HEADER,
+  SETTLEMENT_SIGNATURE_HEADER,
+  SETTLEMENT_TIMESTAMP_HEADER,
+  parseSettlementCallbackKeyring,
+  verifySettlementCallbackSignature,
+} from "../settlement-auth";
+import {
+  parseSettlementMtlsFingerprints,
+  SETTLEMENT_MTLS_FINGERPRINT_HEADER,
+  SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER,
+  SETTLEMENT_MTLS_VERIFIED_HEADER,
+  verifySettlementMtls,
+} from "../settlement-mtls";
+import {
+  reconcileAuthenticatedSettlementCallback,
+  settlementCallbackSchema,
+} from "../settlement";
+import {
+  providerSettlementReportSchema,
+  reconcileProviderSettlementReport,
+} from "../settlement-lifecycle";
+import { LedgerIntegrityError } from "../ledger";
+import { startOutboxWorker } from "../outbox-worker";
+import {
+  isTigerBeetleEnabled,
+  startTigerBeetleTunnel,
+  stopTigerBeetleTunnel,
+} from "../tigerbeetle";
+import { isTigerBeetleFinalityWorkerEnabled, startTigerBeetleFinalityWorker, stopTigerBeetleFinalityWorker } from "../tigerbeetle-finality";
+import { createScheduledAuth } from "./scheduled-auth";
+import { assertProductionGates } from "./production-gates";
+import { createDocumentAnalysisWorker } from "../services/document-analysis";
+import { renderDocumentAnalysisMetrics } from "../metrics";
+import { assertTelemetryProductionConfig, recordTelemetryOperation } from "./telemetry";
+import { recordAlertmanagerDelivery, verifyAlertmanagerBearer } from "../services/operational-alerts";
 
 // ─── Startup ENV validation ──────────────────────────────────────────────────
 function validateEnv() {
   const required: (keyof typeof ENV)[] = ["cookieSecret"];
   const missing = required.filter(k => !ENV[k]);
   if (missing.length && ENV.isProduction) {
-    throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
+    throw new Error(
+      `Missing required environment variables: ${missing.join(", ")}`
+    );
   }
   if (!ENV.cookieSecret || ENV.cookieSecret.length < 16) {
-    console.warn("[startup] JWT_SECRET is weak or missing — using insecure default in dev");
+    console.warn(
+      "[startup] JWT_SECRET is weak or missing — using insecure default in dev"
+    );
+  }
+  if (ENV.isProduction) {
+    const databaseUrl =
+      process.env.EXTERNAL_POSTGRES_URL?.trim() ||
+      (process.env.DATABASE_URL ?? "");
+    if (!/^postgres(?:ql)?:\/\//.test(databaseUrl)) {
+      throw new Error(
+        "Production requires EXTERNAL_POSTGRES_URL or DATABASE_URL to be an open-source PostgreSQL connection string"
+      );
+    }
+    if (process.env.EXTERNAL_POSTGRES_URL?.trim()) {
+      const external = new URL(process.env.EXTERNAL_POSTGRES_URL);
+      if (
+        external.searchParams.get("sslmode") !== "verify-ca" ||
+        !external.searchParams.get("sslrootcert")
+      ) {
+        throw new Error(
+          "Production EXTERNAL_POSTGRES_URL requires sslmode=verify-ca and sslrootcert"
+        );
+      }
+      if (!process.env.EXTERNAL_POSTGRES_TLS_SERVER_NAME?.trim()) {
+        throw new Error(
+          "Production EXTERNAL_POSTGRES_TLS_SERVER_NAME is required for strict certificate hostname validation"
+        );
+      }
+    }
+    const keyring = parseSettlementCallbackKeyring(
+      process.env.SETTLEMENT_CALLBACK_KEYRING
+    );
+    if (!keyring) {
+      throw new Error(
+        "Production requires a versioned SETTLEMENT_CALLBACK_KEYRING before settlement callbacks are enabled"
+      );
+    }
+    if (
+      !process.env.SETTLEMENT_MTLS_CLIENT_CA_PEM ||
+      !parseSettlementMtlsFingerprints(
+        process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS
+      ).length
+    ) {
+      throw new Error(
+        "Production requires provider mTLS CA material and an allowed certificate fingerprint"
+      );
+    }
+    if (
+      !process.env.SETTLEMENT_MTLS_INGRESS_TOKEN ||
+      process.env.SETTLEMENT_MTLS_INGRESS_TOKEN.length < 32
+    ) {
+      throw new Error(
+        "Production requires a high-entropy settlement mTLS ingress token"
+      );
+    }
   }
 }
 
@@ -31,7 +133,9 @@ function validateEnv() {
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
     const server = net.createServer();
-    server.listen(port, () => { server.close(() => resolve(true)); });
+    server.listen(port, () => {
+      server.close(() => resolve(true));
+    });
     server.on("error", () => resolve(false));
   });
 }
@@ -45,22 +149,49 @@ async function findAvailablePort(startPort = 3000): Promise<number> {
 
 // ─── Scheduled endpoint auth ─────────────────────────────────────────────────
 const SCHEDULED_SECRET = process.env.SCHEDULED_SECRET ?? "dev-scheduled-secret";
-function scheduledAuth(req: Request, res: Response, next: NextFunction) {
-  const auth = req.headers.authorization ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (ENV.isProduction && token !== SCHEDULED_SECRET) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-  next();
+if (
+  ENV.isProduction &&
+  (SCHEDULED_SECRET === "dev-scheduled-secret" || SCHEDULED_SECRET.length < 32)
+) {
+  throw new Error(
+    "SCHEDULED_SECRET must be a non-default value containing at least 32 characters in production"
+  );
 }
+const scheduledAuth = createScheduledAuth(ENV.isProduction, SCHEDULED_SECRET);
 
 // ─── Server startup ───────────────────────────────────────────────────────────
 async function startServer() {
   validateEnv();
+  assertProductionRuntimeConfig();
+  assertTelemetryProductionConfig();
+  assertProductionGates();
+  if (isTigerBeetleEnabled()) {
+    // TigerBeetle is an optional ledger acceleration capability while payment
+    // execution is disabled. Its mTLS proxy must never make the HTTP service
+    // unavailable; any TigerBeetle-dependent operation observes readiness and
+    // fails closed instead of substituting another settlement path.
+    void startTigerBeetleTunnel().then(
+      () => {
+        console.info("[startup] TigerBeetle mTLS tunnel is ready");
+        if (isTigerBeetleFinalityWorkerEnabled()) startTigerBeetleFinalityWorker();
+      },
+      error =>
+        console.error(
+          "[startup] TigerBeetle mTLS tunnel unavailable; dependent operations remain fail-closed",
+          error
+        )
+    );
+  }
 
   const app = express();
   const server = createServer(app);
+
+  // Liveness/readiness is intentionally data-free. Dependency-specific routes
+  // remain fail-closed at their operation boundary and must not be inferred from
+  // this process-level endpoint.
+  app.get("/healthz", (_req: Request, res: Response) => {
+    res.status(200).json({ status: "ok" });
+  });
 
   // ── Security headers (helmet) ──────────────────────────────────────────────
   app.use(
@@ -83,31 +214,57 @@ async function startServer() {
   );
 
   // ── CORS ──────────────────────────────────────────────────────────────────
-  const allowedOrigins = ENV.isProduction
-    ? [ENV.appUrl, `https://${process.env.VITE_APP_ID ?? ""}.manus.space`].filter(Boolean)
-    : ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"];
-
-  // Sandbox/preview domains always allowed (manus.computer proxy)
-  const isSandboxOrigin = (origin: string) =>
-    origin.includes(".manus.computer") || origin.includes(".manus.space");
-
+  // Configure via ALLOWED_ORIGINS env var (comma-separated list of origins).
+  // In development all origins are allowed; in production only the listed ones.
+  const configuredOrigins = [ENV.appUrl, ...ENV.allowedOrigins].filter(Boolean);
+  // Export for testing
+  (app as any).__allowedOrigins = configuredOrigins;
   app.use(
     cors({
       origin: (origin, callback) => {
         // Allow requests with no origin (mobile apps, curl, server-to-server)
         if (!origin) return callback(null, true);
-        // Always allow sandbox preview and manus.space domains
-        if (isSandboxOrigin(origin)) return callback(null, true);
-        if (allowedOrigins.some(o => origin.startsWith(o))) return callback(null, true);
         // In dev, allow all origins
         if (!ENV.isProduction) return callback(null, true);
-        callback(new Error(`CORS: origin ${origin} not allowed`));
+        if (configuredOrigins.some(o => origin === o || origin.startsWith(o)))
+          return callback(null, true);
+        callback(
+          new Error(
+            `CORS: origin ${origin} not allowed. Add it to ALLOWED_ORIGINS env var.`
+          )
+        );
       },
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
     })
   );
+
+  // ── Response compression ────────────────────────────────────────────────
+  app.use(compression());
+
+  // ── HTTP Parameter Pollution protection ──────────────────────────────────
+  app.use(hpp());
+
+  // ── Request ID tracing ───────────────────────────────────────────────────
+  // Attach a unique X-Request-ID to every request for distributed tracing
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const reqId = (req.headers["x-request-id"] as string) || uuidv4();
+    const startedAt = performance.now();
+    res.setHeader("X-Request-ID", reqId);
+    (req as any).requestId = reqId;
+    res.once("finish", () => {
+      // Only bounded dimensions are recorded. Tenant, user, dispute, document,
+      // payment, route parameters, request bodies, and remote IPs are excluded.
+      recordTelemetryOperation({
+        component: "application",
+        operation: "http.request",
+        status: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "blocked" : "ok",
+        durationMs: performance.now() - startedAt,
+      });
+    });
+    next();
+  });
 
   // ── Rate limiting ──────────────────────────────────────────────────────────
   // Global limiter: 200 req/min per IP
@@ -135,13 +292,291 @@ async function startServer() {
     })
   );
 
+  // Brute-force slow-down for auth endpoints: delay after 5 requests
+  app.use(
+    "/api/auth",
+    slowDown({
+      windowMs: 60_000,
+      delayAfter: 5,
+      delayMs: hits => hits * 200, // 200ms, 400ms, 600ms...
+      skip: () => !ENV.isProduction,
+    })
+  );
+
   // ── Request logging (morgan) ──────────────────────────────────────────────
   // Use 'combined' format in production for full Apache-style logs, 'dev' in development
   app.use(morgan(ENV.isProduction ? "combined" : "dev"));
 
+  // ── Authenticated Alertmanager receiver ───────────────────────────────────
+  // Must precede express.json so the exact bounded body can be hashed for an
+  // immutable audit receipt. Alertmanager annotations are never stored.
+  app.post(
+    "/internal/observability/alertmanager",
+    express.raw({ type: "application/json", limit: "256kb" }),
+    async (req: Request, res: Response) => {
+      if (!verifyAlertmanagerBearer(req.header("authorization") ?? undefined, process.env.ALERTMANAGER_WEBHOOK_TOKEN)) {
+        res.status(401).json({ error: "invalid Alertmanager receiver authorization" });
+        return;
+      }
+      if (!Buffer.isBuffer(req.body)) {
+        res.status(400).json({ error: "Alertmanager payload must be JSON" });
+        return;
+      }
+      try {
+        const accepted = await recordAlertmanagerDelivery(req.body);
+        res.status(202).json({ accepted });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Alertmanager delivery rejected";
+        res.status(message.includes("PostgreSQL") ? 503 : 400).json({ error: message });
+      }
+    }
+  );
+
+  // ── Authenticated settlement-provider callbacks ───────────────────────────
+  // This route must stay before express.json so the signature covers the exact
+  // bytes received from the provider. It records externally settled evidence;
+  // it never initiates or releases funds.
+  app.post(
+    "/api/settlement/callbacks",
+    express.raw({ type: "application/json", limit: "256kb" }),
+    async (req: Request, res: Response) => {
+      const rawBody = Buffer.isBuffer(req.body)
+        ? req.body.toString("utf8")
+        : "";
+      const mtls = verifySettlementMtls({
+        required:
+          ENV.isProduction || process.env.SETTLEMENT_MTLS_REQUIRED === "true",
+        verifiedHeader:
+          req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
+        fingerprintHeader:
+          req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
+        ingressTokenHeader:
+          req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
+        expectedIngressToken: process.env.SETTLEMENT_MTLS_INGRESS_TOKEN,
+        allowedFingerprints: parseSettlementMtlsFingerprints(
+          process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS
+        ),
+      });
+      if (!mtls.valid) {
+        res.status(401).json({
+          error: "Invalid settlement mTLS ingress",
+          reason: mtls.reason,
+        });
+        return;
+      }
+      const verification = verifySettlementCallbackSignature({
+        secret: process.env.SETTLEMENT_CALLBACK_SECRET,
+        keyring: parseSettlementCallbackKeyring(
+          process.env.SETTLEMENT_CALLBACK_KEYRING
+        ),
+        keyId: req.header(SETTLEMENT_KEY_ID_HEADER) ?? undefined,
+        timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
+        signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+        rawBody,
+      });
+      if (!verification.valid) {
+        res.status(401).json({
+          error: "Invalid settlement callback",
+          reason: verification.reason,
+        });
+        return;
+      }
+
+      let parsedPayload: unknown;
+      try {
+        parsedPayload = JSON.parse(rawBody);
+      } catch {
+        res
+          .status(400)
+          .json({ error: "Settlement callback body must be valid JSON" });
+        return;
+      }
+      const parsed = settlementCallbackSchema.safeParse(parsedPayload);
+      if (!parsed.success) {
+        res.status(400).json({
+          error: "Invalid settlement callback payload",
+          issues: parsed.error.issues,
+        });
+        return;
+      }
+      const providerEventHeader = req.header(SETTLEMENT_EVENT_ID_HEADER);
+      if (!providerEventHeader || providerEventHeader !== parsed.data.eventId) {
+        res.status(400).json({
+          error:
+            "Settlement event identifier header does not match the signed payload",
+        });
+        return;
+      }
+      const expectedProvider =
+        process.env.SETTLEMENT_CALLBACK_PROVIDER ?? "mojaloop";
+      if (parsed.data.provider !== expectedProvider) {
+        res.status(403).json({ error: "Unexpected settlement provider" });
+        return;
+      }
+
+      try {
+        const reconciliation = await reconcileAuthenticatedSettlementCallback(
+          parsed.data,
+          parsedPayload as Record<string, unknown>
+        );
+        res.setHeader("Cache-Control", "no-store");
+        res.status(reconciliation.duplicate ? 200 : 202).json({
+          status: reconciliation.duplicate ? "duplicate" : "reconciled",
+          settlementCallbackId: reconciliation.settlementCallbackId,
+          ledgerEntryId: reconciliation.ledgerEntryId,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Settlement reconciliation failed";
+        const status = error instanceof LedgerIntegrityError ? 409 : 503;
+        console.error(
+          "[settlement] authenticated callback reconciliation failed",
+          { requestId: (req as any).requestId, message }
+        );
+        res
+          .status(status)
+          .json({ error: "Settlement callback was not reconciled", message });
+      }
+    }
+  );
+
+  // Provider reports are independently signed and arrive only through the same
+  // trusted mutual-TLS ingress. They reconcile a pre-authorized transfer; no
+  // browser or internal tRPC procedure can manufacture a provider report.
+  app.post(
+    "/api/settlement/reports",
+    express.raw({ type: "application/json", limit: "256kb" }),
+    async (req: Request, res: Response) => {
+      const rawBody = Buffer.isBuffer(req.body)
+        ? req.body.toString("utf8")
+        : "";
+      const mtls = verifySettlementMtls({
+        required:
+          ENV.isProduction || process.env.SETTLEMENT_MTLS_REQUIRED === "true",
+        verifiedHeader:
+          req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
+        fingerprintHeader:
+          req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
+        ingressTokenHeader:
+          req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
+        expectedIngressToken: process.env.SETTLEMENT_MTLS_INGRESS_TOKEN,
+        allowedFingerprints: parseSettlementMtlsFingerprints(
+          process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS
+        ),
+      });
+      if (!mtls.valid) {
+        res.status(401).json({
+          error: "Invalid settlement mTLS ingress",
+          reason: mtls.reason,
+        });
+        return;
+      }
+      const verification = verifySettlementCallbackSignature({
+        secret: process.env.SETTLEMENT_CALLBACK_SECRET,
+        keyring: parseSettlementCallbackKeyring(
+          process.env.SETTLEMENT_CALLBACK_KEYRING
+        ),
+        keyId: req.header(SETTLEMENT_KEY_ID_HEADER) ?? undefined,
+        timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
+        signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+        rawBody,
+      });
+      if (!verification.valid) {
+        res.status(401).json({
+          error: "Invalid settlement report",
+          reason: verification.reason,
+        });
+        return;
+      }
+      let parsedPayload: unknown;
+      try {
+        parsedPayload = JSON.parse(rawBody);
+      } catch {
+        res
+          .status(400)
+          .json({ error: "Settlement report body must be valid JSON" });
+        return;
+      }
+      const parsed = providerSettlementReportSchema.safeParse(parsedPayload);
+      if (!parsed.success) {
+        res.status(400).json({
+          error: "Invalid settlement report payload",
+          issues: parsed.error.issues,
+        });
+        return;
+      }
+      if (req.header(SETTLEMENT_EVENT_ID_HEADER) !== parsed.data.reportId) {
+        res.status(400).json({
+          error:
+            "Settlement report identifier header does not match the signed payload",
+        });
+        return;
+      }
+      const expectedProvider =
+        process.env.SETTLEMENT_CALLBACK_PROVIDER ?? "mojaloop";
+      if (parsed.data.provider !== expectedProvider) {
+        res.status(403).json({ error: "Unexpected settlement provider" });
+        return;
+      }
+      try {
+        const reconciliation = await reconcileProviderSettlementReport(
+          parsed.data,
+          parsedPayload as Record<string, unknown>
+        );
+        res.setHeader("Cache-Control", "no-store");
+        res
+          .status(
+            reconciliation.duplicate
+              ? 200
+              : reconciliation.reconciliationStatus === "exception"
+                ? 409
+                : 202
+          )
+          .json(reconciliation);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Settlement report reconciliation failed";
+        const status = error instanceof LedgerIntegrityError ? 409 : 503;
+        console.error("[settlement] provider report reconciliation failed", {
+          requestId: (req as any).requestId,
+          message,
+        });
+        res
+          .status(status)
+          .json({ error: "Settlement report was not reconciled", message });
+      }
+    }
+  );
+
   // ── Body parsers ──────────────────────────────────────────────────────────
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // ── Structured JSON logging for production ────────────────────────────────
+  if (ENV.isProduction) {
+    morgan.token("request-id", (req: Request) => (req as any).requestId ?? "-");
+    morgan.token("user-id", (req: Request) => (req as any).user?.id ?? "-");
+    app.use(
+      morgan((tokens, req, res) => {
+        return JSON.stringify({
+          timestamp: new Date().toISOString(),
+          requestId: tokens["request-id"](req, res),
+          method: tokens.method(req, res),
+          url: tokens.url(req, res),
+          status: parseInt(tokens.status(req, res) ?? "0"),
+          responseTimeMs: parseFloat(tokens["response-time"](req, res) ?? "0"),
+          contentLength: tokens.res(req, res, "content-length") ?? "-",
+          userId: tokens["user-id"](req, res),
+          userAgent: tokens["user-agent"](req, res),
+          remoteAddr: tokens["remote-addr"](req, res),
+        });
+      })
+    );
+  }
 
   // ── Health check ──────────────────────────────────────────────────────────
   const startTime = Date.now();
@@ -151,7 +586,9 @@ async function startServer() {
       const { getDb } = await import("../db");
       const db = await getDb();
       dbOk = db !== null;
-    } catch { /* db unavailable */ }
+    } catch {
+      /* db unavailable */
+    }
 
     const status = dbOk ? 200 : 503;
     res.status(status).json({
@@ -163,12 +600,275 @@ async function startServer() {
     });
   });
 
-  // ── Keycloak OIDC routes ──────────────────────────────────────────────────
+  // ── Liveness probe (Kubernetes/Docker-compatible) ─────────────────────────────────
+  app.get("/api/ready", (_req: Request, res: Response) => {
+    res.status(200).json({
+      ready: true,
+      uptime: Math.round((Date.now() - startTime) / 1000),
+    });
+  });
+
+  // ── FHIR R4 read endpoint — GET /api/fhir/Claim/:id ───────────────────────
+  // Returns a dispute as a FHIR R4 Claim resource (application/fhir+json)
+  app.get("/api/fhir/Claim/:id", async (req: Request, res: Response) => {
+    try {
+      const { getDb } = await import("../db");
+      const { disputes: disputesTable } = await import("../../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) {
+        res.status(503).json({
+          resourceType: "OperationOutcome",
+          issue: [
+            {
+              severity: "error",
+              code: "exception",
+              diagnostics: "Database unavailable",
+            },
+          ],
+        });
+        return;
+      }
+      const rows = await db
+        .select()
+        .from(disputesTable)
+        .where(eq(disputesTable.id, req.params.id))
+        .limit(1);
+      if (!rows.length) {
+        res.status(404).json({
+          resourceType: "OperationOutcome",
+          issue: [
+            {
+              severity: "error",
+              code: "not-found",
+              diagnostics: `Claim/${req.params.id} not found`,
+            },
+          ],
+        });
+        return;
+      }
+      const d = rows[0];
+      const claim = {
+        resourceType: "Claim",
+        id: d.id,
+        meta: { versionId: "1", lastUpdated: d.updatedAt?.toISOString() },
+        status: d.status === "closed" ? "cancelled" : "active",
+        type: {
+          coding: [
+            {
+              system: "http://terminology.hl7.org/CodeSystem/claim-type",
+              code: "professional",
+              display: "Professional",
+            },
+          ],
+        },
+        use: "claim",
+        patient: {
+          reference: `Patient/${d.initiatingPartyId}`,
+          display: d.initiatingPartyName ?? undefined,
+        },
+        created: d.createdAt?.toISOString(),
+        insurer: { display: d.respondingPartyName ?? undefined },
+        provider: { display: d.initiatingPartyName ?? undefined },
+        priority: { coding: [{ code: "normal" }] },
+        total: d.billedAmount
+          ? { value: parseFloat(d.billedAmount), currency: "USD" }
+          : undefined,
+        identifier: [
+          {
+            system: "https://healthpoint.idr/reference",
+            value: d.referenceNumber,
+          },
+        ],
+        extension: [
+          {
+            url: "https://healthpoint.idr/fhir/StructureDefinition/idr-step",
+            valueString: d.currentStep,
+          },
+          d.determinationWinner
+            ? {
+                url: "https://healthpoint.idr/fhir/StructureDefinition/determination-winner",
+                valueString: d.determinationWinner,
+              }
+            : null,
+          d.serviceType
+            ? {
+                url: "https://healthpoint.idr/fhir/StructureDefinition/service-type",
+                valueString: d.serviceType,
+              }
+            : null,
+        ].filter(Boolean),
+      };
+      res.setHeader("Content-Type", "application/fhir+json");
+      res.status(200).json(claim);
+    } catch (err) {
+      res.status(500).json({
+        resourceType: "OperationOutcome",
+        issue: [
+          { severity: "error", code: "exception", diagnostics: String(err) },
+        ],
+      });
+    }
+  });
+
+  // ── Keycloak OIDC routes ──────────────────────────────────────────────────────
   registerKeycloakRoutes(app);
 
+  // ── Dapr subscription boundary ─────────────────────────────────────────────
+  // Subscriptions are advertised only when the authenticated PostgreSQL-backed
+  // inbox is explicitly enabled. Dapr receives SUCCESS only after the inbox and
+  // canonical event log commit; otherwise it receives RETRY/HTTP 503.
+  assertDaprIngressConfiguration();
+  app.get("/dapr/subscribe", (_req: Request, res: Response) => res.json(daprSubscriptionManifest()));
+  const daprJson = express.json({ limit: "64kb", type: [...DAPR_JSON_CONTENT_TYPES] });
+  app.post("/api/events/dispute", daprJson, createDaprEventHandler("idr.dispute.events"));
+  app.post("/api/events/payment", daprJson, createDaprEventHandler("idr.payments"));
+  app.post("/api/events/audit", daprJson, createDaprEventHandler("idr.audit"));
+
+  // ── Legacy unauthenticated transfer callback retirement ───────────────────
+  app.post(
+    "/api/mojaloop/callbacks/transfers",
+    (_req: Request, res: Response) => {
+      res.status(410).json({
+        error: "Deprecated callback route",
+        message:
+          "Use /api/settlement/callbacks with the required signed callback headers.",
+      });
+    }
+  );
+
   // ── Scheduled heartbeat endpoints (auth-guarded in production) ───────────
-  app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
+  app.post(
+    "/api/scheduled/deadline-check",
+    scheduledAuth,
+    deadlineCheckHandler
+  );
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
+  app.post(
+    "/api/scheduled/settlement-balance-proof",
+    scheduledAuth,
+    settlementBalanceProofHandler
+  );
+
+  // Durable settlement and payment-evidence events are reconciled after their
+  // transaction commits. The worker is single-flight in each process; database
+  // event claims prevent duplicate in-process dispatch across instances.
+  startOutboxWorker();
+
+  // CMS IDR submissions remain an auditable human-portal handoff. CMS does not
+  // offer an authorized submission API, so no worker or HTTP transport may submit
+  // a notice automatically from this process. The durable CMS outbox is retained
+  // as a preparation/reconciliation record and must be completed by an authorized
+  // operator through the CMS portal with a receipt recorded in HealthPoint.
+
+  const documentAnalysisEnabled =
+    process.env.DOCUMENT_ANALYSIS_REQUIRED === "true";
+  const documentAnalysisWorker = documentAnalysisEnabled
+    ? createDocumentAnalysisWorker()
+    : null;
+  if (documentAnalysisWorker) documentAnalysisWorker.start();
+  else if (ENV.isProduction && documentAnalysisEnabled) {
+    throw new Error(
+      "DOCUMENT_ANALYSIS_REQUIRED requires DOCUMENT_ANALYSIS_URL and DOCUMENT_ANALYSIS_SERVICE_TOKEN"
+    );
+  }
+
+  app.get("/metrics", (_req: Request, res: Response) => {
+    res.type("text/plain; version=0.0.4").send(renderDocumentAnalysisMetrics());
+  });
+
+  // ── Ollama pull-stream SSE endpoint ────────────────────────────────────────
+  // Streams NDJSON progress from Ollama's /api/pull endpoint as SSE events.
+  // Requires admin role via JWT cookie (same auth as tRPC protectedProcedure).
+  app.get("/api/ollama/pull-stream", async (req: Request, res: Response) => {
+    const model = req.query.model as string;
+    if (!model || model.trim().length === 0) {
+      res.status(400).json({ error: "model query param required" });
+      return;
+    }
+    const ollamaBase = (
+      process.env.OLLAMA_BASE_URL || "http://localhost:11434"
+    ).replace(/\/$/, "");
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const sendEvent = (data: object) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const abortController = new AbortController();
+    req.on("close", () => abortController.abort());
+
+    try {
+      const pullRes = await fetch(`${ollamaBase}/api/pull`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: model.trim(), stream: true }),
+        signal: abortController.signal,
+      });
+
+      if (!pullRes.ok || !pullRes.body) {
+        sendEvent({
+          type: "error",
+          message: `Ollama returned ${pullRes.status}`,
+        });
+        res.end();
+        return;
+      }
+
+      const reader = pullRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const parsed = JSON.parse(trimmed) as {
+              status?: string;
+              completed?: number;
+              total?: number;
+              error?: string;
+            };
+            if (parsed.error) {
+              sendEvent({ type: "error", message: parsed.error });
+            } else {
+              sendEvent({
+                type: "progress",
+                status: parsed.status ?? "",
+                completed: parsed.completed ?? 0,
+                total: parsed.total ?? 0,
+                pct:
+                  parsed.total && parsed.total > 0
+                    ? Math.round(((parsed.completed ?? 0) / parsed.total) * 100)
+                    : null,
+              });
+            }
+          } catch {
+            // non-JSON line — skip
+          }
+        }
+      }
+
+      sendEvent({ type: "done" });
+    } catch (err: unknown) {
+      if ((err as Error)?.name !== "AbortError") {
+        sendEvent({ type: "error", message: String(err) });
+      }
+    } finally {
+      res.end();
+    }
+  });
 
   // ── tRPC API ──────────────────────────────────────────────────────────────
   app.use(
@@ -198,6 +898,17 @@ async function startServer() {
     serveStatic(app);
   }
 
+  // ── Background startup tasks (non-blocking) ─────────────────────────────
+  bootstrapOpenSearchIndices().catch(err =>
+    console.warn("[startup] OpenSearch bootstrap failed (non-fatal):", err)
+  );
+  bootstrapPermifySchema().catch(err =>
+    console.warn("[startup] Permify schema bootstrap failed (non-fatal):", err)
+  );
+  startKafkaConsumer().catch(err =>
+    console.warn("[startup] Kafka consumer failed to start (non-fatal):", err)
+  );
+
   // ── Port binding ──────────────────────────────────────────────────────────
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);
@@ -212,6 +923,8 @@ async function startServer() {
   // ── Graceful shutdown ─────────────────────────────────────────────────────
   const shutdown = (signal: string) => {
     console.log(`[server] Received ${signal} — shutting down gracefully`);
+    stopTigerBeetleFinalityWorker();
+    void stopTigerBeetleTunnel();
     server.close(() => {
       console.log("[server] HTTP server closed");
       process.exit(0);
@@ -225,11 +938,11 @@ async function startServer() {
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("uncaughtException", (err) => {
+  process.on("uncaughtException", err => {
     console.error("[server] Uncaught exception:", err);
     shutdown("uncaughtException");
   });
-  process.on("unhandledRejection", (reason) => {
+  process.on("unhandledRejection", reason => {
     console.error("[server] Unhandled rejection:", reason);
   });
 }

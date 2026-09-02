@@ -1,0 +1,76 @@
+{
+  "evidence_type": "georgetown_model_validation",
+  "schema_version": "1.1",
+  "model": {
+    "model_id": "REPLACE_WITH_APPROVED_MODEL_ID",
+    "version": "REPLACE_WITH_IMMUTABLE_VERSION",
+    "artifact_uri": "REPLACE_WITH_CONTROLLED_ARTIFACT_URI",
+    "artifact_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "owner": "REPLACE_WITH_MODEL_OWNER",
+    "provenance": "REPLACE_WITH_SOURCE_AND_BUILD_PROVENANCE",
+    "feature_schema_version": "REPLACE_WITH_FEATURE_SCHEMA_VERSION"
+  },
+  "dataset": {
+    "dataset_id": "REPLACE_WITH_GOVERNED_DATASET_ID",
+    "source": "REPLACE_WITH_SOURCE",
+    "license": "REPLACE_WITH_LICENSE_OR_APPROVAL_REFERENCE",
+    "as_of": "YYYY-MM-DD",
+    "uri": "REPLACE_WITH_CONTROLLED_DATASET_URI",
+    "sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "row_count": 0,
+    "positive_count": 0,
+    "negative_count": 0,
+    "subgroups": ["REPLACE_WITH_APPROVED_SUBGROUPS"]
+  },
+  "data_use_approval": {
+    "approval_id": "REPLACE_WITH_IMMUTABLE_DATA_USE_APPROVAL_ID",
+    "decision": "approved|rejected|expired|revoked",
+    "approved_purpose": "model_validation",
+    "approved_scope": "REPLACE_WITH_DATA_ELEMENTS_AND_COHORT_SCOPE",
+    "data_controller": "REPLACE_WITH_ACCOUNTABLE_DATA_CONTROLLER",
+    "privacy_reviewer_id": "REPLACE_WITH_PRIVACY_REVIEWER_ID",
+    "legal_reviewer_id": "REPLACE_WITH_LEGAL_REVIEWER_ID",
+    "approved_at": "YYYY-MM-DDThh:mm:ssZ",
+    "expires_at": "YYYY-MM-DDThh:mm:ssZ",
+    "retention_policy_uri": "REPLACE_WITH_APPROVED_RETENTION_POLICY_URI",
+    "redaction_or_deidentification_method": "REPLACE_WITH_APPROVED_METHOD",
+    "dataset_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "stop_decision": "proceed|hold|abort",
+    "stop_decision_reason": "REPLACE_WITH_EVIDENCE_BASED_DECISION_REASON"
+  },
+  "reproduction": {
+    "code_commit": "REPLACE_WITH_COMMIT_SHA",
+    "command": "REPLACE_WITH_REPRODUCIBLE_COMMAND",
+    "prediction_file_uri": "REPLACE_WITH_CONTROLLED_PREDICTION_URI",
+    "prediction_file_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "executed_at": "YYYY-MM-DDThh:mm:ssZ"
+  },
+  "metrics": {
+    "brier_score": 0.0,
+    "log_loss": 0.0,
+    "ece": 0.0,
+    "auc": 0.0,
+    "accuracy_lower": 0.0,
+    "accuracy_upper": 0.0,
+    "uncertainty_coverage": 0.0,
+    "mean_interval_width": 0.0,
+    "subgroup_calibration_gap": 0.0,
+    "thresholds": {
+      "max_brier_score": 0.0,
+      "max_ece": 0.0,
+      "min_auc": 0.0,
+      "min_uncertainty_coverage": 0.0,
+      "max_mean_interval_width": 0.0,
+      "max_subgroup_calibration_gap": 0.0
+    }
+  },
+  "governance": {
+    "validation_run_id": "REPLACE_WITH_PERSISTED_VALIDATION_RUN_ID",
+    "decision": "approved|rejected",
+    "reviewer_id": "REPLACE_WITH_INDEPENDENT_REVIEWER_ID",
+    "conflict_check": "passed|failed",
+    "approval_id": "REPLACE_WITH_IMMUTABLE_APPROVAL_ID",
+    "approved_at": "YYYY-MM-DDThh:mm:ssZ",
+    "limitations": ["REPLACE_WITH_EXPLICIT_LIMITATIONS"]
+  }
+}

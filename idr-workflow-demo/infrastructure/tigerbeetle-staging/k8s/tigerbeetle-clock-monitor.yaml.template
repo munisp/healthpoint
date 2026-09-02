@@ -1,0 +1,181 @@
+# TEMPLATE-ONLY. Deploy only after the Chrony/Node Exporter sources, private
+# Prometheus service, required role labels, and mTLS material are verified in
+# staging. This monitor only performs read-only Prometheus queries and exports
+# bounded operational metrics; it cannot invoke a drill, mutate Kubernetes, or
+# adjust any clock.
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: tigerbeetle-clock-monitor-prometheus-mtls
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: healthpoint-staging
+  target:
+    name: tigerbeetle-clock-monitor-prometheus-mtls
+    creationPolicy: Owner
+  data:
+    - secretKey: ca.crt
+      remoteRef: { key: ${TIGERBEETLE_CLOCK_MONITOR_SECRET_PREFIX}, property: prometheus_ca }
+    - secretKey: tls.crt
+      remoteRef: { key: ${TIGERBEETLE_CLOCK_MONITOR_SECRET_PREFIX}, property: prometheus_client_certificate }
+    - secretKey: tls.key
+      remoteRef: { key: ${TIGERBEETLE_CLOCK_MONITOR_SECRET_PREFIX}, property: prometheus_client_key }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tigerbeetle-clock-monitor
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-clock-monitor
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigerbeetle-clock-monitor
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-clock-monitor
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: healthpoint
+      app.kubernetes.io/component: tigerbeetle-clock-monitor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: healthpoint
+        app.kubernetes.io/component: tigerbeetle-clock-monitor
+    spec:
+      serviceAccountName: tigerbeetle-clock-monitor
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: monitor
+          image: ${HEALTHPOINT_APP_IMAGE_DIGEST}
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/tigerbeetle-clock-monitor.js"]
+          env:
+            - { name: HEALTHPOINT_TIGERBEETLE_MONITOR_ENV, value: staging }
+            - { name: PAYMENT_EXECUTION_MODE, value: disabled }
+            - { name: STAGING_PROMETHEUS_QUERY_URL, value: ${STAGING_PROMETHEUS_PRIVATE_URL} }
+            - { name: TIGERBEETLE_TIMING_TARGET_COUNT, value: "${TIGERBEETLE_TIMING_TARGET_COUNT}" }
+            - { name: TIGERBEETLE_CLOCK_MONITOR_INTERVAL_SECONDS, value: "15" }
+            - { name: TIGERBEETLE_CLOCK_MONITOR_WARNING_SECONDS, value: "0.025" }
+            - { name: TIGERBEETLE_CLOCK_MONITOR_PRECHECK_LIMIT_SECONDS, value: "0.05" }
+            - { name: TIGERBEETLE_CLOCK_MONITOR_LISTEN_ADDRESS, value: "0.0.0.0" }
+            - { name: TIGERBEETLE_CLOCK_MONITOR_LISTEN_PORT, value: "9464" }
+            - { name: STAGING_PROMETHEUS_CA_PATH, value: /var/run/prometheus-mtls/ca.crt }
+            - { name: STAGING_PROMETHEUS_CLIENT_CERT_PATH, value: /var/run/prometheus-mtls/tls.crt }
+            - { name: STAGING_PROMETHEUS_CLIENT_KEY_PATH, value: /var/run/prometheus-mtls/tls.key }
+          ports:
+            - { name: metrics, containerPort: 9464, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /readyz, port: metrics }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 192Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          volumeMounts:
+            - { name: prometheus-mtls, mountPath: /var/run/prometheus-mtls, readOnly: true }
+      volumes:
+        - name: prometheus-mtls
+          secret:
+            secretName: tigerbeetle-clock-monitor-prometheus-mtls
+            defaultMode: 0400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tigerbeetle-clock-monitor
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-clock-monitor
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-clock-monitor
+  ports:
+    - { name: metrics, port: 9464, targetPort: metrics, protocol: TCP }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: tigerbeetle-clock-monitor
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: tigerbeetle-clock-monitor
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 5s
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tigerbeetle-clock-monitor-private-egress
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: healthpoint
+      app.kubernetes.io/component: tigerbeetle-clock-monitor
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - { protocol: TCP, port: 9464 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - { protocol: TCP, port: 9090 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

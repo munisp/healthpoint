@@ -1,26 +1,22 @@
 /**
- * server/search.ts
- * Full-text search service using Fuse.js with an OpenSearch-compatible interface.
+ * Durable full-text search service backed exclusively by OpenSearch.
  *
- * In production this would call the OpenSearch REST API.
- * Here we implement the same query interface in-process using Fuse.js,
- * providing a drop-in replacement that can be swapped for OpenSearch
- * without changing callers.
- *
- * Indexed entity types:
- *   - disputes: id, referenceNumber, patientName, payerName, serviceType, status, cptCodes
- *   - documents: id, fileName, disputeId, extractedFields
- *   - audit_log: id, action, entityType, entityId, userId
+ * HealthPoint does not maintain an in-process search index. A missing, insecure, or
+ * unavailable OpenSearch service raises SearchUnavailableError so callers cannot
+ * present stale or partial process-local results as an authoritative search response.
  */
+import fs from "node:fs";
+import { Client as OpenSearchClient } from "@opensearch-project/opensearch";
 
-import Fuse from "fuse.js";
-import { getDb } from "./db";
-import { disputes, disputeDocuments, auditLog } from "../drizzle/schema";
-import { desc } from "drizzle-orm";
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-export type SearchEntityType = "dispute" | "document" | "audit";
+export type SearchEntityType =
+  | "dispute"
+  | "document"
+  | "audit"
+  | "payer_contact"
+  | "idr_entity"
+  | "expert"
+  | "regulatory"
+  | "qpa_benchmark";
 
 export interface SearchHit<T = Record<string, unknown>> {
   id: string;
@@ -35,152 +31,79 @@ export interface SearchResult {
   hits: SearchHit[];
   query: string;
   entityTypes: SearchEntityType[];
-  took: number; // ms
+  took: number;
 }
 
-// ── Index cache ───────────────────────────────────────────────────────────────
-
-interface IndexCache {
-  disputes: Fuse<Record<string, unknown>>;
-  documents: Fuse<Record<string, unknown>>;
-  audit: Fuse<Record<string, unknown>>;
-  lastRefreshed: Date;
+export class SearchUnavailableError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = "SearchUnavailableError";
+    this.cause = cause;
+  }
 }
 
-let _cache: IndexCache | null = null;
-const CACHE_TTL_MS = 60 * 1000; // 1 minute
-
-// ── Fuse.js configuration ─────────────────────────────────────────────────────
-
-const DISPUTE_FUSE_KEYS = [
-  { name: "referenceNumber", weight: 2.0 },
-  { name: "patientName", weight: 1.5 },
-  { name: "payerName", weight: 1.5 },
-  { name: "serviceType", weight: 1.0 },
-  { name: "status", weight: 0.5 },
-  { name: "cptCodes", weight: 1.0 },
-  { name: "icd10Codes", weight: 0.8 },
-  { name: "providerName", weight: 1.0 },
-  { name: "notes", weight: 0.5 },
-];
-
-const DOCUMENT_FUSE_KEYS = [
-  { name: "fileName", weight: 2.0 },
-  { name: "documentType", weight: 1.0 },
-  { name: "extractedText", weight: 0.5 },
-];
-
-const AUDIT_FUSE_KEYS = [
-  { name: "action", weight: 2.0 },
-  { name: "entityType", weight: 1.0 },
-  { name: "entityId", weight: 1.5 },
-  { name: "userId", weight: 1.0 },
-  { name: "newValue", weight: 0.5 },
-];
-
-const FUSE_OPTIONS = {
-  includeScore: true,
-  includeMatches: true,
-  threshold: 0.4,
-  minMatchCharLength: 2,
+const ENTITY_INDEX_MAP: Record<SearchEntityType, string> = {
+  dispute: "idr-disputes",
+  document: "idr-documents",
+  audit: "idr-audit",
+  payer_contact: "idr-payer-contacts",
+  idr_entity: "idr-entities",
+  expert: "idr-expert-panel",
+  regulatory: "idr-regulatory",
+  qpa_benchmark: "idr-qpa-benchmarks",
 };
 
-// ── Index building ────────────────────────────────────────────────────────────
+const ALL_ENTITY_TYPES: SearchEntityType[] = Object.keys(ENTITY_INDEX_MAP) as SearchEntityType[];
+let client: OpenSearchClient | undefined;
 
-async function buildIndex(): Promise<IndexCache> {
-  const db = await getDb();
+function configuredClient(): OpenSearchClient {
+  if (client) return client;
+  const node = process.env.OPENSEARCH_URL?.trim();
+  const username = process.env.OPENSEARCH_USER?.trim();
+  const password = process.env.OPENSEARCH_PASSWORD;
+  const caPath = process.env.OPENSEARCH_CA_PATH?.trim();
+  const production = process.env.NODE_ENV === "production";
+  if (!node) throw new SearchUnavailableError("OpenSearch is not configured");
 
-  let disputeData: Record<string, unknown>[] = [];
-  let documentData: Record<string, unknown>[] = [];
-  let auditData: Record<string, unknown>[] = [];
-
-  if (db) {
+  let parsed: URL;
+  try {
+    parsed = new URL(node);
+  } catch (error) {
+    throw new SearchUnavailableError("OPENSEARCH_URL is invalid", error);
+  }
+  if (production && parsed.protocol !== "https:") {
+    throw new SearchUnavailableError("OPENSEARCH_URL must use https in production");
+  }
+  if (production && (!username || !password || !caPath)) {
+    throw new SearchUnavailableError("OpenSearch requires username, password, and CA path in production");
+  }
+  let ca: string | undefined;
+  if (caPath) {
     try {
-      const disputeRows = await db
-        .select()
-        .from(disputes)
-        .orderBy(desc(disputes.createdAt))
-        .limit(5000);
-
-      disputeData = disputeRows.map(d => ({
-        id: d.id,
-        referenceNumber: d.referenceNumber ?? "",
-        patientName: (d as Record<string, unknown>).patientName as string ?? "",
-        payerName: d.respondingPartyName ?? "",
-        serviceType: d.serviceType ?? "",
-        status: d.status ?? "",
-        cptCodes: Array.isArray(d.cptCodes) ? (d.cptCodes as string[]).join(" ") : "",
-        icd10Codes: Array.isArray(d.icd10Codes) ? (d.icd10Codes as string[]).join(" ") : "",
-        providerName: d.initiatingPartyName ?? "",
-        notes: d.notes ?? "",
-        billedAmount: d.billedAmount ?? "",
-        currentStep: d.currentStep ?? "",
-      }));
-    } catch (err) {
-      console.warn("[Search] Failed to index disputes:", err);
-    }
-
-    try {
-      const docRows = await db
-        .select()
-        .from(disputeDocuments)
-        .orderBy(desc(disputeDocuments.uploadedAt))
-        .limit(5000);
-
-      documentData = docRows.map(d => ({
-        id: d.id,
-        disputeId: d.disputeId ?? "",
-        fileName: d.fileName ?? "",
-        documentType: d.documentType ?? "",
-        extractedText: "",
-      }));
-    } catch (err) {
-      console.warn("[Search] Failed to index documents:", err);
-    }
-
-    try {
-      const auditRows = await db
-        .select()
-        .from(auditLog)
-        .orderBy(desc(auditLog.createdAt))
-        .limit(10000);
-
-      auditData = auditRows.map(a => ({
-        id: a.id,
-        action: a.action ?? "",
-        entityType: a.entityType ?? "",
-        entityId: a.entityId ?? "",
-        userId: a.userId ?? "",
-        newValue: typeof a.newValue === "string" ? a.newValue.slice(0, 200) : "",
-      }));
-    } catch (err) {
-      console.warn("[Search] Failed to index audit log:", err);
+      ca = fs.readFileSync(caPath, "utf8");
+    } catch (error) {
+      throw new SearchUnavailableError("OPENSEARCH_CA_PATH is unreadable", error);
     }
   }
-
-  return {
-    disputes: new Fuse(disputeData, { ...FUSE_OPTIONS, keys: DISPUTE_FUSE_KEYS }),
-    documents: new Fuse(documentData, { ...FUSE_OPTIONS, keys: DOCUMENT_FUSE_KEYS }),
-    audit: new Fuse(auditData, { ...FUSE_OPTIONS, keys: AUDIT_FUSE_KEYS }),
-    lastRefreshed: new Date(),
-  };
+  client = new OpenSearchClient({
+    node: parsed.origin,
+    auth: username && password ? { username, password } : undefined,
+    ssl: { rejectUnauthorized: production || Boolean(ca), ...(ca ? { ca } : {}) },
+  });
+  return client;
 }
 
-async function getIndex(): Promise<IndexCache> {
-  if (!_cache || Date.now() - _cache.lastRefreshed.getTime() > CACHE_TTL_MS) {
-    _cache = await buildIndex();
-  }
-  return _cache;
+function asEntityType(index: unknown): SearchEntityType {
+  const value = String(index ?? "");
+  if (value.includes("audit")) return "audit";
+  if (value.includes("document")) return "document";
+  if (value.includes("payer")) return "payer_contact";
+  if (value.includes("entities")) return "idr_entity";
+  if (value.includes("expert")) return "expert";
+  if (value.includes("regulatory")) return "regulatory";
+  if (value.includes("qpa")) return "qpa_benchmark";
+  return "dispute";
 }
-
-/**
- * Invalidate the search index cache (call after mutations).
- */
-export function invalidateSearchIndex(): void {
-  _cache = null;
-}
-
-// ── Search API ────────────────────────────────────────────────────────────────
 
 export interface SearchQuery {
   q: string;
@@ -190,90 +113,152 @@ export interface SearchQuery {
   userRole?: "user" | "admin";
 }
 
-/**
- * Execute a full-text search across all indexed entity types.
- * Returns results ranked by relevance score.
- */
+/** Execute a durable OpenSearch query. Authorization filtering remains the caller's responsibility. */
 export async function search(query: SearchQuery): Promise<SearchResult> {
+  const q = query.q.trim();
+  const entityTypes = query.entityTypes?.length ? query.entityTypes : ALL_ENTITY_TYPES;
+  const limit = Math.max(1, Math.min(query.limit ?? 20, 100));
+  if (q.length < 2) return { total: 0, hits: [], query: q, entityTypes, took: 0 };
   const start = Date.now();
-  const {
-    q,
-    entityTypes = ["dispute", "document", "audit"],
-    limit = 20,
-  } = query;
-
-  if (!q || q.trim().length < 2) {
-    return { total: 0, hits: [], query: q, entityTypes, took: 0 };
+  try {
+    const response = await configuredClient().search({
+      index: entityTypes.map((entityType) => ENTITY_INDEX_MAP[entityType]).join(","),
+      body: {
+        size: limit,
+        query: {
+          multi_match: {
+            query: q,
+            fields: ["referenceNumber^3", "name^2", "title^2", "status", "action", "category", "specialty"],
+            type: "best_fields",
+            fuzziness: "AUTO",
+          },
+        },
+        highlight: { fields: { title: {}, description: {}, summary: {} } },
+      },
+    });
+    const raw = (response.body.hits?.hits ?? []) as Array<Record<string, unknown>>;
+    const totalRaw = response.body.hits?.total;
+    const total = typeof totalRaw === "object" && totalRaw ? Number((totalRaw as { value?: number }).value ?? raw.length) : Number(totalRaw ?? raw.length);
+    return {
+      total,
+      query: q,
+      entityTypes,
+      took: Date.now() - start,
+      hits: raw.map((hit) => ({
+        id: String(hit._id ?? ""),
+        entityType: asEntityType(hit._index),
+        score: Number(hit._score ?? 0),
+        item: (hit._source ?? {}) as Record<string, unknown>,
+        highlights: (hit.highlight ?? {}) as Record<string, string[]>,
+      })),
+    };
+  } catch (error) {
+    if (error instanceof SearchUnavailableError) throw error;
+    throw new SearchUnavailableError("OpenSearch query failed", error);
   }
-
-  const index = await getIndex();
-  const hits: SearchHit[] = [];
-
-  if (entityTypes.includes("dispute")) {
-    const results = index.disputes.search(q, { limit });
-    for (const r of results) {
-      hits.push({
-        id: r.item.id as string,
-        entityType: "dispute",
-        score: 1 - (r.score ?? 0),
-        item: r.item,
-        highlights: extractHighlights(r.matches),
-      });
-    }
-  }
-
-  if (entityTypes.includes("document")) {
-    const results = index.documents.search(q, { limit });
-    for (const r of results) {
-      hits.push({
-        id: r.item.id as string,
-        entityType: "document",
-        score: 1 - (r.score ?? 0),
-        item: r.item,
-        highlights: extractHighlights(r.matches),
-      });
-    }
-  }
-
-  if (entityTypes.includes("audit")) {
-    const results = index.audit.search(q, { limit });
-    for (const r of results) {
-      hits.push({
-        id: r.item.id as string,
-        entityType: "audit",
-        score: 1 - (r.score ?? 0),
-        item: r.item,
-        highlights: extractHighlights(r.matches),
-      });
-    }
-  }
-
-  // Sort by score descending
-  hits.sort((a, b) => b.score - a.score);
-
-  return {
-    total: hits.length,
-    hits: hits.slice(0, limit),
-    query: q,
-    entityTypes,
-    took: Date.now() - start,
-  };
 }
 
-function extractHighlights(
-  matches?: readonly { key?: string; value?: string; indices?: readonly [number, number][] }[]
-): Record<string, string[]> {
-  if (!matches) return {};
-  const highlights: Record<string, string[]> = {};
-  for (const match of matches) {
-    if (match.key && match.value) {
-      highlights[match.key] = [match.value];
-    }
+/** Index a durable business record. Failures are surfaced so a durable caller can retry. */
+export async function indexDocument(entityType: SearchEntityType, id: string, payload: Record<string, unknown>): Promise<void> {
+  if (!id) throw new Error("Search document ID is required");
+  try {
+    await configuredClient().index({
+      index: ENTITY_INDEX_MAP[entityType],
+      id,
+      body: { ...payload, updatedAt: new Date().toISOString() },
+      refresh: false,
+    });
+  } catch (error) {
+    if (error instanceof SearchUnavailableError) throw error;
+    throw new SearchUnavailableError(`OpenSearch index write failed for ${entityType}`, error);
   }
-  return highlights;
 }
 
-// ── Lakehouse export ──────────────────────────────────────────────────────────
+export async function indexDispute(disputeId: string, payload: Record<string, unknown>): Promise<void> {
+  await indexDocument("dispute", disputeId, { disputeId, ...payload });
+}
+
+export async function deleteFromIndex(entityType: SearchEntityType, id: string): Promise<void> {
+  try {
+    await configuredClient().delete({ index: ENTITY_INDEX_MAP[entityType], id, refresh: false });
+  } catch (error) {
+    if (error instanceof SearchUnavailableError) throw error;
+    const statusCode = (error as { meta?: { statusCode?: number } })?.meta?.statusCode;
+    if (statusCode === 404) return;
+    throw new SearchUnavailableError(`OpenSearch delete failed for ${entityType}`, error);
+  }
+}
+
+/** Retained only as a compatibility no-op: there is no process-local index to invalidate. */
+export function invalidateSearchIndex(): void {}
+
+
+export interface SuggestResult {
+  text: string;
+  score: number;
+  entityType: SearchEntityType;
+}
+
+/** OpenSearch completion suggestions only; unavailable search is an explicit error. */
+export async function suggest(prefix: string, limit = 8): Promise<SuggestResult[]> {
+  const normalized = prefix.trim();
+  if (normalized.length < 2) return [];
+  const boundedLimit = Math.max(1, Math.min(limit, 20));
+  try {
+    const response = await configuredClient().search({
+      index: Object.values(ENTITY_INDEX_MAP).join(","),
+      body: {
+        suggest: {
+          entity_suggest: {
+            prefix: normalized,
+            completion: { field: "suggest", size: boundedLimit, skip_duplicates: true, fuzzy: { fuzziness: "AUTO" } },
+          },
+        },
+      },
+    });
+    const options = (response.body.suggest?.entity_suggest?.[0]?.options ?? []) as Array<{ text?: string; _score?: number; _index?: string }>;
+    return options.slice(0, boundedLimit).flatMap((option) => {
+      const text = option.text?.trim();
+      return text ? [{ text, score: Number(option._score ?? 0), entityType: asEntityType(option._index) }] : [];
+    });
+  } catch (error) {
+    if (error instanceof SearchUnavailableError) throw error;
+    throw new SearchUnavailableError("OpenSearch suggestion query failed", error);
+  }
+}
+
+const INDEX_MAPPINGS: Record<string, object> = Object.fromEntries(
+  Object.values(ENTITY_INDEX_MAP).map((indexName) => [indexName, {
+    settings: { number_of_shards: 1, number_of_replicas: 1 },
+    mappings: { dynamic: "strict", properties: {
+      id: { type: "keyword" },
+      disputeId: { type: "keyword" },
+      referenceNumber: { type: "keyword" },
+      status: { type: "keyword" },
+      currentStep: { type: "keyword" },
+      name: { type: "text", fields: { keyword: { type: "keyword" } } },
+      title: { type: "text" },
+      description: { type: "text" },
+      summary: { type: "text" },
+      updatedAt: { type: "date" },
+      createdAt: { type: "date" },
+      suggest: { type: "completion", analyzer: "simple", max_input_length: 50 },
+    } },
+  }]),
+);
+
+/** Idempotently create the strict OpenSearch indices required by active routes. */
+export async function bootstrapOpenSearchIndices(): Promise<void> {
+  const os = configuredClient();
+  for (const [index, body] of Object.entries(INDEX_MAPPINGS)) {
+    try {
+      const exists = await os.indices.exists({ index });
+      if (!exists.body) await os.indices.create({ index, body });
+    } catch (error) {
+      throw new SearchUnavailableError(`OpenSearch bootstrap failed for ${index}`, error);
+    }
+  }
+}
 
 export interface LakehouseExportOptions {
   tables: Array<"disputes" | "documents" | "audit" | "ledger" | "events">;
@@ -281,65 +266,45 @@ export interface LakehouseExportOptions {
   since?: Date;
 }
 
+function csvCell(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
 /**
- * Generate a Lakehouse-ready NDJSON or CSV export of platform data.
- * Compatible with Apache Iceberg, Delta Lake, and Hudi table formats.
- * Each line is a complete JSON object (NDJSON) or CSV row.
+ * Build a bounded export exclusively from PostgreSQL tables. This is an export
+ * formatter, not a local data store; it throws on any requested-table failure
+ * rather than returning an incomplete dataset as a successful lakehouse export.
  */
-export async function generateLakehouseExport(
-  options: LakehouseExportOptions
-): Promise<{ content: string; rowCount: number; tables: string[] }> {
+export async function generateLakehouseExport(options: LakehouseExportOptions): Promise<{ content: string; rowCount: number; tables: string[] }> {
+  const { getDb } = await import("./db");
+  const { disputes, disputeDocuments, auditLog, ledgerEntries, eventLog } = await import("../drizzle/schema");
   const db = await getDb();
-  if (!db) return { content: "", rowCount: 0, tables: [] };
-
-  const lines: string[] = [];
-  const exportedTables: string[] = [];
-  let rowCount = 0;
-
-  for (const table of options.tables) {
-    try {
-      let rows: Record<string, unknown>[] = [];
-
-      if (table === "disputes") {
-        rows = (await db.select().from(disputes).limit(50000)) as Record<string, unknown>[];
-      } else if (table === "documents") {
-        rows = (await db.select().from(disputeDocuments).limit(50000)) as Record<string, unknown>[];
-      } else if (table === "audit") {
-        rows = (await db.select().from(auditLog).limit(100000)) as Record<string, unknown>[];
-      }
-
-      if (options.format === "ndjson") {
-        for (const row of rows) {
-          lines.push(JSON.stringify({ _table: table, _exported_at: new Date().toISOString(), ...row }));
-        }
-      } else {
-        // CSV: header row + data rows
-        if (rows.length > 0) {
-          const headers = Object.keys(rows[0]);
-          lines.push(headers.join(","));
-          for (const row of rows) {
-            lines.push(
-              headers.map(h => {
-                const v = row[h];
-                if (v === null || v === undefined) return "";
-                const s = typeof v === "object" ? JSON.stringify(v) : String(v);
-                return s.includes(",") || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
-              }).join(",")
-            );
-          }
-        }
-      }
-
-      rowCount += rows.length;
-      exportedTables.push(table);
-    } catch (err) {
-      console.warn(`[Lakehouse] Failed to export table ${table}:`, err);
-    }
+  if (!db) throw new Error("PostgreSQL is required for Lakehouse export");
+  const requested = Array.from(new Set(options.tables));
+  if (requested.length === 0) throw new Error("At least one Lakehouse table is required");
+  const rowsByTable: Array<{ table: string; rows: Record<string, unknown>[] }> = [];
+  for (const table of requested) {
+    let rows: Record<string, unknown>[];
+    if (table === "disputes") rows = (await db.select().from(disputes).limit(50_000)) as Record<string, unknown>[];
+    else if (table === "documents") rows = (await db.select().from(disputeDocuments).limit(50_000)) as Record<string, unknown>[];
+    else if (table === "audit") rows = (await db.select().from(auditLog).limit(100_000)) as Record<string, unknown>[];
+    else if (table === "ledger") rows = (await db.select().from(ledgerEntries).limit(100_000)) as Record<string, unknown>[];
+    else rows = (await db.select().from(eventLog).limit(100_000)) as Record<string, unknown>[];
+    rowsByTable.push({ table, rows });
   }
-
-  return {
-    content: lines.join("\n"),
-    rowCount,
-    tables: exportedTables,
-  };
+  const exportedAt = new Date().toISOString();
+  if (options.format === "ndjson") {
+    const lines = rowsByTable.flatMap(({ table, rows }) => rows.map((row) => JSON.stringify({ _table: table, _exported_at: exportedAt, ...row })));
+    return { content: lines.join("\n"), rowCount: lines.length, tables: requested };
+  }
+  const lines: string[] = [];
+  for (const { table, rows } of rowsByTable) {
+    if (rows.length === 0) continue;
+    const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+    lines.push(["_table", "_exported_at", ...columns].join(","));
+    for (const row of rows) lines.push([table, exportedAt, ...columns.map((column) => csvCell(row[column]))].join(","));
+  }
+  return { content: lines.join("\n"), rowCount: rowsByTable.reduce((total, item) => total + item.rows.length, 0), tables: requested };
 }

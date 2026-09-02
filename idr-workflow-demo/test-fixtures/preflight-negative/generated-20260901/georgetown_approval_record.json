@@ -1,0 +1,7 @@
+{
+  "fixture_class": "synthetic-negative-test",
+  "non_production": true,
+  "purpose": "Proves protected preflight rejects placeholder external evidence.",
+  "evidence_name": "georgetown_approval_record",
+  "prohibited_for_release": true
+}

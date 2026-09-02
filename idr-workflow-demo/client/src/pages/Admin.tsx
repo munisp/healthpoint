@@ -69,6 +69,17 @@ export default function Admin() {
   const [notifType, setNotifType] = useState("system");
   const [notifMessage, setNotifMessage] = useState("");
   const utils = trpc.useUtils();
+  const [showReseedConfirm, setShowReseedConfirm] = useState(false);
+  const reseedMutation = trpc.admin.reseedDemoData.useMutation({
+    onSuccess: (res) => {
+      toast.success(`Demo data reseeded — ${res.disputes} disputes, ${res.entities} entities, ${res.events} events`);
+      utils.admin.allDisputes.invalidate();
+      utils.admin.stats.invalidate();
+      utils.arbitrators.list.invalidate();
+      setShowReseedConfirm(false);
+    },
+    onError: (err: { message: string }) => toast.error(`Reseed failed: ${err.message}`),
+  });
   const sendNotifMutation = trpc.notifications.sendNotification.useMutation({
     onSuccess: () => {
       toast.success("Notification sent");
@@ -101,23 +112,7 @@ export default function Admin() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
-          <span className="text-lg font-bold text-slate-800">{APP_TITLE}</span>
-          <Badge variant="outline" className="text-xs text-purple-700 border-purple-300">Admin</Badge>
-        </div>
-        <nav className="flex items-center gap-4">
-          <button onClick={() => navigate("/dashboard")} className="text-sm text-slate-600 hover:text-blue-600">Dashboard</button>
-          <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600">My Disputes</button>
-          <button onClick={() => navigate("/idr-entities")} className="text-sm text-slate-600 hover:text-blue-600">IDR Entities</button>
-          <span className="text-sm text-slate-600">{user?.name}</span>
-          <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
-        </nav>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-8">
+    <div>
         {/* Title */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
@@ -135,6 +130,9 @@ export default function Admin() {
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => setShowNotifComposer(true)}>
               <Bell size={13} className="mr-1.5" />Send Notification
+            </Button>
+            <Button variant="outline" size="sm" className="text-amber-700 border-amber-300 hover:bg-amber-50" onClick={() => setShowReseedConfirm(true)}>
+              <RefreshCw size={13} className="mr-1.5" />Reseed Demo Data
             </Button>
             <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
               <RefreshCw size={13} className={isFetching ? "animate-spin" : ""} />
@@ -273,7 +271,6 @@ export default function Admin() {
             )}
           </CardContent>
         </Card>
-      </main>
 
       {/* Notification Composer Dialog */}
       <Dialog open={showNotifComposer} onOpenChange={setShowNotifComposer}>
@@ -319,6 +316,40 @@ export default function Admin() {
             >
               {sendNotifMutation.isPending ? <Loader2 size={14} className="animate-spin mr-1" /> : <Bell size={14} className="mr-1" />}
               Send
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reseed Demo Data Confirmation */}
+      <Dialog open={showReseedConfirm} onOpenChange={setShowReseedConfirm}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-700">
+              <AlertTriangle size={18} />
+              Reseed Demo Data?
+            </DialogTitle>
+          </DialogHeader>
+          <div className="text-sm text-slate-600 space-y-2">
+            <p>This will <strong>delete all existing disputes, entities, offers, and notifications</strong> and replace them with fresh demo data.</p>
+            <p>The action includes:</p>
+            <ul className="list-disc list-inside space-y-1 text-slate-500">
+              <li>40 disputes across all 19 IDR workflow steps</li>
+              <li>12 fully-closed disputes (populates analytics charts)</li>
+              <li>QPA values for Step 10+ disputes</li>
+              <li>5 IDR entities with updated caseloads</li>
+            </ul>
+            <p className="text-red-600 font-medium">This cannot be undone.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowReseedConfirm(false)}>Cancel</Button>
+            <Button
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={() => reseedMutation.mutate()}
+              disabled={reseedMutation.isPending}
+            >
+              {reseedMutation.isPending ? <Loader2 size={14} className="animate-spin mr-1" /> : <RefreshCw size={14} className="mr-1" />}
+              {reseedMutation.isPending ? "Seeding..." : "Yes, Reseed"}
             </Button>
           </DialogFooter>
         </DialogContent>

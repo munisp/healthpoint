@@ -1,0 +1,20 @@
+{
+  "evidence_type": "cms_pilot_authorization",
+  "schema_version": "1.0",
+  "pilot": {
+    "authorization_id": "REPLACE_WITH_IMMUTABLE_CMS_PILOT_AUTHORIZATION_ID",
+    "decision": "approved|rejected|expired|revoked",
+    "approved_scope": "REPLACE_WITH_APPROVED_PILOT_SCOPE",
+    "approved_by": "REPLACE_WITH_ACCOUNTABLE_APPROVER_ID",
+    "approved_at": "YYYY-MM-DDThh:mm:ssZ",
+    "expires_at": "YYYY-MM-DDThh:mm:ssZ",
+    "operator_id": "REPLACE_WITH_AUTHORIZED_HUMAN_PORTAL_OPERATOR_ID",
+    "operator_training_record_uri": "REPLACE_WITH_CONTROLLED_TRAINING_RECORD_URI",
+    "operator_training_record_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "sop_uri": "REPLACE_WITH_APPROVED_SOP_URI",
+    "sop_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "escalation_owner_id": "REPLACE_WITH_ESCALATION_OWNER_ID",
+    "stop_decision": "proceed|hold|abort",
+    "stop_decision_reason": "REPLACE_WITH_EVIDENCE_BASED_DECISION_REASON"
+  }
+}

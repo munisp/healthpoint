@@ -1,0 +1,77 @@
+{
+  "evidence_type": "cms_portal_round_trip",
+  "schema_version": "1.1",
+  "pilot_governance": {
+    "pilot_authorization_id": "REPLACE_WITH_APPROVED_PILOT_AUTHORIZATION_ID",
+    "approved_scope": "production_pilot",
+    "approved_by": "REPLACE_WITH_ACCOUNTABLE_APPROVER_ID",
+    "approved_at": "YYYY-MM-DDThh:mm:ssZ",
+    "operator_training_record_uri": "REPLACE_WITH_CONTROLLED_TRAINING_RECORD_URI",
+    "operator_training_record_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "sop_uri": "REPLACE_WITH_APPROVED_SOP_URI",
+    "sop_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "escalation_owner_id": "REPLACE_WITH_ESCALATION_OWNER_ID",
+    "receipt_provenance_status": "verified|unverified",
+    "feedback_provenance_status": "verified|unverified",
+    "stop_decision": "proceed|hold|abort",
+    "stop_decision_reason": "REPLACE_WITH_EVIDENCE_BASED_DECISION_REASON"
+  },
+  "submission": {
+    "dispute_id": "REPLACE_WITH_DISPUTE_ID",
+    "outbox_id": "REPLACE_WITH_OUTBOX_ID",
+    "idempotency_key": "REPLACE_WITH_IDEMPOTENCY_KEY",
+    "bundle_uri": "REPLACE_WITH_CONTROLLED_BUNDLE_URI",
+    "bundle_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "submitted_at": "YYYY-MM-DDThh:mm:ssZ",
+    "operator_id": "REPLACE_WITH_AUTHORIZED_OPERATOR_ID",
+    "portal_environment": "production|certification",
+    "portal_evidence_uri": "REPLACE_WITH_REDACTED_PORTAL_EXPORT_OR_SCREENSHOT_REFERENCE"
+  },
+  "receipt": {
+    "cms_reference": "REPLACE_WITH_CMS_REFERENCE",
+    "receipt_uri": "REPLACE_WITH_CONTROLLED_RECEIPT_URI",
+    "receipt_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "received_at": "YYYY-MM-DDThh:mm:ssZ",
+    "submitted_bundle_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "reconciled": true
+  },
+  "feedback": {
+    "event_id": "REPLACE_WITH_CMS_EVENT_ID",
+    "raw_body_uri": "REPLACE_WITH_REDACTED_RAW_BODY_URI",
+    "raw_body_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "signature_algorithm": "REPLACE_WITH_PROVIDER_ALGORITHM_OR_MANUAL_VERIFICATION_PROCEDURE",
+    "signature_verified": true,
+    "timestamp_verified": true,
+    "duplicate_event_rejected": true,
+    "resulting_workflow_state": "REPLACE_WITH_CANONICAL_IDR_STATE",
+    "audit_event_id": "REPLACE_WITH_AUDIT_EVENT_ID"
+  },
+  "failure_drills": [
+    {
+      "case": "portal_timeout",
+      "observed": true,
+      "result": "REPLACE_WITH_RESULT"
+    },
+    {
+      "case": "portal_rejection",
+      "observed": true,
+      "result": "REPLACE_WITH_RESULT"
+    },
+    {
+      "case": "duplicate_feedback",
+      "observed": true,
+      "result": "REPLACE_WITH_RESULT"
+    },
+    {
+      "case": "operator_recovery",
+      "observed": true,
+      "result": "REPLACE_WITH_RESULT"
+    }
+  ],
+  "certification": {
+    "cms_owner_id": "REPLACE_WITH_CMS_OWNER_ID",
+    "certification_id": "REPLACE_WITH_IMMUTABLE_CERTIFICATION_ID",
+    "certified_at": "YYYY-MM-DDThh:mm:ssZ",
+    "limitations": ["REPLACE_WITH_EXPLICIT_LIMITATIONS"]
+  }
+}

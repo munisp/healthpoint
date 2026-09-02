@@ -1,12 +1,16 @@
 import { defineConfig } from "drizzle-kit";
 
-const LOCAL_PG_URL = "postgresql://idr_user:idr_pass123@localhost:5432/idr_demo";
+const rawUrl = process.env.DATABASE_URL ?? "";
+const isPostgres = rawUrl.startsWith("postgresql://") || rawUrl.startsWith("postgres://");
+if (!isPostgres) {
+  throw new Error("DATABASE_URL must be an explicit PostgreSQL URI before running Drizzle migrations");
+}
 
 export default defineConfig({
   schema: "./drizzle/schema.ts",
   out: "./drizzle/migrations",
   dialect: "postgresql",
   dbCredentials: {
-    url: LOCAL_PG_URL,
+    url: rawUrl,
   },
 });

@@ -6,42 +6,70 @@ import { APP_LOGO, APP_TITLE, getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
 import {
   AlertTriangle, Bell, CheckCircle2, Clock, FileText,
-  Gavel, LogOut, Plus, Scale, TrendingUp
+  Gavel, LogOut, Plus, Scale, TrendingUp, Activity
 } from "lucide-react";
+import SlaProgressBar, { SlaLegend, getSlaStatus } from "@/components/SlaProgressBar";
 import { useLocation } from "wouter";
 import { useState } from "react";
+import { useChartColors } from "@/hooks/useChartColors";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell,
   LineChart, Line, Area, AreaChart,
 } from "recharts";
 
-// Generate a simple 7-point sparkline trend from a seed value
-function makeSparkline(base: number, variance = 0.3) {
-  return Array.from({ length: 7 }, (_, i) => ({
-    v: Math.max(0, Math.round(base * (1 + (Math.random() - 0.5) * variance * (i / 3))))
+// Convert real daily stats to sparkline format
+function toSparkline(dailyStats: { date: string; total: number; opened: number; closed: number }[] | undefined, field: "total" | "opened" | "closed" = "total") {
+  if (!dailyStats?.length) return [];
+  return dailyStats.map(d => ({
+    v: d[field],
+    date: new Date(d.date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
   }));
 }
 
-function Sparkline({ data, color = "#3b82f6" }: { data: { v: number }[]; color?: string }) {
+function SparklineTooltip({ active, payload, metricLabel }: any) {
+  if (!active || !payload?.length) return null;
+  const { v, date } = payload[0]?.payload ?? {};
+  const color = payload[0]?.stroke ?? "oklch(0.646 0.222 41.116)";  // chart-1 fallback
   return (
-    <ResponsiveContainer width="100%" height={32}>
-      <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+    <div className="rounded-lg border bg-white shadow-lg px-3 py-2 text-xs pointer-events-none min-w-[120px]" style={{ borderColor: color + "40" }}>
+      <p className="font-semibold text-slate-600 mb-1">{date}</p>
+      <div className="flex items-center gap-1.5">
+        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+        <span className="font-bold text-slate-800">{v.toLocaleString()}</span>
+        <span className="text-slate-400">{metricLabel ?? "disputes"}</span>
+      </div>
+    </div>
+  );
+}
+
+function Sparkline({ data, color = "oklch(0.646 0.222 41.116)", metricLabel }: { data: { v: number; date: string }[]; color?: string; metricLabel?: string }) {
+  const gradId = `sg-${color.replace('#','')}-${metricLabel?.replace(/\s/g,'') ?? 'default'}`;
+  return (
+    <ResponsiveContainer width="100%" height={44}>
+      <AreaChart data={data} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
         <defs>
-          <linearGradient id={`sg-${color.replace('#','')}`} x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor={color} stopOpacity={0.25} />
             <stop offset="95%" stopColor={color} stopOpacity={0} />
           </linearGradient>
         </defs>
+        <Tooltip
+          content={<SparklineTooltip metricLabel={metricLabel} />}
+          cursor={{ stroke: color, strokeWidth: 1, strokeDasharray: "3 3" }}
+          wrapperStyle={{ zIndex: 50 }}
+          position={{ y: -60 }}
+        />
         <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5}
-          fill={`url(#sg-${color.replace('#','')})`} dot={false} isAnimationActive={false} />
+          fill={`url(#${gradId})`} dot={false} isAnimationActive={false}
+          activeDot={{ r: 4, fill: color, stroke: "white", strokeWidth: 2 }} />
       </AreaChart>
     </ResponsiveContainer>
   );
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
+  const colorMap: Record<string, string> = {
     open_negotiation: "bg-blue-100 text-blue-700",
     idr_initiated: "bg-purple-100 text-purple-700",
     idr_entity_selection: "bg-indigo-100 text-indigo-700",
@@ -54,8 +82,21 @@ function StatusBadge({ status }: { status: string }) {
     appealed: "bg-rose-100 text-rose-700",
     ineligible: "bg-slate-100 text-slate-600",
   };
-  const label = status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${map[status] ?? "bg-slate-100 text-slate-600"}`}>{label}</span>;
+  const labelMap: Record<string, string> = {
+    open_negotiation: "Open Negotiation",
+    idr_initiated: "IDR Initiated",
+    idr_entity_selection: "IDR Entity Selection",
+    eligibility_review: "Eligibility Review",
+    offer_submission: "Offer Submission",
+    under_arbitration: "Under Arbitration",
+    determination_issued: "Determination Issued",
+    payment_pending: "Payment Pending",
+    closed: "Closed",
+    appealed: "Appealed",
+    ineligible: "Ineligible",
+  };
+  const label = labelMap[status] ?? status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${colorMap[status] ?? "bg-slate-100 text-slate-600"}`}>{label}</span>;
 }
 
 export default function Dashboard() {
@@ -68,9 +109,14 @@ export default function Dashboard() {
     { enabled: isAuthenticated }
   );
   const { data: outcomeData } = trpc.dashboard.outcomeAnalytics.useQuery(undefined, { enabled: isAuthenticated });
+  const { data: slaProgress, isLoading: slaLoading } = trpc.sla.liveProgress.useQuery(
+    { limit: 10 },
+    { enabled: isAuthenticated, refetchInterval: 60_000 }
+  );
   const { data: notifications } = trpc.notifications.list.useQuery({ unreadOnly: true }, { enabled: isAuthenticated });
   const markReadMutation = trpc.notifications.markAllRead.useMutation();
   const utils = trpc.useUtils();
+  const C = useChartColors();
 
   if (authLoading) return (
     <div className="min-h-screen flex items-center justify-center">
@@ -87,17 +133,21 @@ export default function Dashboard() {
     </div>
   );
 
-  // Sparkline data — seeded from current KPI values so they look realistic
+  // Real 7-day sparkline data from DB
+  const { data: dailyStats } = trpc.dashboard.dailyStats.useQuery({ days: 7 }, { enabled: isAuthenticated });
+  const totalSpark = toSparkline(dailyStats, "total");
+  const openedSpark = toSparkline(dailyStats, "opened");
+  const closedSpark = toSparkline(dailyStats, "closed");
   const sparklines = [
-    makeSparkline(stats?.total ?? 10, 0.15),
-    makeSparkline(stats?.openNegotiation ?? 4, 0.4),
-    makeSparkline(stats?.inIDR ?? 3, 0.4),
-    makeSparkline(stats?.closedThisMonth ?? 2, 0.5),
-    makeSparkline(stats?.dueSoon ?? 1, 0.6),
-    makeSparkline(stats?.overdue ?? 0, 0.8),
-    makeSparkline(stats?.unreadNotifications ?? 0, 0.7),
+    totalSpark,   // Total Disputes
+    openedSpark,  // Open Negotiation
+    openedSpark,  // In IDR Process
+    closedSpark,  // Closed This Month
+    openedSpark,  // Due in 5 Days
+    openedSpark,  // Overdue
+    openedSpark,  // Unread Alerts
   ];
-  const sparkColors = ["#3b82f6","#f59e0b","#8b5cf6","#22c55e","#f59e0b","#ef4444","#6366f1"];
+  const sparkColors = [C.chart1, C.chart3, C.chart4, C.chart2, C.chart3, C.danger, C.primary];
 
   const kpis = [
     { title: "Total Disputes", value: stats?.total ?? 0, icon: FileText, color: "bg-blue-500", urgent: false },
@@ -110,37 +160,7 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
-          <span className="text-lg font-bold text-slate-800">{APP_TITLE}</span>
-          <span className="hidden sm:block text-slate-400 text-sm">|</span>
-          <span className="hidden sm:block text-slate-500 text-sm">NSA/IDR Workflow</span>
-        </div>
-        <nav className="flex items-center gap-4">
-          <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600 font-medium">Disputes</button>
-          <button onClick={() => navigate("/idr-entities")} className="text-sm text-slate-600 hover:text-blue-600 font-medium">IDR Entities</button>
-          <button onClick={() => navigate("/disputes/new")} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
-            <Plus size={14} />New Dispute
-          </button>
-          <div className="relative">
-            <Bell size={18} className="text-slate-500 cursor-pointer hover:text-blue-600" />
-            {(stats?.unreadNotifications ?? 0) > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                {stats!.unreadNotifications}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-slate-600">{user?.name}</span>
-            <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
-          </div>
-        </nav>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+    <div className="space-y-8">
         {/* Page title */}
         <div className="flex items-center justify-between">
           <div>
@@ -185,7 +205,7 @@ export default function Dashboard() {
                   <div className="text-xs font-medium text-slate-500 mb-2">{kpi.title}</div>
                   {/* Sparkline */}
                   <div className="-mx-1">
-                    <Sparkline data={sparklines[idx] ?? []} color={sparkColors[idx] ?? "#3b82f6"} />
+                    <Sparkline data={sparklines[idx] ?? []} color={sparkColors[idx] ?? C.chart1} metricLabel={kpi.title.toLowerCase().includes("alert") ? "alerts" : kpi.title.toLowerCase().includes("month") ? "closed" : "disputes"} />
                   </div>
                 </CardContent>
               </Card>
@@ -228,16 +248,16 @@ export default function Dashboard() {
             ) : (
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                   <XAxis
                     dataKey="month"
-                    tick={{ fontSize: 11, fill: "#94a3b8" }}
+                    tick={{ fontSize: 11, fill: C.muted }}
                     tickFormatter={v => {
                       const [y, m] = v.split("-");
                       return new Date(Number(y), Number(m) - 1).toLocaleString("default", { month: "short", year: "2-digit" });
                     }}
                   />
-                  <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} allowDecimals={false} />
+                  <YAxis tick={{ fontSize: 11, fill: C.muted }} allowDecimals={false} />
                   <Tooltip
                     contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
                     labelFormatter={v => {
@@ -246,10 +266,10 @@ export default function Dashboard() {
                     }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="open_negotiation" name="Open Negotiation" stackId="a" fill="#3b82f6" radius={[0,0,0,0]} />
-                  <Bar dataKey="idr_active" name="IDR Active" stackId="a" fill="#8b5cf6" radius={[0,0,0,0]} />
-                  <Bar dataKey="closed" name="Closed" stackId="a" fill="#22c55e" radius={[0,0,0,0]} />
-                  <Bar dataKey="ineligible" name="Ineligible" stackId="a" fill="#94a3b8" radius={[4,4,0,0]} />
+                  <Bar dataKey="open_negotiation" name="Open Negotiation" stackId="a" fill={C.chart1} radius={[0,0,0,0]} />
+                  <Bar dataKey="idr_active" name="IDR Active" stackId="a" fill={C.chart4} radius={[0,0,0,0]} />
+                  <Bar dataKey="closed" name="Closed" stackId="a" fill={C.chart2} radius={[0,0,0,0]} />
+                  <Bar dataKey="ineligible" name="Ineligible" stackId="a" fill={C.muted} radius={[4,4,0,0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -275,11 +295,11 @@ export default function Dashboard() {
               ) : (
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={outcomeData.byServiceType} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                     <XAxis dataKey="serviceType" tick={{ fontSize: 10 }} tickFormatter={v => v.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()).slice(0, 12)} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
                     <Tooltip formatter={(v: number) => `${Math.round(v * 100)}%`} />
-                    <Bar dataKey="winRate" name="Win Rate" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="winRate" name="Win Rate" fill={C.chart2} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -301,12 +321,12 @@ export default function Dashboard() {
               ) : (
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={outcomeData.byServiceType} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.muted} />
                     <XAxis dataKey="serviceType" tick={{ fontSize: 10 }} tickFormatter={v => v.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()).slice(0, 12)} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
                     <Tooltip formatter={(v: number) => `$${Number(v).toLocaleString()}`} />
-                    <Bar dataKey="avgDeterminationAmount" name="Avg. Determination" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="avgBilledAmount" name="Avg. Billed" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="avgDeterminationAmount" name="Avg. Determination" fill={C.chart1} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="avgBilledAmount" name="Avg. Billed" fill={C.muted} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -375,9 +395,14 @@ export default function Dashboard() {
               </CardHeader>
               <CardContent className="p-0">
                 {!notifications?.length ? (
-                  <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                  <div className="flex flex-col items-center justify-center py-10 text-slate-400 px-4 text-center">
                     <CheckCircle2 size={28} className="mb-2 opacity-30" />
-                    <p className="text-sm">No pending alerts</p>
+                    <p className="text-sm">No unread alerts</p>
+                    {(stats?.overdue ?? 0) > 0 && (
+                      <p className="text-xs mt-1.5 text-amber-600">
+                        {stats!.overdue} overdue SLA{stats!.overdue !== 1 ? "s" : ""} — see SLA Monitor below
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
@@ -427,7 +452,95 @@ export default function Dashboard() {
             </Card>
           </div>
         </div>
-      </main>
+
+        {/* ── SLA Progress Monitor ─────────────────────────────────────────── */}
+        <div className="mt-6">
+          <Card className="border-slate-200">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-base font-semibold text-slate-800 flex items-center gap-2">
+                <Activity size={16} className="text-blue-500" />
+                SLA Progress Monitor
+                {slaProgress && slaProgress.length > 0 && (
+                  <span className="ml-1 text-xs font-normal text-slate-400">
+                    — {slaProgress.filter(d => getSlaStatus(d.percent) === "breached").length} breached,{" "}
+                    {slaProgress.filter(d => getSlaStatus(d.percent) === "critical").length} critical,{" "}
+                    {slaProgress.filter(d => getSlaStatus(d.percent) === "warning").length} at risk
+                  </span>
+                )}
+              </CardTitle>
+              <div className="flex items-center gap-3">
+                <SlaLegend />
+                <button onClick={() => navigate("/sla-breaches")} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+                  Full report →
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {slaLoading ? (
+                <div className="space-y-4">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="space-y-1.5 animate-pulse">
+                      <div className="flex justify-between">
+                        <div className="h-3 w-32 bg-slate-100 rounded" />
+                        <div className="h-3 w-16 bg-slate-100 rounded" />
+                      </div>
+                      <div className="h-2.5 w-full bg-slate-100 rounded-full" />
+                    </div>
+                  ))}
+                </div>
+              ) : !slaProgress?.length ? (
+                <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                  <CheckCircle2 size={28} className="mb-2 opacity-30" />
+                  <p className="text-sm">No active disputes to monitor</p>
+                  <button onClick={() => navigate("/disputes/new")} className="mt-2 text-sm text-blue-600 hover:text-blue-700">
+                    Initiate a dispute →
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
+                  {slaProgress.map(d => (
+                    <div
+                      key={d.disputeId}
+                      className="cursor-pointer hover:bg-slate-50 rounded-lg p-2 -mx-2 transition-colors"
+                      onClick={() => navigate(`/disputes/${d.disputeId}`)}
+                    >
+                      {/* Dispute header */}
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs font-semibold text-slate-700 truncate">
+                            {d.referenceNumber}
+                          </span>
+                          {d.patientName && (
+                            <span className="text-xs text-slate-400 truncate hidden sm:block">
+                              · {d.patientName}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-xs text-slate-400 shrink-0 ml-2">
+                          {d.deadlineDate
+                            ? new Date(d.deadlineDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                            : `${d.deadlineDays}d window`}
+                        </span>
+                      </div>
+                      {/* Progress bar */}
+                      <SlaProgressBar
+                        percent={d.percent}
+                        stepLabel={d.stepLabel}
+                        deadlineLabel={
+                          d.deadlineDate
+                            ? new Date(d.deadlineDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                            : undefined
+                        }
+                        daysRemaining={d.daysRemaining}
+                        deadlineDays={d.deadlineDays}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
     </div>
   );
 }

@@ -1,6 +1,8 @@
 import { eq, desc, and, or, like, count, sql, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import {
   InsertUser, users,
   disputes, InsertDispute, Dispute,
@@ -21,23 +23,130 @@ import {
   IDR_STEP, IDRStep, DISPUTE_STATUS, DisputeStatus,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { observeDependencyOperation } from "./_core/telemetry";
 
-const LOCAL_PG_URL = "postgresql://idr_user:idr_pass123@localhost:5432/idr_demo";
+export function isPostgresConnectionString(value: string | undefined): value is string {
+  return Boolean(value && /^(postgres|postgresql):\/\//.test(value));
+}
+
+export function resolvePostgresUrl(): string | null {
+  const externalOverride = process.env.EXTERNAL_POSTGRES_URL?.trim();
+  const configured = externalOverride || process.env.DATABASE_URL?.trim();
+  if (!configured) {
+    console.error("[Database] A PostgreSQL database URL is required");
+    return null;
+  }
+  if (isPostgresConnectionString(configured)) return configured;
+  console.error(`[Database] ${externalOverride ? "EXTERNAL_POSTGRES_URL" : "DATABASE_URL"} is not a PostgreSQL connection string; refusing an incompatible database backend`);
+  return null;
+}
+
+/**
+ * postgres-js does not consume libpq's sslrootcert query parameter itself.
+ * For the protected external override, load that CA explicitly and require
+ * verify-ca semantics instead of accepting a self-signed certificate.
+ */
+export function resolvePostgresTlsOptions(connectionString: string): { ssl?: { rejectUnauthorized: true; ca: string; servername: string } } {
+  const externalOverride = process.env.EXTERNAL_POSTGRES_URL?.trim();
+  if (!externalOverride || connectionString !== externalOverride) return {};
+
+  let parsed: URL;
+  try {
+    parsed = new URL(connectionString);
+  } catch {
+    throw new Error("EXTERNAL_POSTGRES_URL must be a valid PostgreSQL URI");
+  }
+  if (parsed.searchParams.get("sslmode") !== "verify-ca") {
+    throw new Error("EXTERNAL_POSTGRES_URL requires sslmode=verify-ca");
+  }
+  const configuredRootCertPath = parsed.searchParams.get("sslrootcert");
+  if (!configuredRootCertPath) {
+    throw new Error("EXTERNAL_POSTGRES_URL requires sslrootcert for strict CA validation");
+  }
+  const rootCertPath = !existsSync(configuredRootCertPath) && process.env.NODE_ENV !== "production" && configuredRootCertPath.startsWith("/app/infra/")
+    ? path.resolve(process.cwd(), configuredRootCertPath.replace("/app/", ""))
+    : configuredRootCertPath;
+  const servername = process.env.EXTERNAL_POSTGRES_TLS_SERVER_NAME?.trim();
+  if (!servername || !/^(?:[a-z0-9-]+\.)*[a-z0-9-]+$/i.test(servername)) {
+    throw new Error("EXTERNAL_POSTGRES_TLS_SERVER_NAME is required for strict certificate hostname validation");
+  }
+  let ca: string;
+  try {
+    ca = readFileSync(rootCertPath, "utf8");
+  } catch {
+    throw new Error("EXTERNAL_POSTGRES_URL sslrootcert is not readable");
+  }
+  return { ssl: { rejectUnauthorized: true, ca, servername } };
+}
+
+/** postgres-js forwards unknown URI parameters as PostgreSQL startup settings. */
+export function resolvePostgresDriverUrl(connectionString: string): string {
+  const externalOverride = process.env.EXTERNAL_POSTGRES_URL?.trim();
+  if (!externalOverride || connectionString !== externalOverride) return connectionString;
+  const parsed = new URL(connectionString);
+  parsed.searchParams.delete("sslmode");
+  parsed.searchParams.delete("sslrootcert");
+  return parsed.toString();
+}
 
 let _db: ReturnType<typeof drizzle> | null = null;
+let _pgClient: ReturnType<typeof postgres> | null = null;
 
 export async function getDb() {
   if (!_db) {
-    try {
-      const connectionString = LOCAL_PG_URL;
-      const client = postgres(connectionString, { max: 10 });
-      _db = drizzle(client);
-    } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
-      _db = null;
+    const connectionString = resolvePostgresUrl();
+    if (!connectionString) {
+      const error = new Error("PostgreSQL is not configured; refusing to initialize a database client");
+      console.error(`[Database] ${error.message}`);
+      if (process.env.NODE_ENV === "production") throw error;
+      return null;
+    }
+    let attempts = 0;
+    const maxAttempts = 5;
+    while (attempts < maxAttempts) {
+      try {
+        _pgClient = postgres(resolvePostgresDriverUrl(connectionString), {
+          max: 20,                  // connection pool size
+          idle_timeout: 30,         // seconds before idle connection is closed
+          connect_timeout: 10,      // seconds to wait for a connection
+          max_lifetime: 1800,       // seconds before connection is recycled
+          onnotice: () => {},       // suppress NOTICE messages
+          ...resolvePostgresTlsOptions(connectionString),
+        });
+        _db = drizzle(_pgClient);
+        // Verify connectivity without recording SQL text or connection details in telemetry.
+        await observeDependencyOperation("postgresql", "connectivity_check", () => _pgClient!`SELECT 1`.then(() => undefined));
+        console.info(`[Database] Connected to PostgreSQL (pool max=20)`);
+        break;
+      } catch (error) {
+        attempts++;
+        _db = null;
+        _pgClient = null;
+        if (attempts >= maxAttempts) {
+          console.error(`[Database] Failed to connect after ${maxAttempts} attempts:`, error);
+        } else {
+          const delay = Math.min(1000 * 2 ** attempts, 30000);
+          console.warn(`[Database] Connection attempt ${attempts} failed, retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+    }
+    if (!_db && process.env.NODE_ENV === "production") {
+      throw new Error("PostgreSQL connection is unavailable after bounded retry attempts");
     }
   }
   return _db;
+}
+
+/** Health check — returns true if the database is reachable */
+export async function checkDbHealth(): Promise<boolean> {
+  try {
+    if (!_pgClient) return false;
+    await _pgClient`SELECT 1`;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ─── User helpers ─────────────────────────────────────────────────────────────
@@ -45,7 +154,12 @@ export async function getDb() {
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.id) throw new Error("User ID is required for upsert");
   const db = await getDb();
-  if (!db) { console.warn("[Database] Cannot upsert user: database not available"); return; }
+  if (!db) {
+    const error = new Error("Cannot upsert user: PostgreSQL is not available");
+    if (process.env.NODE_ENV === "production") throw error;
+    console.warn(`[Database] ${error.message}`);
+    return;
+  }
   try {
     const values: InsertUser = { id: user.id };
     const updateSet: Record<string, unknown> = {};
@@ -60,7 +174,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     };
     textFields.forEach(assignNullable);
     if (user.lastSignedIn !== undefined) { values.lastSignedIn = user.lastSignedIn; updateSet.lastSignedIn = user.lastSignedIn; }
-    if (user.role === undefined && user.id === ENV.ownerId) { user.role = 'admin'; values.role = 'admin'; updateSet.role = 'admin'; }
+    // Admin role is managed via Keycloak realm roles — no owner ID override needed
     if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
     await db.insert(users).values(values).onConflictDoUpdate({ target: users.id, set: updateSet });
   } catch (error) { console.error("[Database] Failed to upsert user:", error); throw error; }
@@ -71,6 +185,20 @@ export async function getUser(id: string) {
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function countUsers(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const result = await db.select({ value: count() }).from(users);
+  return result[0]?.value ?? 0;
 }
 
 // ─── Business day calculation ─────────────────────────────────────────────────
@@ -334,16 +462,26 @@ export async function acceptOffer(disputeId: string, offerId: string, performedB
   if (!db) throw new Error("Database not available");
   const existing = await db.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
   if (existing.length === 0) throw new Error("Dispute not found");
-  const offer = await db.select().from(disputeOffers).where(eq(disputeOffers.id, offerId)).limit(1);
-  if (offer.length === 0) throw new Error("Offer not found");
+  // Try to find the specific offer, or fall back to the latest responding offer
+  let offer = await db.select().from(disputeOffers).where(eq(disputeOffers.id, offerId)).limit(1);
+  if (offer.length === 0) {
+    // Fall back: find the latest responding party offer for this dispute
+    offer = await db.select().from(disputeOffers)
+      .where(and(eq(disputeOffers.disputeId, disputeId), eq(disputeOffers.offerType, "responding_party")))
+      .orderBy(disputeOffers.submittedAt)
+      .limit(1);
+  }
   const now = new Date();
-  // Mark offer as accepted
-  await db.update(disputeOffers).set({ isAccepted: true }).where(eq(disputeOffers.id, offerId));
+  const determinationAmount = offer.length > 0 ? offer[0].amount : existing[0].respondingPartyOffer ?? existing[0].billedAmount;
+  // Mark offer as accepted if found
+  if (offer.length > 0) {
+    await db.update(disputeOffers).set({ isAccepted: true }).where(eq(disputeOffers.id, offer[0].id));
+  }
   // Advance dispute to determination issued
   await db.update(disputes).set({
     currentStep: "STEP_13_DETERMINATION_ISSUED",
     status: "determination_issued",
-    determinationAmount: offer[0].amount,
+    determinationAmount,
     updatedAt: now,
   }).where(eq(disputes.id, disputeId));
   // Record timeline event
@@ -1151,25 +1289,32 @@ export async function listAuditEntries(opts: {
 export async function createWebhook(webhook: Omit<InsertWebhook, "id">): Promise<Webhook> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const id = `wh_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  const id = crypto.randomUUID();
   await db.insert(webhooks).values({ ...webhook, id });
   const rows = await db.select().from(webhooks).where(eq(webhooks.id, id)).limit(1);
   return rows[0];
 }
 export async function listWebhooks(userId: string): Promise<Webhook[]> {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) throw new Error("Database not available");
   return db.select().from(webhooks).where(eq(webhooks.userId, userId)).orderBy(desc(webhooks.createdAt));
 }
-export async function updateWebhook(id: string, data: Partial<InsertWebhook>): Promise<void> {
+export async function updateWebhook(userId: string, id: string, data: Partial<InsertWebhook>): Promise<boolean> {
   const db = await getDb();
-  if (!db) return;
-  await db.update(webhooks).set({ ...data, updatedAt: new Date() }).where(eq(webhooks.id, id));
+  if (!db) throw new Error("Database not available");
+  const rows = await db.update(webhooks)
+    .set({ ...data, updatedAt: new Date() })
+    .where(and(eq(webhooks.id, id), eq(webhooks.userId, userId)))
+    .returning({ id: webhooks.id });
+  return rows.length === 1;
 }
-export async function deleteWebhook(id: string): Promise<void> {
+export async function deleteWebhook(userId: string, id: string): Promise<boolean> {
   const db = await getDb();
-  if (!db) return;
-  await db.delete(webhooks).where(eq(webhooks.id, id));
+  if (!db) throw new Error("Database not available");
+  const rows = await db.delete(webhooks)
+    .where(and(eq(webhooks.id, id), eq(webhooks.userId, userId)))
+    .returning({ id: webhooks.id });
+  return rows.length === 1;
 }
 
 // ─── Outcome Predictions Helpers ──────────────────────────────────────────────

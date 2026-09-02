@@ -10,11 +10,12 @@ import { APP_LOGO, APP_TITLE, getLoginUrl } from "@/const";
 import {
   AlertTriangle, Bell, ChevronLeft, ChevronRight,
   FileText, Gavel, LogOut, Plus, Scale, Search, X, SlidersHorizontal, Download,
-  ArrowRight, UserCheck, CheckSquare, Square, Trash2
+  ArrowRight, UserCheck, CheckSquare, Square, Trash2, Pin, PinOff
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import EmptyState from "@/components/EmptyState";
+import { usePinnedDisputes } from "@/hooks/usePinnedDisputes";
 
 const DISPUTE_STATUSES = [
   { value: "all", label: "All Disputes" },
@@ -44,7 +45,71 @@ const STATUS_COLORS: Record<string, string> = {
   ineligible: "bg-slate-100 text-slate-600",
 };
 
+const STATUS_LABELS: Record<string, string> = {
+  open_negotiation: "Open Negotiation",
+  idr_initiated: "IDR Initiated",
+  idr_entity_selection: "IDR Entity Selection",
+  eligibility_review: "Eligibility Review",
+  offer_submission: "Offer Submission",
+  under_arbitration: "Under Arbitration",
+  determination_issued: "Determination Issued",
+  payment_pending: "Payment Pending",
+  closed: "Closed",
+  appealed: "Appealed",
+  ineligible: "Ineligible",
+};
+
 const PAGE_SIZE = 20;
+
+// ─── Hermes Risk Badge (client-side heuristic model) ─────────────────────────
+function computeRisk(d: {
+  status?: string | null;
+  billedAmount?: string | number | null;
+  createdAt?: Date | string | null;
+  serviceType?: string | null;
+}): { score: number; level: "low" | "medium" | "high" | "critical"; factors: string[] } {
+  let score = 0;
+  const factors: string[] = [];
+  const age = d.createdAt ? Math.floor((Date.now() - new Date(d.createdAt).getTime()) / 86400000) : 0;
+  if (age > 60) { score += 30; factors.push("Overdue (60+ days)"); }
+  else if (age > 30) { score += 15; factors.push("Aging (30+ days)"); }
+  const amount = Number(d.billedAmount) || 0;
+  if (amount > 50000) { score += 25; factors.push("High value claim"); }
+  else if (amount > 20000) { score += 12; factors.push("Significant claim value"); }
+  const statusRisk: Record<string, number> = {
+    offer_submission: 20, under_arbitration: 25, appealed: 30, eligibility_review: 15, idr_entity_selection: 10,
+  };
+  const statusScore = statusRisk[d.status ?? ""] ?? 0;
+  if (statusScore > 0) { score += statusScore; factors.push(`Status: ${(d.status ?? "").replace(/_/g, " ")}`); }
+  const serviceRisk: Record<string, number> = {
+    air_ambulance: 20, neonatology: 15, anesthesiology: 10, emergency_medicine: 8,
+  };
+  const svcScore = serviceRisk[d.serviceType ?? ""] ?? 0;
+  if (svcScore > 0) { score += svcScore; factors.push(`High-risk service: ${(d.serviceType ?? "").replace(/_/g, " ")}`); }
+  const level = score >= 70 ? "critical" : score >= 45 ? "high" : score >= 20 ? "medium" : "low";
+  return { score: Math.min(score, 100), level, factors };
+}
+
+const RISK_CONFIG = {
+  critical: { badge: "bg-red-100 text-red-700 border-red-300", dot: "bg-red-500 animate-pulse", label: "Critical" },
+  high:     { badge: "bg-orange-100 text-orange-700 border-orange-300", dot: "bg-orange-500", label: "High" },
+  medium:   { badge: "bg-yellow-100 text-yellow-700 border-yellow-300", dot: "bg-yellow-400", label: "Medium" },
+  low:      { badge: "bg-green-100 text-green-700 border-green-300", dot: "bg-green-400", label: "Low" },
+};
+
+function RiskBadge({ dispute }: { dispute: any }) {
+  const { score, level, factors } = computeRisk(dispute);
+  const cfg = RISK_CONFIG[level];
+  return (
+    <span
+      title={`Risk score: ${score}\n${factors.join("\n") || "No risk factors"}`}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border cursor-help ${cfg.badge}`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cfg.dot}`} />
+      {cfg.label}
+    </span>
+  );
+}
 
 const SERVICE_TYPES = [
   { value: "all", label: "All Service Types" },
@@ -71,6 +136,7 @@ export default function DisputesList() {
   const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -106,6 +172,7 @@ export default function DisputesList() {
 
   const advanceStepMutation = trpc.disputes.advance.useMutation();
   const utils = trpc.useUtils();
+  const { isPinned, toggle: togglePin } = usePinnedDisputes();
 
   const handleExportCSV = async () => {
     setCsvExporting(true);
@@ -273,26 +340,36 @@ export default function DisputesList() {
 
   const handleDeselectAll = () => setSelectedIds(new Set());
 
-  return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
-          <span className="text-lg font-bold text-slate-800">{APP_TITLE}</span>
-        </div>
-        <nav className="flex items-center gap-4">
-          <button onClick={() => navigate("/dashboard")} className="text-sm text-slate-600 hover:text-blue-600">Dashboard</button>
-          <button onClick={() => navigate("/disputes/new")} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
-            <Plus size={14} />New Dispute
-          </button>
-          <span className="text-sm text-slate-600">{user?.name}</span>
-          <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
-        </nav>
-      </header>
+  // ── Keyboard shortcuts: N = new dispute, / = focus search, E = export CSV ──
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      const isTyping = tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement).isContentEditable;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "n" || e.key === "N") {
+        if (isTyping) return;
+        e.preventDefault();
+        navigate("/disputes/new");
+      } else if (e.key === "/") {
+        if (isTyping) return;
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      } else if (e.key === "e" || e.key === "E") {
+        if (isTyping) return;
+        e.preventDefault();
+        handleExportCSV();
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  return (
+    <div className="space-y-6">
       {/* Bulk-action sticky toolbar — appears when items are selected */}
       {selectedIds.size > 0 && (
-        <div className="sticky top-14 z-20 bg-blue-600 text-white px-6 py-2.5 flex items-center gap-3 shadow-md border-b border-blue-700">
+        <div className="sticky top-0 z-20 bg-blue-600 text-white px-6 py-2.5 flex items-center gap-3 shadow-md border-b border-blue-700 -mx-6 -mt-6">
           <div className="flex items-center gap-2 flex-1">
             <CheckSquare size={16} className="text-blue-200" />
             <span className="text-sm font-semibold">
@@ -339,8 +416,7 @@ export default function DisputesList() {
         </div>
       )}
 
-      <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-800">IDR Disputes</h1>
             <p className="text-sm text-slate-500 mt-0.5">{total.toLocaleString()} total disputes</p>
@@ -351,8 +427,9 @@ export default function DisputesList() {
               <Download size={15} />
               {csvExporting ? "Exporting..." : `Export CSV${total > 0 ? ` (${total.toLocaleString()})` : ""}`}
             </Button>
-            <Button onClick={() => navigate("/disputes/new")} className="flex items-center gap-2">
+            <Button onClick={() => navigate("/disputes/new")} className="flex items-center gap-2 relative">
               <Plus size={16} />Initiate Dispute
+              <kbd className="hidden sm:inline-flex ml-1 h-4 items-center gap-0.5 rounded border border-primary-foreground/30 bg-primary-foreground/20 px-1 font-mono text-[9px] font-medium text-primary-foreground/70">N</kbd>
             </Button>
           </div>
         </div>
@@ -364,7 +441,8 @@ export default function DisputesList() {
             <div className="relative flex-1 min-w-[220px] max-w-sm">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <Input
-                placeholder="Search reference #, party name..."
+                ref={searchInputRef}
+                placeholder="Search reference #, party name... (press / to focus)"
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
                 className="pl-8 text-sm"
@@ -473,7 +551,7 @@ export default function DisputesList() {
                           className="border-slate-300"
                         />
                       </th>
-                      {["Reference #", "Initiating Party", "Responding Party", "Service Type", "Billed Amount", "QPA", "Status", "Step", "Created", ""].map(h => (
+                      {["Reference #", "Initiating Party", "Responding Party", "Service Type", "Billed Amount", "QPA", "Risk", "Status", "Step", "Created", ""].map(h => (
                         <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>
                       ))}
                     </tr>
@@ -503,18 +581,39 @@ export default function DisputesList() {
                           <td className="px-4 py-3 text-sm font-mono font-semibold text-blue-600">{d.referenceNumber}</td>
                           <td className="px-4 py-3 text-sm text-slate-700 max-w-[140px] truncate">{d.initiatingPartyName}</td>
                           <td className="px-4 py-3 text-sm text-slate-600 max-w-[140px] truncate">{d.respondingPartyName ?? <span className="text-slate-400">TBD</span>}</td>
-                          <td className="px-4 py-3 text-sm text-slate-600 capitalize">{d.serviceType?.replace(/_/g, " ")}</td>
+                          <td className="px-4 py-3 text-sm text-slate-600">{d.serviceType?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}</td>
                           <td className="px-4 py-3 text-sm font-semibold text-slate-800">${Number(d.billedAmount).toLocaleString()}</td>
                           <td className="px-4 py-3 text-sm text-slate-600">{d.qpaAmount ? `$${Number(d.qpaAmount).toLocaleString()}` : <span className="text-slate-400">—</span>}</td>
                           <td className="px-4 py-3">
+                            <RiskBadge dispute={d} />
+                          </td>
+                          <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status] ?? "bg-slate-100 text-slate-600"}`}>
-                              {d.status?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                              {STATUS_LABELS[d.status] ?? d.status?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-xs text-slate-500 max-w-[120px] truncate">
-                            {d.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ").toLowerCase()}
+                            {d.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
                           </td>
                           <td className="px-4 py-3 text-sm text-slate-500">{new Date(d.createdAt).toLocaleDateString()}</td>
+                          <td className="px-4 py-3 w-10" onClick={e => e.stopPropagation()}>
+                            <button
+                              onClick={() => togglePin({
+                                id: d.id,
+                                referenceNumber: d.referenceNumber,
+                                serviceType: d.serviceType ?? "",
+                                status: d.status,
+                              })}
+                              title={isPinned(d.id) ? "Unpin" : "Pin to sidebar"}
+                              className={`p-1 rounded transition-colors ${
+                                isPinned(d.id)
+                                  ? "text-amber-500 hover:text-amber-600"
+                                  : "text-slate-300 hover:text-slate-500"
+                              }`}
+                            >
+                              {isPinned(d.id) ? <PinOff size={14} /> : <Pin size={14} />}
+                            </button>
+                          </td>
                           <td className="px-4 py-3">
                             <span className="text-sm text-blue-600 font-medium hover:text-blue-700">View →</span>
                           </td>
@@ -543,7 +642,6 @@ export default function DisputesList() {
             </div>
           </div>
         )}
-      </main>
     </div>
   );
 }

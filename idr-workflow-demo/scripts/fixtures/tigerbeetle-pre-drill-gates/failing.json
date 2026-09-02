@@ -1,0 +1,28 @@
+{
+  "fixture_kind": "simulation_only",
+  "scenario": "failing",
+  "observation_window_seconds": 900,
+  "expected_replicas": 6,
+  "probe_cadence_seconds": 30,
+  "metrics": {
+    "exporter_min_up": 0,
+    "statefulset_desired_replicas": 6,
+    "statefulset_min_ready_replicas": 5,
+    "pod_min_ready": {
+      "tigerbeetle-0": 1,
+      "tigerbeetle-1": 1,
+      "tigerbeetle-2": 0,
+      "tigerbeetle-3": 1,
+      "tigerbeetle-4": 1,
+      "tigerbeetle-5": 1
+    },
+    "read_probe_failures": 2,
+    "read_probe_successes": 28,
+    "read_probe_p99_seconds": 1.27,
+    "cni_enforced_proofs": 0,
+    "cni_not_enforced_proofs": 0,
+    "cni_inconclusive_proofs": 1,
+    "baseline_job_failures": 1,
+    "cleanup_failures_last_24h": 1
+  }
+}

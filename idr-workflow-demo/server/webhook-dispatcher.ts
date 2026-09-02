@@ -25,10 +25,11 @@ type WebhookRow = {
 export async function dispatchWebhooksForEvent(
   eventType: string,
   aggregateId: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  eventId: string = crypto.randomUUID(),
 ): Promise<void> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) throw new Error("Webhook dispatch requires PostgreSQL");
 
   let activeWebhooks: WebhookRow[];
   try {
@@ -43,28 +44,28 @@ export async function dispatchWebhooksForEvent(
       try { events = JSON.parse(w.events); } catch { events = []; }
       return events.includes(eventType) || events.includes("*");
     });
-  } catch {
-    return;
+  } catch (error) {
+    throw new Error(`Unable to load active webhook subscriptions: ${error instanceof Error ? error.message : "unknown database error"}`);
   }
 
   if (!activeWebhooks.length) return;
 
   const body = JSON.stringify({
-    id: crypto.randomUUID(),
+    id: eventId,
     event: eventType,
     aggregateId,
     timestamp: new Date().toISOString(),
     data: payload,
   });
 
-  await Promise.allSettled(
-    activeWebhooks.map(webhook => deliverWebhook(webhook, body))
+  await Promise.all(
+    activeWebhooks.map(webhook => deliverWebhook(webhook, body, eventType))
   );
 }
 
-async function deliverWebhook(webhook: WebhookRow, body: string): Promise<void> {
+async function deliverWebhook(webhook: WebhookRow, body: string, eventType: string): Promise<void> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) throw new Error("Webhook delivery requires PostgreSQL");
 
   // HMAC-SHA256 signature
   const signature = crypto
@@ -81,7 +82,7 @@ async function deliverWebhook(webhook: WebhookRow, body: string): Promise<void> 
       headers: {
         "Content-Type": "application/json",
         "X-HealthPoint-Signature": `sha256=${signature}`,
-        "X-HealthPoint-Event": body,
+        "X-HealthPoint-Event": eventType,
         "User-Agent": "HealthPoint-Webhooks/1.0",
       },
       body,
@@ -105,17 +106,13 @@ async function deliverWebhook(webhook: WebhookRow, body: string): Promise<void> 
 
     // Auto-disable after 10 consecutive failures
     if (newCount >= 10) {
-      updates.active = false;
-      console.warn(`[Webhooks] Disabled webhook ${webhook.id} after ${newCount} failures`);
+      updates.status = "failed";
+      console.warn(`[Webhooks] Marked webhook ${webhook.id} failed after ${newCount} failures`);
     }
 
-    try {
-      await db.update(webhooks)
-        .set(updates)
-        .where(eq(webhooks.id, webhook.id));
-    } catch {
-      // Non-fatal
-    }
+    await db.update(webhooks)
+      .set(updates)
+      .where(eq(webhooks.id, webhook.id));
   } finally {
     clearTimeout(timeout);
   }

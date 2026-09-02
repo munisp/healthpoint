@@ -1,0 +1,18 @@
+{
+  "name": "HealthPoint IDR",
+  "short_name": "HealthPoint",
+  "description": "HealthPoint NSA/IDR case-management workspace.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#1d4ed8",
+  "icons": [
+    {
+      "src": "/icons/healthpoint.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

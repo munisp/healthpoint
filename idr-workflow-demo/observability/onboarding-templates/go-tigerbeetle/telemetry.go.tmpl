@@ -1,0 +1,96 @@
+// TEMPLATE ONLY — do not compile or deploy until the owning Go TigerBeetle adapter
+// exists, an approved mTLS OTLP collector is available, and the dependency versions
+// are pinned in that adapter's go.mod.
+package telemetry
+
+import (
+    "context"
+    "crypto/tls"
+    "crypto/x509"
+    "errors"
+    "os"
+    "time"
+
+    "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/attribute"
+    "go.opentelemetry.io/otel/codes"
+    "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+    "go.opentelemetry.io/otel/propagation"
+    "go.opentelemetry.io/otel/sdk/resource"
+    sdktrace "go.opentelemetry.io/otel/sdk/trace"
+    semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+)
+
+type Config struct {
+    ServiceName string
+    Endpoint    string // HTTPS URL only; never include credentials.
+    CertPath    string
+    KeyPath     string
+    CAPath      string
+}
+
+func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) {
+    if cfg.ServiceName == "" || cfg.Endpoint == "" || cfg.CertPath == "" || cfg.KeyPath == "" || cfg.CAPath == "" {
+        return nil, errors.New("service name, HTTPS OTLP endpoint, and mTLS material are required")
+    }
+    certificate, err := tls.LoadX509KeyPair(cfg.CertPath, cfg.KeyPath)
+    if err != nil {
+        return nil, errors.New("unable to load OTLP client certificate")
+    }
+    caPEM, err := os.ReadFile(cfg.CAPath)
+    if err != nil {
+        return nil, errors.New("unable to load OTLP CA certificate")
+    }
+    roots := x509.NewCertPool()
+    if !roots.AppendCertsFromPEM(caPEM) {
+        return nil, errors.New("OTLP CA file contains no PEM certificate")
+    }
+    exporter, err := otlptracehttp.New(ctx,
+        otlptracehttp.WithEndpointURL(cfg.Endpoint),
+        otlptracehttp.WithTLSClientConfig(&tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, RootCAs: roots}),
+    )
+    if err != nil {
+        return nil, err
+    }
+    resource, err := resource.Merge(resource.Default(), resource.NewWithAttributes(
+        semconv.SchemaURL,
+        semconv.ServiceName(cfg.ServiceName),
+        semconv.ServiceVersion(os.Getenv("OTEL_SERVICE_VERSION")),
+        semconv.DeploymentEnvironment(os.Getenv("OTEL_DEPLOYMENT_ENVIRONMENT")),
+    ))
+    if err != nil {
+        return nil, err
+    }
+    provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(resource))
+    otel.SetTracerProvider(provider)
+    otel.SetTextMapPropagator(propagation.TraceContext{})
+    _ = otelhttp.NewTransport(nil) // install only if this process makes trusted HTTP calls.
+    return provider.Shutdown, nil
+}
+
+// ReadOnlyTigerBeetleClient must expose a non-mutating health or account lookup.
+// The caller must never put account IDs, ledger codes, or cluster endpoints on a span.
+type ReadOnlyTigerBeetleClient interface {
+    Health(ctx context.Context) error
+}
+
+func CheckTigerBeetle(ctx context.Context, client ReadOnlyTigerBeetleClient) error {
+    ctx, span := otel.Tracer("healthpoint.tigerbeetle").Start(ctx, "healthpoint.tigerbeetle.health")
+    defer span.End()
+    started := time.Now()
+    err := client.Health(ctx)
+    outcome := "ok"
+    if err != nil {
+        outcome = "error"
+        span.SetStatus(codes.Error, "tigerbeetle operation failed")
+    }
+    // Attributes are finite enumerations; no tenant, account, or endpoint identifier.
+    span.SetAttributes(
+        attribute.String("healthpoint.component", "tigerbeetle"),
+        attribute.String("healthpoint.operation", "health"),
+        attribute.String("healthpoint.outcome", outcome),
+        attribute.Int64("healthpoint.duration_ms", time.Since(started).Milliseconds()),
+    )
+    return err
+}

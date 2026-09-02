@@ -5,14 +5,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import DashboardLayout from "@/components/DashboardLayout";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import {
   UserCheck, Clock, AlertTriangle, CheckCircle2, FileText,
   Gavel, Star, Phone, Mail, ChevronDown, ChevronUp, Sparkles
 } from "lucide-react";
 
-const EXPERT_PANEL = [
+// Expert panel is now DB-driven via trpc.expertPanelDB.list
+const _REMOVED = [
   {
     id: "exp-001",
     name: "Dr. Sarah Chen, MD, JD",
@@ -83,6 +84,7 @@ export default function ExpertReview() {
   const [aiRecommendation, setAIRecommendation] = useState<string | null>(null);
   const [aiLoading, setAILoading] = useState(false);
 
+  const { data: expertPanel, isLoading: panelLoading } = trpc.expertPanelDB.list.useQuery({}, { enabled: isAuthenticated });
   const { data: disputes } = trpc.disputes.list.useQuery({ limit: 50 }, { enabled: isAuthenticated });
   const askAssistant = trpc.ai.askAssistant.useMutation({
     onSuccess: (result: any) => {
@@ -140,8 +142,10 @@ export default function ExpertReview() {
 
   if (!isAuthenticated) return null;
 
+  const experts = expertPanel ?? [];
+
   return (
-    <DashboardLayout>
+    <>
       <div className="p-6 max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -155,7 +159,7 @@ export default function ExpertReview() {
             </p>
           </div>
           <Badge className="bg-indigo-600 text-white text-xs">
-            {EXPERT_PANEL.filter(e => e.availability === "available").length} Experts Available
+            {experts.filter(e => e.availability === "available").length} Experts Available
           </Badge>
         </div>
 
@@ -177,7 +181,13 @@ export default function ExpertReview() {
             {/* Expert Panel */}
             <div className="lg:col-span-2 space-y-4">
               <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide">Select an Expert</h2>
-              {EXPERT_PANEL.map(expert => (
+              {panelLoading ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <Card key={i}><CardContent className="p-4"><Skeleton className="h-20 w-full" /></CardContent></Card>
+                ))
+              ) : !experts.length ? (
+                <Card><CardContent className="py-8 text-center text-muted-foreground text-sm">No experts in panel — seed via Admin panel</CardContent></Card>
+              ) : experts.map(expert => (
                 <Card
                   key={expert.id}
                   className={`border cursor-pointer transition-all ${
@@ -209,15 +219,15 @@ export default function ExpertReview() {
                           <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
                             <span className="flex items-center gap-1">
                               <Star size={11} className="text-amber-400 fill-amber-400" />
-                              {expert.successRate}% success rate
+                              {expert.successRate} success rate
                             </span>
                             <span className="flex items-center gap-1">
                               <Clock size={11} />
-                              Avg. {expert.avgDays} days
+                              Avg. {expert.avgResponseHours}h response
                             </span>
                             <span className="flex items-center gap-1">
                               <Gavel size={11} />
-                              {expert.casesHandled.toLocaleString()} cases
+                              {(expert.casesHandled ?? 0).toLocaleString()} cases
                             </span>
                           </div>
                         </div>
@@ -235,17 +245,13 @@ export default function ExpertReview() {
                       <div className="mt-3 pt-3 border-t border-slate-200 space-y-3">
                         <p className="text-sm text-slate-600">{expert.bio}</p>
                         <div className="flex flex-wrap gap-1.5">
-                          {expert.credentials.map(c => (
-                            <span key={c} className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{c}</span>
+                          {(expert.credentials ?? "").split(",").filter(Boolean).map(c => (
+                            <span key={c} className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{c.trim()}</span>
                           ))}
                         </div>
                         <div className="flex items-center gap-4 text-xs text-slate-500">
-                          <a href={`mailto:${expert.email}`} className="flex items-center gap-1 hover:text-blue-600">
-                            <Mail size={11} />{expert.email}
-                          </a>
-                          <a href={`tel:${expert.phone}`} className="flex items-center gap-1 hover:text-blue-600">
-                            <Phone size={11} />{expert.phone}
-                          </a>
+                          <span className="flex items-center gap-1"><Clock size={11} />{expert.yearsExperience} yrs experience</span>
+                          <span className="flex items-center gap-1"><Mail size={11} />Contact via platform</span>
                         </div>
                       </div>
                     )}
@@ -349,6 +355,6 @@ export default function ExpertReview() {
           </div>
         )}
       </div>
-    </DashboardLayout>
+    </>
   );
 }
