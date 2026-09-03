@@ -33,6 +33,12 @@ jobs:
       - run: pnpm run audit:dependencies
       - run: pnpm run check
       - run: pnpm run test
+      - name: Verify TigerBeetle fail-closed packet-loss regression
+        run: pnpm run test:tigerbeetle-fail-closed-packet-loss
+      - name: Verify TigerBeetle connectivity monitor fallback behavior
+        run: pnpm run test:tigerbeetle-connectivity-monitor-integration
+      - name: Verify TigerBeetle connectivity monitor deployment contract
+        run: pnpm run validate:tigerbeetle-connectivity-monitor-deployment-contract
       - run: pnpm run build
 
   postgres-migration-and-audit-integration:

@@ -1,0 +1,194 @@
+# TEMPLATE-ONLY. Render and deploy only through approved staging GitOps.
+# This monitor is a read-only observer. It must not initiate a chaos drill, mutate
+# Kubernetes, enable payment/finality execution, or create TigerBeetle transfers.
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: tigerbeetle-connectivity-monitor-mtls
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: healthpoint-staging
+  target:
+    name: tigerbeetle-connectivity-monitor-mtls
+    creationPolicy: Owner
+  data:
+    - secretKey: ca.crt
+      remoteRef: { key: ${TIGERBEETLE_CONNECTIVITY_MONITOR_SECRET_PREFIX}, property: tls_ca }
+    - secretKey: tls.crt
+      remoteRef: { key: ${TIGERBEETLE_CONNECTIVITY_MONITOR_SECRET_PREFIX}, property: client_certificate }
+    - secretKey: tls.key
+      remoteRef: { key: ${TIGERBEETLE_CONNECTIVITY_MONITOR_SECRET_PREFIX}, property: client_key }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tigerbeetle-connectivity-monitor
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-connectivity-monitor
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigerbeetle-connectivity-monitor
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-connectivity-monitor
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: healthpoint
+      app.kubernetes.io/component: tigerbeetle-connectivity-monitor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: healthpoint
+        app.kubernetes.io/component: tigerbeetle-connectivity-monitor
+    spec:
+      serviceAccountName: tigerbeetle-connectivity-monitor
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: monitor
+          image: ${HEALTHPOINT_APP_IMAGE_DIGEST}
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/tigerbeetle-connectivity-monitor.js"]
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: HEALTHPOINT_TIGERBEETLE_CONNECTIVITY_MONITOR_ENV, value: staging }
+            - { name: PAYMENT_EXECUTION_MODE, value: disabled }
+            - { name: TIGERBEETLE_FINALITY_EXECUTION, value: "false" }
+            - { name: TIGERBEETLE_ENABLED, value: "true" }
+            - { name: TIGERBEETLE_ADDRESS, value: "127.0.0.1:3000" }
+            - { name: TIGERBEETLE_TLS_REMOTE_ADDRESS, value: ${TIGERBEETLE_MTLS_PROXY_HOSTPORT} }
+            - { name: TIGERBEETLE_TLS_SERVER_NAME, value: ${TIGERBEETLE_MTLS_PROXY_DNS_NAME} }
+            - { name: TIGERBEETLE_CLUSTER_ID, value: "${TIGERBEETLE_CLUSTER_ID}" }
+            - { name: TIGERBEETLE_CA_PATH, value: /var/run/tigerbeetle/ca.crt }
+            - { name: TIGERBEETLE_CLIENT_CERT_PATH, value: /var/run/tigerbeetle/tls.crt }
+            - { name: TIGERBEETLE_CLIENT_KEY_PATH, value: /var/run/tigerbeetle/tls.key }
+            - { name: TIGERBEETLE_CONNECTIVITY_MONITOR_INTERVAL_MS, value: "15000" }
+            - { name: TIGERBEETLE_CONNECTIVITY_MONITOR_PROBE_TIMEOUT_MS, value: "10000" }
+            - { name: TIGERBEETLE_CONNECTIVITY_MONITOR_FAILURE_THRESHOLD, value: "2" }
+            - { name: TIGERBEETLE_CONNECTIVITY_MONITOR_LISTEN_ADDRESS, value: "0.0.0.0" }
+            - { name: TIGERBEETLE_CONNECTIVITY_MONITOR_LISTEN_PORT, value: "9465" }
+          ports:
+            - { name: metrics, containerPort: 9465, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /readyz, port: metrics }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          volumeMounts:
+            - { name: tigerbeetle-mtls, mountPath: /var/run/tigerbeetle, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tigerbeetle-mtls
+          secret:
+            secretName: tigerbeetle-connectivity-monitor-mtls
+            defaultMode: 0400
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tigerbeetle-connectivity-monitor
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-connectivity-monitor
+spec:
+  type: ClusterIP
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-connectivity-monitor
+  ports:
+    - { name: metrics, port: 9465, targetPort: metrics, protocol: TCP }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: tigerbeetle-connectivity-monitor
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: tigerbeetle-connectivity-monitor
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 5s
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tigerbeetle-connectivity-monitor-restricted-traffic
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: healthpoint
+      app.kubernetes.io/component: tigerbeetle-connectivity-monitor
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - { protocol: TCP, port: 9465 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${TIGERBEETLE_MTLS_NAMESPACE}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tigerbeetle-mtls-proxy
+      ports:
+        - { protocol: TCP, port: ${TIGERBEETLE_MTLS_PROXY_PORT} }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
