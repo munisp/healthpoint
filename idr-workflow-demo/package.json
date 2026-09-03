@@ -51,6 +51,7 @@
     "test:tigerbeetle-clock-monitor-guards": "node --test scripts/tigerbeetle-clock-monitor-guards.test.mjs",
     "test:tigerbeetle-clock-monitor-integration": "node --test scripts/tigerbeetle-clock-monitor.integration.test.mjs",
     "test:tigerbeetle-connectivity-monitor-integration": "node --test scripts/tigerbeetle-connectivity-monitor.integration.test.mjs",
+    "test:tigerbeetle-connectivity-monitor-jitter": "node --test scripts/tigerbeetle-connectivity-monitor-jitter.integration.test.mjs",
     "test:tigerbeetle-lifecycle-metrics": "vitest run server/tigerbeetle-lifecycle-metrics.test.ts",
     "test:tigerbeetle-fail-closed-packet-loss": "vitest run server/tigerbeetle-fail-closed-packet-loss.test.ts",
     "test:tigerbeetle-finality": "vitest run server/tigerbeetle-finality.test.ts",
