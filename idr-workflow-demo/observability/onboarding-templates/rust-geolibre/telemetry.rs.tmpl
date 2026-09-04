@@ -1,0 +1,57 @@
+// TEMPLATE ONLY — GeoLibre is currently an external browser/desktop GIS dependency,
+// not an active HealthPoint service. Place this in an approved Rust gateway/plugin only
+// after its deployment, data-protection review, and pinned Cargo dependencies exist.
+use opentelemetry::{global, KeyValue};
+use opentelemetry::propagation::Extractor;
+use opentelemetry::trace::{TraceContextExt, Tracer};
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::{runtime, trace, Resource};
+use std::collections::HashMap;
+
+pub fn initialize_telemetry(service_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Exporter endpoint and mTLS client settings come from a secret-mounted environment.
+    // The process must reject a non-HTTPS endpoint or missing certificate material before
+    // calling this wrapper; never put bearer tokens in OTLP headers.
+    let exporter = opentelemetry_otlp::new_exporter().http();
+    let tracer = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(exporter)
+        .with_trace_config(
+            trace::config().with_resource(Resource::new(vec![
+                KeyValue::new("service.name", service_name.to_owned()),
+                KeyValue::new("healthpoint.component", "geolibre-gateway"),
+            ])),
+        )
+        .install_batch(runtime::Tokio)?;
+    global::set_tracer_provider(tracer.provider());
+    global::set_text_map_propagator(opentelemetry_sdk::propagation::TraceContextPropagator::new());
+    Ok(())
+}
+
+struct HeaderCarrier<'a>(&'a HashMap<String, String>);
+impl Extractor for HeaderCarrier<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(&key.to_ascii_lowercase()).map(String::as_str)
+    }
+    fn keys(&self) -> Vec<&str> { self.0.keys().map(String::as_str).collect() }
+}
+
+pub fn observe_map_tile_metadata(
+    headers: &HashMap<String, String>,
+    result: Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // `traceparent` is accepted from a trusted gateway only. Ignore baggage, custom
+    // tenant headers, map coordinates, layer identifiers, request URLs, and query strings.
+    let extracted = global::get_text_map_propagator(|propagator| propagator.extract(&HeaderCarrier(headers)));
+    let tracer = global::tracer("healthpoint.geolibre");
+    let span = tracer.start_with_context("healthpoint.geolibre.tile_metadata", &extracted);
+    span.set_attribute(KeyValue::new("healthpoint.component", "geolibre"));
+    span.set_attribute(KeyValue::new("healthpoint.operation", "tile_metadata"));
+    if result.is_err() {
+        span.set_attribute(KeyValue::new("healthpoint.outcome", "error"));
+    } else {
+        span.set_attribute(KeyValue::new("healthpoint.outcome", "ok"));
+    }
+    span.end();
+    result
+}

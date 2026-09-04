@@ -543,7 +543,9 @@ function StepNotesPanel({ disputeId, stepId, isCurrent }: StepNotesProps) {
 export default function WorkflowTimeline({ steps, currentStep, disputeId, disputeCreatedAt, compact = false }: WorkflowTimelineProps) {
   const currentStepIndex = IDR_STEP_DEFS.findIndex(s => s.key === currentStep);
   const completedCount = steps.filter(s => s.isCompleted).length;
-  const progressPct = Math.round((completedCount / IDR_STEP_DEFS.length) * 100);
+  // Count completed steps + the current active step (if any) for a more intuitive progress %
+  const progressStepCount = completedCount + (currentStepIndex >= 0 ? 1 : 0);
+  const progressPct = Math.round((progressStepCount / IDR_STEP_DEFS.length) * 100);
 
   const phaseGroups = useMemo(() => {
     const groups: { phase: IDRStepDef["phase"]; steps: IDRStepDef[] }[] = [];
@@ -570,7 +572,7 @@ export default function WorkflowTimeline({ steps, currentStep, disputeId, disput
         <div className="flex-1">
           <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
             <span className="font-medium">IDR Progress</span>
-            <span>{completedCount} of {IDR_STEP_DEFS.length} steps · {progressPct}%</span>
+            <span>{progressStepCount} of {IDR_STEP_DEFS.length} steps · {progressPct}%</span>
           </div>
           <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
             <div
@@ -766,7 +768,7 @@ export default function WorkflowTimeline({ steps, currentStep, disputeId, disput
           <div className="text-[10px] text-primary/70">Current Step</div>
         </div>
         <div className="text-center p-2 rounded-lg bg-muted border border-border">
-          <div className="text-lg font-bold text-muted-foreground">{IDR_STEP_DEFS.length - completedCount - 1}</div>
+          <div className="text-lg font-bold text-muted-foreground">{Math.max(0, IDR_STEP_DEFS.length - completedCount - (currentStepIndex >= 0 ? 1 : 0))}</div>
           <div className="text-[10px] text-muted-foreground">Remaining</div>
         </div>
       </div>

@@ -1,0 +1,43 @@
+{
+  "schema_version": "healthpoint.tigerbeetle.drill.timing.v1",
+  "evidence_boundary": "proposed staging control thresholds; require real time-source verification before operational use",
+  "event_time_join_window_seconds": 120,
+  "maximum_collector_ingest_lag_seconds": 30,
+  "clock_offset_warning_seconds": 0.05,
+  "clock_offset_abort_seconds": 0.25,
+  "required_clock_observations": [
+    "application_node",
+    "cni_node",
+    "otel_collector_node",
+    "prometheus_node"
+  ],
+  "required_application_log_fields_when_available": [
+    "source_node_name",
+    "event_time_precision",
+    "monotonic_sequence"
+  ],
+  "chrony_required_metrics": [
+    "chrony_up",
+    "chrony_tracking_system_time_seconds",
+    "chrony_tracking_last_offset_seconds",
+    "chrony_tracking_rms_offset_seconds",
+    "chrony_tracking_root_delay_seconds",
+    "chrony_tracking_root_dispersion_seconds",
+    "chrony_tracking_reference_timestamp_seconds",
+    "chrony_tracking_remote_reference",
+    "chrony_tracking_stratum",
+    "chrony_tracking_skew_ppms",
+    "chrony_tracking_update_interval_seconds",
+    "chrony_sources_reachability_ratio",
+    "chrony_sources_last_sample_age_seconds",
+    "chrony_sources_state_info"
+  ],
+  "kernel_time_required_metrics": [
+    "node_timex_sync_status",
+    "node_timex_offset_seconds",
+    "node_timex_maxerror_seconds",
+    "node_timex_estimated_error_seconds",
+    "node_timex_status"
+  ],
+  "time_source_rule": "All participating nodes must use the organization-approved authenticated time service; the selected exporter/agent must be demonstrated to report meaningful offset for that implementation."
+}

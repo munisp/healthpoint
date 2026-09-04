@@ -1,0 +1,60 @@
+name: PR #2 approval reminder
+
+on:
+  schedule:
+    # Twice daily at 00:17 and 12:17 UTC; low-frequency reminder only.
+    - cron: "17 */12 * * *"
+  workflow_dispatch:
+    inputs:
+      deliver:
+        description: "Send to Mattermost when the PR remains approval-pending"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: healthpoint-pr2-approval-reminder
+  cancel-in-progress: false
+
+jobs:
+  report-pending-approval:
+    name: Report pending PR #2 approval
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: idr-workflow-demo
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HEALTHPOINT_PR_REVIEW_REMINDER_DELIVERY: mattermost
+      HEALTHPOINT_PR_REVIEW_REMINDER_ENABLED: ${{ vars.HEALTHPOINT_PR_REVIEW_REMINDER_ENABLED }}
+      HEALTHPOINT_MATTERMOST_WEBHOOK_URL: ${{ secrets.HEALTHPOINT_MATTERMOST_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify reporter formatting and delivery guard
+        run: node scripts/report-pending-pr-approval.test.mjs
+      - name: Generate approval-status report
+        env:
+          MANUAL_DELIVERY: ${{ inputs.deliver }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$HEALTHPOINT_PR_REVIEW_REMINDER_ENABLED" == "true" ]] || \
+             [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$MANUAL_DELIVERY" == "true" ]]; then
+            node scripts/report-pending-pr-approval.mjs -- --pr-number 2 --deliver
+          else
+            node scripts/report-pending-pr-approval.mjs -- --pr-number 2
+          fi
+      - name: Upload approval-status artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthpoint-pr2-approval-status-${{ github.run_id }}
+          path: idr-workflow-demo/artifacts/pending-pr-approval-report/
+          if-no-files-found: warn
+          retention-days: 90

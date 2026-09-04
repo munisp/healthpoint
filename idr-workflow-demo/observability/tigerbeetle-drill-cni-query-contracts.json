@@ -1,0 +1,26 @@
+{
+  "schema_version": "healthpoint.tigerbeetle.cni-query-contract.v1",
+  "evidence_boundary": "test-only; not staging evidence",
+  "elasticsearch": {
+    "required_constraints": ["time_window", "namespace", "policy_name_or_uid", "drop_verdict"],
+    "target_query": {
+      "time_field": "@timestamp",
+      "namespace_field": "k8s.namespace.name",
+      "policy_uid_field": "policy.uid",
+      "destination_pod_field": "destination.pod",
+      "drop_values": ["DROPPED", "DENIED", "REJECT"]
+    },
+    "non_target_query": {
+      "excluded_ordinals": [0, 1, 3, 4, 5],
+      "requires_policy_uid": true
+    }
+  },
+  "loki": {
+    "required_pipeline_stages": ["stream_selector", "json", "verdict_filter", "namespace_filter", "policy_uid_filter"],
+    "target_logql": "{job=~\"<CNI_JOB>\"} | json | verdict=~\"(?i)dropped|denied|reject\" | destination_namespace=\"<NAMESPACE>\" | destination_pod=\"<TARGET_POD>\" | policy_uid=\"<POLICY_UID>\"",
+    "non_target_logql": "{job=~\"<CNI_JOB>\"} | json | verdict=~\"(?i)dropped|denied|reject\" | destination_namespace=\"<NAMESPACE>\" | destination_pod=~\"<STATEFULSET>-(0|1|3|4|5)\" | policy_uid=\"<POLICY_UID>\""
+  },
+  "privacy": {
+    "forbidden_fields": ["tenant_id", "user_id", "patient_id", "dispute_id", "provider_id", "account_id", "transfer_id", "certificate", "token", "authorization", "webhook_url", "endpoint"]
+  }
+}

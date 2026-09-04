@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "system": "HealthPoint IDR workflow platform",
+  "lastReviewedRevision": "3cc827f6d3e3ad46387092306835a5d58e0dec50",
+  "claims": [
+    {
+      "id": "MC-POSTGRES-RUNTIME",
+      "claim": "The application persists workflow and settlement state in PostgreSQL.",
+      "source": "drizzle/schema.ts; server/db.ts; docker-compose.yml",
+      "entryPoints": ["server/_core/index.ts", "server/routers.ts"],
+      "evidence": ["PostgreSQL 16 local migrations", "GET /api/health returned db=connected", "Managed PostgreSQL 18.6 direct strict-CA query verified with 63 public tables on 2026-08-16"],
+      "status": "blocked",
+      "limitations": "The platform-managed preview DATABASE_URL remains non-PostgreSQL, so deployed persistence has not been verified."
+    },
+    {
+      "id": "MC-SETTLEMENT-EVIDENCE",
+      "claim": "Signed settlement evidence is idempotent, atomic, auditable, and reversible.",
+      "source": "server/settlement.ts; server/settlement-lifecycle.ts; server/ledger.ts",
+      "entryPoints": ["/api/settlement/callbacks", "/api/settlement/reports"],
+      "evidence": ["176 Vitest tests", "9 Playwright PostgreSQL settlement scenarios including hermetic provider-simulator coverage", "local migration chain through 0025", "production fail-closed dispute lock and workflow transition guard tests"],
+      "status": "verified",
+      "limitations": "Evidence covers an isolated PostgreSQL database and development keys; it does not prove a provider or bank transferred funds."
+    },
+    {
+      "id": "MC-TRANSFER-RAIL",
+      "claim": "The platform can initiate and settle real funds through a regulated provider.",
+      "source": "docker-compose.yml; services/go/main.go",
+      "entryPoints": ["/internal/payments/initiate"],
+      "evidence": ["Fail-closed internal service token", "live payment mode rejected by the Go sidecar", "sandbox execution requires explicit mode", "hermetic test-only provider simulator rejects production and non-disabled execution modes"],
+      "status": "blocked",
+      "limitations": "Live initiation is intentionally unsupported. A contracted provider sandbox, mTLS interoperability certificate, settlement report feed, and regulated-rail acceptance evidence are still required before any provider execution can be enabled."
+    },
+    {
+      "id": "MC-AI-EMR-EXTRACTION",
+      "claim": "EMR/FHIR extraction provides real data to disputes.",
+      "source": "ai-service/main.py; server/routers.ts",
+      "entryPoints": ["ai.pullDisputeData", "/extract-emr-data"],
+      "evidence": ["Synthetic extraction removed; endpoint returns 503 without a real connector"],
+      "status": "retired",
+      "limitations": "No authenticated FHIR provider connector or sandbox evidence is configured."
+    },
+    {
+      "id": "MC-DAILY-BALANCE-PROOF",
+      "claim": "Daily settlement proof and exception review execute durably and alert operators.",
+      "source": "server/settlement-proof.ts; server/scheduled/settlementBalanceProof.ts",
+      "entryPoints": ["/api/scheduled/settlement-balance-proof"],
+      "evidence": ["PostgreSQL-backed 8-scenario settlement E2E suite", "Heartbeat task-UID configuration persistence"],
+      "status": "blocked",
+      "limitations": "The deployed PostgreSQL binding and production Heartbeat job have not been created or observed."
+    },
+    {
+      "id": "MC-COMPOSE-PRODUCTION",
+      "claim": "The repository separates development compose from a fail-closed production overlay.",
+      "source": "docker-compose.yml; docker-compose.production.yml; scripts/validate-production-config.sh",
+      "entryPoints": ["compose services"],
+      "evidence": ["Development compose is explicitly labeled and simulator-profiled", "production overlay requires mandatory secrets and explicit endpoints", "production configuration validator rejects local databases and unsupported live initiation"],
+      "status": "blocked",
+      "limitations": "The production overlay has not been deployed against hardened provider, identity, search, etcd, Kafka, and TigerBeetle services; production interoperability evidence remains required."
+    },
+    {
+      "id": "MC-EMR-CREDENTIALS",
+      "claim": "EMR credentials are encrypted at rest before persistence.",
+      "source": "server/credential-crypto.ts; server/routers.ts",
+      "entryPoints": ["emr.create"],
+      "evidence": ["AES-256-GCM versioned envelope", "tamper rejection unit test", "production key validation"],
+      "status": "verified",
+      "limitations": "A managed KMS/HSM and key-rotation service are not configured in the isolated environment."
+    },
+    {
+      "id": "MC-TIGERBEETLE-TRANSPORT",
+      "claim": "TigerBeetle read connectivity uses a loopback-only client behind a CA- and hostname-verified mTLS tunnel.",
+      "source": "server/tigerbeetle.ts; server/tigerbeetle-connectivity.test.ts; Dockerfile",
+      "entryPoints": ["server/_core/index.ts", "server/tigerbeetle.ts"],
+      "evidence": ["Uploaded CA and client certificate verified", "client private key stored as runtime-only secret", "strict stunnel TLS tunnel to tigerbeetle.newfire.app", "read-only lookupAccounts assurance probe passed"],
+      "status": "verified",
+      "limitations": "Only non-mutating client connectivity was exercised. TigerBeetle is not authorized to initiate provider transfers, and external production interoperability still requires deployment evidence."
+    },
+    {
+      "id": "MC-BACKUP-RECOVERY",
+      "claim": "Database backup and restore are automated and integrity-checked.",
+      "source": "scripts/db-backup.sh; scripts/db-restore-verify.sh; scripts/db-recovery-drill.sh",
+      "entryPoints": ["recovery drill scripts"],
+      "evidence": ["Encrypted local PostgreSQL recovery drill with 63-table and critical-table count verification"],
+      "status": "verified",
+      "limitations": "A production backup destination, retention policy, and deployed restore drill have not been observed."
+    }
+  ]
+}

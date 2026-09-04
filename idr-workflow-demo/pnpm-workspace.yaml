@@ -1,0 +1,5 @@
+overrides:
+  browserslist: 4.28.7
+  mysql2: 3.23.1
+  qs: 6.16.0
+  esbuild: 0.25.12

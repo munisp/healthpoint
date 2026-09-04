@@ -1,0 +1,11 @@
+apiVersion: v2
+name: healthpoint-grafana-observability
+description: Privacy-safe Grafana dashboard provisioning for HealthPoint OpenTelemetry and dead-man operational signals.
+type: application
+version: 0.1.0
+appVersion: "11.2"
+keywords:
+  - healthpoint
+  - grafana
+  - opentelemetry
+  - observability

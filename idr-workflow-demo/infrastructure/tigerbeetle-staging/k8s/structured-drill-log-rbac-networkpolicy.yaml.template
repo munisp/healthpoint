@@ -1,0 +1,209 @@
+# TEMPLATE-ONLY. Render only after verifying namespace labels, CNI behavior,
+# private CIDRs, collector labels, and the existing workload topology in staging.
+# This contract does not authorize a partition drill and contains no real secret,
+# endpoint, or credential. The log emitter and forensic query client must use
+# mounted mTLS/identity material, not Kubernetes API permissions.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tigerbeetle-drill-log-emitter
+  namespace: ${TIGERBEETLE_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-drill-log-emitter
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tigerbeetle-drill-forensic-snapshot-reader
+  namespace: ${TIGERBEETLE_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-drill-forensic-snapshot-reader
+# This identity needs a bounded API token only for read-only Kubernetes evidence.
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tigerbeetle-drill-forensic-snapshot-reader
+  namespace: ${TIGERBEETLE_NAMESPACE}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tigerbeetle-drill-forensic-snapshot-reader
+  namespace: ${TIGERBEETLE_NAMESPACE}
+subjects:
+  - kind: ServiceAccount
+    name: tigerbeetle-drill-forensic-snapshot-reader
+    namespace: ${TIGERBEETLE_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tigerbeetle-drill-forensic-snapshot-reader
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tigerbeetle-drill-forensic-query-client
+  namespace: healthpoint-observability
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-drill-forensic-query-client
+# The query client uses an external read-only role plus mTLS; it must not use
+# the Kubernetes API at all.
+automountServiceAccountToken: false
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tigerbeetle-drill-log-emitter-egress
+  namespace: ${TIGERBEETLE_NAMESPACE}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: healthpoint
+      app.kubernetes.io/component: tigerbeetle-drill-log-emitter
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: healthpoint-observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: otel-collector-drill-log-ingress-and-export-egress
+  namespace: healthpoint-observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  policyTypes: [Ingress, Egress]
+  # Before applying, label every existing approved OTLP client Pod with
+  # healthpoint.io/otel-client=true. Applying this policy without that inventory
+  # would incorrectly deny existing telemetry sources.
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: healthpoint
+          podSelector:
+            matchLabels:
+              healthpoint.io/otel-client: "true"
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: healthpoint-observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+    - to:
+        - ipBlock:
+            cidr: ${OPENSEARCH_PRIVATE_CIDR}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 9200
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tigerbeetle-drill-forensic-query-client-egress
+  namespace: healthpoint-observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: healthpoint
+      app.kubernetes.io/component: tigerbeetle-drill-forensic-query-client
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: ${OPENSEARCH_PRIVATE_CIDR}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 9200
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

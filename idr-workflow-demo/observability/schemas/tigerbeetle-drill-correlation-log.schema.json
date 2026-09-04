@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthpoint.example/schemas/tigerbeetle-drill-correlation-log.v1.json",
+  "title": "HealthPoint TigerBeetle Drill Correlation Log",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "timestamp",
+    "severity",
+    "event_type",
+    "event_phase",
+    "outcome",
+    "environment",
+    "service_name",
+    "drill_run_id",
+    "change_ticket",
+    "k8s_namespace",
+    "workload_name",
+    "target_pod",
+    "target_ordinal",
+    "network_policy_name",
+    "correlation_key"
+  ],
+  "properties": {
+    "schema_version": {"const": "healthpoint.tigerbeetle.drill.v1"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "severity": {"enum": ["INFO", "WARN", "ERROR"]},
+    "event_type": {
+      "enum": [
+        "healthpoint.tigerbeetle.drill.precheck_completed",
+        "healthpoint.tigerbeetle.drill.readiness_before_completed",
+        "healthpoint.tigerbeetle.drill.policy_applied",
+        "healthpoint.tigerbeetle.drill.abort_observed",
+        "healthpoint.tigerbeetle.drill.policy_delete_attempted",
+        "healthpoint.tigerbeetle.drill.policy_cleanup_verified",
+        "healthpoint.tigerbeetle.drill.readiness_after_completed",
+        "healthpoint.tigerbeetle.drill.recovery_window_completed"
+      ]
+    },
+    "event_phase": {"enum": ["precheck", "baseline", "partition", "abort", "cleanup", "recovery"]},
+    "outcome": {"enum": ["started", "succeeded", "failed", "aborted", "verified"]},
+    "environment": {"const": "staging"},
+    "service_name": {"const": "healthpoint-tigerbeetle-drill"},
+    "drill_run_id": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"},
+    "change_ticket": {"type": "string", "pattern": "^[A-Z][A-Z0-9]+-[0-9]+$"},
+    "k8s_namespace": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+    "workload_name": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+    "target_pod": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+    "target_ordinal": {"type": "integer", "minimum": 0, "maximum": 5},
+    "network_policy_name": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+    "network_policy_uid": {"type": "string", "pattern": "^[0-9a-f-]{36}$"},
+    "network_policy_resource_version": {"type": "string", "pattern": "^[0-9]+$"},
+    "probe_job_name": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+    "probe_result": {"enum": ["not_run", "succeeded", "failed"]},
+    "reason_code": {
+      "enum": [
+        "none",
+        "precheck_failed",
+        "readiness_failed",
+        "non_target_readiness_loss",
+        "read_probe_failed",
+        "probe_latency_high",
+        "telemetry_blind",
+        "cleanup_failed"
+      ]
+    },
+    "trace_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "source_node_name": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+    "event_time_precision": {"enum": ["milliseconds", "microseconds", "nanoseconds"]},
+    "monotonic_sequence": {"type": "integer", "minimum": 0},
+    "correlation_key": {"type": "string", "pattern": "^tbdrill:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"}
+  }
+}

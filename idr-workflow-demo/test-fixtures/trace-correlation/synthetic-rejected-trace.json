@@ -1,0 +1,34 @@
+{
+  "evidenceType": "redacted-staging-trace-export",
+  "synthetic": true,
+  "spans": [
+    {
+      "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "spanId": "bbbbbbbbbbbbbbbb",
+      "attributes": {
+        "service.name": "healthpoint-api",
+        "healthpoint.component": "dapr",
+        "healthpoint.operation": "service_invoke",
+        "healthpoint.tenant.id": "must-be-rejected"
+      }
+    },
+    {
+      "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "spanId": "cccccccccccccccc",
+      "attributes": {
+        "service.name": "healthpoint-api",
+        "healthpoint.component": "temporal",
+        "healthpoint.operation": "workflow_start"
+      }
+    },
+    {
+      "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "spanId": "dddddddddddddddd",
+      "attributes": {
+        "service.name": "healthpoint-temporal-worker",
+        "healthpoint.component": "temporal",
+        "healthpoint.operation": "workflow_describe"
+      }
+    }
+  ]
+}

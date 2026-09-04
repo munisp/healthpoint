@@ -1,0 +1,1 @@
+ALTER TYPE "public"."event_status" ADD VALUE 'processing' BEFORE 'delivered';

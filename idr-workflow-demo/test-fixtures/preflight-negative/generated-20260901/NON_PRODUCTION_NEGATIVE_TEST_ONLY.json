@@ -1,0 +1,32 @@
+{
+  "fixtureClass": "synthetic-negative-test",
+  "prohibition": "These files are deliberately invalid and must never be used as approval evidence or release inputs.",
+  "expectedValidationResult": "blocked",
+  "generatedAt": "2026-09-01T13:57:12.102Z",
+  "files": [
+    "data_use_approval_record.json",
+    "georgetown_model_artifact.json",
+    "georgetown_validation_dataset.json",
+    "georgetown_calibration_report.json",
+    "georgetown_approval_record.json",
+    "cms_pilot_authorization_record.json",
+    "cms_submission_evidence.json",
+    "cms_receipt_evidence.json",
+    "cms_feedback_evidence.json",
+    "cms_certification_record.json",
+    "payment_provider_certification.json",
+    "payment_callback_evidence.json",
+    "payment_ledger_report.json",
+    "payment_reconciliation_report.json",
+    "payment_approval_record.json",
+    "staging_e2e_evidence.json",
+    "document_analysis_evidence.json",
+    "operations_recovery_evidence.json",
+    "operations_approval_record.json",
+    "hipaa_risk_analysis.json",
+    "baa_or_legal_review.json",
+    "assurance_record.json",
+    "regulatory_content_governance.json",
+    "compliance_approval_record.json"
+  ]
+}

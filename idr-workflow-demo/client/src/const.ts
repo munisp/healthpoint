@@ -7,17 +7,20 @@ export const APP_LOGO =
   "https://d2xsxph8kpxj0f.cloudfront.net/114501028/Ko6TiyjsXLeVjoMLkkxz58/healthpoint-logo-KHkgbr4JATo4FJnvK2noam.png";
 
 /**
- * Keycloak OIDC — all auth flows go through the server-side routes.
- * The server handles PKCE, state, and cookie creation.
+ * Keycloak OIDC — all auth flows go through the Express server's Keycloak routes.
+ * The server handles PKCE + code exchange and sets a session cookie.
  */
 
-/** Redirect the browser to the Keycloak sign-in page */
-export const getLoginUrl = (redirectTo = "/") =>
+/** Redirect the browser to Keycloak login via the server-side OIDC flow */
+export const getLoginUrl = (redirectTo = "/dashboard") =>
   `/api/auth/login?redirectTo=${encodeURIComponent(redirectTo)}`;
 
-/** Redirect the browser to the Keycloak registration page */
-export const getRegisterUrl = (role = "", redirectTo = "/") =>
-  `/api/auth/register?redirectTo=${encodeURIComponent(redirectTo)}&role=${encodeURIComponent(role)}`;
+/** Redirect the browser to Keycloak registration page via the server-side OIDC flow */
+export const getRegisterUrl = (role = "", redirectTo = "/dashboard") => {
+  const params = new URLSearchParams({ redirectTo });
+  if (role) params.set("role", role);
+  return `/api/auth/register?${params.toString()}`;
+};
 
-/** Redirect the browser to Keycloak end-session */
+/** Redirect to Keycloak end-session (clears both app cookie and Keycloak SSO session) */
 export const getLogoutUrl = () => `/api/auth/logout`;

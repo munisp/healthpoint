@@ -1,68 +1,81 @@
-// Preconfigured storage helpers for Manus WebDev templates
-// Uses the Biz-provided storage proxy (Authorization: Bearer <token>)
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import path from "node:path";
 
-type StorageConfig = { baseUrl: string; apiKey: string };
+type StorageConfig = {
+  endpoint: string;
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+};
 
 function getStorageConfig(): StorageConfig {
-  const baseUrl = process.env.BUILT_IN_STORAGE_API_URL?.trim() ?? "";
-  const apiKey = process.env.BUILT_IN_STORAGE_API_KEY?.trim() ?? "";
-
-  if (!baseUrl || !apiKey) {
+  const endpoint = process.env.S3_ENDPOINT?.trim() ?? "";
+  const accessKeyId = process.env.S3_ACCESS_KEY?.trim() ?? "";
+  const secretAccessKey = process.env.S3_SECRET_KEY?.trim() ?? "";
+  const bucket = process.env.S3_BUCKET?.trim() ?? "";
+  const region = process.env.S3_REGION?.trim() ?? "us-east-1";
+  if (!endpoint || !accessKeyId || !secretAccessKey || !bucket) {
     throw new Error(
-      "Storage proxy credentials missing: set BUILT_IN_STORAGE_API_URL and BUILT_IN_STORAGE_API_KEY"
+      "S3 storage credentials missing: set S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, and S3_BUCKET"
     );
   }
-
-  return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey };
+  const parsed = new URL(endpoint);
+  if (process.env.NODE_ENV === "production" && parsed.protocol !== "https:") {
+    throw new Error("S3_ENDPOINT must use HTTPS in production");
+  }
+  return {
+    endpoint: parsed.toString(),
+    region,
+    bucket,
+    accessKeyId,
+    secretAccessKey,
+  };
 }
 
-function buildUploadUrl(baseUrl: string, relKey: string): URL {
-  const url = new URL("storage/upload", ensureTrailingSlash(baseUrl));
-  url.searchParams.set("path", normalizeKey(relKey));
-  return url;
+function normalizeKey(value: string): string {
+  const normalized = path.posix.normalize(value.trim().replace(/^\/+/, ""));
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../")
+  ) {
+    throw new Error(
+      "Storage key must be a non-empty relative path without traversal"
+    );
+  }
+  return normalized;
 }
 
-async function buildDownloadUrl(
-  baseUrl: string,
-  relKey: string,
-  apiKey: string
-): Promise<string> {
-  const downloadApiUrl = new URL(
-    "storage/download",
-    ensureTrailingSlash(baseUrl)
-  );
-  downloadApiUrl.searchParams.set("path", normalizeKey(relKey));
-  const response = await fetch(downloadApiUrl, {
-    method: "POST",
-    headers: buildAuthHeaders(apiKey),
+function createClient(config: StorageConfig): S3Client {
+  return new S3Client({
+    endpoint: config.endpoint,
+    region: config.region,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
   });
-  return (await response.json()).url;
 }
 
-function ensureTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value : `${value}/`;
-}
-
-function normalizeKey(relKey: string): string {
-  return relKey.replace(/^\/+/, "");
-}
-
-function toFormData(
-  data: Buffer | Uint8Array | string,
-  contentType: string,
-  fileName: string
-): FormData {
-  const blob =
-    typeof data === "string"
-      ? new Blob([data], { type: contentType })
-      : new Blob([data as any], { type: contentType });
-  const form = new FormData();
-  form.append("file", blob, fileName || "file");
-  return form;
-}
-
-function buildAuthHeaders(apiKey: string): HeadersInit {
-  return { Authorization: `Bearer ${apiKey}` };
+async function presignedDownloadUrl(
+  client: S3Client,
+  config: StorageConfig,
+  key: string,
+  expiresIn: number
+): Promise<string> {
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({ Bucket: config.bucket, Key: key }),
+    { expiresIn }
+  );
 }
 
 export async function storagePut(
@@ -70,36 +83,67 @@ export async function storagePut(
   data: Buffer | Uint8Array | string,
   contentType = "application/octet-stream"
 ): Promise<{ key: string; url: string }> {
-  const { baseUrl, apiKey } = getStorageConfig();
+  const config = getStorageConfig();
   const key = normalizeKey(relKey);
-  const uploadUrl = buildUploadUrl(baseUrl, key);
-  const formData = toFormData(data, contentType, key.split("/").pop() ?? key);
+  const client = createClient(config);
+  const body = typeof data === "string" ? Buffer.from(data) : data;
+  await client.send(
+    new PutObjectCommand({
+      Bucket: config.bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      ServerSideEncryption: "AES256",
+    })
+  );
+  return { key, url: await presignedDownloadUrl(client, config, key, 300) };
+}
 
-  const response = await fetch(uploadUrl, {
-    method: "POST",
-    headers: buildAuthHeaders(apiKey),
-    body: formData,
-  });
-
-  if (!response.ok) {
-    const message = await response.text().catch(() => response.statusText);
-    throw new Error(
-      `Storage upload failed (${response.status} ${response.statusText}): ${message}`
-    );
+/**
+ * Reads a stored object only from the configured S3-compatible bucket. This is
+ * intended for server-side verification workflows such as an authorized CMS
+ * handoff; callers must perform domain authorization before invoking it.
+ */
+export async function storageReadVerified(
+  relKey: string,
+  maxBytes = 25 * 1024 * 1024
+): Promise<{ key: string; bytes: Buffer; contentType?: string }> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 100 * 1024 * 1024) {
+    throw new Error("Storage read maximum must be an integer from 1 through 104857600 bytes");
   }
-  const url = (await response.json()).url;
-
-  return { key, url };
+  const config = getStorageConfig();
+  const key = normalizeKey(relKey);
+  const response = await createClient(config).send(
+    new GetObjectCommand({ Bucket: config.bucket, Key: key })
+  );
+  if (!response.Body) throw new Error("Stored object has no readable body");
+  if (response.ContentLength !== undefined && response.ContentLength > maxBytes) {
+    throw new Error("Stored object exceeds the permitted verified-read size");
+  }
+  const body = response.Body as { transformToByteArray?: () => Promise<Uint8Array> };
+  const bytes = body.transformToByteArray
+    ? Buffer.from(await body.transformToByteArray())
+    : Buffer.from(await new Response(response.Body as any).arrayBuffer());
+  if (bytes.byteLength > maxBytes) {
+    throw new Error("Stored object exceeds the permitted verified-read size");
+  }
+  return { key, bytes, contentType: response.ContentType };
 }
 
 export async function storageGet(
   relKey: string,
-  _expiresIn = 300
-): Promise<{ key: string; url: string; }> {
-  const { baseUrl, apiKey } = getStorageConfig();
+  expiresIn = 300
+): Promise<{ key: string; url: string }> {
+  if (!Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > 3600) {
+    throw new Error(
+      "Storage URL expiry must be an integer from 1 through 3600 seconds"
+    );
+  }
+  const config = getStorageConfig();
   const key = normalizeKey(relKey);
+  const client = createClient(config);
   return {
     key,
-    url: await buildDownloadUrl(baseUrl, key, apiKey),
+    url: await presignedDownloadUrl(client, config, key, expiresIn),
   };
 }

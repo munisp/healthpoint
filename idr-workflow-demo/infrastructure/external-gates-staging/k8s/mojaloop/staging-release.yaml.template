@@ -1,0 +1,101 @@
+# This is a release contract, not an implicit deployment. Render it in the
+# provider-owned Mojaloop pipeline after selecting a supported chart release and
+# producing a provenance record with all workload image digests.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${MOJALOOP_NAMESPACE}
+  labels:
+    healthpoint.io/environment: staging
+    healthpoint.io/component: mojaloop
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mojaloop-participant-credentials
+  namespace: ${MOJALOOP_NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: ClusterSecretStore, name: healthpoint-staging }
+  target: { name: mojaloop-participant-credentials, creationPolicy: Owner }
+  data:
+    - secretKey: ca.crt
+      remoteRef: { key: ${MOJALOOP_SECRET_PREFIX}, property: tls_ca }
+    - secretKey: tls.crt
+      remoteRef: { key: ${MOJALOOP_SECRET_PREFIX}, property: client_certificate }
+    - secretKey: tls.key
+      remoteRef: { key: ${MOJALOOP_SECRET_PREFIX}, property: client_key }
+    - secretKey: jws-signing-key.pem
+      remoteRef: { key: ${MOJALOOP_SECRET_PREFIX}, property: jws_signing_key }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mojaloop-staging-release-contract
+  namespace: ${MOJALOOP_NAMESPACE}
+  labels: { healthpoint.io/component: mojaloop }
+data:
+  environment: staging
+  helm_repository: https://mojaloop.io/helm/repo/
+  helm_chart: mojaloop/mojaloop
+  helm_chart_version: ${MOJALOOP_CHART_VERSION}
+  chart_provenance_sha256: ${MOJALOOP_CHART_PROVENANCE_SHA256}
+  workload_image_provenance_sha256: ${MOJALOOP_IMAGE_PROVENANCE_SHA256}
+  healthpoint_database_boundary: postgresql-only-for-healthpoint
+  mojaloop_database_boundary: isolated-supported-datastore-not-postgresql
+  financial_adapter_state: disabled-pending-sanctioned-provider-onboarding
+  transfer_execution: disabled
+  verification: helm-test-and-provider-sandbox-journey-only
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mojaloop-participant-egress-only
+  namespace: ${MOJALOOP_NAMESPACE}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: healthpoint-staging-gateway } }
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: healthpoint-staging-data } }
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: healthpoint-staging-observability } }
+    - to:
+        - ipBlock: { cidr: ${MOJALOOP_PARTICIPANT_CIDR} }
+      ports: [{ protocol: TCP, port: 443 }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mojaloop-release-contract-verification-${RELEASE_ID}
+  namespace: ${MOJALOOP_NAMESPACE}
+  labels: { healthpoint.io/verification: non-destructive }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: verify-contract
+          image: ${CURL_IMAGE_DIGEST}
+          command: ["sh", "-ec"]
+          args:
+            - >-
+              test "$(cat /var/run/mojaloop/tls.crt | wc -c)" -gt 0 &&
+              test "$(cat /var/run/mojaloop/tls.key | wc -c)" -gt 0 &&
+              test "$(cat /var/run/mojaloop/jws-signing-key.pem | wc -c)" -gt 0 &&
+              curl --fail --silent --show-error --proto '=https' --tlsv1.2
+              --cacert /var/run/mojaloop/ca.crt
+              --cert /var/run/mojaloop/tls.crt --key /var/run/mojaloop/tls.key
+              https://${MOJALOOP_PARTICIPANT_HEALTH_HOST}/health >/dev/null
+          volumeMounts: [{ name: credentials, mountPath: /var/run/mojaloop, readOnly: true }]
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] }, readOnlyRootFilesystem: true, runAsNonRoot: true }
+      volumes: [{ name: credentials, secret: { secretName: mojaloop-participant-credentials } }]
+# This verification does not create transfers or settle money. The provider-owned
+# sandbox journey and reconciliation evidence remain mandatory promotion gates.

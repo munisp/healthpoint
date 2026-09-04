@@ -1,0 +1,15 @@
+# Render only through the approved staging deployment pipeline.
+# Do not place private keys or actual private addresses in this file repository.
+foreground = yes
+client = yes
+debug = 4
+sslVersionMin = TLSv1.2
+verifyChain = yes
+checkHost = ${TIGERBEETLE_TLS_SERVER_NAME}
+
+[healthpoint-tigerbeetle]
+accept = 127.0.0.1:16001
+connect = ${TIGERBEETLE_TLS_REMOTE_ADDRESS}
+CAfile = /var/run/secrets/tigerbeetle/client/ca.crt
+cert = /var/run/secrets/tigerbeetle/client/tls.crt
+key = /var/run/secrets/tigerbeetle/client/tls.key

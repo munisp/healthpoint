@@ -1,0 +1,35 @@
+# TEST-ONLY UNSAFE FIXTURE. It must be rejected by the GitOps deployment-contract validator.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tigerbeetle-drill-log-access-test
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    healthpoint.io/environment: staging
+    healthpoint.io/component: tigerbeetle-drill-log-access
+  annotations:
+    healthpoint.io/source-commit-sha: ${GIT_COMMIT_SHA}
+    healthpoint.io/manifest-bundle-sha256: ${MANIFEST_BUNDLE_SHA256}
+    healthpoint.io/source-validation-artifact-sha256: ${SOURCE_VALIDATION_ARTIFACT_SHA256}
+spec:
+  project: staging
+  source:
+    repoURL: https://git.example.invalid/healthpoint/operations.git
+    targetRevision: ${GIT_COMMIT_SHA}
+    path: rendered/tigerbeetle-drill-log-access
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: healthpoint-observability
+  syncPolicy:
+    automated:
+      enabled: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=false
+      - Prune=true
+      - ServerSideApply=true
+      - Validate=true
+  revisionHistoryLimit: 5

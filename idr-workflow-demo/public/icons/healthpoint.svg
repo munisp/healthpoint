@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">HealthPoint IDR</title>
+  <rect width="256" height="256" rx="48" fill="#1d4ed8"/>
+  <path d="M128 46c-35 24-61 30-78 31v58c0 47 33 77 78 94 45-17 78-47 78-94V77c-17-1-43-7-78-31Z" fill="#eff6ff"/>
+  <path d="M112 84h32v28h28v32h-28v28h-32v-28H84v-32h28V84Z" fill="#1d4ed8"/>
+</svg>

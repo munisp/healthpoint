@@ -1,0 +1,68 @@
+# NON-DEPLOYABLE EXAMPLE ONLY. All REPLACE_* values must be supplied by an
+# approved provider-specific infrastructure pipeline outside source control.
+environment = "staging"
+mojaloop_datastore_engine = "unselected"
+fluvio_application_integration_approved = false
+
+components = {
+  mojaloop = {
+    enabled = false
+    image_digest = "registry.example.invalid/mojaloop@sha256:REPLACE_WITH_64_HEX_DIGEST"
+    namespace = "healthpoint-staging-payments"
+    private_endpoint = "https://10.20.10.10"
+    secret_manager_references = {
+      tls_ca = "secret-manager://staging/mojaloop/tls-ca"
+      client_certificate = "secret-manager://staging/mojaloop/client-certificate"
+      client_key = "secret-manager://staging/mojaloop/client-key"
+      jws_signing_key = "secret-manager://staging/mojaloop/jws-signing-key"
+    }
+    deployment_mode = "isolated-provider-stack"
+  }
+  permify = {
+    enabled = false
+    image_digest = "registry.example.invalid/permify@sha256:REPLACE_WITH_64_HEX_DIGEST"
+    namespace = "healthpoint-staging-authz"
+    private_endpoint = "https://10.20.20.10"
+    secret_manager_references = {
+      tls_ca = "secret-manager://staging/permify/tls-ca"
+      runtime_bearer_token = "secret-manager://staging/permify/runtime-token"
+    }
+    deployment_mode = "stateful-service"
+  }
+  keycloak = {
+    enabled = false
+    image_digest = "registry.example.invalid/keycloak@sha256:REPLACE_WITH_64_HEX_DIGEST"
+    namespace = "healthpoint-staging-identity"
+    private_endpoint = "https://10.20.30.10"
+    secret_manager_references = {
+      database_credentials = "secret-manager://staging/keycloak/database"
+      admin_bootstrap = "secret-manager://staging/keycloak/admin-bootstrap"
+      oidc_client_secret = "secret-manager://staging/keycloak/healthpoint-oidc-client"
+      tls_certificate = "secret-manager://staging/keycloak/tls"
+    }
+    deployment_mode = "stateful-service"
+  }
+  fluvio = {
+    enabled = false
+    image_digest = "registry.example.invalid/fluvio@sha256:REPLACE_WITH_64_HEX_DIGEST"
+    namespace = "healthpoint-staging-streaming"
+    private_endpoint = "https://10.20.40.10"
+    secret_manager_references = {
+      tls_ca = "secret-manager://staging/fluvio/tls-ca"
+      client_certificate = "secret-manager://staging/fluvio/client-certificate"
+      client_key = "secret-manager://staging/fluvio/client-key"
+    }
+    deployment_mode = "template-only-until-app-integration"
+  }
+  openappsec = {
+    enabled = false
+    image_digest = "registry.example.invalid/openappsec@sha256:REPLACE_WITH_64_HEX_DIGEST"
+    namespace = "healthpoint-staging-security"
+    private_endpoint = "https://10.20.50.10"
+    secret_manager_references = {
+      management_token = "secret-manager://staging/openappsec/management-token"
+      tls_certificate = "secret-manager://staging/openappsec/tls"
+    }
+    deployment_mode = "gateway-adjacent-security-agent"
+  }
+}

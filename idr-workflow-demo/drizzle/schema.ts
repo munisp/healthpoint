@@ -7,6 +7,7 @@ import {
   integer,
   numeric,
   boolean,
+  bigint,
   jsonb,
   index,
   uniqueIndex,
@@ -19,14 +20,49 @@ export const roleEnum = pgEnum("role", ["user", "admin"]);
 export const users = pgTable("users", {
   id: varchar("id", { length: 64 }).primaryKey(),
   name: text("name"),
-  email: varchar("email", { length: 320 }),
+  email: varchar("email", { length: 320 }).unique(),
+  passwordHash: text("passwordHash"),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: roleEnum("role").default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow(),
+  suspendedAt: timestamp("suspendedAt"),
+  suspendedUntil: timestamp("suspendedUntil"),
+  suspendReason: text("suspendReason"),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
+
+// ─── Operational alert receipt audit ─────────────────────────────────────────
+// Alertmanager payloads may contain untrusted annotations. Persist only bounded,
+// allow-listed operational fields and a digest for replay/audit correlation.
+export const operationalAlertEvents = pgTable(
+  "operational_alert_events",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    alertFingerprint: varchar("alertFingerprint", { length: 128 }).notNull(),
+    alertName: varchar("alertName", { length: 128 }).notNull(),
+    service: varchar("service", { length: 128 }).notNull(),
+    severity: varchar("severity", { length: 16 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull(),
+    startsAt: timestamp("startsAt").notNull(),
+    endsAt: timestamp("endsAt"),
+    receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+    payloadSha256: varchar("payloadSha256", { length: 64 }).notNull(),
+  },
+  t => [
+    uniqueIndex("operational_alert_event_dedup_idx").on(
+      t.alertFingerprint,
+      t.status,
+      t.startsAt,
+      t.payloadSha256
+    ),
+    index("operational_alert_events_received_idx").on(t.receivedAt),
+    index("operational_alert_events_active_idx").on(t.status, t.severity, t.service),
+  ]
+);
+export type OperationalAlertEvent = typeof operationalAlertEvents.$inferSelect;
+export type InsertOperationalAlertEvent = typeof operationalAlertEvents.$inferInsert;
 
 // ─── NSA IDR 19-Step Workflow ────────────────────────────────────────────────
 export const IDR_STEP = [
@@ -67,7 +103,12 @@ export const DISPUTE_STATUS = [
 ] as const;
 export type DisputeStatus = (typeof DISPUTE_STATUS)[number];
 
-export const PARTY_TYPE = ["provider", "facility", "payer", "aggregator"] as const;
+export const PARTY_TYPE = [
+  "provider",
+  "facility",
+  "payer",
+  "aggregator",
+] as const;
 
 export const SERVICE_TYPE = [
   "emergency_medicine",
@@ -88,18 +129,27 @@ export const idrStepEnum = pgEnum("idr_step", IDR_STEP);
 export const disputeStatusEnum = pgEnum("dispute_status", DISPUTE_STATUS);
 export const partyTypeEnum = pgEnum("party_type", PARTY_TYPE);
 export const serviceTypeEnum = pgEnum("service_type", SERVICE_TYPE);
-export const offerTypeEnum = pgEnum("offer_type", ["initiating_party", "responding_party", "qpa", "determination"]);
+export const offerTypeEnum = pgEnum("offer_type", [
+  "initiating_party",
+  "responding_party",
+  "qpa",
+  "determination",
+]);
 
 // ─── Disputes ─────────────────────────────────────────────────────────────────
 export const disputes = pgTable(
   "disputes",
   {
     id: varchar("id", { length: 64 }).primaryKey(),
-    referenceNumber: varchar("referenceNumber", { length: 32 }).notNull().unique(),
+    referenceNumber: varchar("referenceNumber", { length: 32 })
+      .notNull()
+      .unique(),
     // Parties
     initiatingPartyId: varchar("initiatingPartyId", { length: 64 }).notNull(),
     initiatingPartyType: partyTypeEnum("initiatingPartyType").notNull(),
-    initiatingPartyName: varchar("initiatingPartyName", { length: 255 }).notNull(),
+    initiatingPartyName: varchar("initiatingPartyName", {
+      length: 255,
+    }).notNull(),
     initiatingPartyNpi: varchar("initiatingPartyNpi", { length: 20 }),
     respondingPartyId: varchar("respondingPartyId", { length: 64 }),
     respondingPartyType: partyTypeEnum("respondingPartyType"),
@@ -113,14 +163,30 @@ export const disputes = pgTable(
     cptCodes: jsonb("cptCodes").$type<string[]>().notNull(),
     icd10Codes: jsonb("icd10Codes").$type<string[]>(),
     // Financial
-    billedAmount: numeric("billedAmount", { precision: 12, scale: 2 }).notNull(),
+    billedAmount: numeric("billedAmount", {
+      precision: 12,
+      scale: 2,
+    }).notNull(),
     qpaAmount: numeric("qpaAmount", { precision: 12, scale: 2 }),
-    initiatingPartyOffer: numeric("initiatingPartyOffer", { precision: 12, scale: 2 }),
-    respondingPartyOffer: numeric("respondingPartyOffer", { precision: 12, scale: 2 }),
-    determinationAmount: numeric("determinationAmount", { precision: 12, scale: 2 }),
+    initiatingPartyOffer: numeric("initiatingPartyOffer", {
+      precision: 12,
+      scale: 2,
+    }),
+    respondingPartyOffer: numeric("respondingPartyOffer", {
+      precision: 12,
+      scale: 2,
+    }),
+    determinationAmount: numeric("determinationAmount", {
+      precision: 12,
+      scale: 2,
+    }),
+    // Cumulative verified payment evidence. This is never a payment instruction.
+    paidAmount: numeric("paidAmount", { precision: 12, scale: 2 }).default("0"),
     adminFeeAmount: numeric("adminFeeAmount", { precision: 12, scale: 2 }),
     // Workflow state
-    currentStep: idrStepEnum("currentStep").notNull().default("STEP_01_OPEN_NEGOTIATION_INITIATED"),
+    currentStep: idrStepEnum("currentStep")
+      .notNull()
+      .default("STEP_01_OPEN_NEGOTIATION_INITIATED"),
     status: disputeStatusEnum("status").notNull().default("open_negotiation"),
     idrEntityId: varchar("idrEntityId", { length: 64 }),
     idrEntityName: varchar("idrEntityName", { length: 255 }),
@@ -137,22 +203,69 @@ export const disputes = pgTable(
     isEligible: boolean("isEligible"),
     ineligibilityReason: text("ineligibilityReason"),
     determinationBasis: text("determinationBasis"),
+    determinationWinner: varchar("determinationWinner", { length: 32 }), // "initiating_party" | "responding_party" | null
     notes: text("notes"),
     createdBy: varchar("createdBy", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow(),
     updatedAt: timestamp("updatedAt").defaultNow(),
     closedAt: timestamp("closedAt"),
   },
-  (t) => [
+  t => [
     index("disputes_status_idx").on(t.status),
     index("disputes_step_idx").on(t.currentStep),
     index("disputes_initiating_idx").on(t.initiatingPartyId),
     index("disputes_responding_idx").on(t.respondingPartyId),
     uniqueIndex("disputes_ref_idx").on(t.referenceNumber),
+    index("disputes_createdAt_idx").on(t.createdAt),
+    index("disputes_billedAmount_idx").on(t.billedAmount),
+    index("disputes_respondingName_idx").on(t.respondingPartyName),
   ]
 );
 export type Dispute = typeof disputes.$inferSelect;
 export type InsertDispute = typeof disputes.$inferInsert;
+
+// ─── Durable IDR Workflow Transitions ──────────────────────────────────────────
+// Mirrors migration 0033. Every successful 19-step transition has one immutable
+// versioned record; the unique index prevents concurrent transitions from sharing
+// the same resulting version for a dispute.
+export const disputeWorkflowTransitions = pgTable(
+  "dispute_workflow_transitions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("dispute_id", { length: 64 })
+      .notNull()
+      .references(() => disputes.id, { onDelete: "restrict" }),
+    previousStep: idrStepEnum("previous_step"),
+    targetStep: idrStepEnum("target_step").notNull(),
+    previousStatus: disputeStatusEnum("previous_status"),
+    targetStatus: disputeStatusEnum("target_status").notNull(),
+    actorId: varchar("actor_id", { length: 64 }),
+    expectedVersion: bigint("expected_version", { mode: "number" }).notNull(),
+    resultingVersion: bigint("resulting_version", { mode: "number" }).notNull(),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  t => [
+    index("dispute_workflow_transitions_dispute_idx").on(
+      t.disputeId,
+      t.createdAt
+    ),
+    uniqueIndex("dispute_workflow_transition_version_idx").on(
+      t.disputeId,
+      t.resultingVersion
+    ),
+  ]
+);
+export type DisputeWorkflowTransition =
+  typeof disputeWorkflowTransitions.$inferSelect;
+export type InsertDisputeWorkflowTransition =
+  typeof disputeWorkflowTransitions.$inferInsert;
 
 // ─── Dispute Events ───────────────────────────────────────────────────────────
 export const disputeEvents = pgTable(
@@ -169,7 +282,7 @@ export const disputeEvents = pgTable(
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     createdAt: timestamp("createdAt").defaultNow(),
   },
-  (t) => [
+  t => [
     index("events_dispute_idx").on(t.disputeId),
     index("events_step_idx").on(t.step),
   ]
@@ -190,9 +303,7 @@ export const disputeOffers = pgTable(
     submittedAt: timestamp("submittedAt").defaultNow(),
     isAccepted: boolean("isAccepted").default(false),
   },
-  (t) => [
-    index("offers_dispute_idx").on(t.disputeId),
-  ]
+  t => [index("offers_dispute_idx").on(t.disputeId)]
 );
 export type DisputeOffer = typeof disputeOffers.$inferSelect;
 
@@ -211,30 +322,38 @@ export const disputeDocuments = pgTable(
     uploadedAt: timestamp("uploadedAt").defaultNow(),
     description: text("description"),
   },
-  (t) => [
-    index("docs_dispute_idx").on(t.disputeId),
-  ]
+  t => [index("docs_dispute_idx").on(t.disputeId)]
 );
 export type DisputeDocument = typeof disputeDocuments.$inferSelect;
 
 // ─── IDR Entities ─────────────────────────────────────────────────────────────
-export const idrEntities = pgTable("idr_entities", {
-  id: varchar("id", { length: 64 }).primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  certificationNumber: varchar("certificationNumber", { length: 64 }).unique(),
-  certificationExpiry: timestamp("certificationExpiry"),
-  specialties: jsonb("specialties").$type<string[]>(),
-  states: jsonb("states").$type<string[]>(),
-  contactEmail: varchar("contactEmail", { length: 320 }),
-  contactPhone: varchar("contactPhone", { length: 20 }),
-  website: varchar("website", { length: 512 }),
-  avgResolutionDays: integer("avgResolutionDays"),
-  totalCasesHandled: integer("totalCasesHandled").default(0),
-  maxConcurrentCases: integer("maxConcurrentCases").default(50),
-  currentActiveCases: integer("currentActiveCases").default(0),
-  isActive: boolean("isActive").default(true),
-  createdAt: timestamp("createdAt").defaultNow(),
-});
+export const idrEntities = pgTable(
+  "idr_entities",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    name: varchar("name", { length: 255 }).notNull(),
+    certificationNumber: varchar("certificationNumber", {
+      length: 64,
+    }).unique(),
+    certificationExpiry: timestamp("certificationExpiry"),
+    specialties: jsonb("specialties").$type<string[]>(),
+    states: jsonb("states").$type<string[]>(),
+    contactEmail: varchar("contactEmail", { length: 320 }),
+    contactPhone: varchar("contactPhone", { length: 20 }),
+    website: varchar("website", { length: 512 }),
+    avgResolutionDays: integer("avgResolutionDays"),
+    totalCasesHandled: integer("totalCasesHandled").default(0),
+    maxConcurrentCases: integer("maxConcurrentCases").default(50),
+    currentActiveCases: integer("currentActiveCases").default(0),
+    isActive: boolean("isActive").default(true),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("idr_entities_name_idx").on(t.name),
+    index("idr_entities_active_idx").on(t.isActive),
+    index("idr_entities_expiry_idx").on(t.certificationExpiry),
+  ]
+);
 export type IDREntity = typeof idrEntities.$inferSelect;
 
 // ─── Notifications ────────────────────────────────────────────────────────────
@@ -251,7 +370,7 @@ export const notifications = pgTable(
     isRead: boolean("isRead").default(false),
     createdAt: timestamp("createdAt").defaultNow(),
   },
-  (t) => [
+  t => [
     index("notif_dispute_idx").on(t.disputeId),
     index("notif_user_idx").on(t.userId),
     index("notif_read_idx").on(t.isRead),
@@ -260,19 +379,31 @@ export const notifications = pgTable(
 export type Notification = typeof notifications.$inferSelect;
 
 // ─── Dispute Drafts ───────────────────────────────────────────────────────────
-export const disputeDrafts = pgTable("dispute_drafts", {
-  id: varchar("id", { length: 64 }).primaryKey(),
-  userId: varchar("userId", { length: 64 }).notNull(),
-  formData: jsonb("formData").$type<Record<string, unknown>>().notNull(),
-  currentStep: integer("currentStep").default(1),
-  lastSavedAt: timestamp("lastSavedAt").defaultNow(),
-  createdAt: timestamp("createdAt").defaultNow(),
-});
+export const disputeDrafts = pgTable(
+  "dispute_drafts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    formData: jsonb("formData").$type<Record<string, unknown>>().notNull(),
+    currentStep: integer("currentStep").default(1),
+    lastSavedAt: timestamp("lastSavedAt").defaultNow(),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("dispute_drafts_user_idx").on(t.userId),
+    index("dispute_drafts_lastSaved_idx").on(t.lastSavedAt),
+  ]
+);
 export type DisputeDraft = typeof disputeDrafts.$inferSelect;
 export type InsertDisputeDraft = typeof disputeDrafts.$inferInsert;
 
 // ─── CMS Submission Drafts ────────────────────────────────────────────────────
-export const cmsDraftStatusEnum = pgEnum("cms_draft_status", ["draft", "submitted", "determined", "withdrawn"]);
+export const cmsDraftStatusEnum = pgEnum("cms_draft_status", [
+  "draft",
+  "submitted",
+  "determined",
+  "withdrawn",
+]);
 
 export const cmsDrafts = pgTable(
   "cms_drafts",
@@ -284,27 +415,34 @@ export const cmsDrafts = pgTable(
     // Eligibility result
     isEligible: boolean("isEligible").notNull(),
     eligibilityReason: text("eligibilityReason").notNull(),
-    missingRequirements: jsonb("missingRequirements").$type<string[]>().notNull(),
+    missingRequirements: jsonb("missingRequirements")
+      .$type<string[]>()
+      .notNull(),
     warnings: jsonb("warnings").$type<string[]>().notNull(),
     estimatedDeadline: varchar("estimatedDeadline", { length: 64 }),
     regulatoryBasis: jsonb("regulatoryBasis").$type<string[]>(),
     // Draft content
     formFields: jsonb("formFields").$type<Record<string, string>>().notNull(),
-    attachmentChecklist: jsonb("attachmentChecklist").$type<Array<{ item: string; status: string; required?: boolean }>>().notNull(),
+    attachmentChecklist: jsonb("attachmentChecklist")
+      .$type<Array<{ item: string; status: string; required?: boolean }>>()
+      .notNull(),
     submissionNarrative: text("submissionNarrative").notNull(),
     draftRegulatoryBasis: jsonb("draftRegulatoryBasis").$type<string[]>(),
     estimatedOutcome: text("estimatedOutcome").notNull(),
     nextSteps: jsonb("nextSteps").$type<string[]>().notNull(),
     // Agent metadata
     additionalContext: text("additionalContext"),
-    processingTimeSeconds: numeric("processingTimeSeconds", { precision: 6, scale: 2 }),
+    processingTimeSeconds: numeric("processingTimeSeconds", {
+      precision: 6,
+      scale: 2,
+    }),
     agentTrace: jsonb("agentTrace").$type<string[]>(),
     // Timestamps
     submittedAt: timestamp("submittedAt"),
     createdAt: timestamp("createdAt").defaultNow(),
     updatedAt: timestamp("updatedAt").defaultNow(),
   },
-  (t) => [
+  t => [
     index("cms_drafts_dispute_idx").on(t.disputeId),
     index("cms_drafts_user_idx").on(t.createdBy),
     index("cms_drafts_status_idx").on(t.status),
@@ -314,21 +452,28 @@ export type CMSDraft = typeof cmsDrafts.$inferSelect;
 export type InsertCMSDraft = typeof cmsDrafts.$inferInsert;
 
 // ─── EMR Connections ─────────────────────────────────────────────────────────
-export const emrStatusEnum = pgEnum("emr_status", ["active", "inactive", "error", "testing"]);
+export const emrStatusEnum = pgEnum("emr_status", [
+  "active",
+  "inactive",
+  "error",
+  "testing",
+]);
 
 export const emrConnections = pgTable(
   "emr_connections",
   {
     id: varchar("id", { length: 64 }).primaryKey(),
     name: varchar("name", { length: 255 }).notNull(),
-    emrSystem: varchar("emrSystem", { length: 64 }).notNull(),   // epic, cerner, meditech, etc.
-    authType: varchar("authType", { length: 32 }).notNull(),     // oauth2, apikey, bearer
+    emrSystem: varchar("emrSystem", { length: 64 }).notNull(), // epic, cerner, meditech, etc.
+    authType: varchar("authType", { length: 32 }).notNull(), // oauth2, apikey, bearer
     baseUrl: text("baseUrl").notNull(),
     fhirVersion: varchar("fhirVersion", { length: 8 }).default("R4"),
     // Credentials stored as encrypted JSON (never returned to client)
     credentialsEncrypted: text("credentialsEncrypted"),
     // Field mappings: IDR field → FHIR path
-    fieldMappings: jsonb("fieldMappings").$type<Record<string, string>>().notNull(),
+    fieldMappings: jsonb("fieldMappings")
+      .$type<Record<string, string>>()
+      .notNull(),
     // Status & health
     status: emrStatusEnum("status").default("inactive").notNull(),
     lastTestAt: timestamp("lastTestAt"),
@@ -342,7 +487,7 @@ export const emrConnections = pgTable(
     createdAt: timestamp("createdAt").defaultNow(),
     updatedAt: timestamp("updatedAt").defaultNow(),
   },
-  (t) => [
+  t => [
     index("emr_connections_user_idx").on(t.createdBy),
     index("emr_connections_status_idx").on(t.status),
     index("emr_connections_system_idx").on(t.emrSystem),
@@ -352,8 +497,18 @@ export type EMRConnection = typeof emrConnections.$inferSelect;
 export type InsertEMRConnection = typeof emrConnections.$inferInsert;
 
 // ─── EMR Sync Logs ────────────────────────────────────────────────────────────────────────────────
-export const emrSyncTriggerEnum = pgEnum("emr_sync_trigger", ["manual", "dispute_pull", "heartbeat", "test"]);
-export const emrSyncStatusEnum = pgEnum("emr_sync_status", ["success", "partial", "failed", "timeout"]);
+export const emrSyncTriggerEnum = pgEnum("emr_sync_trigger", [
+  "manual",
+  "dispute_pull",
+  "heartbeat",
+  "test",
+]);
+export const emrSyncStatusEnum = pgEnum("emr_sync_status", [
+  "success",
+  "partial",
+  "failed",
+  "timeout",
+]);
 
 export const emrSyncLogs = pgTable(
   "emr_sync_logs",
@@ -375,7 +530,7 @@ export const emrSyncLogs = pgTable(
     summary: text("summary"),
     createdAt: timestamp("createdAt").defaultNow(),
   },
-  (t) => [
+  t => [
     index("emr_sync_logs_conn_idx").on(t.connectionId),
     index("emr_sync_logs_created_idx").on(t.createdAt),
   ]
@@ -409,7 +564,7 @@ export const disputeTemplates = pgTable(
     createdAt: timestamp("createdAt").defaultNow(),
     updatedAt: timestamp("updatedAt").defaultNow(),
   },
-  (t) => [
+  t => [
     index("dispute_templates_user_idx").on(t.createdBy),
     index("dispute_templates_created_idx").on(t.createdAt),
   ]
@@ -442,9 +597,7 @@ export const userProfiles = pgTable(
     createdAt: timestamp("createdAt").defaultNow(),
     updatedAt: timestamp("updatedAt").defaultNow(),
   },
-  (t) => [
-    index("user_profiles_role_idx").on(t.stakeholderRole),
-  ]
+  t => [index("user_profiles_role_idx").on(t.stakeholderRole)]
 );
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type InsertUserProfile = typeof userProfiles.$inferInsert;
@@ -461,9 +614,11 @@ export const leadStatusEnum = pgEnum("lead_status", [
 export const marketingLeads = pgTable(
   "marketing_leads",
   {
-    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() =>
-      `lead_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
-    ),
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(
+        () => `lead_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+      ),
     firstName: varchar("firstName", { length: 128 }),
     lastName: varchar("lastName", { length: 128 }),
     email: varchar("email", { length: 320 }).notNull(),
@@ -482,7 +637,7 @@ export const marketingLeads = pgTable(
     createdAt: timestamp("createdAt").defaultNow(),
     updatedAt: timestamp("updatedAt").defaultNow(),
   },
-  (t) => [
+  t => [
     index("marketing_leads_email_idx").on(t.email),
     index("marketing_leads_status_idx").on(t.status),
     index("marketing_leads_role_idx").on(t.stakeholderRole),
@@ -506,16 +661,21 @@ export const auditLog = pgTable(
     userAgent: text("userAgent"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  (t) => [
+  t => [
     index("audit_log_userId_idx").on(t.userId),
     index("audit_log_entityType_entityId_idx").on(t.entityType, t.entityId),
     index("audit_log_createdAt_idx").on(t.createdAt),
+    index("audit_log_action_idx").on(t.action),
   ]
 );
 export type AuditLogEntry = typeof auditLog.$inferSelect;
 export type InsertAuditLogEntry = typeof auditLog.$inferInsert;
 // ─── Webhooks ─────────────────────────────────────────────────────────────────
-export const webhookStatusEnum = pgEnum("webhook_status", ["active", "paused", "failed"]);
+export const webhookStatusEnum = pgEnum("webhook_status", [
+  "active",
+  "paused",
+  "failed",
+]);
 export const webhooks = pgTable(
   "webhooks",
   {
@@ -531,7 +691,7 @@ export const webhooks = pgTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   },
-  (t) => [
+  t => [
     index("webhooks_userId_idx").on(t.userId),
     index("webhooks_status_idx").on(t.status),
   ]
@@ -548,18 +708,40 @@ export const outcomePredictions = pgTable(
     confidenceScore: integer("confidenceScore").notNull(),
     keyFactors: text("keyFactors").notNull(),
     recommendation: text("recommendation").notNull(),
-    modelVersion: varchar("modelVersion", { length: 32 }).default("v1").notNull(),
+    modelVersion: varchar("modelVersion", { length: 64 })
+      .default("ungoverned-legacy")
+      .notNull(),
+    modelId: varchar("modelId", { length: 128 }),
+    modelArtifactSha256: varchar("modelArtifactSha256", { length: 64 }),
+    modelValidationRunId: varchar("modelValidationRunId", { length: 64 }),
+    modelApprovalGateId: varchar("modelApprovalGateId", { length: 64 }),
+    documentValidationRunId: varchar("documentValidationRunId", { length: 64 }),
+    confidenceInterval: jsonb("confidenceInterval").$type<[number, number]>(),
+    decisionSupportOnly: boolean("decisionSupportOnly").default(true).notNull(),
+    governanceApprovedAt: timestamp("governanceApprovedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   },
-  (t) => [
+  t => [
     index("outcome_predictions_disputeId_idx").on(t.disputeId),
+    index("outcome_predictions_governance_gate_idx").on(
+      t.modelApprovalGateId,
+      t.governanceApprovedAt
+    ),
+    index("outcome_predictions_document_validation_idx").on(
+      t.documentValidationRunId
+    ),
   ]
 );
 export type OutcomePrediction = typeof outcomePredictions.$inferSelect;
 export type InsertOutcomePrediction = typeof outcomePredictions.$inferInsert;
 // ─── Document Analysis ────────────────────────────────────────────────────────
-export const documentAnalysisStatusEnum = pgEnum("doc_analysis_status", ["pending", "processing", "completed", "failed"]);
+export const documentAnalysisStatusEnum = pgEnum("doc_analysis_status", [
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+]);
 export const documentAnalyses = pgTable(
   "document_analyses",
   {
@@ -578,7 +760,7 @@ export const documentAnalyses = pgTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   },
-  (t) => [
+  t => [
     index("doc_analyses_disputeId_idx").on(t.disputeId),
     index("doc_analyses_userId_idx").on(t.userId),
     index("doc_analyses_status_idx").on(t.status),
@@ -588,18 +770,24 @@ export type DocumentAnalysis = typeof documentAnalyses.$inferSelect;
 export type InsertDocumentAnalysis = typeof documentAnalyses.$inferInsert;
 
 // ─── Dispute Access (ReBAC / Permify-style relation tuples) ──────────────────
-export const authzPermissionEnum = pgEnum("authz_permission", ["read", "write", "admin"]);
+export const authzPermissionEnum = pgEnum("authz_permission", [
+  "read",
+  "write",
+  "admin",
+]);
 export const disputeAccess = pgTable(
   "dispute_access",
   {
-    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
     disputeId: varchar("disputeId", { length: 64 }).notNull(),
     userId: varchar("userId", { length: 64 }).notNull(),
     permission: authzPermissionEnum().default("read").notNull(),
     grantedBy: varchar("grantedBy", { length: 64 }).notNull(),
     grantedAt: timestamp("grantedAt").defaultNow().notNull(),
   },
-  (t) => [
+  t => [
     index("dispute_access_disputeId_idx").on(t.disputeId),
     index("dispute_access_userId_idx").on(t.userId),
     uniqueIndex("dispute_access_unique_idx").on(t.disputeId, t.userId),
@@ -610,21 +798,28 @@ export type InsertDisputeAccess = typeof disputeAccess.$inferInsert;
 
 // ─── Double-Entry Ledger (TigerBeetle-style) ─────────────────────────────────
 export const ledgerAccountTypeEnum = pgEnum("ledger_account_type", [
-  "billed", "allowed", "paid", "determination", "adjustment", "patient_responsibility"
+  "billed",
+  "allowed",
+  "paid",
+  "determination",
+  "adjustment",
+  "patient_responsibility",
 ]);
 export const ledgerAccounts = pgTable(
   "ledger_accounts",
   {
-    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
     disputeId: varchar("disputeId", { length: 64 }).notNull(),
     accountType: ledgerAccountTypeEnum().notNull(),
-    // Balance stored as integer cents to avoid floating-point errors
-    balanceCents: integer("balanceCents").default(0).notNull(),
+    // Balance stored as signed bigint cents to avoid floating-point and int4 overflow.
+    balanceCents: bigint("balanceCents", { mode: "bigint" }).default(0n).notNull(),
     currency: varchar("currency", { length: 3 }).default("USD").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   },
-  (t) => [
+  t => [
     index("ledger_accounts_disputeId_idx").on(t.disputeId),
     uniqueIndex("ledger_accounts_unique_idx").on(t.disputeId, t.accountType),
   ]
@@ -633,69 +828,534 @@ export type LedgerAccount = typeof ledgerAccounts.$inferSelect;
 export type InsertLedgerAccount = typeof ledgerAccounts.$inferInsert;
 
 export const ledgerEntryTypeEnum = pgEnum("ledger_entry_type", [
-  "debit", "credit", "adjustment", "reversal"
+  "debit",
+  "credit",
+  "adjustment",
+  "reversal",
 ]);
 export const ledgerEntries = pgTable(
   "ledger_entries",
   {
-    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
     disputeId: varchar("disputeId", { length: 64 }).notNull(),
     debitAccountId: varchar("debitAccountId", { length: 64 }).notNull(),
     creditAccountId: varchar("creditAccountId", { length: 64 }).notNull(),
-    amountCents: integer("amountCents").notNull(),
+    amountCents: bigint("amountCents", { mode: "bigint" }).notNull(),
     currency: varchar("currency", { length: 3 }).default("USD").notNull(),
     entryType: ledgerEntryTypeEnum().notNull(),
     description: text("description").notNull(),
     referenceId: varchar("referenceId", { length: 64 }), // offer ID, determination ID, etc.
     referenceType: varchar("referenceType", { length: 64 }), // "offer", "determination", "adjustment"
+    // Required for externally evidenced payment records. Unique per dispute when present.
+    idempotencyKey: varchar("idempotencyKey", { length: 64 }),
     metadata: jsonb("metadata"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  (t) => [
+  t => [
     index("ledger_entries_disputeId_idx").on(t.disputeId),
     index("ledger_entries_debitAccountId_idx").on(t.debitAccountId),
     index("ledger_entries_creditAccountId_idx").on(t.creditAccountId),
     index("ledger_entries_createdAt_idx").on(t.createdAt),
+    uniqueIndex("ledger_entries_dispute_idempotency_idx").on(
+      t.disputeId,
+      t.idempotencyKey
+    ),
   ]
 );
 export type LedgerEntry = typeof ledgerEntries.$inferSelect;
 export type InsertLedgerEntry = typeof ledgerEntries.$inferInsert;
 
 // ─── Event Bus (Kafka-style durable event log) ────────────────────────────────
-export const eventStatusEnum = pgEnum("event_status", ["pending", "delivered", "failed", "skipped"]);
+export const eventStatusEnum = pgEnum("event_status", [
+  "pending",
+  "processing",
+  "delivered",
+  "failed",
+  "skipped",
+]);
 export const eventLog = pgTable(
   "event_log",
   {
-    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
-    topic: varchar("topic", { length: 128 }).notNull(),        // e.g. "idr.disputes.state_changes"
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    topic: varchar("topic", { length: 128 }).notNull(), // e.g. "idr.disputes.state_changes"
     eventType: varchar("eventType", { length: 128 }).notNull(), // e.g. "dispute.advanced"
     aggregateId: varchar("aggregateId", { length: 64 }).notNull(), // disputeId
     aggregateType: varchar("aggregateType", { length: 64 }).notNull(), // "dispute"
     payload: jsonb("payload").notNull(),
     metadata: jsonb("metadata"),
+    // Natural deduplication key for callbacks and other externally delivered events.
+    idempotencyKey: varchar("idempotencyKey", { length: 191 }),
     status: eventStatusEnum().default("pending").notNull(),
     publishedAt: timestamp("publishedAt"),
     failureReason: text("failureReason"),
     retryCount: integer("retryCount").default(0).notNull(),
+    lastAttemptAt: timestamp("lastAttemptAt"),
+    nextAttemptAt: timestamp("nextAttemptAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  (t) => [
+  t => [
     index("event_log_topic_idx").on(t.topic),
     index("event_log_aggregateId_idx").on(t.aggregateId),
     index("event_log_status_idx").on(t.status),
+    index("event_log_retry_idx").on(t.status, t.nextAttemptAt),
+    uniqueIndex("event_log_idempotency_idx").on(t.idempotencyKey),
     index("event_log_createdAt_idx").on(t.createdAt),
   ]
 );
 export type EventLogEntry = typeof eventLog.$inferSelect;
 export type InsertEventLogEntry = typeof eventLog.$inferInsert;
 
+// ─── Dapr durable CloudEvent inbox ───────────────────────────────────────────
+// Dapr ingress is accepted only after the request passes authentication and schema
+// validation. External event IDs are unique per pubsub component/topic so retries
+// are idempotent across application replicas and restarts.
+export const daprInboxStatusEnum = pgEnum("dapr_inbox_status", ["received", "processed", "failed"]);
+export const daprEventInbox = pgTable(
+  "dapr_event_inbox",
+  {
+    id: varchar("id", { length: 128 }).primaryKey(),
+    pubsubName: varchar("pubsubName", { length: 128 }).notNull(),
+    topic: varchar("topic", { length: 128 }).notNull(),
+    eventType: varchar("eventType", { length: 128 }).notNull(),
+    subject: varchar("subject", { length: 256 }),
+    payload: jsonb("payload").notNull(),
+    payloadSha256: varchar("payloadSha256", { length: 64 }).notNull(),
+    status: daprInboxStatusEnum().default("received").notNull(),
+    retryCount: integer("retryCount").default(0).notNull(),
+    failureReason: varchar("failureReason", { length: 512 }),
+    receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+    processedAt: timestamp("processedAt"),
+  },
+  t => [
+    uniqueIndex("dapr_inbox_dedup_idx").on(t.pubsubName, t.topic, t.id),
+    index("dapr_inbox_status_received_idx").on(t.status, t.receivedAt),
+    index("dapr_inbox_event_type_idx").on(t.eventType),
+  ]
+);
+export type DaprEventInboxEntry = typeof daprEventInbox.$inferSelect;
+export type InsertDaprEventInboxEntry = typeof daprEventInbox.$inferInsert;
+
+// ─── Settlement Callback Reconciliation ──────────────────────────────────────
+// Callback records are written only after an HMAC-authenticated request passes
+// schema validation. They retain the provider payload and link settlement proof
+// to the resulting ledger entry without initiating a funds transfer.
+export const settlementCallbackStatusEnum = pgEnum(
+  "settlement_callback_status",
+  ["settled", "failed", "rejected"]
+);
+
+export const settlementCallbacks = pgTable(
+  "settlement_callbacks",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    providerEventId: varchar("providerEventId", { length: 128 }).notNull(),
+    providerTransferId: varchar("providerTransferId", {
+      length: 128,
+    }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    amountCents: bigint("amountCents", { mode: "bigint" }).notNull(),
+    currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    status: settlementCallbackStatusEnum("status").notNull(),
+    occurredAt: timestamp("occurredAt").notNull(),
+    signatureVersion: varchar("signatureVersion", { length: 16 })
+      .default("v1")
+      .notNull(),
+    rawPayload: jsonb("rawPayload").notNull(),
+    ledgerEntryId: varchar("ledgerEntryId", { length: 64 }),
+    reconciliationNote: text("reconciliationNote"),
+    reconciledAt: timestamp("reconciledAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("settlement_callbacks_provider_event_idx").on(
+      t.provider,
+      t.providerEventId
+    ),
+    index("settlement_callbacks_dispute_idx").on(t.disputeId),
+    index("settlement_callbacks_transfer_idx").on(t.providerTransferId),
+    index("settlement_callbacks_status_idx").on(t.status),
+  ]
+);
+export type SettlementCallback = typeof settlementCallbacks.$inferSelect;
+
+// ─── Settlement Transfer Lifecycle & Independent Reconciliation ───────────────
+// These rows describe a provider-facing transfer lifecycle. Creating or approving
+// a transfer records an intent only; it never initiates, routes, or releases funds.
+export const settlementTransferStatusEnum = pgEnum(
+  "settlement_transfer_status",
+  [
+    "requested",
+    "authorized",
+    "submitted",
+    "accepted",
+    "settled",
+    "failed",
+    "reversed",
+    "reconciled",
+  ]
+);
+
+export const settlementTransfers = pgTable(
+  "settlement_transfers",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    providerTransferId: varchar("providerTransferId", { length: 128 }),
+    amountCents: bigint("amountCents", { mode: "bigint" }).notNull(),
+    currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    status: settlementTransferStatusEnum("status")
+      .default("requested")
+      .notNull(),
+    requestedBy: varchar("requestedBy", { length: 64 }).notNull(),
+    requestedByName: varchar("requestedByName", { length: 255 }).notNull(),
+    requestReason: text("requestReason").notNull(),
+    idempotencyKey: varchar("idempotencyKey", { length: 128 }).notNull(),
+    authorizedAt: timestamp("authorizedAt"),
+    submittedAt: timestamp("submittedAt"),
+    acceptedAt: timestamp("acceptedAt"),
+    settledAt: timestamp("settledAt"),
+    failedAt: timestamp("failedAt"),
+    reversedAt: timestamp("reversedAt"),
+    reconciledAt: timestamp("reconciledAt"),
+    failureCode: varchar("failureCode", { length: 64 }),
+    failureReason: text("failureReason"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("settlement_transfers_idempotency_idx").on(t.idempotencyKey),
+    uniqueIndex("settlement_transfers_provider_transfer_idx").on(
+      t.provider,
+      t.providerTransferId
+    ),
+    index("settlement_transfers_dispute_idx").on(t.disputeId),
+    index("settlement_transfers_status_idx").on(t.status),
+    index("settlement_transfers_provider_idx").on(t.provider),
+  ]
+);
+export type SettlementTransfer = typeof settlementTransfers.$inferSelect;
+
+export const settlementApprovalDecisionEnum = pgEnum(
+  "settlement_approval_decision",
+  ["approved", "rejected"]
+);
+export const settlementApprovals = pgTable(
+  "settlement_approvals",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    transferId: varchar("transferId", { length: 64 }).notNull(),
+    decision: settlementApprovalDecisionEnum("decision").notNull(),
+    decidedBy: varchar("decidedBy", { length: 64 }).notNull(),
+    decidedByName: varchar("decidedByName", { length: 255 }).notNull(),
+    decisionReason: text("decisionReason").notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    decidedAt: timestamp("decidedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("settlement_approvals_transfer_idx").on(t.transferId),
+    index("settlement_approvals_decider_idx").on(t.decidedBy),
+    index("settlement_approvals_expiry_idx").on(t.expiresAt),
+  ]
+);
+export type SettlementApproval = typeof settlementApprovals.$inferSelect;
+
+export const settlementProviderReports = pgTable(
+  "settlement_provider_reports",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    providerReportId: varchar("providerReportId", { length: 128 }).notNull(),
+    transferId: varchar("transferId", { length: 64 }).notNull(),
+    providerTransferId: varchar("providerTransferId", {
+      length: 128,
+    }).notNull(),
+    reportedStatus: settlementTransferStatusEnum("reportedStatus").notNull(),
+    amountCents: bigint("amountCents", { mode: "bigint" }).notNull(),
+    currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    reportedAt: timestamp("reportedAt").notNull(),
+    rawPayload: jsonb("rawPayload").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("settlement_provider_reports_event_idx").on(
+      t.provider,
+      t.providerReportId
+    ),
+    index("settlement_provider_reports_transfer_idx").on(t.transferId),
+  ]
+);
+export type SettlementProviderReport =
+  typeof settlementProviderReports.$inferSelect;
+
+export const settlementReconciliationStatusEnum = pgEnum(
+  "settlement_reconciliation_status",
+  ["matched", "mismatched", "exception"]
+);
+export const settlementReconciliations = pgTable(
+  "settlement_reconciliations",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    transferId: varchar("transferId", { length: 64 }).notNull(),
+    providerReportId: varchar("providerReportId", { length: 64 }).notNull(),
+    status: settlementReconciliationStatusEnum("status").notNull(),
+    expectedAmountCents: bigint("expectedAmountCents", { mode: "bigint" }).notNull(),
+    reportedAmountCents: bigint("reportedAmountCents", { mode: "bigint" }).notNull(),
+    expectedStatus: settlementTransferStatusEnum("expectedStatus").notNull(),
+    reportedStatus: settlementTransferStatusEnum("reportedStatus").notNull(),
+    exceptionReason: text("exceptionReason"),
+    reconciledBy: varchar("reconciledBy", { length: 64 }).notNull(),
+    reconciledAt: timestamp("reconciledAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("settlement_reconciliations_report_idx").on(t.providerReportId),
+    index("settlement_reconciliations_transfer_idx").on(t.transferId),
+    index("settlement_reconciliations_status_idx").on(t.status),
+  ]
+);
+export type SettlementReconciliation =
+  typeof settlementReconciliations.$inferSelect;
+
+// ─── TigerBeetle Finality Mapping, Intents, and Attempt Audit ──────────────────
+// TigerBeetle identifiers are unsigned 128-bit values. PostgreSQL bigint cannot
+// represent the full range, so identifiers stay canonical decimal strings; money
+// remains native PostgreSQL bigint/int8 cents.
+export const tigerbeetleFinalityModeEnum = pgEnum(
+  "tigerbeetle_finality_mode",
+  ["single_phase_settlement"]
+);
+export const tigerbeetleFinalityIntentStatusEnum = pgEnum(
+  "tigerbeetle_finality_intent_status",
+  ["queued", "claimed", "retryable", "committed", "exception"]
+);
+export const tigerbeetleFinalityAttemptOutcomeEnum = pgEnum(
+  "tigerbeetle_finality_attempt_outcome",
+  ["created", "exists_verified", "retryable_transport_error", "permanent_rejection", "payload_mismatch"]
+);
+export const tigerbeetleFinalityAuthorizationStatusEnum = pgEnum(
+  "tigerbeetle_finality_authorization_status",
+  ["pending_approval", "approved", "consumed", "cancelled", "expired"]
+);
+
+export const tigerbeetleFinalityAccountMappings = pgTable(
+  "tigerbeetle_finality_account_mappings",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    debitAccountId: varchar("debitAccountId", { length: 39 }).notNull(),
+    creditAccountId: varchar("creditAccountId", { length: 39 }).notNull(),
+    ledger: integer("ledger").notNull(),
+    code: integer("code").notNull(),
+    mode: tigerbeetleFinalityModeEnum("mode").notNull(),
+    mappingVersion: integer("mappingVersion").notNull(),
+    active: boolean("active").default(false).notNull(),
+    verifiedAt: timestamp("verifiedAt"),
+    verifiedBy: varchar("verifiedBy", { length: 64 }),
+    verificationEvidenceSha256: varchar("verificationEvidenceSha256", { length: 64 }),
+    activationEvidenceBundleId: varchar("activationEvidenceBundleId", { length: 64 }),
+    approvedBy: varchar("approvedBy", { length: 64 }).notNull(),
+    approvalReference: varchar("approvalReference", { length: 128 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("tigerbeetle_finality_mapping_version_idx").on(t.provider, t.currency, t.mappingVersion),
+    uniqueIndex("tigerbeetle_finality_mapping_evidence_idx").on(t.activationEvidenceBundleId),
+    index("tigerbeetle_finality_mapping_active_idx").on(t.provider, t.currency, t.active),
+  ]
+);
+export type TigerBeetleFinalityAccountMapping = typeof tigerbeetleFinalityAccountMappings.$inferSelect;
+
+export const tigerbeetleFinalityIntents = pgTable(
+  "tigerbeetle_finality_intents",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    settlementTransferId: varchar("settlementTransferId", { length: 64 }).notNull(),
+    providerReportId: varchar("providerReportId", { length: 64 }).notNull(),
+    mappingId: varchar("mappingId", { length: 64 }).notNull(),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    mode: tigerbeetleFinalityModeEnum("mode").notNull(),
+    tigerbeetleTransferId: varchar("tigerbeetleTransferId", { length: 39 }).notNull(),
+    debitAccountId: varchar("debitAccountId", { length: 39 }).notNull(),
+    creditAccountId: varchar("creditAccountId", { length: 39 }).notNull(),
+    ledger: integer("ledger").notNull(),
+    code: integer("code").notNull(),
+    amountCents: bigint("amountCents", { mode: "bigint" }).notNull(),
+    payloadDigest: varchar("payloadDigest", { length: 64 }).notNull(),
+    status: tigerbeetleFinalityIntentStatusEnum("status").default("queued").notNull(),
+    attemptCount: integer("attemptCount").default(0).notNull(),
+    nextAttemptAt: timestamp("nextAttemptAt").defaultNow().notNull(),
+    leaseExpiresAt: timestamp("leaseExpiresAt"),
+    finalityObservedAt: timestamp("finalityObservedAt"),
+    ledgerEntryId: varchar("ledgerEntryId", { length: 64 }),
+    lastOutcome: tigerbeetleFinalityAttemptOutcomeEnum("lastOutcome"),
+    lastErrorCode: varchar("lastErrorCode", { length: 96 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("tigerbeetle_finality_intents_transfer_idx").on(t.settlementTransferId),
+    uniqueIndex("tigerbeetle_finality_intents_report_idx").on(t.providerReportId),
+    uniqueIndex("tigerbeetle_finality_intents_tb_transfer_idx").on(t.tigerbeetleTransferId),
+    index("tigerbeetle_finality_intents_claim_idx").on(t.status, t.nextAttemptAt),
+  ]
+);
+export type TigerBeetleFinalityIntent = typeof tigerbeetleFinalityIntents.$inferSelect;
+
+export const tigerbeetleFinalitySubmissionAuthorizations = pgTable(
+  "tigerbeetle_finality_submission_authorizations",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    intentId: varchar("intentId", { length: 64 }).notNull(),
+    changeTicket: varchar("changeTicket", { length: 128 }).notNull(),
+    requestReason: text("requestReason").notNull(),
+    requestedBy: varchar("requestedBy", { length: 64 }).notNull(),
+    requestedAt: timestamp("requestedAt").defaultNow().notNull(),
+    approvedBy: varchar("approvedBy", { length: 64 }),
+    approvedAt: timestamp("approvedAt"),
+    expiresAt: timestamp("expiresAt"),
+    consumedAt: timestamp("consumedAt"),
+    consumedBy: varchar("consumedBy", { length: 64 }),
+    cancelledAt: timestamp("cancelledAt"),
+    cancelledBy: varchar("cancelledBy", { length: 64 }),
+    status: tigerbeetleFinalityAuthorizationStatusEnum("status").default("pending_approval").notNull(),
+  },
+  t => [
+    index("tigerbeetle_finality_authorization_claim_idx").on(t.intentId, t.status, t.expiresAt),
+    index("tigerbeetle_finality_authorization_ticket_idx").on(t.changeTicket),
+  ]
+);
+export type TigerBeetleFinalitySubmissionAuthorization = typeof tigerbeetleFinalitySubmissionAuthorizations.$inferSelect;
+
+export const tigerbeetleFinalityAttempts = pgTable(
+  "tigerbeetle_finality_attempts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    intentId: varchar("intentId", { length: 64 }).notNull(),
+    attemptNumber: integer("attemptNumber").notNull(),
+    outcome: tigerbeetleFinalityAttemptOutcomeEnum("outcome").notNull(),
+    resultCode: varchar("resultCode", { length: 96 }).notNull(),
+    startedAt: timestamp("startedAt").notNull(),
+    completedAt: timestamp("completedAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("tigerbeetle_finality_attempt_number_idx").on(t.intentId, t.attemptNumber),
+    index("tigerbeetle_finality_attempts_intent_idx").on(t.intentId),
+  ]
+);
+export type TigerBeetleFinalityAttempt = typeof tigerbeetleFinalityAttempts.$inferSelect;
+
+// ─── Daily Settlement Balance Proof & Exception Review ─────────────────────────
+export const settlementBalanceProofStatusEnum = pgEnum(
+  "settlement_balance_proof_status",
+  ["passed", "failed"]
+);
+export const settlementBalanceProofs = pgTable(
+  "settlement_balance_proofs",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    proofDate: varchar("proofDate", { length: 10 }).notNull(), // UTC YYYY-MM-DD
+    status: settlementBalanceProofStatusEnum("status").notNull(),
+    transferCount: integer("transferCount").notNull(),
+    reconciledTransferCount: integer("reconciledTransferCount").notNull(),
+    ledgerPaymentCents: bigint("ledgerPaymentCents", { mode: "bigint" }).notNull(),
+    ledgerReversalCents: bigint("ledgerReversalCents", { mode: "bigint" }).notNull(),
+    unresolvedExceptionCount: integer("unresolvedExceptionCount").notNull(),
+    ledgerMismatchCount: integer("ledgerMismatchCount").notNull(),
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    summary: jsonb("summary").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("settlement_balance_proofs_date_idx").on(t.proofDate),
+    index("settlement_balance_proofs_status_idx").on(t.status),
+  ]
+);
+export type SettlementBalanceProof =
+  typeof settlementBalanceProofs.$inferSelect;
+
+export const settlementExceptionReviewStatusEnum = pgEnum(
+  "settlement_exception_review_status",
+  ["open", "resolved", "accepted_risk"]
+);
+export const settlementExceptionReviews = pgTable(
+  "settlement_exception_reviews",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    reconciliationId: varchar("reconciliationId", { length: 64 }).notNull(),
+    status: settlementExceptionReviewStatusEnum("status")
+      .default("open")
+      .notNull(),
+    reviewReason: text("reviewReason").notNull(),
+    reviewedBy: varchar("reviewedBy", { length: 64 }),
+    reviewedByName: varchar("reviewedByName", { length: 255 }),
+    resolution: text("resolution"),
+    reviewedAt: timestamp("reviewedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("settlement_exception_reviews_reconciliation_idx").on(
+      t.reconciliationId
+    ),
+    index("settlement_exception_reviews_status_idx").on(t.status),
+  ]
+);
+export type SettlementExceptionReview =
+  typeof settlementExceptionReviews.$inferSelect;
+
+// ─── Project-Level Settlement Job Configuration ────────────────────────────────
+export const settlementJobConfigs = pgTable(
+  "settlement_job_configs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    name: varchar("name", { length: 128 }).notNull(),
+    cronExpression: varchar("cronExpression", { length: 64 }).notNull(),
+    scheduleCronTaskUid: varchar("scheduleCronTaskUid", { length: 65 }),
+    isEnabled: boolean("isEnabled").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("settlement_job_configs_name_idx").on(t.name),
+    index("settlement_job_configs_task_uid_idx").on(t.scheduleCronTaskUid),
+  ]
+);
+export type SettlementJobConfig = typeof settlementJobConfigs.$inferSelect;
+
 // ─── Workflow Step Notes ──────────────────────────────────────────────────────
 export const stepNotes = pgTable(
   "step_notes",
   {
-    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
     disputeId: varchar("disputeId", { length: 64 }).notNull(),
-    stepId: varchar("stepId", { length: 64 }).notNull(),       // e.g. "STEP_09_OFFER_SUBMISSION"
+    stepId: varchar("stepId", { length: 64 }).notNull(), // e.g. "STEP_09_OFFER_SUBMISSION"
     authorId: varchar("authorId", { length: 64 }).notNull(),
     authorName: text("authorName"),
     note: text("note").notNull(),
@@ -704,10 +1364,1846 @@ export const stepNotes = pgTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   },
-  (t) => [
+  t => [
     index("step_notes_disputeId_idx").on(t.disputeId),
     index("step_notes_stepId_idx").on(t.stepId),
   ]
 );
 export type StepNote = typeof stepNotes.$inferSelect;
 export type InsertStepNote = typeof stepNotes.$inferInsert;
+
+// ─── Dispute Comments ────────────────────────────────────────────────────────
+export const disputeComments = pgTable(
+  "dispute_comments",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    authorId: varchar("authorId", { length: 64 }).notNull(),
+    authorName: text("authorName"),
+    content: text("content").notNull(),
+    parentId: varchar("parentId", { length: 64 }), // for threaded replies
+    edited: boolean("edited").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    index("dispute_comments_disputeId_idx").on(t.disputeId),
+    index("dispute_comments_parentId_idx").on(t.parentId),
+  ]
+);
+export type DisputeComment = typeof disputeComments.$inferSelect;
+export type InsertDisputeComment = typeof disputeComments.$inferInsert;
+
+// ─── Provider/FSP Sandbox Acceptance Evidence ────────────────────────────────
+// Evidence collection only: no database field can enable payment execution or
+// self-certify a provider relationship.
+export const providerSandboxAcceptances = pgTable(
+  "provider_sandbox_acceptances",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    providerName: varchar("providerName", { length: 160 }).notNull(),
+    sandboxBaseUrl: text("sandboxBaseUrl"),
+    providerReference: varchar("providerReference", { length: 160 }),
+    mtlsEvidenceState: varchar("mtlsEvidenceState", { length: 32 })
+      .notNull()
+      .default("pending"),
+    reconciliationEvidenceState: varchar("reconciliationEvidenceState", {
+      length: 32,
+    })
+      .notNull()
+      .default("pending"),
+    bilateralAttestationReference: varchar("bilateralAttestationReference", {
+      length: 160,
+    }),
+    evidenceNotes: text("evidenceNotes"),
+    status: varchar("status", { length: 32 }).notNull().default("draft"),
+    submittedBy: varchar("submittedBy", { length: 64 }).notNull(),
+    submittedAt: timestamp("submittedAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    index("provider_sandbox_acceptances_status_idx").on(t.status),
+    index("provider_sandbox_acceptances_submittedAt_idx").on(t.submittedAt),
+  ]
+);
+export type ProviderSandboxAcceptance =
+  typeof providerSandboxAcceptances.$inferSelect;
+
+// ─── Payer Contact Book ───────────────────────────────────────────────────────
+export const payerContacts = pgTable(
+  "payer_contacts",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    payerName: text("payerName").notNull(),
+    payerId: varchar("payerId", { length: 64 }),
+    contactName: text("contactName"),
+    contactTitle: text("contactTitle"),
+    email: varchar("email", { length: 320 }),
+    phone: varchar("phone", { length: 32 }),
+    fax: varchar("fax", { length: 32 }),
+    address: text("address"),
+    idrPortalUrl: text("idrPortalUrl"),
+    notes: text("notes"),
+    createdBy: varchar("createdBy", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [index("payer_contacts_payerName_idx").on(t.payerName)]
+);
+export type PayerContact = typeof payerContacts.$inferSelect;
+export type InsertPayerContact = typeof payerContacts.$inferInsert;
+
+// ─── API Keys ─────────────────────────────────────────────────────────────────
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    name: text("name").notNull(),
+    keyHash: varchar("keyHash", { length: 128 }).notNull(), // SHA-256 of the key
+    keyPrefix: varchar("keyPrefix", { length: 8 }).notNull(), // first 8 chars for display
+    scopes: text("scopes").default("read").notNull(), // comma-separated: read,write,admin
+    lastUsedAt: timestamp("lastUsedAt"),
+    expiresAt: timestamp("expiresAt"),
+    revokedAt: timestamp("revokedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    index("api_keys_userId_idx").on(t.userId),
+    index("api_keys_keyHash_idx").on(t.keyHash),
+  ]
+);
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type InsertApiKey = typeof apiKeys.$inferInsert;
+
+// ─── SLA Breach Log ───────────────────────────────────────────────────────────
+export const slaBreaches = pgTable(
+  "sla_breaches",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    step: text("step").notNull(),
+    deadlineDays: integer("deadlineDays").notNull(),
+    actualDays: integer("actualDays").notNull(),
+    breachDays: integer("breachDays").notNull(), // actualDays - deadlineDays
+    detectedAt: timestamp("detectedAt").defaultNow().notNull(),
+    resolvedAt: timestamp("resolvedAt"),
+    severity: text("severity").notNull().default("warning"), // warning | critical
+  },
+  t => [
+    index("sla_breaches_disputeId_idx").on(t.disputeId),
+    index("sla_breaches_detectedAt_idx").on(t.detectedAt),
+  ]
+);
+export type SLABreach = typeof slaBreaches.$inferSelect;
+export type InsertSLABreach = typeof slaBreaches.$inferInsert;
+
+// ─── Webhook Deliveries ───────────────────────────────────────────────────────
+export const webhookDeliveryStatusEnum = pgEnum("webhook_delivery_status", [
+  "pending",
+  "delivered",
+  "failed",
+]);
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    webhookId: varchar("webhookId", { length: 64 }).notNull(),
+    eventType: varchar("eventType", { length: 64 }).notNull(),
+    payload: text("payload").notNull(), // JSON string
+    status: webhookDeliveryStatusEnum("status").default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    lastAttemptAt: timestamp("lastAttemptAt"),
+    nextRetryAt: timestamp("nextRetryAt"),
+    responseStatus: integer("responseStatus"),
+    responseBody: text("responseBody"),
+    errorMessage: text("errorMessage"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    index("webhook_deliveries_webhookId_idx").on(t.webhookId),
+    index("webhook_deliveries_status_idx").on(t.status),
+    index("webhook_deliveries_createdAt_idx").on(t.createdAt),
+  ]
+);
+export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type InsertWebhookDelivery = typeof webhookDeliveries.$inferInsert;
+
+// ─── Email Digest Preferences ─────────────────────────────────────────────────
+export const digestFrequencyEnum = pgEnum("digest_frequency", [
+  "daily",
+  "weekly",
+  "never",
+]);
+export const emailDigestPreferences = pgTable(
+  "email_digest_preferences",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: varchar("userId", { length: 64 }).notNull().unique(),
+    digestFrequency: digestFrequencyEnum("digestFrequency")
+      .default("daily")
+      .notNull(),
+    notifyOnNewDispute: boolean("notifyOnNewDispute").default(true).notNull(),
+    notifyOnStatusChange: boolean("notifyOnStatusChange")
+      .default(true)
+      .notNull(),
+    notifyOnDeadlineApproach: boolean("notifyOnDeadlineApproach")
+      .default(true)
+      .notNull(),
+    notifyOnDetermination: boolean("notifyOnDetermination")
+      .default(true)
+      .notNull(),
+    notifyOnSLABreach: boolean("notifyOnSLABreach").default(true).notNull(),
+    digestTime: varchar("digestTime", { length: 5 }).default("08:00").notNull(), // HH:MM
+    digestDayOfWeek: integer("digestDayOfWeek").default(1).notNull(), // 0=Sun, 1=Mon...
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [index("email_digest_prefs_userId_idx").on(t.userId)]
+);
+export type EmailDigestPreference = typeof emailDigestPreferences.$inferSelect;
+export type InsertEmailDigestPreference =
+  typeof emailDigestPreferences.$inferInsert;
+
+// ─── Dispute Watchlist ────────────────────────────────────────────────────────
+export const disputeWatchlist = pgTable(
+  "dispute_watchlist",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    note: text("note"),
+    alertOnStatusChange: boolean("alertOnStatusChange").default(true).notNull(),
+    alertOnDeadline: boolean("alertOnDeadline").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    index("watchlist_userId_idx").on(t.userId),
+    index("watchlist_disputeId_idx").on(t.disputeId),
+  ]
+);
+export type DisputeWatchlistEntry = typeof disputeWatchlist.$inferSelect;
+
+// ─── Dispute Escalations ──────────────────────────────────────────────────────
+export const escalationStatusEnum = pgEnum("escalation_status", [
+  "open",
+  "in_review",
+  "resolved",
+  "dismissed",
+]);
+export const escalationPriorityEnum = pgEnum("escalation_priority", [
+  "low",
+  "medium",
+  "high",
+  "critical",
+]);
+export const disputeEscalations = pgTable(
+  "dispute_escalations",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    raisedBy: varchar("raisedBy", { length: 64 }).notNull(),
+    raisedByName: varchar("raisedByName", { length: 255 }).notNull(),
+    assignedTo: varchar("assignedTo", { length: 64 }),
+    priority: escalationPriorityEnum("priority").default("medium").notNull(),
+    status: escalationStatusEnum("status").default("open").notNull(),
+    reason: text("reason").notNull(),
+    resolution: text("resolution"),
+    resolvedAt: timestamp("resolvedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    index("escalations_disputeId_idx").on(t.disputeId),
+    index("escalations_status_idx").on(t.status),
+  ]
+);
+export type DisputeEscalation = typeof disputeEscalations.$inferSelect;
+
+// ─── Document Expiry Tracker ──────────────────────────────────────────────────
+export const documentExpiryAlerts = pgTable(
+  "document_expiry_alerts",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    documentName: varchar("documentName", { length: 255 }).notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    alertSentAt: timestamp("alertSentAt"),
+    dismissed: boolean("dismissed").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    index("doc_expiry_disputeId_idx").on(t.disputeId),
+    index("doc_expiry_expiresAt_idx").on(t.expiresAt),
+  ]
+);
+export type DocumentExpiryAlert = typeof documentExpiryAlerts.$inferSelect;
+
+// ─── Dispute Appeals ──────────────────────────────────────────────────────────
+export const appealStatusEnum = pgEnum("appeal_status", [
+  "draft",
+  "submitted",
+  "under_review",
+  "upheld",
+  "denied",
+  "withdrawn",
+]);
+export const disputeAppeals = pgTable(
+  "dispute_appeals",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    submittedBy: varchar("submittedBy", { length: 64 }).notNull(),
+    submittedByName: varchar("submittedByName", { length: 255 }).notNull(),
+    status: appealStatusEnum("status").default("draft").notNull(),
+    groundsForAppeal: text("groundsForAppeal").notNull(),
+    supportingEvidence: text("supportingEvidence"),
+    originalDetermination: text("originalDetermination"),
+    appealDecision: text("appealDecision"),
+    decidedAt: timestamp("decidedAt"),
+    submittedAt: timestamp("submittedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    index("appeals_disputeId_idx").on(t.disputeId),
+    index("appeals_status_idx").on(t.status),
+  ]
+);
+export type DisputeAppeal = typeof disputeAppeals.$inferSelect;
+
+// ─── Saved Narratives ─────────────────────────────────────────────────────────
+export const disputeNarratives = pgTable(
+  "dispute_narratives",
+  {
+    id: varchar("id", { length: 64 })
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    generatedBy: varchar("generatedBy", { length: 64 }).notNull(),
+    narrativeType: varchar("narrativeType", { length: 64 })
+      .default("opening_statement")
+      .notNull(),
+    content: text("content").notNull(),
+    wordCount: integer("wordCount").default(0).notNull(),
+    approved: boolean("approved").default(false).notNull(),
+    approvedBy: varchar("approvedBy", { length: 64 }),
+    approvedAt: timestamp("approvedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [index("narratives_disputeId_idx").on(t.disputeId)]
+);
+export type DisputeNarrative = typeof disputeNarratives.$inferSelect;
+
+// ─── FHIR Capability Statements ──────────────────────────────────────────────
+// Stores the parsed CapabilityStatement from each connected EMR
+export const fhirCapabilityStatements = pgTable(
+  "fhir_capability_statements",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }).notNull(),
+    fhirVersion: varchar("fhirVersion", { length: 8 }).default("R4").notNull(),
+    softwareName: varchar("softwareName", { length: 128 }),
+    softwareVersion: varchar("softwareVersion", { length: 64 }),
+    supportedResources: jsonb("supportedResources")
+      .$type<string[]>()
+      .default([]),
+    supportedSearchParams: jsonb("supportedSearchParams")
+      .$type<Record<string, string[]>>()
+      .default({}),
+    smartScopes: jsonb("smartScopes").$type<string[]>().default([]),
+    bulkExportSupported: boolean("bulkExportSupported").default(false),
+    cdsHooksSupported: boolean("cdsHooksSupported").default(false),
+    rawStatement: jsonb("rawStatement"),
+    fetchedAt: timestamp("fetchedAt").defaultNow(),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [index("fhir_cap_emr_idx").on(t.emrConnectionId)]
+);
+export type FHIRCapabilityStatement =
+  typeof fhirCapabilityStatements.$inferSelect;
+
+// ─── SMART on FHIR Token Store ────────────────────────────────────────────────
+export const smartTokens = pgTable(
+  "smart_tokens",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }).notNull(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    accessToken: text("accessToken").notNull(),
+    refreshToken: text("refreshToken"),
+    tokenType: varchar("tokenType", { length: 32 }).default("Bearer"),
+    scope: text("scope"),
+    expiresAt: timestamp("expiresAt"),
+    patientContext: varchar("patientContext", { length: 64 }),
+    encounterContext: varchar("encounterContext", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  t => [index("smart_tokens_emr_user_idx").on(t.emrConnectionId, t.userId)]
+);
+export type SmartToken = typeof smartTokens.$inferSelect;
+
+// ─── Bulk FHIR Export Jobs ────────────────────────────────────────────────────
+export const bulkFhirStatusEnum = pgEnum("bulk_fhir_status", [
+  "pending",
+  "in_progress",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+export const bulkFhirExportJobs = pgTable(
+  "bulk_fhir_export_jobs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }).notNull(),
+    initiatedBy: varchar("initiatedBy", { length: 64 }).notNull(),
+    exportType: varchar("exportType", { length: 32 })
+      .default("Patient")
+      .notNull(), // Patient | Group | System
+    resourceTypes: jsonb("resourceTypes").$type<string[]>().default([]),
+    since: timestamp("since"),
+    statusUrl: text("statusUrl"),
+    status: bulkFhirStatusEnum("status").default("pending").notNull(),
+    progress: integer("progress").default(0),
+    outputFiles: jsonb("outputFiles")
+      .$type<Array<{ type: string; url: string; count: number }>>()
+      .default([]),
+    errorFiles: jsonb("errorFiles")
+      .$type<Array<{ type: string; url: string }>>()
+      .default([]),
+    totalRecords: integer("totalRecords").default(0),
+    disputesCreated: integer("disputesCreated").default(0),
+    errorMessage: text("errorMessage"),
+    startedAt: timestamp("startedAt"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("bulk_fhir_emr_idx").on(t.emrConnectionId),
+    index("bulk_fhir_status_idx").on(t.status),
+  ]
+);
+export type BulkFHIRExportJob = typeof bulkFhirExportJobs.$inferSelect;
+
+// ─── CDS Hooks ────────────────────────────────────────────────────────────────
+export const cdsHookStatusEnum = pgEnum("cds_hook_status", [
+  "active",
+  "inactive",
+  "error",
+]);
+export const cdsHooks = pgTable(
+  "cds_hooks",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }).notNull(),
+    hookId: varchar("hookId", { length: 128 }).notNull(), // e.g. "patient-view", "order-sign"
+    title: varchar("title", { length: 256 }).notNull(),
+    description: text("description"),
+    prefetch: jsonb("prefetch").$type<Record<string, string>>().default({}),
+    status: cdsHookStatusEnum("status").default("active").notNull(),
+    invocationCount: integer("invocationCount").default(0),
+    lastInvokedAt: timestamp("lastInvokedAt"),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("cds_hooks_emr_idx").on(t.emrConnectionId),
+    index("cds_hooks_hookId_idx").on(t.hookId),
+  ]
+);
+export type CDSHook = typeof cdsHooks.$inferSelect;
+
+// ─── Da Vinci / PDEX / PAS Transactions ──────────────────────────────────────
+export const daVinciTxTypeEnum = pgEnum("davinci_tx_type", [
+  "pdex_payer_network",
+  "pas_prior_auth",
+  "crd_coverage_req",
+  "dtr_doc_templates",
+  "hrex_member_match",
+]);
+export const daVinciTxStatusEnum = pgEnum("davinci_tx_status", [
+  "pending",
+  "approved",
+  "denied",
+  "pended",
+  "error",
+]);
+export const daVinciTransactions = pgTable(
+  "davinci_transactions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }),
+    txType: daVinciTxTypeEnum("txType").notNull(),
+    status: daVinciTxStatusEnum("status").default("pending").notNull(),
+    requestPayload: jsonb("requestPayload"),
+    responsePayload: jsonb("responsePayload"),
+    priorAuthNumber: varchar("priorAuthNumber", { length: 64 }),
+    coverageDecision: varchar("coverageDecision", { length: 32 }),
+    errorCode: varchar("errorCode", { length: 32 }),
+    errorMessage: text("errorMessage"),
+    processingTimeMs: integer("processingTimeMs"),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  t => [
+    index("davinci_dispute_idx").on(t.disputeId),
+    index("davinci_type_status_idx").on(t.txType, t.status),
+  ]
+);
+export type DaVinciTransaction = typeof daVinciTransactions.$inferSelect;
+
+// ─── FHIR Resource Cache ──────────────────────────────────────────────────────
+// Caches individual FHIR resources fetched from EMRs to reduce API calls
+export const fhirResourceCache = pgTable(
+  "fhir_resource_cache",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }).notNull(),
+    resourceType: varchar("resourceType", { length: 64 }).notNull(), // Patient, Claim, Coverage, etc.
+    resourceId: varchar("resourceId", { length: 128 }).notNull(),
+    fhirVersion: varchar("fhirVersion", { length: 8 }).default("R4"),
+    resourceData: jsonb("resourceData").notNull(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    expiresAt: timestamp("expiresAt"),
+    fetchedAt: timestamp("fetchedAt").defaultNow(),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("fhir_cache_emr_type_idx").on(t.emrConnectionId, t.resourceType),
+    index("fhir_cache_dispute_idx").on(t.disputeId),
+  ]
+);
+export type FHIRResourceCache = typeof fhirResourceCache.$inferSelect;
+
+// ─── USCDI Data Elements Mapping ─────────────────────────────────────────────
+// Tracks which USCDI v3 data elements have been populated for each dispute
+export const uscdiDataElements = pgTable(
+  "uscdi_data_elements",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    emrConnectionId: varchar("emrConnectionId", { length: 64 }),
+    // Core USCDI v3 elements relevant to IDR
+    patientName: boolean("patientName").default(false),
+    patientDOB: boolean("patientDOB").default(false),
+    patientAddress: boolean("patientAddress").default(false),
+    patientInsuranceMemberId: boolean("patientInsuranceMemberId").default(
+      false
+    ),
+    diagnosisCodes: boolean("diagnosisCodes").default(false),
+    procedureCodes: boolean("procedureCodes").default(false),
+    encounterDate: boolean("encounterDate").default(false),
+    facilityNPI: boolean("facilityNPI").default(false),
+    providerNPI: boolean("providerNPI").default(false),
+    billedAmount: boolean("billedAmount").default(false),
+    allowedAmount: boolean("allowedAmount").default(false),
+    payerName: boolean("payerName").default(false),
+    planType: boolean("planType").default(false),
+    priorAuthNumber: boolean("priorAuthNumber").default(false),
+    completenessScore: integer("completenessScore").default(0), // 0-100
+    missingElements: jsonb("missingElements").$type<string[]>().default([]),
+    lastUpdatedAt: timestamp("lastUpdatedAt").defaultNow(),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [index("uscdi_dispute_idx").on(t.disputeId)]
+);
+export type USCDIDataElement = typeof uscdiDataElements.$inferSelect;
+
+// ─── SmartForm AI Extraction ──────────────────────────────────────────────────
+export const smartFormTargetEnum = pgEnum("smart_form_target", [
+  "dispute",
+  "offer",
+  "cms_submission",
+  "emr_onboarding",
+  "mobile_dispute",
+  "generic",
+]);
+
+export const smartFormExtractions = pgTable(
+  "smart_form_extractions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    targetForm: smartFormTargetEnum("targetForm").notNull().default("generic"),
+    disputeId: varchar("disputeId", { length: 64 }),
+    // Input
+    inputType: varchar("inputType", { length: 32 }).notNull().default("text"), // text | pdf_base64 | url | fhir_json
+    inputPreview: text("inputPreview"), // first 500 chars of input for display
+    documentName: varchar("documentName", { length: 256 }),
+    // Output
+    extractedFields: jsonb("extractedFields")
+      .$type<
+        Record<
+          string,
+          { value: string | number | null; confidence: number; source: string }
+        >
+      >()
+      .default({}),
+    overallConfidence: integer("overallConfidence").default(0), // 0-100
+    fieldCount: integer("fieldCount").default(0),
+    highConfidenceCount: integer("highConfidenceCount").default(0),
+    lowConfidenceCount: integer("lowConfidenceCount").default(0),
+    // Status
+    status: varchar("status", { length: 32 }).notNull().default("pending"), // pending | processing | complete | failed
+    errorMessage: text("errorMessage"),
+    processingMs: integer("processingMs"),
+    modelUsed: varchar("modelUsed", { length: 128 }),
+    // Applied
+    appliedAt: timestamp("appliedAt"),
+    appliedFields: jsonb("appliedFields").$type<string[]>().default([]),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("smart_form_user_idx").on(t.userId),
+    index("smart_form_dispute_idx").on(t.disputeId),
+  ]
+);
+export type SmartFormExtraction = typeof smartFormExtractions.$inferSelect;
+export type InsertSmartFormExtraction =
+  typeof smartFormExtractions.$inferInsert;
+
+// ─── Hermes AI Agent ──────────────────────────────────────────────────────────
+
+export const hermesJobTypeEnum = pgEnum("hermes_job_type", [
+  "narrative_generation",
+  "outcome_simulation",
+  "fhir_enrichment",
+  "risk_scoring",
+  "payer_intelligence",
+  "regulatory_feed",
+  "arbitrator_scoring",
+  "chat",
+]);
+
+export const hermesJobStatusEnum = pgEnum("hermes_job_status", [
+  "queued",
+  "running",
+  "complete",
+  "failed",
+  "cancelled",
+]);
+
+/** One Hermes agent job — tracks input, output, model, latency */
+export const hermesJobs = pgTable(
+  "hermes_jobs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    jobType: hermesJobTypeEnum("jobType").notNull(),
+    status: hermesJobStatusEnum("status").notNull().default("queued"),
+    // Input
+    inputPayload: jsonb("inputPayload")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    // Output
+    outputText: text("outputText"),
+    outputJson: jsonb("outputJson").$type<Record<string, unknown>>(),
+    // Metadata
+    modelUsed: varchar("modelUsed", { length: 128 }),
+    promptTokens: integer("promptTokens"),
+    completionTokens: integer("completionTokens"),
+    latencyMs: integer("latencyMs"),
+    errorMessage: text("errorMessage"),
+    // Timestamps
+    startedAt: timestamp("startedAt"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("hermes_jobs_user_idx").on(t.userId),
+    index("hermes_jobs_dispute_idx").on(t.disputeId),
+    index("hermes_jobs_type_idx").on(t.jobType),
+    index("hermes_jobs_status_idx").on(t.status),
+  ]
+);
+export type HermesJob = typeof hermesJobs.$inferSelect;
+export type InsertHermesJob = typeof hermesJobs.$inferInsert;
+
+/** Persisted Hermes insights attached to a dispute (risk score, narrative, etc.) */
+export const hermesInsights = pgTable(
+  "hermes_insights",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    jobId: varchar("jobId", { length: 64 }),
+    insightType: hermesJobTypeEnum("insightType").notNull(),
+    // Risk scoring
+    riskScore: integer("riskScore"), // 0-100
+    riskLevel: varchar("riskLevel", { length: 16 }), // low | medium | high | critical
+    riskFactors: jsonb("riskFactors").$type<string[]>(),
+    // Narrative
+    narrative: text("narrative"),
+    narrativeVersion: integer("narrativeVersion").default(1),
+    // Outcome simulation
+    providerWinPct: integer("providerWinPct"),
+    payerWinPct: integer("payerWinPct"),
+    splitPct: integer("splitPct"),
+    withdrawnPct: integer("withdrawnPct"),
+    simulationBasis: text("simulationBasis"),
+    // Payer intelligence
+    payerBehaviorSummary: text("payerBehaviorSummary"),
+    payerAcceptanceRate: integer("payerAcceptanceRate"),
+    payerAvgRoundToAccept: numeric("payerAvgRoundToAccept", {
+      precision: 4,
+      scale: 1,
+    }),
+    // Arbitrator scoring
+    arbitratorId: varchar("arbitratorId", { length: 64 }),
+    arbitratorWinRate: integer("arbitratorWinRate"),
+    arbitratorAvgAward: numeric("arbitratorAvgAward", {
+      precision: 12,
+      scale: 2,
+    }),
+    arbitratorNotes: text("arbitratorNotes"),
+    // FHIR enrichment
+    enrichedFields: jsonb("enrichedFields").$type<Record<string, unknown>>(),
+    // Timestamps
+    generatedAt: timestamp("generatedAt").defaultNow(),
+    expiresAt: timestamp("expiresAt"),
+  },
+  t => [
+    index("hermes_insights_dispute_idx").on(t.disputeId),
+    index("hermes_insights_type_idx").on(t.insightType),
+  ]
+);
+export type HermesInsight = typeof hermesInsights.$inferSelect;
+export type InsertHermesInsight = typeof hermesInsights.$inferInsert;
+
+/** Hermes regulatory change feed entries */
+export const hermesRegulatoryEntries = pgTable(
+  "hermes_regulatory_entries",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    title: varchar("title", { length: 512 }).notNull(),
+    summary: text("summary").notNull(),
+    source: varchar("source", { length: 255 }).notNull(),
+    sourceUrl: varchar("sourceUrl", { length: 1024 }),
+    impactLevel: varchar("impactLevel", { length: 16 })
+      .notNull()
+      .default("medium"), // low | medium | high | critical
+    affectedSteps: jsonb("affectedSteps").$type<string[]>().default([]),
+    tags: jsonb("tags").$type<string[]>().default([]),
+    effectiveDate: timestamp("effectiveDate"),
+    isRead: boolean("isRead").default(false),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("hermes_reg_impact_idx").on(t.impactLevel),
+    index("hermes_reg_read_idx").on(t.isRead),
+  ]
+);
+export type HermesRegulatoryEntry = typeof hermesRegulatoryEntries.$inferSelect;
+
+/** Hermes chat conversation messages */
+export const hermesChatMessages = pgTable(
+  "hermes_chat_messages",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    sessionId: varchar("sessionId", { length: 64 }).notNull(),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    role: varchar("role", { length: 16 }).notNull(), // user | assistant | system
+    content: text("content").notNull(),
+    jobId: varchar("jobId", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("hermes_chat_session_idx").on(t.sessionId),
+    index("hermes_chat_user_idx").on(t.userId),
+  ]
+);
+export type HermesChatMessage = typeof hermesChatMessages.$inferSelect;
+
+// ─── Organisation Settings ────────────────────────────────────────────────────
+/** Per-organisation global settings (one row per org / user scope) */
+export const orgSettings = pgTable(
+  "org_settings",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull().unique(),
+    orgName: varchar("orgName", { length: 256 }),
+    timezone: varchar("timezone", { length: 64 }).default("America/New_York"),
+    dateFormat: varchar("dateFormat", { length: 32 }).default("MM/DD/YYYY"),
+    defaultPageSize: integer("defaultPageSize").default(25),
+    // Notification prefs
+    emailDeadlineWarning: boolean("emailDeadlineWarning").default(true),
+    emailStepAdvanced: boolean("emailStepAdvanced").default(true),
+    emailDetermination: boolean("emailDetermination").default(true),
+    inAppNotifications: boolean("inAppNotifications").default(true),
+    deadlineWarningDays: integer("deadlineWarningDays").default(3),
+    // Security prefs
+    sessionTimeoutMinutes: integer("sessionTimeoutMinutes").default(30),
+    requireMFA: boolean("requireMFA").default(false),
+    auditAllActions: boolean("auditAllActions").default(true),
+    ipAllowlist: text("ipAllowlist"),
+    // Data prefs
+    retentionDays: integer("retentionDays").default(2555),
+    autoExportEnabled: boolean("autoExportEnabled").default(false),
+    exportFormat: varchar("exportFormat", { length: 16 }).default("csv"),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  t => [index("org_settings_user_idx").on(t.userId)]
+);
+export type OrgSettings = typeof orgSettings.$inferSelect;
+export type InsertOrgSettings = typeof orgSettings.$inferInsert;
+
+// ─── TOTP / Two-Factor Auth ───────────────────────────────────────────────────
+export const totpStatusEnum = pgEnum("totp_status", [
+  "pending",
+  "active",
+  "disabled",
+]);
+
+/** TOTP secrets and backup codes for 2FA */
+export const totpSecrets = pgTable(
+  "totp_secrets",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("userId", { length: 64 }).notNull().unique(),
+    secret: varchar("secret", { length: 128 }).notNull(),
+    status: totpStatusEnum("status").default("pending").notNull(),
+    backupCodes: text("backupCodes"), // JSON array of hashed backup codes
+    usedBackupCodes: text("usedBackupCodes"), // JSON array of used codes
+    enabledAt: timestamp("enabledAt"),
+    disabledAt: timestamp("disabledAt"),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  t => [index("totp_user_idx").on(t.userId)]
+);
+export type TotpSecret = typeof totpSecrets.$inferSelect;
+export type InsertTotpSecret = typeof totpSecrets.$inferInsert;
+
+// ─── QPA Benchmark Reference Data ────────────────────────────────────────────
+/** CPT-level QPA benchmark data (seeded from CMS/NSA reference tables) */
+export const qpaBenchmarks = pgTable(
+  "qpa_benchmarks",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    cptCode: varchar("cptCode", { length: 16 }).notNull(),
+    description: text("description").notNull(),
+    specialty: varchar("specialty", { length: 64 }).notNull(),
+    p50National: integer("p50National").notNull(),
+    p75National: integer("p75National").notNull(),
+    p90National: integer("p90National").notNull(),
+    effectiveYear: integer("effectiveYear").default(2025),
+    source: varchar("source", { length: 128 }).default("CMS NSA Reference"),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  t => [
+    index("qpa_cpt_idx").on(t.cptCode),
+    index("qpa_specialty_idx").on(t.specialty),
+  ]
+);
+export type QpaBenchmark = typeof qpaBenchmarks.$inferSelect;
+export type InsertQpaBenchmark = typeof qpaBenchmarks.$inferInsert;
+
+/** State-level QPA cost modifiers */
+export const qpaStateModifiers = pgTable(
+  "qpa_state_modifiers",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    stateCode: varchar("stateCode", { length: 2 }).notNull().unique(),
+    modifier: varchar("modifier", { length: 8 }).notNull(), // e.g. "1.35"
+    effectiveYear: integer("effectiveYear").default(2025),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [index("qpa_state_idx").on(t.stateCode)]
+);
+export type QpaStateModifier = typeof qpaStateModifiers.$inferSelect;
+
+// ─── Regulatory Change Feed ───────────────────────────────────────────────────
+export const regulatoryImpactEnum = pgEnum("regulatory_impact", [
+  "low",
+  "medium",
+  "high",
+  "critical",
+]);
+export const regulatoryCategoryEnum = pgEnum("regulatory_category", [
+  "fee_schedule",
+  "court_ruling",
+  "guidance",
+  "regulation",
+  "certification",
+  "enforcement",
+  "legislation",
+]);
+
+/** NSA/IDR regulatory updates and CMS announcements */
+export const regulatoryUpdates = pgTable(
+  "regulatory_updates",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    publishedAt: timestamp("publishedAt").notNull(),
+    title: varchar("title", { length: 512 }).notNull(),
+    summary: text("summary").notNull(),
+    category: regulatoryCategoryEnum("category").notNull(),
+    impactLevel: regulatoryImpactEnum("impactLevel").notNull(),
+    source: varchar("source", { length: 128 }).notNull(),
+    sourceUrl: varchar("sourceUrl", { length: 1024 }),
+    tags: text("tags"), // JSON string[]
+    isActive: boolean("isActive").default(true),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("reg_update_date_idx").on(t.publishedAt),
+    index("reg_update_impact_idx").on(t.impactLevel),
+    index("reg_update_category_idx").on(t.category),
+  ]
+);
+export type RegulatoryUpdate = typeof regulatoryUpdates.$inferSelect;
+export type InsertRegulatoryUpdate = typeof regulatoryUpdates.$inferInsert;
+
+// ─── Expert Panel ─────────────────────────────────────────────────────────────
+export const expertAvailabilityEnum = pgEnum("expert_availability", [
+  "available",
+  "busy",
+  "unavailable",
+]);
+export const expertSpecialtyEnum = pgEnum("expert_specialty", [
+  "emergency_medicine",
+  "anesthesiology",
+  "air_ambulance",
+  "radiology",
+  "pathology",
+  "hospitalist",
+  "intensivist",
+  "neonatology",
+  "ground_ambulance",
+  "general",
+]);
+
+/** Certified IDR expert reviewers available for dispute analysis */
+export const expertPanel = pgTable(
+  "expert_panel",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    name: varchar("name", { length: 256 }).notNull(),
+    credentials: varchar("credentials", { length: 128 }),
+    specialty: expertSpecialtyEnum("specialty").notNull(),
+    yearsExperience: integer("yearsExperience").default(0),
+    casesHandled: integer("casesHandled").default(0),
+    successRate: varchar("successRate", { length: 8 }), // e.g. "94%"
+    avgResponseHours: integer("avgResponseHours").default(24),
+    availability: expertAvailabilityEnum("availability")
+      .default("available")
+      .notNull(),
+    bio: text("bio"),
+    isActive: boolean("isActive").default(true),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  t => [
+    index("expert_specialty_idx").on(t.specialty),
+    index("expert_availability_idx").on(t.availability),
+  ]
+);
+export type ExpertPanelMember = typeof expertPanel.$inferSelect;
+export type InsertExpertPanelMember = typeof expertPanel.$inferInsert;
+
+// ─── NSA Compliance Checklist ─────────────────────────────────────────────────
+export const complianceStatusEnum = pgEnum("compliance_status", [
+  "compliant",
+  "non_compliant",
+  "not_applicable",
+  "pending_review",
+]);
+
+/** Per-dispute NSA compliance checklist item status */
+export const complianceChecks = pgTable(
+  "compliance_checks",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    userId: varchar("userId", { length: 64 }).notNull(),
+    sectionKey: varchar("sectionKey", { length: 128 }).notNull(),
+    itemKey: varchar("itemKey", { length: 256 }).notNull(),
+    status: complianceStatusEnum("status").default("pending_review").notNull(),
+    notes: text("notes"),
+    checkedAt: timestamp("checkedAt"),
+    checkedBy: varchar("checkedBy", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow(),
+    updatedAt: timestamp("updatedAt").defaultNow(),
+  },
+  t => [
+    index("compliance_dispute_idx").on(t.disputeId),
+    index("compliance_user_idx").on(t.userId),
+    index("compliance_section_idx").on(t.sectionKey),
+  ]
+);
+export type ComplianceCheck = typeof complianceChecks.$inferSelect;
+export type InsertComplianceCheck = typeof complianceChecks.$inferInsert;
+
+// ─── Changelog ────────────────────────────────────────────────────────────────
+export const changelogCategoryEnum = pgEnum("changelog_category", [
+  "feature",
+  "improvement",
+  "bugfix",
+  "security",
+  "breaking",
+  "deprecation",
+]);
+
+/** Application changelog entries */
+export const changelogEntries = pgTable(
+  "changelog_entries",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    version: varchar("version", { length: 32 }).notNull(),
+    releasedAt: timestamp("releasedAt").notNull(),
+    title: varchar("title", { length: 512 }).notNull(),
+    description: text("description").notNull(),
+    category: changelogCategoryEnum("category").notNull(),
+    isHighlight: boolean("isHighlight").default(false),
+    createdAt: timestamp("createdAt").defaultNow(),
+  },
+  t => [
+    index("changelog_version_idx").on(t.version),
+    index("changelog_date_idx").on(t.releasedAt),
+  ]
+);
+export type ChangelogEntry = typeof changelogEntries.$inferSelect;
+export type InsertChangelogEntry = typeof changelogEntries.$inferInsert;
+
+// ─── Document Versions ────────────────────────────────────────────────────────
+/** Tracks every revision of a dispute document for full version history */
+export const documentVersions = pgTable(
+  "document_versions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    versionNumber: integer("versionNumber").notNull().default(1),
+    s3Key: varchar("s3Key", { length: 512 }).notNull(),
+    fileName: varchar("fileName", { length: 255 }).notNull(),
+    fileSize: integer("fileSize"),
+    mimeType: varchar("mimeType", { length: 128 }),
+    uploadedBy: varchar("uploadedBy", { length: 64 }).notNull(),
+    uploadedAt: timestamp("uploadedAt").defaultNow(),
+    changeNote: text("changeNote"),
+    isLatest: boolean("isLatest").default(true),
+  },
+  t => [
+    index("doc_versions_documentId_idx").on(t.documentId),
+    index("doc_versions_disputeId_idx").on(t.disputeId),
+    index("doc_versions_latest_idx").on(t.documentId, t.isLatest),
+  ]
+);
+export type DocumentVersion = typeof documentVersions.$inferSelect;
+export type InsertDocumentVersion = typeof documentVersions.$inferInsert;
+
+// ─── Model Governance and Validation ─────────────────────────────────────────
+export const modelValidationStatusEnum = pgEnum("model_validation_status", [
+  "pending",
+  "passed",
+  "failed",
+  "superseded",
+]);
+export const modelApprovalStatusEnum = pgEnum("model_approval_status", [
+  "pending",
+  "approved",
+  "rejected",
+  "revoked",
+]);
+
+export const modelGovernanceModels = pgTable(
+  "model_governance_models",
+  {
+    id: varchar("id", { length: 128 }).primaryKey(),
+    version: varchar("version", { length: 64 }).notNull(),
+    artifactSha256: varchar("artifactSha256", { length: 64 }).notNull(),
+    featureSchemaVersion: varchar("featureSchemaVersion", {
+      length: 64,
+    }).notNull(),
+    trainingDatasetId: varchar("trainingDatasetId", { length: 128 }).notNull(),
+    owner: varchar("owner", { length: 256 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("model_governance_models_version_uidx").on(t.id, t.version),
+    uniqueIndex("model_governance_models_artifact_uidx").on(t.artifactSha256),
+  ]
+);
+
+export const modelValidationDatasets = pgTable(
+  "model_validation_datasets",
+  {
+    id: varchar("id", { length: 128 }).primaryKey(),
+    sourceUrl: text("sourceUrl").notNull(),
+    sourceDescription: text("sourceDescription").notNull(),
+    datasetSha256: varchar("datasetSha256", { length: 64 }).notNull(),
+    rowCount: integer("rowCount").notNull(),
+    positiveCount: integer("positiveCount").notNull(),
+    negativeCount: integer("negativeCount").notNull(),
+    asOf: timestamp("asOf").notNull(),
+    licenseConfirmed: boolean("licenseConfirmed").notNull(),
+    externalValidation: boolean("externalValidation").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [uniqueIndex("model_validation_datasets_hash_uidx").on(t.datasetSha256)]
+);
+
+export const modelValidationRuns = pgTable(
+  "model_validation_runs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    modelId: varchar("modelId", { length: 128 }).notNull(),
+    modelVersion: varchar("modelVersion", { length: 64 }).notNull(),
+    datasetId: varchar("datasetId", { length: 128 }).notNull(),
+    status: modelValidationStatusEnum().default("pending").notNull(),
+    metrics: jsonb("metrics").notNull(),
+    checks: jsonb("checks").notNull(),
+    rejectionReasons: jsonb("rejectionReasons").notNull(),
+    createdBy: varchar("createdBy", { length: 128 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    index("model_validation_runs_model_idx").on(t.modelId, t.modelVersion),
+    index("model_validation_runs_dataset_idx").on(t.datasetId),
+    index("model_validation_runs_status_idx").on(t.status),
+  ]
+);
+
+export const modelApprovalGates = pgTable(
+  "model_approval_gates",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    modelId: varchar("modelId", { length: 128 }).notNull(),
+    modelVersion: varchar("modelVersion", { length: 64 }).notNull(),
+    validationRunId: varchar("validationRunId", { length: 64 }).notNull(),
+    status: modelApprovalStatusEnum().default("pending").notNull(),
+    approvedBy: varchar("approvedBy", { length: 128 }),
+    decisionReason: text("decisionReason"),
+    decidedAt: timestamp("decidedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("model_approval_gates_version_uidx").on(
+      t.modelId,
+      t.modelVersion
+    ),
+    index("model_approval_gates_status_idx").on(t.status),
+  ]
+);
+
+export type ModelGovernanceModel = typeof modelGovernanceModels.$inferSelect;
+export type ModelValidationDataset =
+  typeof modelValidationDatasets.$inferSelect;
+export type ModelValidationRun = typeof modelValidationRuns.$inferSelect;
+export type ModelApprovalGate = typeof modelApprovalGates.$inferSelect;
+
+export const dataUseApprovalStatusEnum = pgEnum("data_use_approval_status", [
+  "pending",
+  "approved",
+  "rejected",
+  "expired",
+  "revoked",
+]);
+export const evidenceStopDecisionEnum = pgEnum("evidence_stop_decision", [
+  "proceed",
+  "hold",
+  "abort",
+]);
+
+/**
+ * Immutable approval record binding a real validation dataset to a narrowly
+ * approved model-validation use. A live governed outcome must reference an
+ * active, approved, unexpired record whose dataset hash matches its validation
+ * run; generic license metadata is never sufficient.
+ */
+export const modelDataUseApprovals = pgTable(
+  "model_data_use_approvals",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    datasetId: varchar("datasetId", { length: 128 }).notNull(),
+    datasetSha256: varchar("datasetSha256", { length: 64 }).notNull(),
+    approvedPurpose: varchar("approvedPurpose", { length: 64 }).notNull(),
+    approvedScope: text("approvedScope").notNull(),
+    dataController: varchar("dataController", { length: 256 }).notNull(),
+    privacyReviewerId: varchar("privacyReviewerId", { length: 128 }).notNull(),
+    legalReviewerId: varchar("legalReviewerId", { length: 128 }).notNull(),
+    status: dataUseApprovalStatusEnum("status").default("pending").notNull(),
+    stopDecision: evidenceStopDecisionEnum("stopDecision")
+      .default("hold")
+      .notNull(),
+    stopDecisionReason: text("stopDecisionReason").notNull(),
+    retentionPolicyUri: text("retentionPolicyUri").notNull(),
+    redactionMethod: text("redactionMethod").notNull(),
+    evidenceSha256: varchar("evidenceSha256", { length: 64 }).notNull(),
+    approvedBy: varchar("approvedBy", { length: 128 }),
+    approvedAt: timestamp("approvedAt"),
+    expiresAt: timestamp("expiresAt"),
+    revokedAt: timestamp("revokedAt"),
+    revokedBy: varchar("revokedBy", { length: 128 }),
+    revocationReason: text("revocationReason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    createdBy: varchar("createdBy", { length: 128 }).notNull(),
+  },
+  t => [
+    uniqueIndex("model_data_use_approvals_dataset_hash_uidx").on(
+      t.datasetId,
+      t.datasetSha256
+    ),
+    index("model_data_use_approvals_status_expiry_idx").on(
+      t.status,
+      t.expiresAt
+    ),
+  ]
+);
+export type ModelDataUseApproval = typeof modelDataUseApprovals.$inferSelect;
+export type InsertModelDataUseApproval =
+  typeof modelDataUseApprovals.$inferInsert;
+
+export const documentValidationRuns = pgTable(
+  "document_validation_runs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    inputSha256: varchar("inputSha256", { length: 64 }).notNull(),
+    pipelineVersion: varchar("pipelineVersion", { length: 64 }).notNull(),
+    modelGovernanceRunId: varchar("modelGovernanceRunId", {
+      length: 64,
+    }).notNull(),
+    humanApprovalId: varchar("humanApprovalId", { length: 128 }).notNull(),
+    status: varchar("status", { length: 32 }).notNull().default("pending"),
+    approvedAt: timestamp("approvedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("document_validation_identity_uidx").on(
+      t.documentId,
+      t.inputSha256,
+      t.pipelineVersion
+    ),
+    index("document_validation_dispute_idx").on(t.disputeId),
+    index("document_validation_status_idx").on(t.status),
+  ]
+);
+
+export const documentValidationStepEvidence = pgTable(
+  "document_validation_step_evidence",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    validationRunId: varchar("validationRunId", { length: 64 }).notNull(),
+    step: varchar("step", { length: 64 }).notNull(),
+    evidenceSha256: varchar("evidenceSha256", { length: 64 }).notNull(),
+    actor: varchar("actor", { length: 128 }).notNull(),
+    completedAt: timestamp("completedAt").notNull(),
+    evidenceUri: varchar("evidenceUri", { length: 1024 }),
+    metadata: jsonb("metadata").notNull().default({}),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("document_validation_step_identity_uidx").on(
+      t.validationRunId,
+      t.step
+    ),
+    index("document_validation_step_hash_idx").on(t.evidenceSha256),
+  ]
+);
+
+export type DocumentValidationRun = typeof documentValidationRuns.$inferSelect;
+export type InsertDocumentValidationRun =
+  typeof documentValidationRuns.$inferInsert;
+export type DocumentValidationStepEvidence =
+  typeof documentValidationStepEvidence.$inferSelect;
+export type InsertDocumentValidationStepEvidence =
+  typeof documentValidationStepEvidence.$inferInsert;
+
+// ─── Stakeholder Claim Evidence and Independent Attestations ─────────────────
+export const stakeholderClaimEvidenceStatusEnum = pgEnum(
+  "stakeholder_claim_evidence_status",
+  ["pending_review", "validated", "rejected", "superseded"]
+);
+export const stakeholderClaimAttestationKindEnum = pgEnum(
+  "stakeholder_claim_attestation_kind",
+  ["owner", "independent_reviewer"]
+);
+export const stakeholderClaimSigningKeyStatusEnum = pgEnum(
+  "stakeholder_claim_signing_key_status",
+  ["active", "retired", "revoked"]
+);
+export const stakeholderClaimSignatureAlgorithmEnum = pgEnum(
+  "stakeholder_claim_signature_algorithm",
+  ["ed25519"]
+);
+
+export const stakeholderClaimSigningKeys = pgTable(
+  "stakeholder_claim_signing_keys",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    keyId: varchar("keyId", { length: 128 }).notNull().unique(),
+    subjectIdentity: varchar("subjectIdentity", { length: 256 }).notNull(),
+    displayName: varchar("displayName", { length: 256 }).notNull(),
+    permittedAttestationKinds: stakeholderClaimAttestationKindEnum(
+      "permittedAttestationKinds"
+    )
+      .array()
+      .notNull(),
+    algorithm: stakeholderClaimSignatureAlgorithmEnum()
+      .default("ed25519")
+      .notNull(),
+    publicKeyPem: text("publicKeyPem").notNull(),
+    publicKeySha256: varchar("publicKeySha256", { length: 64 })
+      .notNull()
+      .unique(),
+    status: stakeholderClaimSigningKeyStatusEnum().default("active").notNull(),
+    validFrom: timestamp("validFrom").notNull(),
+    validUntil: timestamp("validUntil"),
+    revokedAt: timestamp("revokedAt"),
+    revokedBy: varchar("revokedBy", { length: 256 }),
+    revocationReason: text("revocationReason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    createdBy: varchar("createdBy", { length: 256 }).notNull(),
+  },
+  t => [
+    index("stakeholder_claim_signing_key_subject_status_idx").on(
+      t.subjectIdentity,
+      t.status,
+      t.validFrom,
+      t.validUntil
+    ),
+  ]
+);
+
+export const stakeholderClaimEvidenceBundles = pgTable(
+  "stakeholder_claim_evidence_bundles",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    claimId: varchar("claimId", { length: 128 }).notNull(),
+    claimStatement: text("claimStatement").notNull(),
+    claimType: varchar("claimType", { length: 64 }).notNull(),
+    schemaVersion: varchar("schemaVersion", { length: 16 }).notNull(),
+    environment: varchar("environment", { length: 32 }).notNull(),
+    evidenceRootUri: varchar("evidenceRootUri", { length: 1024 }).notNull(),
+    manifestSha256: varchar("manifestSha256", { length: 64 }).notNull(),
+    validationReportSha256: varchar("validationReportSha256", { length: 64 }),
+    sourceSystem: varchar("sourceSystem", { length: 256 }).notNull(),
+    dataClassification: varchar("dataClassification", {
+      length: 128,
+    }).notNull(),
+    collectionStartedAt: timestamp("collectionStartedAt"),
+    collectionEndedAt: timestamp("collectionEndedAt"),
+    completedAt: timestamp("completedAt").notNull(),
+    status: stakeholderClaimEvidenceStatusEnum()
+      .default("pending_review")
+      .notNull(),
+    validatedBy: varchar("validatedBy", { length: 128 }),
+    validatedAt: timestamp("validatedAt"),
+    invalidatedBy: varchar("invalidatedBy", { length: 128 }),
+    invalidatedAt: timestamp("invalidatedAt"),
+    invalidationReason: text("invalidationReason"),
+    supersedesBundleId: varchar("supersedesBundleId", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("stakeholder_claim_evidence_claim_manifest_uidx").on(
+      t.claimId,
+      t.manifestSha256
+    ),
+    index("stakeholder_claim_evidence_claim_status_idx").on(
+      t.claimId,
+      t.status,
+      t.validatedAt
+    ),
+    index("stakeholder_claim_evidence_validation_idx").on(
+      t.status,
+      t.validatedAt
+    ),
+  ]
+);
+
+export const stakeholderClaimEvidenceArtifacts = pgTable(
+  "stakeholder_claim_evidence_artifacts",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    bundleId: varchar("bundleId", { length: 64 }).notNull(),
+    relativePath: varchar("relativePath", { length: 1024 }).notNull(),
+    artifactRole: varchar("artifactRole", { length: 128 }).notNull(),
+    sha256: varchar("sha256", { length: 64 }).notNull(),
+    byteSize: bigint("byteSize", { mode: "number" }).notNull(),
+    artifactCreatedAt: timestamp("artifactCreatedAt").notNull(),
+    metadata: jsonb("metadata").notNull().default({}),
+    recordedAt: timestamp("recordedAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("stakeholder_claim_artifact_path_uidx").on(
+      t.bundleId,
+      t.relativePath
+    ),
+    index("stakeholder_claim_artifact_hash_idx").on(t.sha256),
+  ]
+);
+
+export const stakeholderClaimReviewerAttestations = pgTable(
+  "stakeholder_claim_reviewer_attestations",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    bundleId: varchar("bundleId", { length: 64 }).notNull(),
+    kind: stakeholderClaimAttestationKindEnum().notNull(),
+    reviewerName: varchar("reviewerName", { length: 256 }).notNull(),
+    reviewerRole: varchar("reviewerRole", { length: 256 }).notNull(),
+    reviewerIdentity: varchar("reviewerIdentity", { length: 256 }).notNull(),
+    approvedAt: timestamp("approvedAt").notNull(),
+    signatureUri: varchar("signatureUri", { length: 1024 }),
+    signatureSha256: varchar("signatureSha256", { length: 64 }),
+    signingKeyId: varchar("signingKeyId", { length: 64 }).references(
+      () => stakeholderClaimSigningKeys.id
+    ),
+    signatureAlgorithm: stakeholderClaimSignatureAlgorithmEnum(),
+    signatureBase64: text("signatureBase64"),
+    signedPayloadSha256: varchar("signedPayloadSha256", { length: 64 }),
+    cryptographicallyVerifiedAt: timestamp("cryptographicallyVerifiedAt"),
+    cryptographicVerifierVersion: varchar("cryptographicVerifierVersion", {
+      length: 64,
+    }),
+    attestationSha256: varchar("attestationSha256", { length: 64 }).notNull(),
+    attestationText: text("attestationText").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("stakeholder_claim_reviewer_kind_uidx").on(t.bundleId, t.kind),
+    index("stakeholder_claim_reviewer_identity_idx").on(
+      t.reviewerIdentity,
+      t.approvedAt
+    ),
+    index("stakeholder_claim_attestation_signing_key_idx").on(
+      t.signingKeyId,
+      t.cryptographicallyVerifiedAt
+    ),
+  ]
+);
+
+export type StakeholderClaimSigningKey =
+  typeof stakeholderClaimSigningKeys.$inferSelect;
+export type InsertStakeholderClaimSigningKey =
+  typeof stakeholderClaimSigningKeys.$inferInsert;
+export type StakeholderClaimEvidenceBundle =
+  typeof stakeholderClaimEvidenceBundles.$inferSelect;
+export type InsertStakeholderClaimEvidenceBundle =
+  typeof stakeholderClaimEvidenceBundles.$inferInsert;
+export type StakeholderClaimEvidenceArtifact =
+  typeof stakeholderClaimEvidenceArtifacts.$inferSelect;
+export type InsertStakeholderClaimEvidenceArtifact =
+  typeof stakeholderClaimEvidenceArtifacts.$inferInsert;
+export type StakeholderClaimReviewerAttestation =
+  typeof stakeholderClaimReviewerAttestations.$inferSelect;
+export type InsertStakeholderClaimReviewerAttestation =
+  typeof stakeholderClaimReviewerAttestations.$inferInsert;
+
+// ─── Durable CMS Submission Round Trip ───────────────────────────────────────
+export const cmsPilotAuthorizationStatusEnum = pgEnum(
+  "cms_pilot_authorization_status",
+  ["pending", "approved", "held", "aborted", "expired", "revoked"]
+);
+
+/**
+ * Human CMS portal pilot authorization. This record authorizes preparation and
+ * reconciliation only; it does not grant or imply automated portal submission.
+ */
+export const cmsPilotAuthorizations = pgTable(
+  "cms_pilot_authorizations",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    approvedScope: text("approvedScope").notNull(),
+    approvedBy: varchar("approvedBy", { length: 128 }),
+    operatorId: varchar("operatorId", { length: 128 }).notNull(),
+    operatorTrainingRecordSha256: varchar("operatorTrainingRecordSha256", {
+      length: 64,
+    }).notNull(),
+    operatorTrainingRecordUri: text("operatorTrainingRecordUri").notNull(),
+    sopSha256: varchar("sopSha256", { length: 64 }).notNull(),
+    sopUri: text("sopUri").notNull(),
+    escalationOwnerId: varchar("escalationOwnerId", { length: 128 }).notNull(),
+    status: cmsPilotAuthorizationStatusEnum("status")
+      .default("pending")
+      .notNull(),
+    stopDecision: evidenceStopDecisionEnum("stopDecision")
+      .default("hold")
+      .notNull(),
+    stopDecisionReason: text("stopDecisionReason").notNull(),
+    evidenceSha256: varchar("evidenceSha256", { length: 64 }).notNull(),
+    approvedAt: timestamp("approvedAt"),
+    expiresAt: timestamp("expiresAt"),
+    revokedAt: timestamp("revokedAt"),
+    revokedBy: varchar("revokedBy", { length: 128 }),
+    revocationReason: text("revocationReason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    createdBy: varchar("createdBy", { length: 128 }).notNull(),
+  },
+  t => [
+    index("cms_pilot_authorizations_status_expiry_idx").on(t.status, t.expiresAt),
+    index("cms_pilot_authorizations_operator_idx").on(t.operatorId),
+  ]
+);
+export type CmsPilotAuthorization = typeof cmsPilotAuthorizations.$inferSelect;
+export type InsertCmsPilotAuthorization =
+  typeof cmsPilotAuthorizations.$inferInsert;
+
+export const cmsSubmissionStatusEnum = pgEnum("cms_submission_status", [
+  "pending",
+  "submitted",
+  "acknowledged",
+  "rejected_validation",
+  "accepted_pending_reconciliation",
+  "failed",
+]);
+
+export const cmsOutboxStatusEnum = pgEnum("cms_outbox_status", [
+  "pending",
+  "processing",
+  "succeeded",
+  "retryable",
+  "dead_letter",
+]);
+
+export const cmsSubmissions = pgTable(
+  "cms_submissions",
+  {
+    submissionId: varchar("submissionId", { length: 64 }).primaryKey(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    idempotencyKey: varchar("idempotencyKey", { length: 191 }).notNull(),
+    payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+    // Nullable only for pre-0040 historical rows. The database constraint and
+    // trigger require both fields for every new or changed manual handoff.
+    pilotAuthorizationId: varchar("pilotAuthorizationId", { length: 64 }).references(
+      () => cmsPilotAuthorizations.id,
+      { onDelete: "restrict" }
+    ),
+    handoffOperatorId: varchar("handoffOperatorId", { length: 128 }),
+    status: cmsSubmissionStatusEnum("status").default("pending").notNull(),
+    cmsReference: varchar("cmsReference", { length: 128 }),
+    portalReceiptSha256: varchar("portalReceiptSha256", { length: 64 }),
+    portalReceiptRecordedBy: varchar("portalReceiptRecordedBy", { length: 128 }),
+    portalReceiptReceivedAt: timestamp("portalReceiptReceivedAt"),
+    attempts: integer("attempts").default(0).notNull(),
+    lastError: text("lastError"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("cms_submissions_dispute_idempotency_idx").on(
+      t.disputeId,
+      t.idempotencyKey
+    ),
+    uniqueIndex("cms_submissions_cms_reference_idx").on(t.cmsReference),
+    index("cms_submissions_dispute_idx").on(t.disputeId),
+    index("cms_submissions_status_idx").on(t.status),
+    index("cms_submissions_pilot_authorization_idx").on(t.pilotAuthorizationId),
+    index("cms_submissions_handoff_operator_idx").on(t.handoffOperatorId),
+  ]
+);
+export type CmsSubmission = typeof cmsSubmissions.$inferSelect;
+export type InsertCmsSubmission = typeof cmsSubmissions.$inferInsert;
+
+export const cmsSubmissionOutbox = pgTable(
+  "cms_submission_outbox",
+  {
+    outboxId: varchar("outboxId", { length: 64 }).primaryKey(),
+    submissionId: varchar("submissionId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    idempotencyKey: varchar("idempotencyKey", { length: 191 }).notNull(),
+    payload: jsonb("payload").notNull(),
+    status: cmsOutboxStatusEnum("status").default("pending").notNull(),
+    attemptCount: integer("attemptCount").default(0).notNull(),
+    availableAt: timestamp("availableAt").defaultNow().notNull(),
+    lockedAt: timestamp("lockedAt"),
+    lockedBy: varchar("lockedBy", { length: 128 }),
+    lastError: text("lastError"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("cms_outbox_submission_idx").on(t.submissionId),
+    index("cms_outbox_claim_idx").on(t.status, t.availableAt),
+    index("cms_outbox_lease_idx").on(t.status, t.lockedAt),
+  ]
+);
+export type CmsSubmissionOutbox = typeof cmsSubmissionOutbox.$inferSelect;
+export type InsertCmsSubmissionOutbox = typeof cmsSubmissionOutbox.$inferInsert;
+
+export const cmsFeedbackEvents = pgTable(
+  "cms_feedback_events",
+  {
+    eventId: varchar("eventId", { length: 128 }).primaryKey(),
+    cmsReference: varchar("cmsReference", { length: 128 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    type: varchar("type", { length: 64 }).notNull(),
+    occurredAt: timestamp("occurredAt").notNull(),
+    keyId: varchar("keyId", { length: 128 }).notNull(),
+    payload: jsonb("payload").notNull(),
+    payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+    receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+    processedAt: timestamp("processedAt"),
+  },
+  t => [
+    uniqueIndex("cms_feedback_reference_event_idx").on(
+      t.cmsReference,
+      t.eventId
+    ),
+    index("cms_feedback_dispute_idx").on(t.disputeId),
+    index("cms_feedback_unprocessed_idx").on(t.processedAt),
+  ]
+);
+export type CmsFeedbackEvent = typeof cmsFeedbackEvents.$inferSelect;
+export type InsertCmsFeedbackEvent = typeof cmsFeedbackEvents.$inferInsert;
+// ─── Durable Document Analysis Jobs ────────────────────────────────────────────
+export const documentAnalysisJobStatusEnum = pgEnum(
+  "document_analysis_job_status",
+  [
+    "pending",
+    "processing",
+    "completed",
+    "requires_review",
+    "retryable_failure",
+    "failed",
+    "dead_letter",
+  ]
+);
+
+export const documentAnalysisJobs = pgTable(
+  "document_analysis_jobs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    tenantId: varchar("tenantId", { length: 64 }).notNull(),
+    requestedBy: varchar("requestedBy", { length: 64 }).notNull(),
+    inputSha256: varchar("inputSha256", { length: 64 }).notNull(),
+    objectUri: varchar("objectUri", { length: 1024 }).notNull(),
+    mimeType: varchar("mimeType", { length: 128 }).notNull(),
+    analysisProfile: varchar("analysisProfile", { length: 64 }).notNull(),
+    pipelineVersion: varchar("pipelineVersion", { length: 64 }).notNull(),
+    status: documentAnalysisJobStatusEnum().default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    availableAt: timestamp("availableAt").defaultNow().notNull(),
+    leaseOwner: varchar("leaseOwner", { length: 128 }),
+    leaseExpiresAt: timestamp("leaseExpiresAt"),
+    lastError: text("lastError"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("document_analysis_job_idempotency_idx").on(
+      t.documentId,
+      t.analysisProfile,
+      t.inputSha256,
+      t.pipelineVersion
+    ),
+    index("document_analysis_jobs_claim_idx").on(t.status, t.availableAt),
+    index("document_analysis_jobs_tenant_idx").on(t.tenantId, t.status),
+    index("document_analysis_jobs_dispute_idx").on(t.disputeId),
+  ]
+);
+export type DocumentAnalysisJob = typeof documentAnalysisJobs.$inferSelect;
+export type InsertDocumentAnalysisJob =
+  typeof documentAnalysisJobs.$inferInsert;
+
+export const documentAnalysisResults = pgTable(
+  "document_analysis_results",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    jobId: varchar("jobId", { length: 64 }).notNull(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    inputSha256: varchar("inputSha256", { length: 64 }).notNull(),
+    outputSha256: varchar("outputSha256", { length: 64 }).notNull(),
+    engine: varchar("engine", { length: 64 }).notNull(),
+    engineVersion: varchar("engineVersion", { length: 128 }).notNull(),
+    status: varchar("status", { length: 32 }).notNull(),
+    extractedText: text("extractedText"),
+    extractedFields: jsonb("extractedFields"),
+    provenance: jsonb("provenance").notNull(),
+    findings: jsonb("findings"),
+    confidence: integer("confidence"),
+    processingTimeMs: integer("processingTimeMs"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("document_analysis_results_job_idx").on(t.jobId),
+    index("document_analysis_results_document_idx").on(t.documentId),
+  ]
+);
+export type DocumentAnalysisResult =
+  typeof documentAnalysisResults.$inferSelect;
+export type InsertDocumentAnalysisResult =
+  typeof documentAnalysisResults.$inferInsert;
+
+export const documentAnalysisOutbox = pgTable(
+  "document_analysis_outbox",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    jobId: varchar("jobId", { length: 64 }).notNull(),
+    eventType: varchar("eventType", { length: 64 }).notNull(),
+    payload: jsonb("payload").notNull(),
+    publishedAt: timestamp("publishedAt"),
+    attempts: integer("attempts").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("document_analysis_outbox_job_event_idx").on(
+      t.jobId,
+      t.eventType
+    ),
+    index("document_analysis_outbox_pending_idx").on(
+      t.publishedAt,
+      t.createdAt
+    ),
+  ]
+);
+export type DocumentAnalysisOutbox = typeof documentAnalysisOutbox.$inferSelect;
+export type InsertDocumentAnalysisOutbox =
+  typeof documentAnalysisOutbox.$inferInsert;
+
+export const documentReviewTasks = pgTable(
+  "document_review_tasks",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    jobId: varchar("jobId", { length: 64 }).notNull(),
+    tenantId: varchar("tenantId", { length: 64 }).notNull(),
+    reason: text("reason").notNull(),
+    status: varchar("status", { length: 32 }).default("open").notNull(),
+    assignedTo: varchar("assignedTo", { length: 64 }),
+    resolution: jsonb("resolution"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    resolvedAt: timestamp("resolvedAt"),
+  },
+  t => [index("document_review_tasks_queue_idx").on(t.tenantId, t.status)]
+);
+export type DocumentReviewTask = typeof documentReviewTasks.$inferSelect;
+export type InsertDocumentReviewTask = typeof documentReviewTasks.$inferInsert;
+
+export const modelRegistryVersions = pgTable(
+  "model_registry_versions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    modelName: varchar("modelName", { length: 128 }).notNull(),
+    modelVersion: varchar("modelVersion", { length: 128 }).notNull(),
+    artifactSha256: varchar("artifactSha256", { length: 64 }).notNull(),
+    status: varchar("status", { length: 32 }).default("candidate").notNull(),
+    provenance: jsonb("provenance").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => [
+    uniqueIndex("model_registry_identity_idx").on(t.modelName, t.modelVersion),
+  ]
+);
+export type ModelRegistryVersion = typeof modelRegistryVersions.$inferSelect;
+export type InsertModelRegistryVersion =
+  typeof modelRegistryVersions.$inferInsert;
+
+// ─── Upload Quarantine and Virus Scanning ─────────────────────────────────────
+export const quarantineStatus = [
+  "quarantined",
+  "scanning",
+  "clean",
+  "infected",
+  "review",
+  "failed",
+  "released",
+] as const;
+export type QuarantineStatus = (typeof quarantineStatus)[number];
+
+export const fileQuarantineJobs = pgTable(
+  "file_quarantine_jobs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    tenantId: varchar("tenantId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }),
+    objectUri: varchar("objectUri", { length: 1024 }).notNull(),
+    inputSha256: varchar("inputSha256", { length: 64 }).notNull(),
+    mimeType: varchar("mimeType", { length: 128 }).notNull(),
+    byteSize: bigint("byteSize", { mode: "number" }).notNull(),
+    status: varchar("status", { length: 32 })
+      .$type<QuarantineStatus>()
+      .notNull()
+      .default("quarantined"),
+    attempts: integer("attempts").notNull().default(0),
+    availableAt: timestamp("availableAt").notNull().defaultNow(),
+    leaseOwner: varchar("leaseOwner", { length: 128 }),
+    leaseExpiresAt: timestamp("leaseExpiresAt"),
+    lastError: text("lastError"),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow(),
+  },
+  t => [
+    uniqueIndex("file_quarantine_document_hash_idx").on(
+      t.documentId,
+      t.inputSha256
+    ),
+    index("file_quarantine_claim_idx").on(t.status, t.availableAt),
+    index("file_quarantine_tenant_idx").on(t.tenantId, t.status),
+  ]
+);
+export type FileQuarantineJob = typeof fileQuarantineJobs.$inferSelect;
+export type InsertFileQuarantineJob = typeof fileQuarantineJobs.$inferInsert;
+
+export const virusScanResults = pgTable(
+  "virus_scan_results",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    quarantineJobId: varchar("quarantineJobId", { length: 64 }).notNull(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    scanner: varchar("scanner", { length: 64 }).notNull(),
+    scannerVersion: varchar("scannerVersion", { length: 128 }).notNull(),
+    status: varchar("status", { length: 32 })
+      .$type<QuarantineStatus>()
+      .notNull(),
+    signature: varchar("signature", { length: 512 }),
+    inputSha256: varchar("inputSha256", { length: 64 }).notNull(),
+    report: jsonb("report").notNull(),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+  },
+  t => [
+    uniqueIndex("virus_scan_result_job_idx").on(t.quarantineJobId),
+    index("virus_scan_result_document_idx").on(t.documentId),
+  ]
+);
+export type VirusScanResult = typeof virusScanResults.$inferSelect;
+export type InsertVirusScanResult = typeof virusScanResults.$inferInsert;
+
+export const quarantineEvents = pgTable(
+  "quarantine_events",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    quarantineJobId: varchar("quarantineJobId", { length: 64 }).notNull(),
+    documentId: varchar("documentId", { length: 64 }).notNull(),
+    eventType: varchar("eventType", { length: 64 }).notNull(),
+    status: varchar("status", { length: 32 }).notNull(),
+    metadata: jsonb("metadata").notNull(),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+  },
+  t => [index("quarantine_events_job_idx").on(t.quarantineJobId, t.createdAt)]
+);
+export type QuarantineEvent = typeof quarantineEvents.$inferSelect;

@@ -1,0 +1,16 @@
+{
+  "repository": "munisp/healthpoint",
+  "number": 2,
+  "state": "OPEN",
+  "headRefOid": "500f30e6694fb23bda61bca20f4ae92534d9748a",
+  "author": "munisp",
+  "reviewDecision": "REVIEW_REQUIRED",
+  "checks": [
+    { "name": "Node quality and hermetic integration tests", "status": "COMPLETED", "conclusion": "SUCCESS" },
+    { "name": "PostgreSQL migration and durable audit integration", "status": "COMPLETED", "conclusion": "SUCCESS" },
+    { "name": "CodeQL (javascript-typescript)", "status": "COMPLETED", "conclusion": "SUCCESS" }
+  ],
+  "reviews": [
+    { "author": "github-advanced-security", "state": "COMMENTED", "submittedAt": "2026-09-02T22:30:55Z" }
+  ]
+}

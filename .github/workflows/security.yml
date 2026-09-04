@@ -14,8 +14,11 @@ permissions:
 
 jobs:
   node-security:
-    name: Node dependency and application checks
+    name: Node quality and hermetic integration tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: idr-workflow-demo
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -25,11 +28,67 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          cache-dependency-path: idr-workflow-demo/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm audit:dependencies
-      - run: pnpm check
-      - run: pnpm test
-      - run: pnpm build
+      - run: pnpm run audit:dependencies
+      - run: pnpm run check
+      - run: pnpm run test
+      - name: Verify TigerBeetle fail-closed packet-loss regression
+        run: pnpm run test:tigerbeetle-fail-closed-packet-loss
+      - name: Verify TigerBeetle connectivity monitor fallback behavior
+        run: pnpm run test:tigerbeetle-connectivity-monitor-integration
+      - name: Verify TigerBeetle connectivity monitor jittered packet-loss behavior
+        run: pnpm run test:tigerbeetle-connectivity-monitor-jitter
+      - name: Verify TigerBeetle connectivity monitor deployment contract
+        run: pnpm run validate:tigerbeetle-connectivity-monitor-deployment-contract
+      - name: Verify daily regression report formatting and delivery guard
+        run: pnpm run test:daily-regression-report
+      - name: Verify pending PR approval reporter and delivery guard
+        run: pnpm run test:pending-pr-approval-report
+      - run: pnpm run build
+
+  postgres-migration-and-audit-integration:
+    name: PostgreSQL migration and durable audit integration
+    runs-on: ubuntu-latest
+    needs: node-security
+    defaults:
+      run:
+        working-directory: idr-workflow-demo
+    services:
+      postgres:
+        image: postgres:16.6
+        env:
+          POSTGRES_DB: healthpoint_migration_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d healthpoint_migration_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    env:
+      MIGRATION_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/healthpoint_migration_ci
+      HEALTHPOINT_ALLOW_CLEAN_MIGRATION_TEST: "true"
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/healthpoint_migration_ci
+      RUN_POSTGRES_INTEGRATION_TESTS: "true"
+      PAYMENT_EXECUTION_MODE: disabled
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: idr-workflow-demo/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Verify clean PostgreSQL migration chain
+        run: bash scripts/verify-clean-postgresql-migrations.sh
+      - name: Verify durable Temporal drill audit record
+        run: pnpm exec vitest run server/temporal-operations.test.ts
 
   python-security:
     name: Python dependency audit

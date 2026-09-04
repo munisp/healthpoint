@@ -1,0 +1,79 @@
+name: Daily regression report
+
+on:
+  schedule:
+    # Daily at 03:17 UTC. GitHub scheduled workflows may start late under load.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      delivery_mode:
+        description: "Override configured delivery mode for this manual run"
+        required: false
+        default: "none"
+        type: choice
+        options: [none, matrix, mattermost]
+      dry_run:
+        description: "Generate the report without sending it externally"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: healthpoint-daily-regression-report-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  regression-and-report:
+    name: Daily regression report
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: idr-workflow-demo
+    env:
+      PAYMENT_EXECUTION_MODE: disabled
+      TIGERBEETLE_FINALITY_EXECUTION: "false"
+      HEALTHPOINT_REGRESSION_REPORT_DELIVERY: ${{ github.event_name == 'schedule' && vars.HEALTHPOINT_REGRESSION_REPORT_DELIVERY || inputs.delivery_mode }}
+      HEALTHPOINT_MATRIX_HOMESERVER_URL: ${{ secrets.HEALTHPOINT_MATRIX_HOMESERVER_URL }}
+      HEALTHPOINT_MATRIX_ROOM_ID: ${{ secrets.HEALTHPOINT_MATRIX_ROOM_ID }}
+      HEALTHPOINT_MATRIX_ACCESS_TOKEN: ${{ secrets.HEALTHPOINT_MATRIX_ACCESS_TOKEN }}
+      HEALTHPOINT_MATTERMOST_WEBHOOK_URL: ${{ secrets.HEALTHPOINT_MATTERMOST_WEBHOOK_URL }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: idr-workflow-demo/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Run dependency and TypeScript gates
+        run: pnpm run audit:dependencies && pnpm run check
+      - name: Run full hermetic regression suite
+        run: pnpm run test
+      - name: Run explicit fail-closed transport regressions
+        run: >-
+          pnpm run test:tigerbeetle-fail-closed-packet-loss &&
+          pnpm run test:tigerbeetle-connectivity-monitor-integration &&
+          pnpm run test:tigerbeetle-connectivity-monitor-jitter &&
+          pnpm run validate:tigerbeetle-connectivity-monitor-deployment-contract
+      - name: Generate daily report without delivery
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: pnpm run generate:daily-regression-report -- --dry-run
+      - name: Generate and deliver daily report
+        if: ${{ github.event_name == 'schedule' || !inputs.dry_run }}
+        run: pnpm run generate:daily-regression-report -- --deliver
+      - name: Upload daily report artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthpoint-daily-regression-report-${{ github.run_id }}
+          path: idr-workflow-demo/artifacts/daily-regression-report/
+          if-no-files-found: warn
+          retention-days: 90

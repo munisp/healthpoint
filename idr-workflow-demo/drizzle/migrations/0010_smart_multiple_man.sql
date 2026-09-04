@@ -1,0 +1,1 @@
+ALTER TABLE "step_notes" ADD COLUMN "attachments" text DEFAULT '[]' NOT NULL;

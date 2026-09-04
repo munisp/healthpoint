@@ -1,0 +1,47 @@
+namespace: healthpoint-observability-staging
+
+grafana:
+  image: "registry.example/observability/grafana@sha256:REPLACE_WITH_APPROVED_64_HEX_DIGEST"
+  replicas: 2
+  serviceAccountName: grafana-observability
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  datasource:
+    url: "http://prometheus.healthpoint-observability-staging.svc.cluster.local:9090"
+  persistence:
+    storageClassName: "REPLACE_WITH_APPROVED_STAGING_STORAGE_CLASS"
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+otlpIngestion:
+  # Existing authoritative collector deployment lives in:
+  # k8s/production/observability/observability-stack.yaml
+  # Configure that deployment only through secret references; never inline OpenSearch credentials.
+  namespace: healthpoint-observability-staging
+  collectorService: otel-collector
+  collectorPort: 4318
+  requireMtls: true
+  tenantPolicy:
+    rawTenantIdentifiersForbidden: true
+    baggageForbidden: true
+    opaqueTenantScopesTraceOnly: true
+    tenantMetricLabelsForbidden: true
+  sinks:
+    prometheusRemoteWrite:
+      enabled: true
+    opensearchTraces:
+      enabled: true
+    opensearchLogs:
+      enabled: true
+  secrets:
+    collectorServerTls: otel-collector-server-tls
+    opensearchCredentials: otel-collector-opensearch
+    opensearchCa: otel-collector-opensearch-ca

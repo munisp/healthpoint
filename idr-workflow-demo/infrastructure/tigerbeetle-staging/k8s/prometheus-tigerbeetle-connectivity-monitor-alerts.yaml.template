@@ -1,0 +1,45 @@
+# TEMPLATE-ONLY. Render only through approved staging GitOps after receiver routing,
+# service labels, and the immutable image digest have been reviewed.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: tigerbeetle-connectivity-monitor-alerts
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+spec:
+  groups:
+    - name: healthpoint.tigerbeetle.connectivity-monitor
+      rules:
+        - alert: HealthPointTigerBeetleConnectivityMonitorNoGo
+          expr: healthpoint_tigerbeetle_connectivity_monitor_status{status="no_go"} == 1
+          for: 30s
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            drill_abort: "true"
+          annotations:
+            summary: TigerBeetle read-only connectivity monitor entered no-go state
+            description: Two or more consecutive bounded read-only TigerBeetle probe failures occurred. Keep payment and finality execution disabled; investigate mTLS/tunnel/cluster state and follow the approved incident runbook.
+        - alert: HealthPointTigerBeetleConnectivityProbeTimeout
+          expr: increase(healthpoint_tigerbeetle_connectivity_monitor_probes_total{outcome="timeout"}[1m]) > 0
+          for: 0s
+          labels:
+            severity: warning
+            environment: staging
+            service: tigerbeetle
+          annotations:
+            summary: TigerBeetle read-only connectivity probe timed out
+            description: A bounded read-only probe timed out. This alert is observational; it must not trigger automated network, payment, finality, or Kubernetes actions.
+        - alert: HealthPointTigerBeetleConnectivityMonitorStale
+          expr: time() - healthpoint_tigerbeetle_connectivity_monitor_last_evaluation_timestamp_seconds > 45
+          for: 30s
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            drill_abort: "true"
+          annotations:
+            summary: TigerBeetle connectivity monitor evaluation is stale
+            description: The read-only monitor has not recorded an evaluation for more than 45 seconds. Treat observability blindness as a rollout stop condition.

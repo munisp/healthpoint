@@ -16,6 +16,7 @@ import {
   Database, Key, Map, Zap, Power, AlertCircle, Info,
   Activity, Shield, RefreshCw, ExternalLink,
 } from "lucide-react";
+import SmartFormPanel, { type ExtractedField } from "@/components/SmartFormPanel";
 
 // ── EMR System catalogue ──────────────────────────────────────────────────────
 
@@ -290,6 +291,16 @@ export default function EMROnboarding() {
 
     return (
       <div className="space-y-5">
+        <SmartFormPanel
+          targetForm="emr_onboarding"
+          triggerLabel="Auto-fill from onboarding document"
+          onApply={(fields: Record<string, ExtractedField>) => {
+            if (fields.fhirBaseUrl?.value) handleCredentialChange("baseUrl", String(fields.fhirBaseUrl.value));
+            if (fields.clientId?.value) handleCredentialChange("clientId", String(fields.clientId.value));
+            if (fields.organizationNPI?.value) handleCredentialChange("facilityId", String(fields.organizationNPI.value));
+            toast.success("SmartForm applied EMR connection fields from your document.");
+          }}
+        />
         <Alert>
           <Shield className="h-4 w-4" />
           <AlertDescription>
@@ -317,7 +328,7 @@ export default function EMROnboarding() {
           <Alert variant="default" className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
             <Info className="h-4 w-4 text-blue-600" />
             <AlertDescription className="text-blue-800 dark:text-blue-200">
-              For OAuth 2.0 systems, register <strong>https://your-domain.manus.space/api/oauth/emr/callback</strong> as the redirect URI in your EMR developer portal before testing.
+              For OAuth 2.0 systems, register <strong>https://your-healthpoint-domain.example.com/api/oauth/emr/callback</strong> as the redirect URI in your EMR developer portal before testing. Replace with your actual deployment URL.
             </AlertDescription>
           </Alert>
         )}

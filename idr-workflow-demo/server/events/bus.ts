@@ -1,21 +1,63 @@
 /**
  * server/events/bus.ts
- * In-process event bus with a Kafka-compatible interface.
+ * PostgreSQL transactional-outbox publisher with Kafka delivery.
  *
  * Architecture:
- * - Events are persisted to the `event_log` PostgreSQL table (durable, replayable)
- * - In-process EventEmitter delivers events synchronously to registered consumers
- * - When KAFKA_BROKER_URL is set, events are also published to Kafka topics
- * - Consumers (audit writer, webhook dispatcher, outcome trigger) register here
- *
- * This design allows a zero-dependency dev environment while being drop-in
- * replaceable with a real Kafka producer/consumer when scaling.
+ * - Events are persisted to the `event_log` PostgreSQL table before return.
+ * - The durable outbox worker claims records and performs side effects after commit.
+ * - Kafka is the sole inter-service transport; in-process EventEmitter delivery is
+ *   intentionally prohibited because it is lost on restart and diverges by replica.
  */
-
-import { EventEmitter } from "events";
+import fs from "fs";
+import { Kafka, Producer, Partitioners, logLevel } from "kafkajs";
+import { eq } from "drizzle-orm";
 import { getDb } from "../db";
-import { eventLog } from "../../drizzle/schema";
+import { auditLog, eventLog, outcomePredictions } from "../../drizzle/schema";
+import { dispatchWebhooksForEvent } from "../webhook-dispatcher";
 import { publishNotification } from "../redis";
+import { injectTrustedTraceparent } from "../_core/telemetry";
+
+// ── Kafka producer (optional — gracefully skipped if KAFKA_BROKERS not set) ────
+
+let _kafkaProducer: Producer | null = null;
+
+async function getKafkaProducer(): Promise<Producer | null> {
+  const brokers = process.env.KAFKA_BROKERS;
+  if (!brokers) return null;
+  if (_kafkaProducer) return _kafkaProducer;
+  const username = process.env.KAFKA_SASL_USERNAME;
+  const password = process.env.KAFKA_SASL_PASSWORD;
+  const caPath = process.env.KAFKA_SSL_CA_PATH;
+  const ca = process.env.KAFKA_SSL_CA_PEM ?? (caPath && fs.existsSync(caPath) ? fs.readFileSync(caPath, "utf8") : undefined);
+  const production = process.env.NODE_ENV === "production";
+  if (production && (!username || !password || !ca)) {
+    console.error("[EventBus] Kafka is configured but TLS CA and SASL credentials are required in production");
+    return null;
+  }
+  try {
+    const kafka = new Kafka({
+      clientId: "idr-app",
+      brokers: brokers.split(","),
+      logLevel: logLevel.WARN,
+      retry: { initialRetryTime: 300, retries: 3 },
+      ssl: ca ? { ca: [ca] } : production,
+      sasl: username && password ? {
+        mechanism: "scram-sha-512" as const,
+        username,
+        password,
+      } : undefined,
+    });
+    _kafkaProducer = kafka.producer({
+      createPartitioner: Partitioners.LegacyPartitioner,
+      allowAutoTopicCreation: false,
+    });
+    await _kafkaProducer.connect();
+    return _kafkaProducer;
+  } catch (err) {
+    console.warn("[EventBus] Kafka unavailable:", err);
+    return null;
+  }
+}
 
 // ── Event types ──────────────────────────────────────────────────────────────
 
@@ -30,6 +72,9 @@ export type IDREventType =
   | "offer.accepted"
   | "offer.rejected"
   | "determination.issued"
+  | "payment.recorded"
+  | "payment.settled"
+  | "payment.settlement_failed"
   | "notification.sent"
   | "webhook.triggered"
   | "audit.logged"
@@ -40,6 +85,7 @@ export type IDRTopic =
   | "idr.disputes.state_changes"
   | "idr.documents"
   | "idr.offers"
+  | "idr.payments"
   | "idr.notifications"
   | "idr.audit"
   | "idr.users";
@@ -55,6 +101,9 @@ const EVENT_TOPIC_MAP: Record<IDREventType, IDRTopic> = {
   "offer.accepted": "idr.offers",
   "offer.rejected": "idr.offers",
   "determination.issued": "idr.disputes.state_changes",
+  "payment.recorded": "idr.payments",
+  "payment.settled": "idr.payments",
+  "payment.settlement_failed": "idr.payments",
   "notification.sent": "idr.notifications",
   "webhook.triggered": "idr.notifications",
   "audit.logged": "idr.audit",
@@ -79,14 +128,11 @@ export interface IDREvent<T = Record<string, unknown>> {
 
 // ── Bus singleton ─────────────────────────────────────────────────────────────
 
-class IDREventBus extends EventEmitter {
+class IDREventBus {
   private static instance: IDREventBus;
 
   static getInstance(): IDREventBus {
-    if (!IDREventBus.instance) {
-      IDREventBus.instance = new IDREventBus();
-      IDREventBus.instance.setMaxListeners(50);
-    }
+    if (!IDREventBus.instance) IDREventBus.instance = new IDREventBus();
     return IDREventBus.instance;
   }
 
@@ -120,77 +166,36 @@ class IDREventBus extends EventEmitter {
       },
     };
 
-    // 1. Persist to event_log (durable, replayable)
+    // 1. Persist to event_log before dispatch. Business transactions use the
+    // same table as a transactional outbox and are dispatched after commit.
     await this.persistEvent(event);
 
-    // 2. Emit to in-process consumers
-    this.emit(eventType, event);
-    this.emit(topic, event);
-    this.emit("*", event);
-
-    // 3. Publish to Redis pub/sub for real-time UI (fire-and-forget)
-    publishNotification({
-      type: eventType,
-      disputeId: aggregateType === "dispute" ? aggregateId : undefined,
-      message: `${eventType} — ${aggregateId}`,
-      data: payload as Record<string, unknown>,
-    }).catch(() => {/* Redis unavailable — ignore */});
-
+    // Delivery is performed by the PostgreSQL-backed outbox worker after commit.
+    // Do not dispatch synchronously or through process memory; callers receive the
+    // durable pending record and eventual delivery state is auditable in event_log.
     return event;
   }
 
-  private async persistEvent<T>(event: IDREvent<T>): Promise<void> {
+  /** Dispatches an already-persisted outbox event without writing a duplicate. */
+  async deliverOutboxEvent<T = Record<string, unknown>>(event: IDREvent<T>): Promise<void> {
+    // Kafka failure leaves the durable outbox event pending/failed for a later retry.
+    const producer = await getKafkaProducer();
+    if (!producer) throw new Error("Kafka producer is unavailable for durable outbox delivery");
+    await producer.send({
+      topic: event.topic,
+      messages: [{
+        key: event.aggregateId,
+        value: JSON.stringify(event),
+        headers: {
+          "event-type": event.eventType,
+          "source-service": "idr-app",
+          ...injectTrustedTraceparent(),
+        },
+      }],
+    });
+
     const db = await getDb();
-    if (!db) return;
-
-    try {
-      await db.insert(eventLog).values({
-        id: event.id,
-        topic: event.topic,
-        eventType: event.eventType,
-        aggregateId: event.aggregateId,
-        aggregateType: event.aggregateType,
-        payload: event.payload as Record<string, unknown>,
-        metadata: event.metadata as Record<string, unknown>,
-        status: "delivered",
-        publishedAt: new Date(),
-      });
-    } catch (err) {
-      console.warn("[EventBus] Failed to persist event:", err);
-    }
-  }
-
-  /**
-   * Subscribe to a specific event type.
-   */
-  on(eventType: IDREventType | IDRTopic | "*", listener: (event: IDREvent) => void): this {
-    return super.on(eventType, listener);
-  }
-
-  /**
-   * Subscribe to a specific event type once.
-   */
-  once(eventType: IDREventType | IDRTopic | "*", listener: (event: IDREvent) => void): this {
-    return super.once(eventType, listener);
-  }
-}
-
-export const eventBus = IDREventBus.getInstance();
-
-// ── Built-in consumers ────────────────────────────────────────────────────────
-
-/**
- * Audit log consumer — writes all events to the audit_log table.
- * This replaces the need to manually call audit.log in every procedure.
- */
-import { getDb as getDbForAudit } from "../db";
-import { auditLog } from "../../drizzle/schema";
-
-eventBus.on("*", async (event: IDREvent) => {
-  const db = await getDbForAudit();
-  if (!db) return;
-
-  try {
+    if (!db) throw new Error("PostgreSQL is unavailable for durable event side effects");
     await db.insert(auditLog).values({
       id: crypto.randomUUID(),
       userId: event.metadata?.userId ?? "system",
@@ -201,41 +206,41 @@ eventBus.on("*", async (event: IDREvent) => {
       ipAddress: null,
       createdAt: new Date(),
     });
-  } catch {
-    // Audit log write failure is non-fatal
-  }
-});
-
-/**
- * Webhook dispatcher consumer — fires outbound webhooks for subscribed events.
- */
-import { dispatchWebhooksForEvent } from "../webhook-dispatcher";
-
-eventBus.on("*", async (event: IDREvent) => {
-  try {
-    await dispatchWebhooksForEvent(event.eventType, event.aggregateId, event.payload as Record<string, unknown>);
-  } catch {
-    // Webhook dispatch failure is non-fatal
-  }
-});
-
-/**
- * Outcome prediction trigger — regenerates predictions when dispute state changes.
- */
-eventBus.on("dispute.advanced", async (event: IDREvent) => {
-  // Trigger async prediction regeneration (fire-and-forget)
-  setTimeout(async () => {
-    try {
-      const db = await getDb();
-      if (!db) return;
-      // Mark existing prediction as stale so it gets regenerated on next view
-      const { outcomePredictions } = await import("../../drizzle/schema");
-      const { eq } = await import("drizzle-orm");
+    await dispatchWebhooksForEvent(event.eventType, event.aggregateId, event.payload as Record<string, unknown>, event.id);
+    if (event.eventType === "dispute.advanced") {
       await db.update(outcomePredictions)
         .set({ updatedAt: new Date() })
         .where(eq(outcomePredictions.disputeId, event.aggregateId));
-    } catch {
-      // Non-fatal
     }
-  }, 100);
-});
+    await publishNotification({
+      type: event.eventType,
+      disputeId: event.aggregateType === "dispute" ? event.aggregateId : undefined,
+      message: event.eventType,
+      data: { eventId: event.id },
+    });
+  }
+
+  private async persistEvent<T>(event: IDREvent<T>): Promise<void> {
+    const db = await getDb();
+    if (!db) throw new Error("PostgreSQL is unavailable for event persistence");
+
+    try {
+      await db.insert(eventLog).values({
+        id: event.id,
+        topic: event.topic,
+        eventType: event.eventType,
+        aggregateId: event.aggregateId,
+        aggregateType: event.aggregateType,
+        payload: event.payload as Record<string, unknown>,
+        metadata: event.metadata as Record<string, unknown>,
+        status: "pending",
+        nextAttemptAt: new Date(),
+      });
+    } catch (err) {
+      throw new Error(`Failed to persist event: ${err instanceof Error ? err.message : "unknown error"}`);
+    }
+  }
+
+}
+
+export const eventBus = IDREventBus.getInstance();

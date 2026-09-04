@@ -1,0 +1,27 @@
+{
+  "evidence_type": "model_data_use_approval",
+  "schema_version": "1.0",
+  "approval": {
+    "approval_id": "REPLACE_WITH_IMMUTABLE_DATA_USE_APPROVAL_ID",
+    "decision": "approved|rejected|expired|revoked",
+    "approved_purpose": "model_validation",
+    "approved_scope": "REPLACE_WITH_DATA_ELEMENTS_COHORT_AND_ENVIRONMENT_SCOPE",
+    "data_controller": "REPLACE_WITH_ACCOUNTABLE_DATA_CONTROLLER",
+    "privacy_reviewer_id": "REPLACE_WITH_PRIVACY_REVIEWER_ID",
+    "legal_reviewer_id": "REPLACE_WITH_LEGAL_REVIEWER_ID",
+    "approved_at": "YYYY-MM-DDThh:mm:ssZ",
+    "expires_at": "YYYY-MM-DDThh:mm:ssZ",
+    "retention_policy_uri": "REPLACE_WITH_APPROVED_RETENTION_POLICY_URI",
+    "redaction_or_deidentification_method": "REPLACE_WITH_APPROVED_METHOD",
+    "dataset_id": "REPLACE_WITH_GOVERNED_DATASET_ID",
+    "dataset_sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "stop_decision": "proceed|hold|abort",
+    "stop_decision_reason": "REPLACE_WITH_EVIDENCE_BASED_DECISION_REASON"
+  },
+  "attestation": {
+    "owner_id": "REPLACE_WITH_DATA_OWNER_ID",
+    "attested_at": "YYYY-MM-DDThh:mm:ssZ",
+    "independent_reviewer_id": "REPLACE_WITH_DISTINCT_REVIEWER_ID",
+    "independently_reviewed_at": "YYYY-MM-DDThh:mm:ssZ"
+  }
+}

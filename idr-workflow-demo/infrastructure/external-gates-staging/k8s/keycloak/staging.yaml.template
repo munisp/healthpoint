@@ -1,0 +1,126 @@
+# Render only through the approved staging release pipeline. The Keycloak
+# Operator CRD must be installed and the rendered output must pass source policy.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${KEYCLOAK_NAMESPACE}
+  labels:
+    healthpoint.io/environment: staging
+    healthpoint.io/component: keycloak
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: keycloak-runtime
+  namespace: ${KEYCLOAK_NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: ClusterSecretStore, name: healthpoint-staging }
+  target: { name: keycloak-runtime, creationPolicy: Owner }
+  data:
+    - secretKey: username
+      remoteRef: { key: ${KEYCLOAK_SECRET_PREFIX}, property: database_username }
+    - secretKey: password
+      remoteRef: { key: ${KEYCLOAK_SECRET_PREFIX}, property: database_password }
+    - secretKey: tls.crt
+      remoteRef: { key: ${KEYCLOAK_SECRET_PREFIX}, property: tls_crt }
+    - secretKey: tls.key
+      remoteRef: { key: ${KEYCLOAK_SECRET_PREFIX}, property: tls_key }
+    - secretKey: healthpoint_oidc_client_secret
+      remoteRef: { key: ${KEYCLOAK_SECRET_PREFIX}, property: healthpoint_oidc_client_secret }
+    - secretKey: admin_username
+      remoteRef: { key: ${KEYCLOAK_SECRET_PREFIX}, property: bootstrap_admin_username }
+    - secretKey: admin_password
+      remoteRef: { key: ${KEYCLOAK_SECRET_PREFIX}, property: bootstrap_admin_password }
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: keycloak-bootstrap-admin
+  namespace: ${KEYCLOAK_NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: ClusterSecretStore, name: healthpoint-staging }
+  target: { name: keycloak-bootstrap-admin, creationPolicy: Owner }
+  data:
+    - secretKey: username
+      remoteRef: { key: ${KEYCLOAK_SECRET_PREFIX}, property: bootstrap_admin_username }
+    - secretKey: password
+      remoteRef: { key: ${KEYCLOAK_SECRET_PREFIX}, property: bootstrap_admin_password }
+---
+apiVersion: k8s.keycloak.org/v2beta1
+kind: Keycloak
+metadata:
+  name: healthpoint-keycloak
+  namespace: ${KEYCLOAK_NAMESPACE}
+  labels: { app.kubernetes.io/name: keycloak }
+spec:
+  instances: 2
+  image: ${KEYCLOAK_IMAGE_DIGEST}
+  db:
+    vendor: postgres
+    host: ${KEYCLOAK_POSTGRES_SERVICE}
+    usernameSecret: { name: keycloak-runtime, key: username }
+    passwordSecret: { name: keycloak-runtime, key: password }
+  http:
+    tlsSecret: keycloak-runtime
+  hostname:
+    hostname: ${KEYCLOAK_PUBLIC_HOSTNAME}
+    strict: true
+    strictBackchannel: true
+  ingress:
+    enabled: false
+  proxy:
+    headers: forwarded
+  additionalOptions:
+    - { name: http-max-queued-requests, value: "${KEYCLOAK_MAX_QUEUED_REQUESTS}" }
+    - { name: health-enabled, value: "true" }
+    - { name: metrics-enabled, value: "true" }
+  bootstrapAdmin:
+    user:
+      secret: keycloak-bootstrap-admin
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-restrict-access
+  namespace: ${KEYCLOAK_NAMESPACE}
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: keycloak } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: healthpoint-staging-gateway } }
+      ports: [{ protocol: TCP, port: 8443 }]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: healthpoint-staging-data } }
+      ports: [{ protocol: TCP, port: 5432 }]
+    - to:
+        - podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-https-discovery-verification-${RELEASE_ID}
+  namespace: ${KEYCLOAK_NAMESPACE}
+  labels: { healthpoint.io/verification: non-destructive }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: verify
+          image: ${CURL_IMAGE_DIGEST}
+          command: ["sh", "-ec"]
+          args:
+            - >-
+              curl --fail --silent --show-error --proto '=https' --tlsv1.2
+              https://${KEYCLOAK_PUBLIC_HOSTNAME}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration
+              | grep -Eq '"issuer"[[:space:]]*:[[:space:]]*"https://${KEYCLOAK_PUBLIC_HOSTNAME}/realms/${KEYCLOAK_REALM}"'
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] }, readOnlyRootFilesystem: true, runAsNonRoot: true }

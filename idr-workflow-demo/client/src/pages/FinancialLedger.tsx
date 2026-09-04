@@ -11,23 +11,17 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import { useChartColors } from "@/hooks/useChartColors";
 import {
   DollarSign, TrendingUp, TrendingDown, BookOpen, ArrowRightLeft,
-  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download, Layers, List, ChevronDown
+  Plus, RefreshCw, AlertCircle, Loader2, CalendarDays, X, Download, Layers, List, ChevronDown,
+  Zap, CheckCircle2, Clock, XCircle
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
   LineChart, Line, CartesianGrid, Legend, ReferenceLine
 } from "recharts";
 
-const ACCOUNT_COLORS: Record<string, string> = {
-  billed: "#6366f1",
-  allowed: "#f59e0b",
-  paid: "#10b981",
-  determination: "#3b82f6",
-  adjustment: "#8b5cf6",
-  patient_responsibility: "#ef4444",
-};
 
 const ACCOUNT_LABELS: Record<string, string> = {
   billed: "Billed Amount",
@@ -45,8 +39,38 @@ const QUICK_RANGES = [
   { label: "Last year", days: 365 },
 ];
 
-function fmt(dollars: number) {
+const MAX_EXACT_CHART_CENTS = 900_719_925_474_099_100n;
+
+function centsToDecimal(cents: bigint): string {
+  const sign = cents < 0n ? "-" : "";
+  const absolute = cents < 0n ? -cents : cents;
+  return `${sign}${absolute / 100n}.${(absolute % 100n).toString().padStart(2, "0")}`;
+}
+
+function fmtCents(cents: bigint): string {
+  const sign = cents < 0n ? "-" : "";
+  const absolute = cents < 0n ? -cents : cents;
+  return `${sign}$${(absolute / 100n).toLocaleString("en-US")}.${(absolute % 100n).toString().padStart(2, "0")}`;
+}
+
+function basisPointsToPercent(basisPoints: bigint): string {
+  return `${basisPoints / 100n}.${(basisPoints % 100n).toString().padStart(2, "0")}%`;
+}
+
+/** Charts are not rendered when conversion to IEEE-754 would lose cents precision. */
+function chartDollars(cents: bigint): number | null {
+  if (cents > MAX_EXACT_CHART_CENTS || cents < -MAX_EXACT_CHART_CENTS) return null;
+  return Number(cents) / 100;
+}
+
+function fmtChartDollars(dollars: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(dollars);
+}
+
+function fmtDecimalString(value: string | null | undefined): string {
+  const match = /^(0|[1-9]\d*)(?:\.(\d{1,2}))?$/.exec(value?.trim() ?? "");
+  if (!match) return "—";
+  return `$${BigInt(match[1]).toLocaleString("en-US")}.${(match[2] ?? "").padEnd(2, "0")}`;
 }
 
 function toDateStr(d: Date) {
@@ -55,7 +79,7 @@ function toDateStr(d: Date) {
 
 // Build synthetic trend data from journal entries bucketed by week
 function buildTrendData(
-  history: Array<{ entry: { createdAt: Date | null; amountCents: number; entryType: string }; debitAccountType: string; creditAccountType: string }>,
+  history: Array<{ entry: { createdAt: Date | null; amountCents: bigint; entryType: string }; debitAccountType: string; creditAccountType: string }>,
   dateFrom: string,
   dateTo: string
 ) {
@@ -89,8 +113,9 @@ function buildTrendData(
       });
     }
     const bucket = buckets.get(label)!;
-    const amountDollars = entry.amountCents / 100;
-    // Credit side increases the account balance
+    const amountDollars = chartDollars(entry.amountCents);
+    if (amountDollars === null) continue;
+    // Credit side increases the account balance. The caller suppresses charts for unsafe values.
     if (creditAccountType in bucket) bucket[creditAccountType] += amountDollars;
     if (debitAccountType in bucket) bucket[debitAccountType] -= amountDollars;
   }
@@ -112,9 +137,21 @@ function buildTrendData(
 }
 
 export default function FinancialLedger() {
+  const C = useChartColors();
+  const ACCOUNT_COLORS: Record<string, string> = {
+    billed: C.primary,
+    allowed: C.chart3,
+    paid: C.chart2,
+    determination: C.chart1,
+    adjustment: C.chart4,
+    patient_responsibility: C.danger,
+  };
+
   const [selectedDisputeId, setSelectedDisputeId] = useState("");
   const [disputeInput, setDisputeInput] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState("");
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
 
   // Date range filter
@@ -164,6 +201,8 @@ export default function FinancialLedger() {
       toast.success("Payment recorded in ledger");
       setPaymentDialogOpen(false);
       setPaymentAmount("");
+      setPaymentReference("");
+      setPaymentIdempotencyKey("");
       balancesQuery.refetch();
       summaryQuery.refetch();
       historyQuery.refetch();
@@ -193,11 +232,15 @@ export default function FinancialLedger() {
     [history, dateFrom, dateTo]
   );
 
-  const chartData = balances.map(b => ({
-    name: ACCOUNT_LABELS[b.accountType] ?? b.accountType,
-    amount: b.balanceDollars,
-    color: ACCOUNT_COLORS[b.accountType] ?? "#94a3b8",
-  }));
+  const chartData = balances.flatMap(b => {
+    const amount = chartDollars(b.balanceCents);
+    return amount === null ? [] : [{
+      name: ACCOUNT_LABELS[b.accountType] ?? b.accountType,
+      amount,
+      color: ACCOUNT_COLORS[b.accountType] ?? C.muted,
+    }];
+  });
+  const chartHasUnsafeAmounts = balances.some(balance => chartDollars(balance.balanceCents) === null);
 
   const hasDateFilter = !!(dateFrom || dateTo);
   const dateRangeLabel = dateFrom && dateTo
@@ -222,7 +265,7 @@ export default function FinancialLedger() {
       `"${(entry.description ?? "").replace(/"/g, '""')}"`,
       ACCOUNT_LABELS[debitAccountType] ?? debitAccountType,
       ACCOUNT_LABELS[creditAccountType] ?? creditAccountType,
-      (entry.amountCents / 100).toFixed(2),
+      centsToDecimal(entry.amountCents),
       entry.entryType,
     ]);
     const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
@@ -257,7 +300,7 @@ export default function FinancialLedger() {
               Financial Ledger
             </h1>
             <p className="text-muted-foreground text-sm mt-1">
-              Double-entry accounting ledger for IDR dispute financials (TigerBeetle-style)
+              PostgreSQL double-entry evidence ledger for IDR dispute financials; it records verified settlement evidence and does not initiate funds transfers
             </p>
           </div>
           <div className="flex gap-2">
@@ -321,23 +364,33 @@ export default function FinancialLedger() {
                 <Button variant="outline" size="sm" onClick={() => { balancesQuery.refetch(); historyQuery.refetch(); }}>
                   <RefreshCw className="h-4 w-4 mr-1" /> Refresh
                 </Button>
-                <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
+                <Dialog open={paymentDialogOpen} onOpenChange={(open) => {
+                  setPaymentDialogOpen(open);
+                  if (open && !paymentIdempotencyKey) setPaymentIdempotencyKey(crypto.randomUUID());
+                }}>
                   <DialogTrigger asChild>
-                    <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Record Payment</Button>
+                    <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Record Payment Evidence</Button>
                   </DialogTrigger>
                   <DialogContent>
-                    <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
+                    <DialogHeader><DialogTitle>Record Verified Payment Evidence</DialogTitle></DialogHeader>
                     <div className="space-y-4 pt-2">
+                      <p className="text-sm text-muted-foreground">This writes an auditable record of an externally completed payment. It does not initiate, route, or release funds.</p>
                       <div>
-                        <Label>Payment Amount (USD)</Label>
-                        <Input type="number" min="0.01" step="0.01" placeholder="0.00"
+                        <Label>Payment Amount (whole cents)</Label>
+                        <Input inputMode="numeric" pattern="[1-9][0-9]*" placeholder="e.g. 12500"
                           value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="mt-1" />
+                        <p className="mt-1 text-xs text-muted-foreground">Enter canonical integer cents. The server rejects decimals, scientific notation, and unsafe numeric values.</p>
+                      </div>
+                      <div>
+                        <Label>External Payment Reference</Label>
+                        <Input minLength={3} maxLength={64} placeholder="ACH trace, bank confirmation, or remittance ID"
+                          value={paymentReference} onChange={e => setPaymentReference(e.target.value)} className="mt-1" />
                       </div>
                       <Button className="w-full"
-                        disabled={!paymentAmount || parseFloat(paymentAmount) <= 0 || recordPaymentMutation.isPending}
-                        onClick={() => recordPaymentMutation.mutate({ disputeId: selectedDisputeId, amountDollars: parseFloat(paymentAmount) })}>
+                        disabled={!/^[1-9]\d{0,18}$/.test(paymentAmount) || paymentReference.trim().length < 3 || !paymentIdempotencyKey || recordPaymentMutation.isPending}
+                        onClick={() => recordPaymentMutation.mutate({ disputeId: selectedDisputeId, amountCents: paymentAmount, referenceId: paymentReference.trim(), idempotencyKey: paymentIdempotencyKey })}>
                         {recordPaymentMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                        Record Payment
+                        Record Payment Evidence
                       </Button>
                     </div>
                   </DialogContent>
@@ -360,7 +413,7 @@ export default function FinancialLedger() {
                   <SelectContent>
                     {disputes.map(d => (
                       <SelectItem key={d.id} value={d.id}>
-                        {d.referenceNumber} — {d.respondingPartyName ?? "Unknown Payer"} ({fmt(parseFloat(d.billedAmount ?? "0"))})
+                        {d.referenceNumber} — {d.respondingPartyName ?? "Unknown Payer"} ({fmtDecimalString(d.billedAmount)})
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -398,7 +451,7 @@ export default function FinancialLedger() {
                     <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
                       <DollarSign className="h-3 w-3" /> Billed Amount
                     </div>
-                    <div className="text-xl font-bold">{fmt(summary.billedDollars)}</div>
+                    <div className="text-xl font-bold">{fmtCents(summary.billedCents)}</div>
                   </CardContent>
                 </Card>
                 <Card>
@@ -406,10 +459,10 @@ export default function FinancialLedger() {
                     <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
                       <TrendingDown className="h-3 w-3 text-amber-500" /> IDR Determination
                     </div>
-                    <div className="text-xl font-bold text-amber-600">{fmt(summary.determinationDollars)}</div>
-                    {summary.billedDollars > 0 && (
+                    <div className="text-xl font-bold text-amber-600">{fmtCents(summary.determinationCents)}</div>
+                    {summary.billedCents > 0n && (
                       <div className="text-xs text-muted-foreground">
-                        {(summary.determinationVsBilled * 100).toFixed(1)}% of billed
+                        {basisPointsToPercent(summary.determinationVsBilledBasisPoints)} of billed
                       </div>
                     )}
                   </CardContent>
@@ -419,7 +472,7 @@ export default function FinancialLedger() {
                     <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
                       <TrendingUp className="h-3 w-3 text-green-500" /> Amount Paid
                     </div>
-                    <div className="text-xl font-bold text-green-600">{fmt(summary.paidDollars)}</div>
+                    <div className="text-xl font-bold text-green-600">{fmtCents(summary.paidCents)}</div>
                   </CardContent>
                 </Card>
                 <Card>
@@ -428,7 +481,7 @@ export default function FinancialLedger() {
                       <ArrowRightLeft className="h-3 w-3 text-blue-500" /> Recovery Rate
                     </div>
                     <div className="text-xl font-bold text-blue-600">
-                      {(summary.recoveryRate * 100).toFixed(1)}%
+                      {basisPointsToPercent(summary.recoveryRateBasisPoints)}
                     </div>
                     <div className="text-xs text-muted-foreground">paid / billed</div>
                   </CardContent>
@@ -487,7 +540,7 @@ export default function FinancialLedger() {
                         <XAxis dataKey="date" tick={{ fontSize: 10 }} />
                         <YAxis tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 11 }} />
                         <Tooltip
-                          formatter={(v: number, name: string) => [fmt(v), ACCOUNT_LABELS[name] ?? name]}
+                          formatter={(v: number, name: string) => [fmtChartDollars(v), ACCOUNT_LABELS[name] ?? name]}
                           contentStyle={{ fontSize: 12 }}
                         />
                         <Legend
@@ -507,9 +560,9 @@ export default function FinancialLedger() {
                             />
                           ) : null
                         )}
-                        {summary && summary.billedDollars > 0 && (
+                        {summary && summary.billedCents > 0n && chartDollars(summary.billedCents) !== null && (
                           <ReferenceLine
-                            y={summary.billedDollars}
+                            y={chartDollars(summary.billedCents) ?? undefined}
                             stroke={ACCOUNT_COLORS.billed}
                             strokeDasharray="4 4"
                             label={{ value: "Billed", position: "insideTopRight", fontSize: 10 }}
@@ -537,7 +590,7 @@ export default function FinancialLedger() {
                         <BarChart data={chartData} margin={{ left: 10, right: 10 }}>
                           <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-20} textAnchor="end" height={50} />
                           <YAxis tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 11 }} />
-                          <Tooltip formatter={(v: number) => fmt(v)} />
+                          <Tooltip formatter={(v: number) => fmtChartDollars(v)} />
                           <Bar dataKey="amount" radius={[4, 4, 0, 0]}>
                             {chartData.map((entry, i) => (
                               <Cell key={i} fill={entry.color} />
@@ -558,12 +611,12 @@ export default function FinancialLedger() {
                         <div key={b.accountId} className="flex items-center justify-between py-2 border-b last:border-0">
                           <div className="flex items-center gap-2">
                             <div className="w-3 h-3 rounded-full"
-                              style={{ backgroundColor: ACCOUNT_COLORS[b.accountType] ?? "#94a3b8" }} />
+                              style={{ backgroundColor: ACCOUNT_COLORS[b.accountType] ?? C.muted }} />
                             <span className="text-sm font-medium">
                               {ACCOUNT_LABELS[b.accountType] ?? b.accountType}
                             </span>
                           </div>
-                          <span className="font-mono font-semibold text-sm">{fmt(b.balanceDollars)}</span>
+                          <span className="font-mono font-semibold text-sm">{fmtCents(b.balanceCents)}</span>
                         </div>
                       ))}
                     </div>
@@ -668,10 +721,10 @@ export default function FinancialLedger() {
                         groups.get(key)!.push(row);
                       });
                       return Array.from(groups.entries()).map(([accountKey, rows]) => {
-                        const groupDebits = rows.filter(r => r.entry.entryType === "debit").reduce((s, r) => s + r.entry.amountCents, 0);
-                        const groupCredits = rows.filter(r => r.entry.entryType === "credit").reduce((s, r) => s + r.entry.amountCents, 0);
+                        const groupDebits = rows.filter(r => r.entry.entryType === "debit").reduce((sum, row) => sum + row.entry.amountCents, 0n);
+                        const groupCredits = rows.filter(r => r.entry.entryType === "credit").reduce((sum, row) => sum + row.entry.amountCents, 0n);
                         const groupNet = groupCredits - groupDebits;
-                        const color = ACCOUNT_COLORS[accountKey] ?? "#94a3b8";
+                        const color = ACCOUNT_COLORS[accountKey] ?? C.muted;
         const isExpanded = expandedGroups[accountKey] !== false; // default open
                         return (
                           <div key={accountKey} className="border rounded-lg overflow-hidden">
@@ -689,13 +742,13 @@ export default function FinancialLedger() {
                                 <Badge variant="secondary" className="text-[10px]">{rows.length} entr{rows.length !== 1 ? "ies" : "y"}</Badge>
                               </div>
                               <div className="flex items-center gap-4 text-xs">
-                                {groupDebits > 0 && (
-                                  <span className="text-muted-foreground">Debits: <span className="font-mono text-red-600 dark:text-red-400">{fmt(groupDebits / 100)}</span></span>
+                                {groupDebits > 0n && (
+                                  <span className="text-muted-foreground">Debits: <span className="font-mono text-red-600 dark:text-red-400">{fmtCents(groupDebits)}</span></span>
                                 )}
-                                {groupCredits > 0 && (
-                                  <span className="text-muted-foreground">Credits: <span className="font-mono text-green-600 dark:text-green-400">{fmt(groupCredits / 100)}</span></span>
+                                {groupCredits > 0n && (
+                                  <span className="text-muted-foreground">Credits: <span className="font-mono text-green-600 dark:text-green-400">{fmtCents(groupCredits)}</span></span>
                                 )}
-                                <span className="text-muted-foreground">Net: <span className={`font-mono font-semibold ${groupNet >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>{groupNet >= 0 ? "+" : ""}{fmt(groupNet / 100)}</span></span>
+                                <span className="text-muted-foreground">Net: <span className={`font-mono font-semibold ${groupNet >= 0n ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>{groupNet >= 0n ? "+" : ""}{fmtCents(groupNet)}</span></span>
                               </div>
                             </button>
                             {/* Group rows — only shown when expanded */}
@@ -710,11 +763,11 @@ export default function FinancialLedger() {
                                       <td className="py-2 pr-3 max-w-xs truncate">{entry.description}</td>
                                       <td className="py-2 pr-3 text-xs text-muted-foreground">
                                         <span className="inline-flex items-center gap-1">
-                                          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }} />
+                                          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? C.muted }} />
                                           → {ACCOUNT_LABELS[creditAccountType] ?? creditAccountType}
                                         </span>
                                       </td>
-                                      <td className="py-2 text-right font-mono font-medium pr-3">{fmt(entry.amountCents / 100)}</td>
+                                      <td className="py-2 text-right font-mono font-medium pr-3">{fmtCents(entry.amountCents)}</td>
                                       <td className="py-2 pl-2 pr-3">
                                         <Badge variant={entry.entryType === "credit" ? "default" : "secondary"} className="text-xs">
                                           {entry.entryType}
@@ -753,19 +806,19 @@ export default function FinancialLedger() {
                             <td className="py-2 pr-4">
                               <span className="inline-flex items-center gap-1">
                                 <div className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: ACCOUNT_COLORS[debitAccountType] ?? "#94a3b8" }} />
+                                  style={{ backgroundColor: ACCOUNT_COLORS[debitAccountType] ?? C.muted }} />
                                 {ACCOUNT_LABELS[debitAccountType] ?? debitAccountType}
                               </span>
                             </td>
                             <td className="py-2 pr-4">
                               <span className="inline-flex items-center gap-1">
                                 <div className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? "#94a3b8" }} />
+                                  style={{ backgroundColor: ACCOUNT_COLORS[creditAccountType] ?? C.muted }} />
                                 {ACCOUNT_LABELS[creditAccountType] ?? creditAccountType}
                               </span>
                             </td>
                             <td className="py-2 text-right font-mono font-medium">
-                              {fmt(entry.amountCents / 100)}
+                              {fmtCents(entry.amountCents)}
                             </td>
                             <td className="py-2 pl-4">
                               <Badge variant={entry.entryType === "credit" ? "default" : "secondary"} className="text-xs">
@@ -779,10 +832,10 @@ export default function FinancialLedger() {
                       {(() => {
                         const totalDebits = filteredHistory
                           .filter(({ entry }) => entry.entryType === "debit")
-                          .reduce((sum, { entry }) => sum + entry.amountCents, 0);
+                          .reduce((sum, { entry }) => sum + entry.amountCents, 0n);
                         const totalCredits = filteredHistory
                           .filter(({ entry }) => entry.entryType === "credit")
-                          .reduce((sum, { entry }) => sum + entry.amountCents, 0);
+                          .reduce((sum, { entry }) => sum + entry.amountCents, 0n);
                         const net = totalCredits - totalDebits;
                         return (
                           <tfoot>
@@ -794,14 +847,14 @@ export default function FinancialLedger() {
                               <td className="py-2.5 pr-4" colSpan={2}>
                                 <div className="flex items-center gap-4 text-xs">
                                   <span className="text-muted-foreground">Debits:</span>
-                                  <span className="font-mono text-red-600 dark:text-red-400">{fmt(totalDebits / 100)}</span>
+                                  <span className="font-mono text-red-600 dark:text-red-400">{fmtCents(totalDebits)}</span>
                                   <span className="text-muted-foreground">Credits:</span>
-                                  <span className="font-mono text-green-600 dark:text-green-400">{fmt(totalCredits / 100)}</span>
+                                  <span className="font-mono text-green-600 dark:text-green-400">{fmtCents(totalCredits)}</span>
                                 </div>
                               </td>
                               <td className="py-2.5 text-right font-mono">
-                                <span className={net >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
-                                  {net >= 0 ? "+" : ""}{fmt(net / 100)}
+                                <span className={net >= 0n ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
+                                  {net >= 0n ? "+" : ""}{fmtCents(net)}
                                 </span>
                               </td>
                               <td className="py-2.5 pl-4">
@@ -818,7 +871,95 @@ export default function FinancialLedger() {
             </Card>
           </>
         )}
+
+        {/* ── Mojaloop Transfer Status ── */}
+        {selectedDisputeId && (
+          <MojaloopPanel disputeId={selectedDisputeId} />
+        )}
       </div>
     </DashboardLayout>
+  );
+}
+
+// ── Mojaloop panel ────────────────────────────────────────────────────────────
+function MojaloopPanel({ disputeId }: { disputeId: string }) {
+  const transfersQuery = trpc.mojaloop.listByDispute.useQuery(
+    { disputeId },
+    { enabled: !!disputeId, refetchInterval: 15_000 }
+  );
+
+  const transfers = (transfersQuery.data ?? []) as Array<{
+    referenceId?: string | null;
+    entryType: string;
+    amountCents: bigint;
+    createdAt: Date | null;
+    description?: string | null;
+  }>;
+
+  const statusBadge = (ref: string) => {
+    if (ref.includes("COMP")) return <Badge className="text-xs bg-emerald-500">Completed</Badge>;
+    if (ref.includes("FAIL")) return <Badge variant="destructive" className="text-xs">Failed</Badge>;
+    return <Badge variant="outline" className="text-xs">Pending</Badge>;
+  };
+
+  const statusIcon = (ref: string) => {
+    if (ref.includes("COMP")) return <CheckCircle2 className="h-4 w-4 text-emerald-500" />;
+    if (ref.includes("FAIL")) return <XCircle className="h-4 w-4 text-destructive" />;
+    return <Clock className="h-4 w-4 text-amber-500" />;
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Zap className="h-5 w-5 text-primary" />
+          Mojaloop Transfer Status
+          {transfersQuery.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground ml-1" />}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {transfersQuery.isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading Mojaloop transfers...
+          </div>
+        ) : transfers.length === 0 ? (
+          <div className="text-sm text-muted-foreground py-6 text-center">
+            No Mojaloop transfers found for this dispute.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Transfer ID</th>
+                  <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Type</th>
+                  <th className="text-right py-2 pr-4 font-medium text-muted-foreground">Amount</th>
+                  <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Status</th>
+                  <th className="text-left py-2 font-medium text-muted-foreground">Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transfers.map((t, i) => (
+                  <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
+                    <td className="py-2.5 pr-4">
+                      <div className="flex items-center gap-1.5">
+                        {statusIcon(t.referenceId ?? "")}
+                        <span className="font-mono text-xs truncate max-w-[160px]">{t.referenceId ?? "—"}</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 pr-4 capitalize text-xs">{t.entryType.replace(/_/g, " ")}</td>
+                    <td className="py-2.5 pr-4 text-right font-medium">{fmtCents(t.amountCents)}</td>
+                    <td className="py-2.5 pr-4">{statusBadge(t.referenceId ?? "")}</td>
+                    <td className="py-2.5 text-muted-foreground text-xs">
+                      {t.createdAt ? new Date(t.createdAt).toLocaleString() : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

@@ -13,10 +13,8 @@ export function useAuth() {
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: (data) => {
       utils.auth.me.setData(undefined, null);
-      // Redirect to Keycloak end-session endpoint to fully sign out
-      if (data?.logoutUrl) {
-        window.location.href = data.logoutUrl;
-      }
+      // Redirect to Keycloak end-session endpoint (clears both app cookie and Keycloak SSO)
+      window.location.href = data?.logoutUrl ?? "/api/auth/logout";
     },
   });
 
@@ -28,7 +26,7 @@ export function useAuth() {
         error instanceof TRPCClientError &&
         error.data?.code === "UNAUTHORIZED"
       ) {
-        // Already logged out — redirect to Keycloak logout anyway
+        // Already logged out — redirect to Keycloak end-session anyway
         window.location.href = "/api/auth/logout";
         return;
       }

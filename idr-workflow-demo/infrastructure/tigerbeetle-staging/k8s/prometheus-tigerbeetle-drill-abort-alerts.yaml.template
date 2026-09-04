@@ -1,0 +1,134 @@
+# Template-only staging alert rules. They require verified kube-state-metrics,
+# TigerBeetle read-probe instrumentation, and a drill-active metric. Do not
+# deploy until metric names, labels, types, and sources are verified in staging.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: healthpoint-tigerbeetle-drill-abort-guards
+  namespace: ${TIGERBEETLE_OBSERVABILITY_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: healthpoint
+    app.kubernetes.io/component: tigerbeetle-drill-guards
+spec:
+  groups:
+    - name: healthpoint.tigerbeetle.partition-drill
+      interval: 5s
+      rules:
+        - alert: HealthPointTigerBeetleNonTargetReplicaReadinessLoss
+          expr: |-
+            (
+              sum by (namespace) (kube_pod_status_ready{namespace="${TIGERBEETLE_NAMESPACE}",condition="true",pod=~"${TIGERBEETLE_STATEFULSET}-[0-5]"}) < 5
+            )
+            and on (namespace)
+            (
+              max by (namespace) (healthpoint_tigerbeetle_partition_drill_active{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",statefulset="${TIGERBEETLE_STATEFULSET}"} == 1)
+            )
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            drill_abort: "true"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+            statefulset: ${TIGERBEETLE_STATEFULSET}
+          annotations:
+            summary: TigerBeetle non-target replica readiness loss during staging partition drill
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetleReadProbeFailure
+          expr: |-
+            (
+              sum by (namespace) (increase(healthpoint_tigerbeetle_read_probe_total{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",operation="lookup_accounts",result="failure"}[1m])) > 0
+            )
+            and on (namespace)
+            (
+              max by (namespace) (healthpoint_tigerbeetle_partition_drill_active{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",statefulset="${TIGERBEETLE_STATEFULSET}"} == 1)
+            )
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            drill_abort: "true"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+            statefulset: ${TIGERBEETLE_STATEFULSET}
+          annotations:
+            summary: TigerBeetle read-only mTLS probe failed during staging partition drill
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetleReadProbeLatencyHigh
+          expr: |-
+            (
+              histogram_quantile(0.99, sum by (namespace, le) (rate(healthpoint_tigerbeetle_read_probe_duration_seconds_bucket{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",operation="lookup_accounts"}[1m]))) > 1
+            )
+            and on (namespace)
+            (
+              max by (namespace) (healthpoint_tigerbeetle_partition_drill_active{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",statefulset="${TIGERBEETLE_STATEFULSET}"} == 1)
+            )
+          for: 5s
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            drill_abort: "true"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+            statefulset: ${TIGERBEETLE_STATEFULSET}
+          annotations:
+            summary: TigerBeetle read-only probe p99 exceeded one second during staging partition drill
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetleExporterUnavailable
+          expr: |-
+            (
+              (
+                min by (namespace) (up{job="tigerbeetle-statsd-exporter",namespace="${TIGERBEETLE_NAMESPACE}"}) != 1
+                or absent(up{job="tigerbeetle-statsd-exporter",namespace="${TIGERBEETLE_NAMESPACE}"}) == 1
+              )
+            )
+            and on (namespace)
+            (
+              max by (namespace) (healthpoint_tigerbeetle_partition_drill_active{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",statefulset="${TIGERBEETLE_STATEFULSET}"} == 1)
+            )
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            drill_abort: "true"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+            statefulset: ${TIGERBEETLE_STATEFULSET}
+          annotations:
+            summary: TigerBeetle exporter telemetry unavailable during staging partition drill
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetleReadProbeTelemetryBlind
+          expr: |-
+            (
+              absent_over_time(healthpoint_tigerbeetle_read_probe_total{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",operation="lookup_accounts"}[1m]) == 1
+            )
+            and on (namespace)
+            (
+              max by (namespace) (healthpoint_tigerbeetle_partition_drill_active{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",statefulset="${TIGERBEETLE_STATEFULSET}"} == 1)
+            )
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            drill_abort: "true"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+            statefulset: ${TIGERBEETLE_STATEFULSET}
+          annotations:
+            summary: TigerBeetle read-probe telemetry is absent during staging partition drill
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
+        - alert: HealthPointTigerBeetlePartitionCleanupFailed
+          expr: |-
+            (
+              sum by (namespace) (increase(healthpoint_tigerbeetle_partition_cleanup_total{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",result="failed"}[1m])) > 0
+            )
+            and on (namespace)
+            (
+              max by (namespace) (healthpoint_tigerbeetle_partition_drill_active{environment="staging",namespace="${TIGERBEETLE_NAMESPACE}",statefulset="${TIGERBEETLE_STATEFULSET}"} == 1)
+            )
+          labels:
+            severity: critical
+            environment: staging
+            service: tigerbeetle
+            drill_abort: "true"
+            cluster: ${TIGERBEETLE_CLUSTER_LABEL}
+            statefulset: ${TIGERBEETLE_STATEFULSET}
+          annotations:
+            summary: TigerBeetle temporary NetworkPolicy cleanup was not verified
+            runbook: ${TIGERBEETLE_DRILL_RUNBOOK_URL}
