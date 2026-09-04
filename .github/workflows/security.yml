@@ -41,6 +41,8 @@ jobs:
         run: pnpm run test:tigerbeetle-connectivity-monitor-jitter
       - name: Verify TigerBeetle connectivity monitor deployment contract
         run: pnpm run validate:tigerbeetle-connectivity-monitor-deployment-contract
+      - name: Verify daily regression report formatting and delivery guard
+        run: pnpm run test:daily-regression-report
       - run: pnpm run build
 
   postgres-migration-and-audit-integration:

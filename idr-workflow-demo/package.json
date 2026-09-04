@@ -62,6 +62,8 @@
     "validate:tigerbeetle-connectivity-monitor-deployment-contract": "node scripts/validate-tigerbeetle-connectivity-monitor-deployment-contract.mjs",
     "validate:tigerbeetle-clock-metrics-terraform-contract": "node scripts/validate-tigerbeetle-clock-metrics-terraform-contract.mjs",
     "validate:tigerbeetle-clock-dashboard": "node scripts/validate-tigerbeetle-clock-dashboard.mjs",
+    "test:daily-regression-report": "node scripts/generate-daily-regression-report.test.mjs",
+    "generate:daily-regression-report": "node scripts/generate-daily-regression-report.mjs",
     "lockdown:unverified-integrations": "node scripts/lock-down-unverified-integrations.mjs",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"
   },

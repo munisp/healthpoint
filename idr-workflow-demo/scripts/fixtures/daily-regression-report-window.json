@@ -1,0 +1,31 @@
+{
+  "repository": "munisp/healthpoint",
+  "branch": "main",
+  "generatedAt": "2026-09-03T15:00:00.000Z",
+  "workflowRuns": [
+    {
+      "id": 101,
+      "name": "Security gates",
+      "display_title": "Daily protected regression",
+      "status": "completed",
+      "conclusion": "success",
+      "event": "schedule",
+      "head_branch": "main",
+      "head_sha": "2f4d2ca93dbe2c6067d70631c7fe94fe46e04efd",
+      "updated_at": "2026-09-03T14:56:12.000Z",
+      "html_url": "https://github.com/munisp/healthpoint/actions/runs/101"
+    },
+    {
+      "id": 100,
+      "name": "Security gates",
+      "display_title": "Earlier protected regression",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "head_branch": "main",
+      "head_sha": "dc2b935d7fcbeacbd1af0596f939daf76ae62594",
+      "updated_at": "2026-09-03T04:00:00.000Z",
+      "html_url": "https://github.com/munisp/healthpoint/actions/runs/100"
+    }
+  ]
+}
