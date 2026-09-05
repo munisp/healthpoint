@@ -20,6 +20,7 @@ import { serveStatic, setupVite } from "./vite";
 import { deadlineCheckHandler } from "../scheduled/deadlineCheck";
 import { weeklyDigestHandler } from "../scheduled/weeklyDigest";
 import { settlementBalanceProofHandler } from "../scheduled/settlementBalanceProof";
+import { ledgerReconciliationHandler } from "../scheduled/ledgerReconciliation";
 import { ENV } from "./env";
 import {
   SETTLEMENT_EVENT_ID_HEADER,
@@ -40,6 +41,7 @@ import { reconcileAuthenticatedSettlementCallback, settlementCallbackSchema } fr
 import { providerSettlementReportSchema, reconcileProviderSettlementReport } from "../settlement-lifecycle";
 import { LedgerIntegrityError } from "../ledger";
 import { startOutboxWorker } from "../outbox-worker";
+import { startLedgerReconciliationScheduler } from "../reconciliation-scheduler";
 import { isTigerBeetleEnabled, startTigerBeetleTunnel, stopTigerBeetleTunnel } from "../tigerbeetle";
 import { createScheduledAuth } from "../scheduled-auth";
 import { securityHeaders } from "./security-headers";
@@ -240,9 +242,9 @@ async function startServer() {
     const verification = verifySettlementCallbackSignature({
       secret: process.env.SETTLEMENT_CALLBACK_SECRET,
       keyring: parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING),
-      keyId: req.header(SETTLEMENT_KEY_ID_HEADER) ?? undefined,
-      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
-      signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+      keyId: req.header(SETTLEMENT_KEY_ID_HEADER),
+      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER),
+      signature: req.header(SETTLEMENT_SIGNATURE_HEADER),
       rawBody,
     });
     if (!verification.valid) {
@@ -309,9 +311,9 @@ async function startServer() {
     const verification = verifySettlementCallbackSignature({
       secret: process.env.SETTLEMENT_CALLBACK_SECRET,
       keyring: parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING),
-      keyId: req.header(SETTLEMENT_KEY_ID_HEADER) ?? undefined,
-      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
-      signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+      keyId: req.header(SETTLEMENT_KEY_ID_HEADER),
+      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER),
+      signature: req.header(SETTLEMENT_SIGNATURE_HEADER),
       rawBody,
     });
     if (!verification.valid) {
@@ -327,7 +329,7 @@ async function startServer() {
     }
     const parsed = providerSettlementReportSchema.safeParse(parsedPayload);
     if (!parsed.success) {
-      res.status(400).json({ error: "Invalid settlement report payload", issues: parsed.error.issues });
+      res.status(400).json({ error: "Settlement report payload", issues: parsed.error.issues });
       return;
     }
     if (req.header(SETTLEMENT_EVENT_ID_HEADER) !== parsed.data.reportId) {
@@ -362,12 +364,12 @@ async function startServer() {
     app.use(morgan((tokens, req, res) => {
       return JSON.stringify({
         timestamp: new Date().toISOString(),
-        requestId: tokens["request-id"](req, res),
+        requestId: tokens["request-id"](req),
         method: tokens.method(req, res),
         url: tokens.url(req, res),
-        status: parseInt(tokens.status(req, res) ?? "0"),
+        status: tokens.status(req, res),
         responseTimeMs: parseFloat(tokens["response-time"](req, res) ?? "0"),
-        contentLength: tokens.res(req, res, "content-length") ?? "-",
+        contentLength: parseFloat(tokens["content-length"](req, res) ?? "-"),
         userId: tokens["user-id"](req, res),
         userAgent: tokens["user-agent"](req, res),
         remoteAddr: tokens["remote-addr"](req, res),
@@ -525,11 +527,18 @@ async function startServer() {
   app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
   app.post("/api/scheduled/settlement-balance-proof", scheduledAuth, settlementBalanceProofHandler);
+  app.post("/api/scheduled/ledger-reconciliation", scheduledAuth, ledgerReconciliationHandler);
 
   // Durable settlement and payment-evidence events are reconciled after their
   // transaction commits. The worker is single-flight in each process; database
   // event claims prevent duplicate in-process dispatch across instances.
   startOutboxWorker();
+
+  // Postgres ↔ TigerBeetle ledger reconciliation on an env-configurable
+  // cadence (LEDGER_RECONCILIATION_INTERVAL_MINUTES, default hourly; 0
+  // disables the in-process scheduler — e.g. when an external cron drives
+  // POST /api/scheduled/ledger-reconciliation above).
+  startLedgerReconciliationScheduler();
 
   // ── Ollama pull-stream SSE endpoint ────────────────────────────────────────
   // Streams NDJSON progress from Ollama's /api/pull endpoint as SSE events.
@@ -579,7 +588,6 @@ async function startServer() {
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
