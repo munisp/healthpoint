@@ -18,9 +18,10 @@
  * "error"; with TB_LEDGER_REQUIRED=true it additionally throws so the caller
  * (scheduled endpoint) surfaces a failure instead of a silent skip.
  *
- * NOTE: reconciliation_runs is accessed with raw SQL because drizzle/schema.ts
- * is updated in a separate changeset; keep the column list in sync with the
- * migration.
+ * NOTE: reconciliation_runs is declared in drizzle/schema-reconciliation.ts
+ * (separate module to avoid concurrent-edit conflicts on schema.ts) and
+ * accessed here with raw SQL; keep the column list in sync with migration
+ * 0027_complete_lily_hollister.
  */
 
 import { createHash } from "crypto";
@@ -28,6 +29,7 @@ import { inArray, sql } from "drizzle-orm";
 import { eventLog, ledgerAccounts, settlementTransfers } from "../drizzle/schema";
 import { getDb } from "./db";
 import { LedgerIntegrityError } from "./ledger";
+import { diffLedgerAccount, type LedgerAccountDrift } from "./reconciliation-diff";
 import {
   deriveTigerBeetleAccountId,
   getTigerBeetleLedgerConfig,
@@ -37,16 +39,8 @@ import {
 
 const BALANCE_LOOKUP_BATCH = 128;
 
-export type ReconciliationDrift = {
-  disputeId: string;
-  accountId: string;
-  kind: "missing_account" | "posted_mismatch" | "pending_mismatch" | "postgres_mismatch";
-  postgresCents: number;
-  tigerBeetlePostedCents: number;
-  tigerBeetlePendingCents: number;
-  expectedPostedCents: number;
-  expectedPendingCents: number;
-};
+// The drift comparison rules live in ./reconciliation-diff (pure, unit-tested).
+export type ReconciliationDrift = LedgerAccountDrift;
 
 export type ReconciliationRun = {
   id: string;
@@ -66,11 +60,6 @@ export type ReconciliationRun = {
 export function defaultReconciliationRunKey(now = new Date()): string {
   // One audit row per UTC hour by default; schedulers may pass their own key.
   return `recon:${now.toISOString().slice(0, 13)}`;
-}
-
-function toNonNegativeInt(value: string | undefined): number {
-  const parsed = Number(value ?? "0");
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
 }
 
 type RawRunRow = {
@@ -152,42 +141,15 @@ export async function runLedgerReconciliation(input: {
       const pgAccounts = await db.select().from(ledgerAccounts).where(inArray(ledgerAccounts.disputeId, batch));
       for (let i = 0; i < batch.length; i++) {
         const disputeId = batch[i];
-        const balance = balances[i];
-        const disputeTransfers = transfers.filter(transfer => transfer.disputeId === disputeId);
         const paidAccount = pgAccounts.find(account => account.disputeId === disputeId && account.accountType === "paid");
-        const pgPaidCents = paidAccount?.balanceCents ?? 0;
-
-        const expectedPostedCents = disputeTransfers.reduce((total, transfer) => {
-          const metadata = (transfer.metadata as Record<string, unknown> | null) ?? {};
-          if (typeof metadata.tbSettledTransferId !== "string") return total;
-          return typeof metadata.tbReversalTransferId === "string" ? total - transfer.amountCents : total + transfer.amountCents;
-        }, 0);
-        const expectedPendingCents = disputeTransfers.reduce((total, transfer) => {
-          const metadata = (transfer.metadata as Record<string, unknown> | null) ?? {};
-          const holdOpen = (transfer.status === "submitted" || transfer.status === "accepted") && typeof metadata.tbPendingHoldId === "string";
-          return holdOpen ? total + transfer.amountCents : total;
-        }, 0);
-
-        if (!balance.found) {
-          if (expectedPostedCents !== 0 || expectedPendingCents !== 0) {
-            drifts.push({ disputeId, accountId: providerAccountIds[i], kind: "missing_account", postgresCents: pgPaidCents, tigerBeetlePostedCents: 0, tigerBeetlePendingCents: 0, expectedPostedCents, expectedPendingCents });
-          }
-          continue;
-        }
-        const tbPostedCents = toNonNegativeInt(balance.creditsPosted) - toNonNegativeInt(balance.debitsPosted);
-        const tbPendingCents = toNonNegativeInt(balance.creditsPending);
-        if (tbPostedCents !== expectedPostedCents || tbPostedCents !== pgPaidCents || tbPendingCents !== expectedPendingCents) {
-          drifts.push({
-            disputeId,
-            accountId: providerAccountIds[i],
-            kind: tbPostedCents !== expectedPostedCents ? "posted_mismatch" : tbPendingCents !== expectedPendingCents ? "pending_mismatch" : "postgres_mismatch",
-            postgresCents: pgPaidCents,
-            tigerBeetlePostedCents: tbPostedCents,
-            tigerBeetlePendingCents: tbPendingCents,
-            expectedPostedCents,
-            expectedPendingCents,
-          });
-        }
+        const drift = diffLedgerAccount({
+          disputeId,
+          accountId: providerAccountIds[i],
+          balance: balances[i],
+          postgresPaidCents: paidAccount?.balanceCents ?? 0,
+          transfers: transfers.filter(transfer => transfer.disputeId === disputeId),
+        });
+        if (drift) drifts.push(drift);
       }
     }
 
