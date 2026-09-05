@@ -190,7 +190,7 @@ export const idrComplianceRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "No open deadline of that type for this dispute" });
       }
       await emitComplianceEvent({
-        eventType: "deadline.warning", // reused channel: resolution recorded in audit trail
+        eventType: "deadline.warning", // resolution recorded in the same audit channel
         aggregateId: input.disputeId,
         aggregateType: "dispute",
         topic: "idr.audit",
@@ -385,7 +385,7 @@ export const idrComplianceRouter = router({
       return db.select().from(idrFeeAssessments).where(eq(idrFeeAssessments.disputeId, input.disputeId));
     }),
 
-  /** Update fee payment status (transition-guarded; audited). */
+  /** Update fee payment status (transition-guarded; audited; admin fee non-refundable). */
   "fees.updatePaymentStatus": protectedProcedure
     .input(z.object({
       assessmentId: z.string().min(1),
@@ -400,7 +400,8 @@ export const idrComplianceRouter = router({
       const current = rows[0];
       await assertDisputeAccess(ctx.user.id, ctx.user.role, current.disputeId, "write");
       try {
-        assertFeeStatusTransition(current.status as never, input.status as never);
+        // feeType-aware: the administrative fee is non-refundable (45 CFR § 149.510(d)(1)).
+        assertFeeStatusTransition(current.status as never, input.status as never, current.feeType as never);
       } catch (e) {
         throw new TRPCError({ code: "BAD_REQUEST", message: (e as Error).message });
       }
