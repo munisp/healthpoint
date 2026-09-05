@@ -6,13 +6,16 @@
 # RELEASE-BLOCKING ACTION ITEM: the following images use unpinned mutable
 # tags (`latest`). Before any release, replace each with a registry-verified
 # immutable digest (image@sha256:...):
-#   - infinyon/fluvio:latest            (fluvio-sc, fluvio-spu)
 #   - ghcr.io/permify/permify:latest    (permify)
 #   - ghcr.io/tigerbeetle/tigerbeetle:latest (tigerbeetle)
 #   - minio/minio:latest                (minio)
 #   - minio/mc:latest                   (minio-init)
 #   - mojaloop/simulator:latest         (mojaloop-simulator)
 #   - openappsec/nginx:latest           (openappsec)
+###############################################################################
+# NOTE: Dapr and Fluvio were removed on 2026-09-05 (zero application adoption;
+# orphaned infrastructure). The application talks to Kafka/Redis/Temporal
+# directly. See docs/UPGRADES.md for the image pinning workflow.
 ###############################################################################
 version: "3.9"
 
@@ -29,7 +32,6 @@ volumes:
   temporal_data:
   minio_data:
   tigerbeetle_data:
-  fluvio_data:
   permify_data:
   caddy_data:
   caddy_config:
@@ -67,7 +69,7 @@ services:
     command: redis-server --requirepass ${REDIS_PASSWORD:-redis_pass123} --appendonly yes
     volumes:
       - redis_data:/data
-    # Internal only — reached via idr-net (app, dapr-sidecar) and via Caddy
+    # Internal only — reached via idr-net (app) and via Caddy
     # layer-4 mTLS (host port 6380). Not published directly.
     expose:
       - "6379"
@@ -147,39 +149,6 @@ services:
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.dlq --partitions 3 --replication-factor 1
       echo 'Kafka topics created.'
     restart: on-failure
-
-  # ── Fluvio (edge real-time stream processing) ─────────────────────────────
-  fluvio-sc:
-    image: infinyon/fluvio:latest
-    restart: unless-stopped
-    networks: [idr-net]
-    command: fluvio-run sc --local
-    environment:
-      RUST_LOG: info
-    volumes:
-      - fluvio_data:/var/lib/fluvio
-    ports:
-      - "9003:9003"
-    healthcheck:
-      # Fail-closed: an unhealthy SC must report unhealthy so dependents and
-      # orchestrators do not route against a broken cluster.
-      test: ["CMD-SHELL", "fluvio cluster status || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-
-  fluvio-spu:
-    image: infinyon/fluvio:latest
-    restart: unless-stopped
-    networks: [idr-net]
-    depends_on: [fluvio-sc]
-    # SC listens on 9003 (see fluvio-sc ports); the SPU must register there.
-    command: fluvio-run spu -i 5001 -p fluvio-spu:9010 -v fluvio-spu:9011 --sc-addr fluvio-sc:9003
-    environment:
-      RUST_LOG: info
-    ports:
-      - "9010:9010"
 
 ###############################################################################
 # WORKFLOW ORCHESTRATION
@@ -531,50 +500,12 @@ services:
       - "3001:3001"     # TigerBeetle (mTLS via go-services)
       - "6380:6380"     # Redis (mTLS)
       - "9201:9201"     # OpenSearch (mTLS)
-      - "9004:9004"     # Fluvio (mTLS)
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:2019/config/ | grep -q '.' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
-
-###############################################################################
-# DAPR SIDECAR INFRASTRUCTURE
-###############################################################################
-
-  # ── Dapr placement service ────────────────────────────────────────────────
-  dapr-placement:
-    image: daprio/dapr:1.13.4
-    restart: unless-stopped
-    networks: [idr-net]
-    command: ["./placement", "--port", "50006", "--log-level", "info"]
-    ports:
-      - "50006:50006"
-
-  # ── Dapr sidecar for the main app ─────────────────────────────────────────
-  dapr-sidecar:
-    image: daprio/daprd:1.13.4
-    restart: unless-stopped
-    networks: [idr-net]
-    depends_on:
-      - dapr-placement
-      - redis
-      - kafka
-    command:
-      - "./daprd"
-      - "--app-id=idr-app"
-      - "--app-port=3000"
-      - "--dapr-http-port=3500"
-      - "--dapr-grpc-port=50001"
-      - "--placement-host-address=dapr-placement:50006"
-      - "--components-path=/components"
-      - "--log-level=info"
-    volumes:
-      - ./infra/dapr/components:/components:ro
-    ports:
-      - "3500:3500"   # Dapr HTTP API
-      - "50001:50001" # Dapr gRPC API
 
 ###############################################################################
 # PAYMENT INTEROPERABILITY
@@ -654,7 +585,6 @@ services:
       TEMPORAL_ADDRESS: "temporal:7233"
       TIGERBEETLE_ADDRESS: "tigerbeetle:3000"
       MOJALOOP_URL: "http://mojaloop-simulator:3003"
-      DAPR_HTTP_ENDPOINT: "http://dapr-sidecar:3500"
       S3_ENDPOINT: "http://minio:9000"
       S3_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minio_admin}"
       S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
@@ -756,7 +686,10 @@ services:
     ports:
       - "8001:8001"
 
-  # ── Rust services (Fluvio processor, high-perf event handlers) ────────────
+  # ── Rust services (high-perf Kafka event handlers) ───────────────────────
+  # NOTE: services/rust still contains an unused Fluvio code path
+  # (fluvio_bootstrap.rs, process_fluvio_stream) tracked for removal; the
+  # Fluvio cluster itself has been removed from this stack.
   rust-services:
     build:
       context: ./services/rust
@@ -765,10 +698,8 @@ services:
     networks: [idr-net]
     depends_on:
       - kafka
-      - fluvio-sc
     environment:
       KAFKA_BROKERS: "kafka:9092"
-      FLUVIO_SC_ADDR: "fluvio-sc:9003"
       RUST_LOG: "info"
       RUST_SERVICES_PORT: "8002"
     ports:
