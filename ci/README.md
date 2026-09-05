@@ -17,6 +17,16 @@ git push
 
 No edits are needed — the file is a complete, self-contained workflow.
 
+## pnpm version requirement
+
+The repo pins `packageManager: pnpm@10.34.5` and the lockfile
+(`lockfileVersion: 9.0`) only installs reproducibly under **pnpm 10** —
+`pnpm install --frozen-lockfile` is not guaranteed to succeed under pnpm 9.
+The workflow satisfies this with `pnpm/action-setup@v4` (`version: 10.34.5`)
+in both the `node` and `integration` jobs. For local runs, use
+`corepack enable` (honors the `packageManager` pin) or
+`npm install -g pnpm@10.34.5`.
+
 ## What the workflow does
 
 | Job | Steps |
