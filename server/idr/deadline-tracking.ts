@@ -12,6 +12,7 @@
  */
 
 import {
+  businessDaysBetween,
   deadlineAlertTier,
   type DeadlineAlertTier,
   type IDRDeadlinePolicy,
@@ -135,8 +136,7 @@ export function planDeadlineTracking(
         disputeId: dispute.id,
         deadlineType: src.deadlineType,
         basisDate: null, // basis anchoring is recorded when the router computes deadlines
-        computedDeadline: deadline,
-        dayCount: 0, // day count recorded by the computing path; scheduler preserves the deadline
+        dayCount: 0, // scheduler preserves the stored deadline; counts come from the computing path
         dayKind: src.dayKind,
         cfrReference: src.cfrReference,
       });
@@ -165,7 +165,7 @@ export function planDeadlineTracking(
         deadlineType: src.deadlineType,
         tier,
         computedDeadline: deadline,
-        businessDaysRemaining: tier === "overdue" ? -1 : Math.max(0, Math.ceil((deadline.getTime() - now.getTime()) / 86400000)),
+        businessDaysRemaining: tier === "overdue" ? -1 : businessDaysBetween(now, deadline, policy),
         cfrReference: src.cfrReference,
         alertKey: deadlineAlertKey(dispute.id, src.deadlineType, tier),
       });
