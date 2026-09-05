@@ -15,6 +15,7 @@ import { router, protectedProcedure } from "../_core/trpc";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import { getDb } from "../db";
+import { assertDisputeAccess } from "../authz";
 import {
   hermesJobs,
   hermesInsights,
@@ -92,6 +93,9 @@ export const hermesRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
+      // IDOR guard: narrative generation reads the full dispute (PHI + financials).
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
+
       const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
       if (!dispute) throw new Error("Dispute not found");
 
@@ -165,6 +169,9 @@ Notes: ${dispute.notes ?? "None"}`;
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
+
+      // IDOR guard: outcome simulation reads the full dispute record.
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
 
       const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
       if (!dispute) throw new Error("Dispute not found");
@@ -263,6 +270,9 @@ ${input.additionalContext ? `Additional context: ${input.additionalContext}` : "
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
+      // IDOR guard: risk scoring reads the full dispute record.
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
+
       const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
       if (!dispute) throw new Error("Dispute not found");
 
@@ -353,6 +363,9 @@ Eligible: ${dispute.isEligible ?? "Unknown"}`,
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
+
+      // IDOR guard: enrichment attaches insights to the dispute.
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
 
       const t0 = Date.now();
 
@@ -623,6 +636,11 @@ Current date context: ${new Date().toISOString().split("T")[0]}`,
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
+      // IDOR guard: arbitrator scoring may attach an insight to the dispute.
+      if (input.disputeId) {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
+      }
+
       const t0 = Date.now();
 
       const res = await invokeLLM({
@@ -711,6 +729,8 @@ ${input.cptCodes?.length ? `CPT codes: ${input.cptCodes.join(", ")}` : ""}`,
       // Fetch dispute context if provided
       let disputeContext = "";
       if (input.disputeId) {
+        // IDOR guard: dispute context contains PHI/financials.
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
         const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
         if (dispute) {
           disputeContext = `\n\nActive dispute context:
@@ -825,7 +845,9 @@ Be concise, accurate, and actionable. Cite regulatory references when relevant.$
   // ── Insights for a dispute ───────────────────────────────────────────────────
   getDisputeInsights: protectedProcedure
     .input(z.object({ disputeId: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      // IDOR guard: insights embed narratives, scores, and dispute data.
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
       const db = await getDb();
       if (!db) return [];
       return db
