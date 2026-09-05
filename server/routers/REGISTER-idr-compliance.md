@@ -1,20 +1,34 @@
 # REGISTER: idr-compliance router + scheduled endpoint
 
-**Status: TODO (one-line registrations).** `server/routers.ts` is owned by another
-workstream on this branch and must not be edited by the IDR-compliance change set.
-Apply the following registrations when merging:
+**Status: DONE (barrel registration).** `server/routers.ts` is owned by another
+workstream on this branch and was too large to edit through API-based merges,
+so registration went through the barrel module instead of editing routers.ts:
 
-## 1. tRPC router — `server/routers.ts`
+- **tRPC router** — `server/app-router.ts` (new):
+  `rootRouter = mergeRouters(appRouter, router({ idrCompliance: idrComplianceRouter }))`.
+  `mergeRouters` is re-exported from `server/_core/trpc.ts`.
+  `server/_core/index.ts` mounts `rootRouter` at `/api/trpc`.
+  Type compatibility: the client's `import type { AppRouter } from "../../../server/routers"`
+  keeps working (rootRouter is a superset of appRouter's type); the superset
+  type is also exported from `server/app-router.ts` as `AppRouter`/`RootRouter`.
 
-Follow the existing `hermesRouter` pattern:
+- **Scheduled endpoint** — `server/_core/index.ts`:
+  `app.post("/api/scheduled/idr-deadline-check", scheduledAuth, idrDeadlineCheckHandler)`
+  next to the other scheduled endpoints (same `scheduledAuth` guard; the
+  scheduled routes intentionally have no Redis rate limiter, matching the
+  existing pattern). Handler: `server/scheduled/idrDeadlineCheck.ts`.
+  Recommended schedule: daily, 08:30 UTC (matches deadline-check cadence).
+  The handler is idempotent (per-tier sentAt columns + deterministic outbox
+  idempotency keys), so daily re-runs and overlapping instances are safe.
 
-```ts
-// top of server/routers.ts, with the other router imports:
-import { idrComplianceRouter } from "./routers/idr-compliance";
-
-// inside appRouter = router({ ... }):
-idrCompliance: idrComplianceRouter,
-```
+- **Drizzle schema re-exports** — PENDING OWNER STEP: `drizzle/schema.ts` is
+  >40KB on this branch and was NOT edited. Optional, only affects future
+  `drizzle-kit generate` (the tables are applied by
+  `drizzle/migrations/0028_idr_compliance_tables.sql`). When editable, append:
+  ```ts
+  export * from "./schema-idr-compliance";
+  export * from "./schema-reconciliation";
+  ```
 
 This exposes:
 - `idrCompliance.deadlines.computeForDispute` / `.listForDispute` / `.markMet`
@@ -23,33 +37,7 @@ This exposes:
 - `idrCompliance.attestations.attest` / `.listForDispute`
 - `idrCompliance.reporting.volumeSummaryCsv` / `.determinationRecord`
 
-## 2. Scheduled endpoint — `server/_core/index.ts`
-
-Next to the other scheduled heartbeat registrations (~line with
-`app.post("/api/scheduled/deadline-check", ...)`):
-
-```ts
-import { idrDeadlineCheckHandler } from "../scheduled/idrDeadlineCheck";
-// ...
-app.post("/api/scheduled/idr-deadline-check", scheduledAuth, idrDeadlineCheckHandler);
-```
-
-Recommended schedule: daily, 08:30 UTC (matches the existing deadline-check cadence).
-The handler is idempotent (per-tier sentAt columns + deterministic outbox
-idempotency keys), so daily re-runs and overlapping instances are safe.
-
-## 3. Drizzle schema visibility (optional, for future `drizzle-kit generate`)
-
-`drizzle.config.ts` points at `./drizzle/schema.ts` only. The compliance tables
-live in `drizzle/schema-idr-compliance.ts` and are applied by
-`drizzle/migrations/0028_idr_compliance_tables.sql`. To include them in future
-generated migrations, add to `drizzle/schema.ts`:
-
-```ts
-export * from "./schema-idr-compliance";
-```
-
-## 4. Configuration (environment; all optional)
+## Configuration (environment; all optional)
 
 Deadline policy (statutory defaults, subject to rulemaking change —
 see `server/idr/deadlines.ts` header):

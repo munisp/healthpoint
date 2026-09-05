@@ -9,6 +9,9 @@ const t = initTRPC.context<TrpcContext>().create({
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
+// Re-exported so server/app-router.ts can merge the idr-compliance router
+// into the app router without editing the (workstream-owned) routers.ts.
+export const mergeRouters = t.mergeRouters;
 
 /**
  * Middleware that automatically invalidates the Fuse.js / OpenSearch search

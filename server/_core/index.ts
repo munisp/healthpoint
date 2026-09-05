@@ -14,10 +14,13 @@ import { registerKeycloakRoutes } from "./keycloak";
 import { bootstrapOpenSearchIndices } from "../search";
 import { startKafkaConsumer } from "../events/kafka-consumer";
 import { assertDisputeAccess, bootstrapPermifySchema } from "../authz";
-import { appRouter } from "../routers";
+// rootRouter (server/app-router.ts) = appRouter + idrCompliance barrel merge;
+// routers.ts itself is workstream-owned and intentionally not edited here.
+import { rootRouter } from "../app-router";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { deadlineCheckHandler } from "../scheduled/deadlineCheck";
+import { idrDeadlineCheckHandler } from "../scheduled/idrDeadlineCheck";
 import { weeklyDigestHandler } from "../scheduled/weeklyDigest";
 import { settlementBalanceProofHandler } from "../scheduled/settlementBalanceProof";
 import { ledgerReconciliationHandler } from "../scheduled/ledgerReconciliation";
@@ -364,7 +367,7 @@ async function startServer() {
     app.use(morgan((tokens, req, res) => {
       return JSON.stringify({
         timestamp: new Date().toISOString(),
-        requestId: tokens["request-id"](req),
+        requestId: tokens["request-id"](req, res),
         method: tokens.method(req, res),
         url: tokens.url(req, res),
         status: tokens.status(req, res),
@@ -525,6 +528,7 @@ async function startServer() {
 
   // ── Scheduled heartbeat endpoints (auth-guarded in production) ───────────
   app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
+  app.post("/api/scheduled/idr-deadline-check", scheduledAuth, idrDeadlineCheckHandler);
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
   app.post("/api/scheduled/settlement-balance-proof", scheduledAuth, settlementBalanceProofHandler);
   app.post("/api/scheduled/ledger-reconciliation", scheduledAuth, ledgerReconciliationHandler);
@@ -631,7 +635,7 @@ async function startServer() {
   app.use(
     "/api/trpc",
     createExpressMiddleware({
-      router: appRouter,
+      router: rootRouter,
       createContext,
       onError: ({ error, path }) => {
         if (error.code === "INTERNAL_SERVER_ERROR") {
