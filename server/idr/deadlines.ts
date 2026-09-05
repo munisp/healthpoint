@@ -193,7 +193,7 @@ export function usFederalHolidays(year: number): Set<string> {
 
   // Keep only dates that actually fall inside `year` (observations can spill).
   const prefix = `${year}-`;
-  return new Set([...days].filter(d => d.startsWith(prefix)));
+  return new Set(Array.from(days).filter(d => d.startsWith(prefix)));
 }
 
 // ── Business-day arithmetic (all UTC) ────────────────────────────────────────
