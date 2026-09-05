@@ -187,18 +187,6 @@ data:
                   "upstreams": [{"dial": ["{{ include "idr-platform.fullname" . }}-opensearch:9200"]}]
                 }]
               }]
-            },
-            "fluvio_mtls": {
-              "listen": ["0.0.0.0:9004"],
-              "routes": [{
-                "handle": [{
-                  "handler": "tls",
-                  "certificate_selection": {"any_tag": ["internal"]}
-                }, {
-                  "handler": "proxy",
-                  "upstreams": [{"dial": ["{{ include "idr-platform.fullname" . }}-fluvio-sc:9003"]}]
-                }]
-              }]
             }
           }
         }
@@ -276,9 +264,6 @@ spec:
               protocol: TCP
             - name: os-mtls
               containerPort: 9201
-              protocol: TCP
-            - name: fluvio-mtls
-              containerPort: 9004
               protocol: TCP
           env:
             - name: CLOUDFLARE_API_TOKEN
@@ -381,10 +366,6 @@ spec:
     - name: opensearch-mtls
       port: {{ .Values.caddy.layer4.opensearch.port }}
       targetPort: 9201
-      protocol: TCP
-    - name: fluvio-mtls
-      port: {{ .Values.caddy.layer4.fluvio.port }}
-      targetPort: 9004
       protocol: TCP
 
 ---
