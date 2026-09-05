@@ -460,27 +460,9 @@ async function startServer() {
   // ── Keycloak OIDC routes ──────────────────────────────────────────────────────
   registerKeycloakRoutes(app);
 
-  // ── Dapr pub/sub subscription discovery + event handlers ─────────────────
-  app.get("/dapr/subscribe", (_req: Request, res: Response) => {
-    res.json([
-      { pubsubname: "idr-pubsub", topic: "idr.dispute.events", route: "/api/events/dispute" },
-      { pubsubname: "idr-pubsub", topic: "idr.payments",        route: "/api/events/payment" },
-      { pubsubname: "idr-pubsub", topic: "idr.audit",           route: "/api/events/audit" },
-    ]);
-  });
-  app.post("/api/events/dispute", express.json(), (req: Request, res: Response) => {
-    const event = (req.body as Record<string, unknown>)?.data ?? req.body;
-    console.info("[Dapr] dispute event:", (event as Record<string, unknown>)?.eventType ?? "unknown");
-    res.status(200).json({ status: "SUCCESS" });
-  });
-  app.post("/api/events/payment", express.json(), (req: Request, res: Response) => {
-    const event = (req.body as Record<string, unknown>)?.data ?? req.body;
-    console.info("[Dapr] payment event:", (event as Record<string, unknown>)?.type ?? "unknown");
-    res.status(200).json({ status: "SUCCESS" });
-  });
-  app.post("/api/events/audit", express.json(), (_req: Request, res: Response) => {
-    res.status(200).json({ status: "SUCCESS" });
-  });
+  // NOTE: the Dapr pub/sub ingress (GET /dapr/subscribe + POST /api/events/*)
+  // was removed — Dapr infrastructure is retired branch-wide and the internal
+  // event flow uses the in-process/Kafka bus in server/events/bus.ts instead.
 
   // ── Legacy unauthenticated transfer callback retirement ───────────────────
   app.post("/api/mojaloop/callbacks/transfers", (_req: Request, res: Response) => {

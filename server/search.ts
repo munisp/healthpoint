@@ -37,17 +37,43 @@ import { desc } from "drizzle-orm";
 
 let _osClient: OpenSearchClient | null = null;
 
+/**
+ * Resolve whether the OpenSearch client verifies TLS server certificates.
+ * Default: verify in production. Development defaults to NOT verifying because
+ * the docker-compose OpenSearch runs with the security plugin disabled over
+ * plain HTTP / self-signed TLS. OPENSEARCH_VERIFY_TLS=false is honored ONLY
+ * outside production — a mis-set env var must never silently disable
+ * certificate verification in production (fail closed).
+ */
+function openSearchRejectUnauthorized(): boolean {
+  const isProduction = process.env.NODE_ENV === "production";
+  const verifyTlsEnv = process.env.OPENSEARCH_VERIFY_TLS?.trim().toLowerCase();
+  if (verifyTlsEnv === "true") return true;
+  if (verifyTlsEnv === "false") {
+    if (isProduction) {
+      console.error("[search] OPENSEARCH_VERIFY_TLS=false is not allowed in production — TLS certificate verification stays ENABLED");
+      return true;
+    }
+    return false;
+  }
+  return !isProduction;
+}
+
 function getOpenSearchClient(): OpenSearchClient | null {
   const url = process.env.OPENSEARCH_URL;
   if (!url) return null;
   if (_osClient) return _osClient;
   try {
+    const rejectUnauthorized = openSearchRejectUnauthorized();
+    if (!rejectUnauthorized && url.startsWith("https:")) {
+      console.warn("[search] OpenSearch TLS certificate verification is DISABLED (development only — never deploy this configuration)");
+    }
     _osClient = new OpenSearchClient({
       node: url,
       auth: process.env.OPENSEARCH_USER
         ? { username: process.env.OPENSEARCH_USER, password: process.env.OPENSEARCH_PASSWORD || "" }
         : undefined,
-      ssl: { rejectUnauthorized: false },
+      ssl: { rejectUnauthorized },
     });
     return _osClient;
   } catch {
