@@ -176,41 +176,6 @@
               ]
             }
           ]
-        },
-
-        "fluvio_tls": {
-          "listen": ["0.0.0.0:9004"],
-          "routes": [
-            {
-              "match": [
-                {
-                  "tls": {}
-                }
-              ],
-              "handle": [
-                {
-                  "handler": "tls",
-                  "connection_policies": [
-                    {
-                      "certificate_selection": {
-                        "any_tag": ["fluvio_internal"]
-                      },
-                      "client_authentication": {
-                        "mode": "require_and_verify",
-                        "trusted_ca_certs_pem_files": ["/etc/caddy/certs/internal-ca.pem"]
-                      }
-                    }
-                  ]
-                },
-                {
-                  "handler": "proxy",
-                  "upstreams": [
-                    { "dial": ["fluvio-sc:9003"] }
-                  ]
-                }
-              ]
-            }
-          ]
         }
 
       }
