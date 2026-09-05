@@ -10,13 +10,23 @@ import "./index.css";
 // Register service worker for PWA offline support
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    // Notify the user once when a new service worker takes control
-    // (i.e. an updated app version has been activated).
+    // When a new service worker takes control, a new app version has been
+    // activated. Offer a persistent toast with an explicit refresh action
+    // instead of a transient notice the user might miss.
     let updateToastShown = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (updateToastShown) return;
       updateToastShown = true;
-      toast('App updated — refresh');
+      toast('A new version of HealthPoint IDR is ready', {
+        description:
+          'Refresh to load the latest updates. Unsaved work on this page will not be affected until you refresh.',
+        duration: Infinity,
+        id: 'sw-update-available',
+        action: {
+          label: 'Refresh',
+          onClick: () => window.location.reload(),
+        },
+      });
     });
 
     navigator.serviceWorker.register('/sw.js').catch((error) => {
