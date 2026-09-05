@@ -1,5 +1,8 @@
 // HealthPoint IDR — Rust Services
-// High-performance stream processing using Fluvio and Kafka
+// High-performance event processing on Kafka (rdkafka).
+// NOTE: the Fluvio cluster was removed (orphan infrastructure); the
+// "fluvio processor" below is a Kafka consumer/producer and predates the
+// removal. It no longer takes any Fluvio configuration.
 // Exposes HTTP API for health and metrics on port 8002
 
 use std::env;
@@ -27,7 +30,6 @@ use tracing::{error, info, warn};
 #[derive(Clone, Debug)]
 struct Config {
     kafka_brokers: String,
-    fluvio_sc_addr: String,
     port: u16,
 }
 
@@ -35,7 +37,6 @@ impl Config {
     fn from_env() -> Self {
         Config {
             kafka_brokers: env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:29092".into()),
-            fluvio_sc_addr: env::var("FLUVIO_SC_ADDR").unwrap_or_else(|_| "localhost:9003".into()),
             port: env::var("RUST_SERVICES_PORT")
                 .unwrap_or_else(|_| "8002".into())
                 .parse()
@@ -78,34 +79,33 @@ struct EnrichedEvent {
     enrichments: serde_json::Value,
 }
 
-// ── Fluvio stream processor ───────────────────────────────────────────────────
+// ── State-change stream processor (Kafka-backed) ─────────────────────────────
 
-async fn run_fluvio_processor(config: Config, metrics: SharedMetrics) {
-    info!("[fluvio] connecting to SC at {}", config.fluvio_sc_addr);
+async fn run_stream_processor(config: Config, metrics: SharedMetrics) {
+    info!("[stream-processor] starting (Kafka-backed)");
 
-    // Fluvio consumer loop — processes real-time dispute state changes
+    // Consumer loop — processes real-time dispute state changes
     // and enriches them before forwarding to Kafka for Lakehouse ingestion
     loop {
-        match process_fluvio_stream(&config, metrics.clone()).await {
-            Ok(_) => info!("[fluvio] stream processor completed"),
+        match process_state_change_stream(&config, metrics.clone()).await {
+            Ok(_) => info!("[stream-processor] stream processor completed"),
             Err(e) => {
-                error!("[fluvio] stream processor error: {}", e);
+                error!("[stream-processor] stream processor error: {}", e);
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         }
     }
 }
 
-async fn process_fluvio_stream(
+async fn process_state_change_stream(
     config: &Config,
     metrics: SharedMetrics,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // In production: use fluvio crate to connect and consume
-    // For now: simulate stream processing with a Kafka consumer on the
-    // idr.disputes.state_changes topic, enrich, and forward to idr.lakehouse.ingest
+    // Kafka consumer on the idr.disputes.state_changes topic; enrich and
+    // forward to idr.lakehouse.ingest.
 
     let consumer: StreamConsumer = ClientConfig::new()
-        .set("group.id", "idr-rust-fluvio-processor")
+        .set("group.id", "idr-rust-stream-processor")
         .set("bootstrap.servers", &config.kafka_brokers)
         .set("auto.offset.reset", "earliest")
         .set("enable.auto.commit", "true")
@@ -119,12 +119,12 @@ async fn process_fluvio_stream(
         .set("message.timeout.ms", "5000")
         .create()?;
 
-    info!("[fluvio-processor] subscribed to idr.disputes.state_changes");
+    info!("[stream-processor] subscribed to idr.disputes.state_changes");
 
     loop {
         match consumer.recv().await {
             Err(e) => {
-                warn!("[fluvio-processor] kafka receive error: {}", e);
+                warn!("[stream-processor] kafka receive error: {}", e);
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
             Ok(msg) => {
@@ -144,10 +144,10 @@ async fn process_fluvio_stream(
                         let enriched = EnrichedEvent {
                             event: event.clone(),
                             processed_at: ts,
-                            processor: "rust-fluvio-processor".into(),
+                            processor: "rust-stream-processor".into(),
                             enrichments: serde_json::json!({
                                 "processingLatencyMs": ts,
-                                "streamSource": "fluvio",
+                                "streamSource": "kafka",
                                 "partitionKey": event.aggregate_id,
                                 "eventCategory": categorize_event(&event.event_type),
                             }),
@@ -165,19 +165,19 @@ async fn process_fluvio_stream(
                                 m.events_processed += 1;
                                 m.last_event_ts = ts;
                                 info!(
-                                    "[fluvio-processor] enriched event {} -> lakehouse",
+                                    "[stream-processor] enriched event {} -> lakehouse",
                                     event.id
                                 );
                             }
                             Err((e, _)) => {
-                                error!("[fluvio-processor] kafka produce error: {}", e);
+                                error!("[stream-processor] kafka produce error: {}", e);
                                 let mut m = metrics.write().await;
                                 m.events_failed += 1;
                             }
                         }
                     }
                     Err(e) => {
-                        warn!("[fluvio-processor] failed to parse event: {}", e);
+                        warn!("[stream-processor] failed to parse event: {}", e);
                         let mut m = metrics.write().await;
                         m.events_failed += 1;
                     }
@@ -408,11 +408,11 @@ async fn main() {
 
     let metrics: SharedMetrics = Arc::new(RwLock::new(Metrics::default()));
 
-    // Spawn Fluvio stream processor
-    let fluvio_config = config.clone();
-    let fluvio_metrics = metrics.clone();
+    // Spawn state-change stream processor
+    let stream_config = config.clone();
+    let stream_metrics = metrics.clone();
     tokio::spawn(async move {
-        run_fluvio_processor(fluvio_config, fluvio_metrics).await;
+        run_stream_processor(stream_config, stream_metrics).await;
     });
 
     // Spawn Kafka event handler
