@@ -285,6 +285,17 @@ export async function listDisputes(opts: {
   if (!db) return { items: [], total: 0 };
   const { limit = 20, offset = 0, status, serviceType, search } = opts;
   const conditions = [];
+  // Object-level authorization: when a userId is supplied (non-admin callers),
+  // restrict results to disputes that user initiated/created. Admin listing
+  // paths omit userId and remain unfiltered.
+  if (opts.userId) {
+    conditions.push(
+      or(
+        eq(disputes.initiatingPartyId, opts.userId),
+        eq(disputes.createdBy, opts.userId)
+      )
+    );
+  }
   if (status) conditions.push(eq(disputes.status, status));
   if (serviceType) conditions.push(sql`${disputes.serviceType} = ${serviceType}`);
   if (search) {
@@ -515,8 +526,8 @@ export async function seedIDREntities() {
   const entities = [
     { id: crypto.randomUUID(), name: "JAMS Healthcare Arbitration", certificationNumber: "IDR-CERT-001", specialties: ["emergency_medicine", "anesthesiology", "radiology"], states: ["CA", "NY", "TX", "FL", "IL"], contactEmail: "idr@jams.com", contactPhone: "1-800-352-5267", website: "https://www.jamsadr.com", avgResolutionDays: 28, totalCasesHandled: 1247, isActive: true },
     { id: crypto.randomUUID(), name: "AAA Healthcare Dispute Resolution", certificationNumber: "IDR-CERT-002", specialties: ["surgery", "hospitalist", "pathology"], states: ["NY", "NJ", "CT", "MA", "PA"], contactEmail: "healthcare@adr.org", contactPhone: "1-800-778-7879", website: "https://www.adr.org", avgResolutionDays: 25, totalCasesHandled: 892, isActive: true },
-    { id: crypto.randomUUID(), name: "AHLA Dispute Resolution Services", certificationNumber: "IDR-CERT-003", specialties: ["air_ambulance", "ground_ambulance", "emergency_medicine"], states: ["TX", "FL", "GA", "NC", "VA"], contactEmail: "disputes@ahla.com", contactPhone: "1-202-833-1100", website: "https://www.americanhealthlaw.org", avgResolutionDays: 22, totalCasesHandled: 634, isActive: true },
-    { id: crypto.randomUUID(), name: "National Arbitration Forum Healthcare", certificationNumber: "IDR-CERT-004", specialties: ["neonatology", "radiology", "anesthesiology"], states: ["MN", "WI", "IA", "ND", "SD"], contactEmail: "healthcare@nafresolution.com", contactPhone: "1-800-474-2371", website: "https://www.nafresolution.com", avgResolutionDays: 30, totalCasesHandled: 445, isActive: true },
+    { id: crypto.randomUUID(), name: "AHLA Dispute Resolution Services", certificationNumber: "IDR-CERT-003", specialties: ["air_ambulance", "ground_ambulance", "emergency_medicine"], states: ["TX", "FL", "GA", "NC", "VA"], contactEmail: "idr@ahla.com", contactPhone: "1-202-833-1100", website: "https://www.ahla.org", avgResolutionDays: 22, totalCasesHandled: 634, isActive: true },
+    { id: crypto.randomUUID(), name: "National Arbitration Forum Healthcare", certificationNumber: "IDR-CERT-004", specialties: ["neonatology", "radiology", "anesthesiology"], states: ["MN", "WI", "IA", "ND", "SD"], contactEmail: "healthcare@nafresolution.org", contactPhone: "1-800-474-2371", website: "https://www.nafresolution.org", avgResolutionDays: 30, totalCasesHandled: 445, isActive: true },
     { id: crypto.randomUUID(), name: "FINRA Healthcare Billing Arbitration", certificationNumber: "IDR-CERT-005", specialties: ["surgery", "emergency_medicine", "hospitalist"], states: ["DC", "MD", "VA", "DE", "WV"], contactEmail: "idr@finra.org", contactPhone: "1-301-590-6500", website: "https://www.finra.org", avgResolutionDays: 27, totalCasesHandled: 318, isActive: true },
   ];
   for (const entity of entities) {
@@ -540,10 +551,11 @@ export async function listNotifications(userId: string, unreadOnly = false) {
   return db.select().from(notifications).where(and(...conditions)).orderBy(desc(notifications.createdAt)).limit(50);
 }
 
-export async function markNotificationRead(id: string) {
+export async function markNotificationRead(id: string, userId: string) {
   const db = await getDb();
   if (!db) return;
-  await db.update(notifications).set({ isRead: true }).where(eq(notifications.id, id));
+  // Scope by userId so a user cannot mark another user's notifications read.
+  await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.id, id), eq(notifications.userId, userId)));
 }
 
 // ─── Event helpers ────────────────────────────────────────────────────────────
@@ -657,7 +669,7 @@ const QPA_BENCHMARKS_BY_CPT: Record<string, { median: number; p25: number; p75: 
   // Surgery
   "27447": { median: 1842, p25: 1285, p75: 2498, description: "Total knee arthroplasty" },
   "27130": { median: 1985, p25: 1385, p75: 2698, description: "Total hip arthroplasty" },
-  "43239": { median: 485,  p25: 338,  p75: 658,  description: "Upper GI endoscopy w/ biopsy" },
+  "43239": { median: 485,  p25: 338,  p75: 585,  description: "Upper GI endoscopy w/ biopsy" },
   "47562": { median: 1248, p25: 872,  p75: 1698, description: "Laparoscopic cholecystectomy" },
   // Pathology
   "88305": { median: 98,   p25: 68,   p75: 135,  description: "Tissue exam, surgical pathology" },
@@ -1208,7 +1220,7 @@ export async function markOnboardingComplete(userId: string): Promise<void> {
     .values({ id: userId, onboardingCompleted: true, onboardingCompletedAt: new Date() })
     .onConflictDoUpdate({
       target: userProfiles.id,
-      set: { onboardingCompleted: true, onboardingCompletedAt: new Date(), updatedAt: new Date() },
+      set: { onboardingCompleted: true, onboardingCompletedAt: new Date(), updatedAt: now },
     });
 }
 
@@ -1288,15 +1300,17 @@ export async function listWebhooks(userId: string): Promise<Webhook[]> {
   if (!db) return [];
   return db.select().from(webhooks).where(eq(webhooks.userId, userId)).orderBy(desc(webhooks.createdAt));
 }
-export async function updateWebhook(id: string, data: Partial<InsertWebhook>): Promise<void> {
+export async function updateWebhook(id: string, userId: string, data: Partial<InsertWebhook>): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  await db.update(webhooks).set({ ...data, updatedAt: new Date() }).where(eq(webhooks.id, id));
+  // Scope by userId so webhook records cannot be modified cross-tenant.
+  await db.update(webhooks).set({ ...data, updatedAt: new Date() }).where(and(eq(webhooks.id, id), eq(webhooks.userId, userId)));
 }
-export async function deleteWebhook(id: string): Promise<void> {
+export async function deleteWebhook(id: string, userId: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  await db.delete(webhooks).where(eq(webhooks.id, id));
+  // Scope by userId so webhook records cannot be deleted cross-tenant.
+  await db.delete(webhooks).where(and(eq(webhooks.id, id), eq(webhooks.userId, userId)));
 }
 
 // ─── Outcome Predictions Helpers ──────────────────────────────────────────────
