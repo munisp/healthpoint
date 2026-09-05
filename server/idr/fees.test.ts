@@ -10,17 +10,21 @@ import {
   type FeeScheduleLike,
 } from "./fees";
 
-const sched = (over: Partial<FeeScheduleLike> = {}): FeeScheduleLike => ({
-  id: over.id ?? "sched-1",
-  effectiveFrom: over.effectiveFrom ?? new Date("2026-01-01T00:00:00Z"),
-  effectiveTo: over.effectiveTo ?? null,
-  adminFeeCents: over.adminFeeCents ?? 11500, // EXAMPLE value in tests only — real amounts are configured
-  idreFeeSingleMinCents: over.idreFeeSingleMinCents ?? 20000,
-  idreFeeSingleMaxCents: over.idreFeeSingleMaxCents ?? 84000,
-  idreFeeBatchedMinCents: over.idreFeeBatchedMinCents ?? 26800,
-  idreFeeBatchedMaxCents: over.idreFeeBatchedMaxCents ?? 113800,
-  currency: "USD",
-});
+const sched = (over: Partial<FeeScheduleLike> = {}): FeeScheduleLike => {
+  const base: FeeScheduleLike = {
+    id: "sched-1",
+    effectiveFrom: new Date("2026-01-01T00:00:00Z"),
+    effectiveTo: null,
+    adminFeeCents: 11500, // EXAMPLE value in tests only — real amounts are configured
+    idreFeeSingleMinCents: 20000,
+    idreFeeSingleMaxCents: 84000,
+    idreFeeBatchedMinCents: 26800,
+    idreFeeBatchedMaxCents: 113800,
+    currency: "USD",
+  };
+  // Spread (not ??) so intentional null overrides are honored.
+  return { ...base, ...over };
+};
 
 describe("fee environment configuration", () => {
   it("returns nulls when no fee env is configured (never invents amounts)", () => {
