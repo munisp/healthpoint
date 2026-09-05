@@ -6,6 +6,10 @@ apisix:
     ip: 0.0.0.0
     port: 9092
   admin_key:
+    # SECURITY: this is the well-known APISIX default admin key. It is only
+    # acceptable for local development. In production this key MUST be
+    # overridden — mount ./infra/apisix/config.prod.yaml (from the production
+    # overlay / secrets pipeline) over this file instead of editing it here.
     - name: "admin"
       key: "edd1c9f034335f136f87ad84b625c8f1"
       role: admin
@@ -15,8 +19,10 @@ apisix:
 deployment:
   admin:
     allow_admin:
+      # Loopback only. The Admin API port (9092) is exposed on the container
+      # network (compose `expose:`) but NOT published to the host, so only
+      # in-cluster tooling can reach it. Never add 0.0.0.0/0 here.
       - 127.0.0.0/24
-      - 0.0.0.0/0
 
 etcd:
   host:
