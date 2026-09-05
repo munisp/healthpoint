@@ -181,14 +181,29 @@ export async function revokeToken(jti: string, ttlSeconds: number): Promise<void
 
 /**
  * Check if a JWT JTI has been revoked.
+ *
+ * Fail-closed in production: if Redis is unavailable or errors, the token is
+ * treated as revoked (request rejected) rather than silently allowed through.
+ * Development/test keep the graceful fail-open path with a warning, matching
+ * the rest of this module's degradation behavior.
  */
 export async function isTokenRevoked(jti: string): Promise<boolean> {
   const client = getRedisClient();
-  if (!client) return false;
+  if (!client) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("[Redis] isTokenRevoked: Redis client unavailable in production — treating token as revoked");
+      return true;
+    }
+    return false;
+  }
   try {
     const val = await client.get(`revoked:${jti}`);
     return val === "1";
   } catch (err) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("[Redis] isTokenRevoked error — treating token as revoked (fail-closed):", err);
+      return true;
+    }
     console.warn("[Redis] isTokenRevoked error:", err);
     return false;
   }
