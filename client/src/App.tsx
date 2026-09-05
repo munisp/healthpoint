@@ -4,6 +4,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
+import RouteSkeleton from "./components/RouteSkeleton";
+import OfflineBanner from "./components/OfflineBanner";
+import InstallPrompt from "./components/InstallPrompt";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import LoginPage from "./pages/LoginPage";
@@ -260,7 +263,12 @@ function AppInner() {
 
   return (
     <>
-      <Suspense fallback={<RouteLoading />}> 
+      <OfflineBanner />
+      <Suspense fallback={
+        <div className="min-h-[60vh] w-full bg-background p-6">
+          <RouteSkeleton />
+        </div>
+      }>
         <Router />
       </Suspense>
       <SessionExpiryWarning
@@ -268,6 +276,7 @@ function AppInner() {
         remainingMs={warningRemainingMs}
         onExtended={onSessionExtended}
       />
+      <InstallPrompt />
     </>
   );
 }
@@ -286,7 +295,3 @@ function App() {
 }
 
 export default App;
-
-function RouteLoading() {
-  return <div className="flex min-h-[14rem] items-center justify-center text-sm text-muted-foreground" role="status">Loading workspace…</div>;
-}
