@@ -134,7 +134,6 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/bash", "-c"]
     command: |
-      "
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.disputes --partitions 6 --replication-factor 1
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.disputes.state_changes --partitions 6 --replication-factor 1
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.documents --partitions 3 --replication-factor 1
@@ -147,7 +146,6 @@ services:
       # Dead-letter queue — server consumer routes poison messages here
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.dlq --partitions 3 --replication-factor 1
       echo 'Kafka topics created.'
-      "
     restart: on-failure
 
   # ── Fluvio (edge real-time stream processing) ─────────────────────────────
@@ -233,7 +231,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
     entrypoint: ["/bin/bash", "-c"]
     command: |
-      "sleep 15 && tctl --namespace default namespace register --retention 30 2>/dev/null || true && tail -f /dev/null"
+      sleep 15 && tctl --namespace default namespace register --retention 30 2>/dev/null || true && tail -f /dev/null
 
 ###############################################################################
 # IDENTITY & AUTHORIZATION
@@ -351,12 +349,10 @@ services:
       - tigerbeetle_data:/data
     entrypoint: ["/bin/sh", "-c"]
     command: |
-      "
       if [ ! -f /data/0_0.tigerbeetle ]; then
         /tigerbeetle format --cluster=0 --replica=0 --replica-count=1 /data/0_0.tigerbeetle
       fi
       /tigerbeetle start --addresses=0.0.0.0:3000 /data/0_0.tigerbeetle
-      "
     # Internal only — app/go-services use idr-net; host access goes through
     # the Caddy layer-4 mTLS listener on port 3001.
     expose:
@@ -403,14 +399,12 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
     command: |
-      "
       mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-minio_admin} ${MINIO_SECRET_KEY:-minio_secret123}
       mc mb --ignore-existing local/idr-lakehouse
       mc mb --ignore-existing local/idr-documents
       mc mb --ignore-existing local/idr-exports
       mc anonymous set download local/idr-exports
       echo 'MinIO buckets created.'
-      "
     restart: on-failure
 
 ###############################################################################
@@ -603,6 +597,7 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+
 
 ###############################################################################
 # APPLICATION SERVICES
