@@ -30,7 +30,7 @@ export default function LoginScreen() {
         <Text style={styles.buttonText}>Sign in with SSO</Text>
       </Pressable>
       {!ready && (
-        <Text style={styles.hint}>Connecting to identity provider\u2026</Text>
+        <Text style={styles.hint}>{"Connecting to identity provider\u2026"}</Text>
       )}
       {error && <Text style={styles.error}>{error}</Text>}
       <Text style={styles.footNote}>
