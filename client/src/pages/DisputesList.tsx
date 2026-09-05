@@ -15,6 +15,8 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import EmptyState from "@/components/EmptyState";
+import StatusBadge from "@/components/StatusBadge";
+import { formatUSD } from "@/lib/format";
 import { usePinnedDisputes } from "@/hooks/usePinnedDisputes";
 
 const DISPUTE_STATUSES = [
@@ -30,20 +32,6 @@ const DISPUTE_STATUSES = [
   { value: "closed", label: "Closed" },
   { value: "ineligible", label: "Ineligible" },
 ];
-
-const STATUS_COLORS: Record<string, string> = {
-  open_negotiation: "bg-blue-100 text-blue-700",
-  idr_initiated: "bg-purple-100 text-purple-700",
-  idr_entity_selection: "bg-indigo-100 text-indigo-700",
-  eligibility_review: "bg-amber-100 text-amber-700",
-  offer_submission: "bg-orange-100 text-orange-700",
-  under_arbitration: "bg-red-100 text-red-700",
-  determination_issued: "bg-teal-100 text-teal-700",
-  payment_pending: "bg-yellow-100 text-yellow-700",
-  closed: "bg-green-100 text-green-700",
-  appealed: "bg-rose-100 text-rose-700",
-  ineligible: "bg-slate-100 text-slate-600",
-};
 
 const STATUS_LABELS: Record<string, string> = {
   open_negotiation: "Open Negotiation",
@@ -90,11 +78,12 @@ function computeRisk(d: {
   return { score: Math.min(score, 100), level, factors };
 }
 
+// Risk tones use the semantic design tokens (WCAG-AA pairs).
 const RISK_CONFIG = {
-  critical: { badge: "bg-red-100 text-red-700 border-red-300", dot: "bg-red-500 animate-pulse", label: "Critical" },
-  high:     { badge: "bg-orange-100 text-orange-700 border-orange-300", dot: "bg-orange-500", label: "High" },
-  medium:   { badge: "bg-yellow-100 text-yellow-700 border-yellow-300", dot: "bg-yellow-400", label: "Medium" },
-  low:      { badge: "bg-green-100 text-green-700 border-green-300", dot: "bg-green-400", label: "Low" },
+  critical: { badge: "bg-danger text-danger-foreground border-danger-foreground/30", dot: "bg-danger-foreground animate-pulse", label: "Critical" },
+  high:     { badge: "bg-warning text-warning-foreground border-warning-foreground/30", dot: "bg-warning-foreground", label: "High" },
+  medium:   { badge: "bg-info text-info-foreground border-info-foreground/30", dot: "bg-info-foreground", label: "Medium" },
+  low:      { badge: "bg-success text-success-foreground border-success-foreground/30", dot: "bg-success-foreground", label: "Low" },
 };
 
 function RiskBadge({ dispute }: { dispute: any }) {
@@ -212,14 +201,14 @@ export default function DisputesList() {
   );
 
   if (authLoading) return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+    <div className="min-h-screen flex items-center justify-center" role="status" aria-label="Loading">
+      <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
     </div>
   );
 
   if (!isAuthenticated) return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
-      <Scale size={48} className="text-blue-600" />
+    <div className="min-h-screen flex flex-col items-center justify-center bg-muted gap-4">
+      <Scale size={48} className="text-primary" />
       <Button size="lg" onClick={() => (window.location.href = getLoginUrl())}>Sign In</Button>
     </div>
   );
@@ -369,9 +358,9 @@ export default function DisputesList() {
     <div className="space-y-6">
       {/* Bulk-action sticky toolbar — appears when items are selected */}
       {selectedIds.size > 0 && (
-        <div className="sticky top-0 z-20 bg-blue-600 text-white px-6 py-2.5 flex items-center gap-3 shadow-md border-b border-blue-700 -mx-6 -mt-6">
+        <div className="sticky top-0 z-20 bg-primary text-primary-foreground px-6 py-2.5 flex items-center gap-3 shadow-md border-b -mx-6 -mt-6">
           <div className="flex items-center gap-2 flex-1">
-            <CheckSquare size={16} className="text-blue-200" />
+            <CheckSquare size={16} className="text-primary-foreground/80" />
             <span className="text-sm font-semibold">
               {selectedIds.size} dispute{selectedIds.size !== 1 ? "s" : ""} selected
             </span>
@@ -408,7 +397,7 @@ export default function DisputesList() {
             </Button>
             <button
               onClick={handleDeselectAll}
-              className="ml-2 text-blue-200 hover:text-white text-xs flex items-center gap-1"
+              className="ml-2 text-primary-foreground/80 hover:text-primary-foreground text-xs flex items-center gap-1"
             >
               <X size={13} />Deselect All
             </button>
@@ -418,12 +407,12 @@ export default function DisputesList() {
 
       <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-800">IDR Disputes</h1>
-            <p className="text-sm text-slate-500 mt-0.5">{total.toLocaleString()} total disputes</p>
+            <h1 className="text-2xl font-bold text-foreground">IDR Disputes</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">{total.toLocaleString()} total disputes</p>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={handleExportCSV} disabled={csvExporting}
-              className="flex items-center gap-2 text-slate-600">
+              className="flex items-center gap-2">
               <Download size={15} />
               {csvExporting ? "Exporting..." : `Export CSV${total > 0 ? ` (${total.toLocaleString()})` : ""}`}
             </Button>
@@ -439,17 +428,19 @@ export default function DisputesList() {
           <div className="flex items-center gap-3 flex-wrap">
             {/* Live search */}
             <div className="relative flex-1 min-w-[220px] max-w-sm">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
                 ref={searchInputRef}
                 placeholder="Search reference #, party name... (press / to focus)"
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
                 className="pl-8 text-sm"
+                aria-label="Search disputes"
               />
               {searchInput && (
                 <button onClick={() => { setSearchInput(""); setSearch(""); setPage(1); }}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                  aria-label="Clear search"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                   <X size={13} />
                 </button>
               )}
@@ -457,7 +448,7 @@ export default function DisputesList() {
 
             {/* Service type select */}
             <Select value={serviceTypeFilter} onValueChange={v => { setServiceTypeFilter(v); setPage(1); }}>
-              <SelectTrigger className="w-44 text-sm">
+              <SelectTrigger className="w-44 text-sm" aria-label="Filter by service type">
                 <SelectValue placeholder="Service type" />
               </SelectTrigger>
               <SelectContent>
@@ -467,7 +458,8 @@ export default function DisputesList() {
 
             {/* Expand/collapse status filter chips */}
             <Button variant="outline" size="sm" onClick={() => setShowFilters(v => !v)}
-              className={showFilters ? "border-blue-400 text-blue-600" : ""}>
+              aria-expanded={showFilters}
+              className={showFilters ? "border-primary text-primary" : ""}>
               <SlidersHorizontal size={14} className="mr-1.5" />
               Status Filter {showFilters ? "▲" : "▼"}
             </Button>
@@ -475,7 +467,7 @@ export default function DisputesList() {
             {/* Clear all */}
             {hasActiveFilters && (
               <Button variant="ghost" size="sm" onClick={clearAllFilters}
-                className="text-slate-500 hover:text-red-600">
+                className="text-muted-foreground hover:text-destructive">
                 <X size={13} className="mr-1" />Clear all
               </Button>
             )}
@@ -484,23 +476,23 @@ export default function DisputesList() {
           {/* Active filter chips */}
           {hasActiveFilters && (
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-slate-400 font-medium">Active filters:</span>
+              <span className="text-xs text-muted-foreground font-medium">Active filters:</span>
               {search && (
-                <span className="flex items-center gap-1 px-2 py-0.5 bg-blue-50 border border-blue-200 rounded-full text-xs text-blue-700">
+                <span className="flex items-center gap-1 px-2 py-0.5 bg-accent border border-accent-foreground/20 rounded-full text-xs text-accent-foreground">
                   Search: "{search}"
-                  <button onClick={() => { setSearch(""); setSearchInput(""); }}><X size={10} /></button>
+                  <button onClick={() => { setSearch(""); setSearchInput(""); }} aria-label="Remove search filter"><X size={10} /></button>
                 </span>
               )}
               {statusFilter !== "all" && (
-                <span className="flex items-center gap-1 px-2 py-0.5 bg-purple-50 border border-purple-200 rounded-full text-xs text-purple-700">
+                <span className="flex items-center gap-1 px-2 py-0.5 bg-info border border-info-foreground/20 rounded-full text-xs text-info-foreground">
                   Status: {DISPUTE_STATUSES.find(s => s.value === statusFilter)?.label}
-                  <button onClick={() => setStatusFilter("all")}><X size={10} /></button>
+                  <button onClick={() => setStatusFilter("all")} aria-label="Remove status filter"><X size={10} /></button>
                 </span>
               )}
               {serviceTypeFilter !== "all" && (
-                <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-50 border border-amber-200 rounded-full text-xs text-amber-700">
+                <span className="flex items-center gap-1 px-2 py-0.5 bg-warning border border-warning-foreground/20 rounded-full text-xs text-warning-foreground">
                   Type: {SERVICE_TYPES.find(t => t.value === serviceTypeFilter)?.label}
-                  <button onClick={() => setServiceTypeFilter("all")}><X size={10} /></button>
+                  <button onClick={() => setServiceTypeFilter("all")} aria-label="Remove service type filter"><X size={10} /></button>
                 </span>
               )}
             </div>
@@ -508,11 +500,12 @@ export default function DisputesList() {
 
           {/* Status tabs (collapsible) */}
           {showFilters && (
-            <div className="flex items-center gap-2 flex-wrap p-3 bg-slate-50 rounded-lg border border-slate-200">
+            <div className="flex items-center gap-2 flex-wrap p-3 bg-muted rounded-lg border border-border">
               {DISPUTE_STATUSES.map(s => (
                 <button key={s.value} onClick={() => { setStatusFilter(s.value); setPage(1); }}
+                  aria-pressed={statusFilter === s.value}
                   className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                    statusFilter === s.value ? "bg-blue-600 text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    statusFilter === s.value ? "bg-primary text-primary-foreground" : "border border-border bg-card text-muted-foreground hover:bg-muted"
                   }`}>
                   {s.label}
                 </button>
@@ -522,11 +515,11 @@ export default function DisputesList() {
         </div>
 
         {/* Table */}
-        <Card className="border-slate-200">
+        <Card>
           <CardContent className="p-0">
             {isLoading ? (
-              <div className="flex items-center justify-center py-16">
-                <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+              <div className="flex items-center justify-center py-16" role="status" aria-label="Loading disputes">
+                <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
               </div>
             ) : items.length === 0 ? (
               <EmptyState
@@ -541,18 +534,17 @@ export default function DisputesList() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full">
-                  <thead className="bg-slate-50 border-b border-slate-200">
+                  <thead className="bg-muted/50 border-b border-border">
                     <tr>
                       <th className="px-4 py-3 w-10">
                         <Checkbox
                           checked={allSelected}
                           onCheckedChange={toggleSelectAll}
                           aria-label="Select all on this page"
-                          className="border-slate-300"
                         />
                       </th>
                       {["Reference #", "Initiating Party", "Responding Party", "Service Type", "Billed Amount", "QPA", "Risk", "Status", "Step", "Created", ""].map(h => (
-                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>
+                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -562,7 +554,7 @@ export default function DisputesList() {
                       return (
                         <tr
                           key={d.id}
-                          className={`border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer transition-colors ${isSelected ? "bg-blue-50 hover:bg-blue-50" : ""}`}
+                          className={`border-b border-border/60 last:border-0 hover:bg-muted/50 cursor-pointer transition-colors ${isSelected ? "bg-accent hover:bg-accent" : ""}`}
                           onClick={(e) => {
                             // Don't navigate if clicking checkbox
                             const target = e.target as HTMLElement;
@@ -575,27 +567,27 @@ export default function DisputesList() {
                               checked={isSelected}
                               onCheckedChange={() => toggleSelectOne(d.id)}
                               aria-label={`Select dispute ${d.referenceNumber}`}
-                              className="border-slate-300"
                             />
                           </td>
-                          <td className="px-4 py-3 text-sm font-mono font-semibold text-blue-600">{d.referenceNumber}</td>
-                          <td className="px-4 py-3 text-sm text-slate-700 max-w-[140px] truncate">{d.initiatingPartyName}</td>
-                          <td className="px-4 py-3 text-sm text-slate-600 max-w-[140px] truncate">{d.respondingPartyName ?? <span className="text-slate-400">TBD</span>}</td>
-                          <td className="px-4 py-3 text-sm text-slate-600">{d.serviceType?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}</td>
-                          <td className="px-4 py-3 text-sm font-semibold text-slate-800">${Number(d.billedAmount).toLocaleString()}</td>
-                          <td className="px-4 py-3 text-sm text-slate-600">{d.qpaAmount ? `$${Number(d.qpaAmount).toLocaleString()}` : <span className="text-slate-400">—</span>}</td>
+                          <td className="px-4 py-3 text-sm font-mono font-semibold text-primary">{d.referenceNumber}</td>
+                          <td className="px-4 py-3 text-sm text-foreground max-w-[140px] truncate">{d.initiatingPartyName}</td>
+                          <td className="px-4 py-3 text-sm text-muted-foreground max-w-[140px] truncate">{d.respondingPartyName ?? <span className="text-muted-foreground/70">TBD</span>}</td>
+                          <td className="px-4 py-3 text-sm text-muted-foreground">{d.serviceType?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-foreground">{formatUSD(Number(d.billedAmount))}</td>
+                          <td className="px-4 py-3 text-sm text-muted-foreground">{d.qpaAmount ? formatUSD(Number(d.qpaAmount)) : <span className="text-muted-foreground/70">—</span>}</td>
                           <td className="px-4 py-3">
                             <RiskBadge dispute={d} />
                           </td>
                           <td className="px-4 py-3">
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status] ?? "bg-slate-100 text-slate-600"}`}>
-                              {STATUS_LABELS[d.status] ?? d.status?.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
-                            </span>
+                            <StatusBadge
+                              status={d.status}
+                              label={STATUS_LABELS[d.status]}
+                            />
                           </td>
-                          <td className="px-4 py-3 text-xs text-slate-500 max-w-[120px] truncate">
+                          <td className="px-4 py-3 text-xs text-muted-foreground max-w-[120px] truncate">
                             {d.currentStep?.replace(/^STEP_\d+_/, "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
                           </td>
-                          <td className="px-4 py-3 text-sm text-slate-500">{new Date(d.createdAt).toLocaleDateString()}</td>
+                          <td className="px-4 py-3 text-sm text-muted-foreground">{new Date(d.createdAt).toLocaleDateString()}</td>
                           <td className="px-4 py-3 w-10" onClick={e => e.stopPropagation()}>
                             <button
                               onClick={() => togglePin({
@@ -605,17 +597,18 @@ export default function DisputesList() {
                                 status: d.status,
                               })}
                               title={isPinned(d.id) ? "Unpin" : "Pin to sidebar"}
+                              aria-label={isPinned(d.id) ? `Unpin dispute ${d.referenceNumber}` : `Pin dispute ${d.referenceNumber} to sidebar`}
                               className={`p-1 rounded transition-colors ${
                                 isPinned(d.id)
-                                  ? "text-amber-500 hover:text-amber-600"
-                                  : "text-slate-300 hover:text-slate-500"
+                                  ? "text-warning-foreground hover:opacity-80"
+                                  : "text-muted-foreground/50 hover:text-muted-foreground"
                               }`}
                             >
                               {isPinned(d.id) ? <PinOff size={14} /> : <Pin size={14} />}
                             </button>
                           </td>
                           <td className="px-4 py-3">
-                            <span className="text-sm text-blue-600 font-medium hover:text-blue-700">View →</span>
+                            <span className="text-sm text-primary font-medium hover:underline">View →</span>
                           </td>
                         </tr>
                       );
@@ -629,14 +622,14 @@ export default function DisputesList() {
 
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between text-sm text-slate-500">
+          <div className="flex items-center justify-between text-sm text-muted-foreground">
             <span>Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}</span>
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
+              <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} aria-label="Previous page">
                 <ChevronLeft size={16} />
               </Button>
               <span>Page {page} of {totalPages}</span>
-              <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+              <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages} aria-label="Next page">
                 <ChevronRight size={16} />
               </Button>
             </div>
