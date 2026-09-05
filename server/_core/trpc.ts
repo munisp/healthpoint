@@ -45,16 +45,21 @@ const requireUser = t.middleware(async opts => {
  * paths must pass their checker (fail closed: checker errors deny the request);
  * unmapped paths default-allow with a once-per-path audit log line.
  *
- * Middlewares run before zod input validation, so checkers receive rawInput;
- * malformed input is skipped here and rejected by the procedure's own schema.
+ * In @trpc/server v11 the input is zod-validated BEFORE middlewares run, so
+ * checkers receive the parsed, schema-validated input object.
  */
 const enforceObjectLevelAuthz = t.middleware(async opts => {
-  const { ctx, next, path, rawInput } = opts;
+  const { ctx, next, path } = opts;
   // ctx.user is guaranteed non-null because requireUser runs first.
   const user = ctx.user!;
+  // @trpc/server v11 middlewares receive the PARSED input as `input` (zod has
+  // already validated it) plus `getRawInput()` for the unparsed value; there
+  // is no `rawInput` property on middleware opts in v11.
+  const parsed = (opts as { input?: unknown }).input;
+  const input = parsed !== undefined ? parsed : await opts.getRawInput();
   await enforcePathAuthz(path, {
     user: { id: user.id, role: user.role === "admin" ? "admin" : "user" },
-  }, rawInput);
+  }, input);
   return next();
 });
 
