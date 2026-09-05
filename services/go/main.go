@@ -1,7 +1,9 @@
 // HealthPoint IDR — Go Services
 // Exposes three internal HTTP APIs:
 //   POST /internal/authz/check      — Permify authorization check
-//   POST /internal/ledger/transfer  — TigerBeetle double-entry transfer
+//   POST /internal/ledger/accounts  — idempotent TigerBeetle account creation
+//   POST /internal/ledger/balances  — TigerBeetle account balance lookup
+//   POST /internal/ledger/transfer  — TigerBeetle double-entry transfer (committed / pending / post / void)
 //   POST /internal/payments/initiate — Mojaloop payment initiation
 //   GET  /internal/health           — Health check
 
@@ -10,14 +12,16 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	permifyv1 "buf.build/gen/go/permifyco/permify/protocolbuffers/go/base/v1"
@@ -33,14 +37,14 @@ import (
 // ── Config ────────────────────────────────────────────────────────────────────
 
 type Config struct {
-	Port              string
-	Environment       string
-	PermifyGRPCURL    string
-	PermifyGRPCTLS    bool
-	TigerBeetleAddr   string
-	KafkaBrokers      string
-	MojaloopURL       string
-	InternalAuthToken string
+	Port                 string
+	Environment          string
+	PermifyGRPCURL       string
+	PermifyGRPCTLS       bool
+	TigerBeetleAddr      string
+	KafkaBrokers         string
+	MojaloopURL          string
+	InternalAuthToken    string
 	PaymentExecutionMode string
 }
 
@@ -59,9 +63,9 @@ func loadConfig() (Config, error) {
 		PaymentExecutionMode: getEnv("PAYMENT_EXECUTION_MODE", "disabled"),
 	}
 	for key, value := range map[string]string{
-		"PERMIFY_GRPC_URL": config.PermifyGRPCURL,
+		"PERMIFY_GRPC_URL":    config.PermifyGRPCURL,
 		"TIGERBEETLE_ADDRESS": config.TigerBeetleAddr,
-		"KAFKA_BROKERS": config.KafkaBrokers,
+		"KAFKA_BROKERS":       config.KafkaBrokers,
 	} {
 		if value == "" {
 			return Config{}, fmt.Errorf("%s is required", key)
@@ -122,12 +126,12 @@ func NewPermifyService(grpcURL string, useTLS bool) (*PermifyService, error) {
 }
 
 type AuthzCheckRequest struct {
-	TenantID   string `json:"tenantId"`
-	SubjectID  string `json:"subjectId"`
+	TenantID    string `json:"tenantId"`
+	SubjectID   string `json:"subjectId"`
 	SubjectType string `json:"subjectType"`
-	Permission string `json:"permission"`
-	EntityType string `json:"entityType"`
-	EntityID   string `json:"entityId"`
+	Permission  string `json:"permission"`
+	EntityType  string `json:"entityType"`
+	EntityID    string `json:"entityId"`
 }
 
 type AuthzCheckResponse struct {
@@ -174,14 +178,206 @@ func NewLedgerService(addr string) (*LedgerService, error) {
 	return &LedgerService{client: client}, nil
 }
 
+// ledgerBusinessError marks request violations and state conflicts that can
+// never succeed on retry (HTTP 409). Transport failures and unexpected
+// TigerBeetle errors remain plain errors (HTTP 500) so callers retry them.
+type ledgerBusinessError struct{ reason string }
+
+func (e *ledgerBusinessError) Error() string { return e.reason }
+
+func newLedgerBusinessError(format string, args ...interface{}) error {
+	return &ledgerBusinessError{reason: fmt.Sprintf(format, args...)}
+}
+
+// parseUint128Hex parses a caller-supplied 128-bit hex identifier and rejects
+// the zero identifier, which TigerBeetle reserves.
+func parseUint128Hex(field, value string) (Uint128, error) {
+	id, err := HexStringToUint128(value)
+	if err != nil {
+		return Uint128{}, newLedgerBusinessError("invalid %s: %v", field, err)
+	}
+	if id == (Uint128{}) {
+		return Uint128{}, newLedgerBusinessError("%s must not be zero", field)
+	}
+	return id, nil
+}
+
+// normalizeUint128Hex renders a Uint128 in the canonical (leading-zero-free)
+// hex form produced by Uint128.String, so externally supplied identifiers can
+// be matched against identifiers returned by the cluster.
+func normalizeUint128Hex(id Uint128) string {
+	return id.String()
+}
+
+type AccountRequest struct {
+	AccountID                  string `json:"accountId"`
+	Ledger                     uint32 `json:"ledger"`
+	Code                       uint16 `json:"code"`
+	DebitsMustNotExceedCredits bool   `json:"debitsMustNotExceedCredits,omitempty"`
+	CreditsMustNotExceedDebits bool   `json:"creditsMustNotExceedDebits,omitempty"`
+	History                    bool   `json:"history,omitempty"`
+}
+
+type AccountEnsureResult struct {
+	AccountID string `json:"accountId"`
+	Status    string `json:"status"` // "created" or "existing"
+}
+
+type EnsureAccountsRequest struct {
+	Accounts []AccountRequest `json:"accounts"`
+}
+
+type EnsureAccountsResponse struct {
+	Accounts []AccountEnsureResult `json:"accounts"`
+}
+
+// EnsureAccounts creates the requested accounts. Creation is idempotent by
+// account identifier: re-creating an account with identical parameters reports
+// "existing", while re-creating it with different parameters is a conflict
+// (TigerBeetle AccountExistsWithDifferent*) because the caller can no longer
+// assume the account matches their intent.
+func (l *LedgerService) EnsureAccounts(ctx context.Context, reqs []AccountRequest) (EnsureAccountsResponse, error) {
+	if len(reqs) == 0 || len(reqs) > 64 {
+		return EnsureAccountsResponse{}, newLedgerBusinessError("between 1 and 64 accounts are required per request")
+	}
+	accounts := make([]Account, len(reqs))
+	for i, req := range reqs {
+		id, err := parseUint128Hex("accountId", req.AccountID)
+		if err != nil {
+			return EnsureAccountsResponse{}, err
+		}
+		if req.Ledger == 0 || req.Code == 0 {
+			return EnsureAccountsResponse{}, newLedgerBusinessError("account %s requires a non-zero ledger and code", req.AccountID)
+		}
+		accounts[i] = Account{
+			ID:     id,
+			Ledger: req.Ledger,
+			Code:   req.Code,
+			Flags: AccountFlags{
+				DebitsMustNotExceedCredits: req.DebitsMustNotExceedCredits,
+				CreditsMustNotExceedDebits: req.CreditsMustNotExceedDebits,
+				History:                    req.History,
+			}.ToUint16(),
+		}
+	}
+	results, err := l.client.CreateAccounts(accounts)
+	if err != nil {
+		return EnsureAccountsResponse{}, fmt.Errorf("tigerbeetle create accounts: %w", err)
+	}
+	failures := map[uint32]CreateAccountResult{}
+	for _, result := range results {
+		failures[result.Index] = result.Result
+	}
+	response := EnsureAccountsResponse{Accounts: make([]AccountEnsureResult, 0, len(reqs))}
+	for i, req := range reqs {
+		result, failed := failures[uint32(i)]
+		switch {
+		case !failed:
+			response.Accounts = append(response.Accounts, AccountEnsureResult{AccountID: req.AccountID, Status: "created"})
+		case result == AccountExists:
+			response.Accounts = append(response.Accounts, AccountEnsureResult{AccountID: req.AccountID, Status: "existing"})
+		default:
+			return EnsureAccountsResponse{}, newLedgerBusinessError("account %s was not created: %v", req.AccountID, result)
+		}
+	}
+	return response, nil
+}
+
+type LedgerAccountBalance struct {
+	AccountID      string `json:"accountId"`
+	Found          bool   `json:"found"`
+	Ledger         uint32 `json:"ledger,omitempty"`
+	Code           uint16 `json:"code,omitempty"`
+	DebitsPosted   string `json:"debitsPosted"`
+	CreditsPosted  string `json:"creditsPosted"`
+	DebitsPending  string `json:"debitsPending"`
+	CreditsPending string `json:"creditsPending"`
+}
+
+type LookupBalancesRequest struct {
+	AccountIDs []string `json:"accountIds"`
+}
+
+type LookupBalancesResponse struct {
+	Balances []LedgerAccountBalance `json:"balances"`
+}
+
+// LookupBalances returns posted and pending balances for the requested
+// accounts. Missing accounts are reported with found=false rather than failing
+// the whole lookup so reconciliation can detect accounts that were never
+// mirrored to TigerBeetle.
+func (l *LedgerService) LookupBalances(ctx context.Context, accountIDs []string) (LookupBalancesResponse, error) {
+	if len(accountIDs) == 0 || len(accountIDs) > 128 {
+		return LookupBalancesResponse{}, newLedgerBusinessError("between 1 and 128 account IDs are required per request")
+	}
+	ids := make([]Uint128, len(accountIDs))
+	for i, raw := range accountIDs {
+		id, err := parseUint128Hex("accountId", raw)
+		if err != nil {
+			return LookupBalancesResponse{}, err
+		}
+		ids[i] = id
+	}
+	accounts, err := l.client.LookupAccounts(ids)
+	if err != nil {
+		return LookupBalancesResponse{}, fmt.Errorf("tigerbeetle lookup accounts: %w", err)
+	}
+	byID := map[string]Account{}
+	for _, account := range accounts {
+		byID[normalizeUint128Hex(account.ID)] = account
+	}
+	response := LookupBalancesResponse{Balances: make([]LedgerAccountBalance, 0, len(accountIDs))}
+	for i, raw := range accountIDs {
+		account, ok := byID[normalizeUint128Hex(ids[i])]
+		if !ok {
+			response.Balances = append(response.Balances, LedgerAccountBalance{
+				AccountID: raw, Found: false,
+				DebitsPosted: "0", CreditsPosted: "0", DebitsPending: "0", CreditsPending: "0",
+			})
+			continue
+		}
+		debitsPosted := account.DebitsPosted.BigInt()
+		creditsPosted := account.CreditsPosted.BigInt()
+		debitsPending := account.DebitsPending.BigInt()
+		creditsPending := account.CreditsPending.BigInt()
+		response.Balances = append(response.Balances, LedgerAccountBalance{
+			AccountID:      raw,
+			Found:          true,
+			Ledger:         account.Ledger,
+			Code:           account.Code,
+			DebitsPosted:   debitsPosted.String(),
+			CreditsPosted:  creditsPosted.String(),
+			DebitsPending:  debitsPending.String(),
+			CreditsPending: creditsPending.String(),
+		})
+	}
+	return response, nil
+}
+
+// Transfer phases for the two-phase settlement flow:
+//
+//	committed — one-shot double-entry transfer (default; original behavior)
+//	pending   — reserve funds as a hold (TransferFlags.Pending)
+//	post      — finalize a hold (TransferFlags.PostPendingTransfer)
+//	void      — release a hold (TransferFlags.VoidPendingTransfer)
+const (
+	TransferPhaseCommitted = "committed"
+	TransferPhasePending   = "pending"
+	TransferPhasePost      = "post"
+	TransferPhaseVoid      = "void"
+)
+
 type TransferRequest struct {
-	TransferID     string  `json:"transferId"`
-	DebitAccountID string  `json:"debitAccountId"`
+	TransferID      string `json:"transferId"`
+	DebitAccountID  string `json:"debitAccountId"`
 	CreditAccountID string `json:"creditAccountId"`
-	Amount         uint64  `json:"amount"`
-	Ledger         uint32  `json:"ledger"`
-	Code           uint16  `json:"code"`
-	UserData       string  `json:"userData"`
+	Amount          uint64 `json:"amount"`
+	Ledger          uint32 `json:"ledger"`
+	Code            uint16 `json:"code"`
+	Phase           string `json:"phase"`
+	PendingID       string `json:"pendingId"`
+	TimeoutSeconds  uint32 `json:"timeoutSeconds"`
+	UserData        string `json:"userData"`
 }
 
 type TransferResponse struct {
@@ -190,45 +386,159 @@ type TransferResponse struct {
 	Timestamp  int64  `json:"timestamp"`
 }
 
+// validateTransferRequest normalizes and validates the phase-independent and
+// phase-specific fields of a transfer request.
+func validateTransferRequest(req TransferRequest) (string, error) {
+	if req.TransferID == "" {
+		return "", newLedgerBusinessError("transferId is required")
+	}
+	phase := req.Phase
+	if phase == "" {
+		phase = TransferPhaseCommitted
+	}
+	switch phase {
+	case TransferPhaseCommitted, TransferPhasePending:
+		if req.DebitAccountID == "" || req.CreditAccountID == "" {
+			return "", newLedgerBusinessError("debitAccountId and creditAccountId are required")
+		}
+		if req.Amount == 0 {
+			return "", newLedgerBusinessError("amount must be positive")
+		}
+		if req.Ledger == 0 || req.Code == 0 {
+			return "", newLedgerBusinessError("ledger and code are required")
+		}
+		if req.PendingID != "" {
+			return "", newLedgerBusinessError("pendingId is only valid for post and void phases")
+		}
+	case TransferPhasePost, TransferPhaseVoid:
+		if req.PendingID == "" {
+			return "", newLedgerBusinessError("pendingId is required for post and void phases")
+		}
+	default:
+		return "", newLedgerBusinessError("phase must be committed, pending, post, or void")
+	}
+	return phase, nil
+}
+
+// Transfer executes a double-entry transfer. Every transfer identifier is
+// supplied by the caller and derived from the platform's outbox idempotency
+// key, so a retried submission is deduplicated by TigerBeetle (TransferExists)
+// instead of moving funds twice.
 func (l *LedgerService) Transfer(ctx context.Context, req TransferRequest) (TransferResponse, error) {
-	id, err := HexStringToUint128(req.TransferID)
+	phase, err := validateTransferRequest(req)
 	if err != nil {
-		return TransferResponse{}, fmt.Errorf("invalid transfer ID: %w", err)
+		return TransferResponse{}, err
 	}
-	debitID, err := HexStringToUint128(req.DebitAccountID)
+	id, err := parseUint128Hex("transferId", req.TransferID)
 	if err != nil {
-		return TransferResponse{}, fmt.Errorf("invalid debit account ID: %w", err)
+		return TransferResponse{}, err
 	}
-	creditID, err := HexStringToUint128(req.CreditAccountID)
-	if err != nil {
-		return TransferResponse{}, fmt.Errorf("invalid credit account ID: %w", err)
-	}
+	now := time.Now().UnixMilli()
 
-	transfers := []Transfer{{
-		ID:              id,
-		DebitAccountID:  debitID,
-		CreditAccountID: creditID,
-		Amount:          ToUint128(req.Amount),
-		Ledger:          req.Ledger,
-		Code:            req.Code,
-		Flags:           TransferFlags{}.ToUint16(),
-	}}
+	transfer := Transfer{ID: id}
+	flags := TransferFlags{}
 
-	errors, err := l.client.CreateTransfers(transfers)
+	switch phase {
+	case TransferPhaseCommitted, TransferPhasePending:
+		debitID, err := parseUint128Hex("debitAccountId", req.DebitAccountID)
+		if err != nil {
+			return TransferResponse{}, err
+		}
+		creditID, err := parseUint128Hex("creditAccountId", req.CreditAccountID)
+		if err != nil {
+			return TransferResponse{}, err
+		}
+		if debitID == creditID {
+			return TransferResponse{}, newLedgerBusinessError("debitAccountId and creditAccountId must differ")
+		}
+		transfer.DebitAccountID = debitID
+		transfer.CreditAccountID = creditID
+		transfer.Amount = ToUint128(req.Amount)
+		transfer.Ledger = req.Ledger
+		transfer.Code = req.Code
+		if phase == TransferPhasePending {
+			flags.Pending = true
+			transfer.Timeout = req.TimeoutSeconds
+		}
+	case TransferPhasePost, TransferPhaseVoid:
+		pendingID, err := parseUint128Hex("pendingId", req.PendingID)
+		if err != nil {
+			return TransferResponse{}, err
+		}
+		pending, err := l.client.LookupTransfers([]Uint128{pendingID})
+		if err != nil {
+			return TransferResponse{}, fmt.Errorf("tigerbeetle lookup pending transfer: %w", err)
+		}
+		if len(pending) == 0 {
+			// No hold exists — e.g. the hold predates ledger enablement. Reported
+			// distinctly so callers can treat a missing hold on void as a no-op
+			// and on post as a hard failure.
+			return TransferResponse{TransferID: req.TransferID, Status: "pending_not_found", Timestamp: now}, nil
+		}
+		hold := pending[0]
+		if req.Amount != 0 && ToUint128(req.Amount) != hold.Amount {
+			return TransferResponse{}, newLedgerBusinessError("amount does not match the pending transfer amount")
+		}
+		// The post/void must reference the hold's exact accounts, ledger, code,
+		// and amount; they are taken from the cluster's record so a retry with
+		// inconsistent parameters cannot create a divergent settlement.
+		transfer.DebitAccountID = hold.DebitAccountID
+		transfer.CreditAccountID = hold.CreditAccountID
+		transfer.Amount = hold.Amount
+		transfer.Ledger = hold.Ledger
+		transfer.Code = hold.Code
+		transfer.PendingID = pendingID
+		if phase == TransferPhasePost {
+			flags.PostPendingTransfer = true
+		} else {
+			flags.VoidPendingTransfer = true
+		}
+	}
+	transfer.Flags = flags.ToUint16()
+
+	failures, err := l.client.CreateTransfers([]Transfer{transfer})
 	if err != nil {
 		return TransferResponse{}, fmt.Errorf("tigerbeetle transfer: %w", err)
 	}
-	if len(errors) > 0 {
-		return TransferResponse{
-			TransferID: req.TransferID,
-			Status:     fmt.Sprintf("error: %v", errors[0].Result),
-		}, nil
+	if len(failures) > 0 {
+		result := failures[0].Result
+		switch result {
+		case TransferExists:
+			// Idempotent retry with identical parameters — already applied.
+			return TransferResponse{TransferID: req.TransferID, Status: "exists", Timestamp: now}, nil
+		case TransferPendingTransferAlreadyPosted:
+			if phase == TransferPhasePost {
+				return TransferResponse{TransferID: req.TransferID, Status: "already_posted", Timestamp: now}, nil
+			}
+			return TransferResponse{}, newLedgerBusinessError("pending transfer was already posted and cannot be voided")
+		case TransferPendingTransferAlreadyVoided:
+			if phase == TransferPhaseVoid {
+				return TransferResponse{TransferID: req.TransferID, Status: "already_voided", Timestamp: now}, nil
+			}
+			return TransferResponse{}, newLedgerBusinessError("pending transfer was already voided and cannot be posted")
+		case TransferPendingTransferNotPending, TransferPendingTransferExpired:
+			return TransferResponse{}, newLedgerBusinessError("pending transfer is no longer pending: %v", result)
+		default:
+			return TransferResponse{
+				TransferID: req.TransferID,
+				Status:     fmt.Sprintf("error: %v", result),
+			}, nil
+		}
 	}
 
+	status := TransferPhaseCommitted
+	switch phase {
+	case TransferPhasePending:
+		status = "pending"
+	case TransferPhasePost:
+		status = "posted"
+	case TransferPhaseVoid:
+		status = "voided"
+	}
 	return TransferResponse{
 		TransferID: req.TransferID,
-		Status:     "committed",
-		Timestamp:  time.Now().UnixMilli(),
+		Status:     status,
+		Timestamp:  now,
 	}, nil
 }
 
@@ -249,13 +559,13 @@ func NewMojaloopService(baseURL string) *MojaloopService {
 }
 
 type PaymentInitiateRequest struct {
-	TransactionID string  `json:"transactionId"`
-	PayerFSP      string  `json:"payerFsp"`
-	PayeeFSP      string  `json:"payeeFsp"`
-	Amount        string  `json:"amount"`
-	Currency      string  `json:"currency"`
-	Note          string  `json:"note"`
-	DisputeID     string  `json:"disputeId"`
+	TransactionID string `json:"transactionId"`
+	PayerFSP      string `json:"payerFsp"`
+	PayeeFSP      string `json:"payeeFsp"`
+	Amount        string `json:"amount"`
+	Currency      string `json:"currency"`
+	Note          string `json:"note"`
+	DisputeID     string `json:"disputeId"`
 }
 
 type PaymentInitiateResponse struct {
@@ -292,8 +602,8 @@ func (m *MojaloopService) InitiatePayment(ctx context.Context, req PaymentInitia
 			"currency": req.Currency,
 		},
 		"transactionType": map[string]string{
-			"scenario":  "TRANSFER",
-			"initiator": "PAYER",
+			"scenario":      "TRANSFER",
+			"initiator":     "PAYER",
 			"initiatorType": "BUSINESS",
 		},
 		"note": req.Note,
@@ -367,11 +677,11 @@ func (k *KafkaPublisher) Publish(ctx context.Context, topic string, key string, 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 
 type Server struct {
-	permify           *PermifyService
-	ledger            *LedgerService
-	mojaloop          *MojaloopService
-	kafka             *KafkaPublisher
-	internalAuthToken string
+	permify              *PermifyService
+	ledger               *LedgerService
+	mojaloop             *MojaloopService
+	kafka                *KafkaPublisher
+	internalAuthToken    string
 	paymentExecutionMode string
 }
 
@@ -420,6 +730,71 @@ func (s *Server) handleAuthzCheck(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// writeLedgerError maps ledger errors to HTTP status codes: request violations
+// and state conflicts are 409 (never retryable), transport/cluster failures are
+// 500 (retryable by the caller with the same idempotency key).
+func writeLedgerError(w http.ResponseWriter, err error) {
+	var businessErr *ledgerBusinessError
+	if errors.As(err, &businessErr) {
+		http.Error(w, businessErr.Error(), http.StatusConflict)
+		return
+	}
+	log.Printf("[ledger] error: %v", err)
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func (s *Server) handleLedgerAccounts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireInternalAuth(w, r) {
+		return
+	}
+	if s.ledger == nil {
+		http.Error(w, "ledger service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var req EnsureAccountsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	resp, err := s.ledger.EnsureAccounts(r.Context(), req.Accounts)
+	if err != nil {
+		writeLedgerError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) handleLedgerBalances(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireInternalAuth(w, r) {
+		return
+	}
+	if s.ledger == nil {
+		http.Error(w, "ledger service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var req LookupBalancesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	resp, err := s.ledger.LookupBalances(r.Context(), req.AccountIDs)
+	if err != nil {
+		writeLedgerError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 func (s *Server) handleLedgerTransfer(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -437,30 +812,32 @@ func (s *Server) handleLedgerTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.TransferID == "" || req.DebitAccountID == "" || req.CreditAccountID == "" || req.Amount == 0 || req.Ledger == 0 || req.Code == 0 {
-		http.Error(w, "transferId, debitAccountId, creditAccountId, amount, ledger, and code are required", http.StatusBadRequest)
-		return
-	}
 	resp, err := s.ledger.Transfer(r.Context(), req)
 	if err != nil {
-		log.Printf("[ledger] transfer error: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeLedgerError(w, err)
 		return
 	}
 	if s.kafka == nil {
 		http.Error(w, "payment event publisher unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.kafka.Publish(r.Context(), "idr.payments", req.TransferID, map[string]interface{}{
-		"type":       "payment.transfer",
-		"transferId": req.TransferID,
-		"amount":     req.Amount,
-		"status":     resp.Status,
-		"timestamp":  resp.Timestamp,
-	}); err != nil {
-		log.Printf("[ledger] payment event publish error: %v", err)
-		http.Error(w, "payment event publication failed", http.StatusServiceUnavailable)
-		return
+	if !strings.HasPrefix(resp.Status, "error:") {
+		phase := req.Phase
+		if phase == "" {
+			phase = TransferPhaseCommitted
+		}
+		if err := s.kafka.Publish(r.Context(), "idr.payments", req.TransferID, map[string]interface{}{
+			"type":       "payment.transfer",
+			"transferId": req.TransferID,
+			"phase":      phase,
+			"amount":     req.Amount,
+			"status":     resp.Status,
+			"timestamp":  resp.Timestamp,
+		}); err != nil {
+			log.Printf("[ledger] payment event publish error: %v", err)
+			http.Error(w, "payment event publication failed", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -551,17 +928,19 @@ func main() {
 	kafkaPub := NewKafkaPublisher(cfg.KafkaBrokers)
 
 	srv := &Server{
-		permify:           permifySvc,
-		ledger:            ledgerSvc,
-		mojaloop:          mojaloopSvc,
-		kafka:             kafkaPub,
-		internalAuthToken: cfg.InternalAuthToken,
+		permify:              permifySvc,
+		ledger:               ledgerSvc,
+		mojaloop:             mojaloopSvc,
+		kafka:                kafkaPub,
+		internalAuthToken:    cfg.InternalAuthToken,
 		paymentExecutionMode: cfg.PaymentExecutionMode,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/internal/health", srv.handleHealth)
 	mux.HandleFunc("/internal/authz/check", srv.handleAuthzCheck)
+	mux.HandleFunc("/internal/ledger/accounts", srv.handleLedgerAccounts)
+	mux.HandleFunc("/internal/ledger/balances", srv.handleLedgerBalances)
 	mux.HandleFunc("/internal/ledger/transfer", srv.handleLedgerTransfer)
 	mux.HandleFunc("/internal/payments/initiate", srv.handlePaymentInitiate)
 
