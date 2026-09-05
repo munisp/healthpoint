@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "HealthPoint IDR",
+    "slug": "healthpoint-idr",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "healthpoint",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.healthpoint.idr"
+    },
+    "android": {
+      "package": "com.healthpoint.idr"
+    },
+    "plugins": ["expo-router", "expo-secure-store"],
+    "extra": {
+      "apiUrl": "http://localhost:3000",
+      "keycloakUrl": "http://localhost:8080",
+      "keycloakRealm": "healthpoint",
+      "keycloakClientId": "healthpoint-app"
+    }
+  }
+}
