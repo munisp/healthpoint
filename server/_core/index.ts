@@ -98,7 +98,11 @@ async function findAvailablePort(startPort = 3000): Promise<number> {
 }
 
 // ─── Scheduled endpoint auth ─────────────────────────────────────────────────
-const SCHEDULED_SECRET = process.env.SCHEDULED_SECRET ?? "dev-scheduled-secret";
+// Production fails closed: createScheduledAuth throws when the secret is empty.
+const SCHEDULED_SECRET = process.env.SCHEDULED_SECRET ?? (ENV.isProduction ? "" : "dev-scheduled-secret");
+if (!process.env.SCHEDULED_SECRET && !ENV.isProduction) {
+  console.warn("[startup] SCHEDULED_SECRET is not set — using the insecure development default; never deploy without it");
+}
 const scheduledAuth = createScheduledAuth(ENV.isProduction, SCHEDULED_SECRET);
 
 // ─── Server startup ───────────────────────────────────────────────────────────
@@ -151,7 +155,9 @@ async function startServer() {
         if (!origin) return callback(null, true);
         // In dev, allow all origins
         if (!ENV.isProduction) return callback(null, true);
-        if (configuredOrigins.some(o => origin === o || origin.startsWith(o))) return callback(null, true);
+        // Exact match only — prefix matching would admit evil-suffix origins
+        // such as https://app.example.com.evil.tld
+        if (configuredOrigins.some(o => origin === o)) return callback(null, true);
         callback(new Error(`CORS: origin ${origin} not allowed. Add it to ALLOWED_ORIGINS env var.`));
       },
       credentials: true,
