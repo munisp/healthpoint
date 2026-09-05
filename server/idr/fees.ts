@@ -230,18 +230,23 @@ export type FeePaymentStatus = "assessed" | "invoiced" | "paid" | "waived" | "re
 const FEE_STATUS_TRANSITIONS: Record<FeePaymentStatus, FeePaymentStatus[]> = {
   assessed: ["invoiced", "paid", "waived", "void"],
   invoiced: ["paid", "waived", "void"],
-  paid: ["refunded"], // refund required if dispute found ineligible (§ 149.510(d)(2)(iv))
+  paid: ["refunded"], // refund path exists for certified IDRE fees on ineligibility (§ 149.510(d)(2)(iv))
   waived: [],
   refunded: [],
   void: [],
 };
 
-export function canTransitionFeeStatus(from: FeePaymentStatus, to: FeePaymentStatus): boolean {
-  return (FEE_STATUS_TRANSITIONS[from] ?? []).includes(to);
+export function canTransitionFeeStatus(from: FeePaymentStatus, to: FeePaymentStatus, feeType?: FeeType): boolean {
+  if (!(FEE_STATUS_TRANSITIONS[from] ?? []).includes(to)) return false;
+  // The administrative fee is NON-REFUNDABLE (45 CFR § 149.510(d)(1)); only
+  // certified IDRE entity fees may be refunded (e.g. on post-selection
+  // ineligibility, § 149.510(d)(2)(iv)).
+  if (to === "refunded" && feeType === "administrative") return false;
+  return true;
 }
 
-export function assertFeeStatusTransition(from: FeePaymentStatus, to: FeePaymentStatus): void {
-  if (!canTransitionFeeStatus(from, to)) {
-    throw new Error(`Invalid fee status transition: ${from} → ${to}`);
+export function assertFeeStatusTransition(from: FeePaymentStatus, to: FeePaymentStatus, feeType?: FeeType): void {
+  if (!canTransitionFeeStatus(from, to, feeType)) {
+    throw new Error(`Invalid fee status transition: ${from} → ${to}${feeType ? ` for fee type ${feeType}` : ""}`);
   }
 }
