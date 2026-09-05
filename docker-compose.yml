@@ -3,6 +3,17 @@
 # This file is not a production deployment baseline. Use the production overlay
 # only with mandatory production secrets and non-simulator provider endpoints.
 ###############################################################################
+# RELEASE-BLOCKING ACTION ITEM: the following images use unpinned mutable
+# tags (`latest`). Before any release, replace each with a registry-verified
+# immutable digest (image@sha256:...):
+#   - infinyon/fluvio:latest            (fluvio-sc, fluvio-spu)
+#   - ghcr.io/permify/permify:latest    (permify)
+#   - ghcr.io/tigerbeetle/tigerbeetle:latest (tigerbeetle)
+#   - minio/minio:latest                (minio)
+#   - minio/mc:latest                   (minio-init)
+#   - mojaloop/simulator:latest         (mojaloop-simulator)
+#   - openappsec/nginx:latest           (openappsec)
+###############################################################################
 version: "3.9"
 
 networks:
@@ -41,7 +52,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     ports:
-      - "5432:5432"
+      - "5432:5432"   # DEV ONLY: host access for local tooling; remove in production overlay
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-idr_user} -d ${POSTGRES_DB:-idr_demo}"]
       interval: 10s
@@ -56,8 +67,10 @@ services:
     command: redis-server --requirepass ${REDIS_PASSWORD:-redis_pass123} --appendonly yes
     volumes:
       - redis_data:/data
-    ports:
-      - "6379:6379"
+    # Internal only — reached via idr-net (app, dapr-sidecar) and via Caddy
+    # layer-4 mTLS (host port 6380). Not published directly.
+    expose:
+      - "6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_pass123}", "ping"]
       interval: 10s
@@ -131,6 +144,8 @@ services:
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.users --partitions 3 --replication-factor 1
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.payments --partitions 6 --replication-factor 1
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.lakehouse.ingest --partitions 3 --replication-factor 1
+      # Dead-letter queue — server consumer routes poison messages here
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.dlq --partitions 3 --replication-factor 1
       echo 'Kafka topics created.'
       "
     restart: on-failure
@@ -148,7 +163,9 @@ services:
     ports:
       - "9003:9003"
     healthcheck:
-      test: ["CMD-SHELL", "fluvio cluster status 2>/dev/null || exit 0"]
+      # Fail-closed: an unhealthy SC must report unhealthy so dependents and
+      # orchestrators do not route against a broken cluster.
+      test: ["CMD-SHELL", "fluvio cluster status || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -159,7 +176,8 @@ services:
     restart: unless-stopped
     networks: [idr-net]
     depends_on: [fluvio-sc]
-    command: fluvio-run spu -i 5001 -p fluvio-spu:9010 -v fluvio-spu:9011 --sc-addr fluvio-sc:9004
+    # SC listens on 9003 (see fluvio-sc ports); the SPU must register there.
+    command: fluvio-run spu -i 5001 -p fluvio-spu:9010 -v fluvio-spu:9011 --sc-addr fluvio-sc:9003
     environment:
       RUST_LOG: info
     ports:
@@ -204,7 +222,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:3000
     ports:
-      - "8088:8080"
+      - "8088:8080"   # DEV ONLY: also reachable via temporal.healthpoint.example.com through Caddy
 
   temporal-admin-tools:
     image: temporalio/admin-tools:1.24.2
@@ -235,7 +253,7 @@ services:
     volumes:
       - ./keycloak:/opt/keycloak/data/import
     ports:
-      - "8080:8080"
+      - "8080:8080"   # DEV ONLY: admin console also available via keycloak.healthpoint.example.com through Caddy; remove in production overlay
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/realms/healthpoint/.well-known/openid-configuration | grep issuer"]
       interval: 20s
@@ -262,9 +280,10 @@ services:
     volumes:
       - permify_data:/var/lib/permify
       - ./infra/permify/schema.perm:/etc/permify/schema.perm:ro
-    ports:
-      - "3476:3476"   # HTTP
-      - "3478:3478"   # gRPC
+    # Internal only — app and go-services reach Permify over idr-net.
+    expose:
+      - "3476"   # HTTP
+      - "3478"   # gRPC
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:3476/healthz | grep SERVING"]
       interval: 15s
@@ -294,12 +313,14 @@ services:
         hard: -1
     volumes:
       - opensearch_data:/usr/share/opensearch/data
-    ports:
-      - "9200:9200"
-      - "9600:9600"
+    # Internal only — consumers reach OpenSearch over idr-net; host access
+    # goes through the Caddy layer-4 mTLS listener on port 9201.
+    expose:
+      - "9200"
+      - "9600"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -E 'green|yellow'"]
-      interval: 20s
+      interval: 10s
       timeout: 10s
       retries: 10
       start_period: 60s
@@ -336,8 +357,10 @@ services:
       fi
       /tigerbeetle start --addresses=0.0.0.0:3000 /data/0_0.tigerbeetle
       "
-    ports:
-      - "3002:3000"
+    # Internal only — app/go-services use idr-net; host access goes through
+    # the Caddy layer-4 mTLS listener on port 3001.
+    expose:
+      - "3000"
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 3000 && echo ok"]
       interval: 10s
@@ -361,8 +384,11 @@ services:
     volumes:
       - minio_data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9001:9001"   # MinIO console (DEV ONLY: remove in production overlay)
+    # S3 API (9000) is internal only — lakehouse-worker, ai-service and the
+    # app reach it over idr-net.
+    expose:
+      - "9000"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -399,8 +425,9 @@ services:
     environment:
       ALLOW_NONE_AUTHENTICATION: "yes"
       ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
-    ports:
-      - "2379:2379"
+    # Internal only — only APISIX and apisix-dashboard talk to etcd.
+    expose:
+      - "2379"
     healthcheck:
       test: ["CMD-SHELL", "etcdctl endpoint health"]
       interval: 10s
@@ -421,7 +448,10 @@ services:
     ports:
       - "9080:9080"   # HTTP gateway
       - "9443:9443"   # HTTPS gateway
-      - "9092:9092"   # Admin API
+    # Admin API (9092) is NOT published — in-cluster only via `expose`.
+    # Restricted to loopback by deployment.admin.allow_admin in config.yaml.
+    expose:
+      - "9092"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9080/apisix/status | grep ok"]
       interval: 15s
@@ -438,7 +468,7 @@ services:
     volumes:
       - ./infra/apisix/dashboard.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
     ports:
-      - "9000:9000"
+      - "9000:9000"   # DEV ONLY: render dashboard.yaml placeholders before production use
 
   # ── OpenAppsec WAF (NGINX-based ML WAF) ─────────────────────────────────
   # Sits between Caddy and APISIX: Caddy → OpenAppsec → APISIX → App
@@ -624,6 +654,8 @@ services:
       KAFKA_BROKERS: "kafka:9092"
       KEYCLOAK_URL: "http://keycloak:8080"
       PERMIFY_GRPC_URL: "permify:3478"
+      # server/authz.ts reads PERMIFY_URL (REST) — keep in sync with PERMIFY_GRPC_URL
+      PERMIFY_URL: "http://permify:3476"
       OPENSEARCH_URL: "http://opensearch:9200"
       TEMPORAL_ADDRESS: "temporal:7233"
       TIGERBEETLE_ADDRESS: "tigerbeetle:3000"
@@ -634,7 +666,7 @@ services:
       S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
       S3_BUCKET: "idr-documents"
     ports:
-      - "3000:3000"
+      - "3000:3000"   # DEV ONLY: remove in production overlay — traffic enters via Caddy → OpenAppsec → APISIX
 
   # ── Python AI service (LangGraph agents) ─────────────────────────────────
   ai-service:
@@ -673,6 +705,14 @@ services:
       S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
       OPENSEARCH_URL: "http://opensearch:9200"
       DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+      # services/lakehouse/pipeline.py reads MINIO_* and a JDBC POSTGRES_URL;
+      # S3_* above are kept for backward compatibility with other tooling.
+      MINIO_ENDPOINT: "http://minio:9000"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minio_admin}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
+      POSTGRES_URL: "jdbc:postgresql://postgres:5432/${POSTGRES_DB:-idr_demo}"
+      POSTGRES_USER: "${POSTGRES_USER:-idr_user}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-idr_pass123}"
 
   # ── Python Temporal workflow workers ──────────────────────────────────────
   temporal-worker:
@@ -688,6 +728,11 @@ services:
         condition: service_healthy
     environment:
       TEMPORAL_ADDRESS: "temporal:7233"
+      # services/temporal-worker/worker.py reads TEMPORAL_HOST (not
+      # TEMPORAL_ADDRESS); both are provided so server and worker align with
+      # the server/temporal.ts defaults.
+      TEMPORAL_HOST: "temporal:7233"
+      TEMPORAL_TASK_QUEUE: "healthpoint-idr"
       TEMPORAL_NAMESPACE: "default"
       DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
       KAFKA_BROKERS: "kafka:9092"
