@@ -1,12 +1,11 @@
-import { defineConfig } from "vitest/config";
 import path from "path";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   root: path.resolve(import.meta.dirname),
   resolve: {
     alias: {
-      // Server modules import @shared/* (tsconfig paths); vitest needs the
-      // same alias since this config replaces vite.config.ts during tests.
+      "@": path.resolve(import.meta.dirname, "client", "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
     },
   },
