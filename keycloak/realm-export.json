@@ -128,7 +128,8 @@
       "redirectUris": [
         "http://localhost:3000/api/auth/callback/*",
         "https://healthpoint.example.com/api/auth/callback/*",
-        "https://${CADDY_DOMAIN:-healthpoint.example.com}/api/auth/callback/*"
+        "https://${CADDY_DOMAIN:-healthpoint.example.com}/api/auth/callback/*",
+        "healthpoint://auth/callback"
       ],
       "webOrigins": [
         "http://localhost:3000",
