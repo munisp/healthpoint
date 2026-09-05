@@ -127,7 +127,7 @@ export async function runLedgerReconciliation(input: {
   try {
     // Disputes with settlement activity are the ones mirrored to TigerBeetle.
     const transfers = await db.select().from(settlementTransfers);
-    const disputeIds = [...new Set(transfers.map(transfer => transfer.disputeId))];
+    const disputeIds = Array.from(new Set(transfers.map(transfer => transfer.disputeId)));
 
     const drifts: ReconciliationDrift[] = [];
     let accountsCompared = 0;
