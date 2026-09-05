@@ -88,8 +88,12 @@ export function useProfile(enabled: boolean) {
   return useCachedQuery<UserProfile | null>({
     cacheKey: "profile",
     queryKey: ["profile"],
-    queryFn: () =>
-      trpc.profiles.get.query() as Promise<UserProfile | null | undefined>,
+    queryFn: async () => {
+      // profiles.get returns `undefined` server-side when no row exists —
+      // normalise to null so the cache shape stays stable.
+      const row = (await trpc.profiles.get.query()) as UserProfile | null | undefined;
+      return row ?? null;
+    },
     enabled,
   });
 }

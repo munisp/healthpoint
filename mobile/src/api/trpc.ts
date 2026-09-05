@@ -41,11 +41,18 @@ export function registerUnauthorizedHandler(handler: UnauthorizedHandler): void 
 
 const MAX_NETWORK_RETRIES = 2;
 
+type FetchInput = Parameters<typeof fetch>[0];
+type FetchInit = Parameters<typeof fetch>[1];
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const fetchWithRetry: typeof fetch = async (input, init, attempt = 0) => {
+async function fetchWithRetry(
+  input: FetchInput,
+  init?: FetchInit,
+  attempt = 0
+): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(input, init);
@@ -62,7 +69,7 @@ const fetchWithRetry: typeof fetch = async (input, init, attempt = 0) => {
     unauthorizedHandler();
   }
   return response;
-};
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const trpc = createTRPCClient<any>({
