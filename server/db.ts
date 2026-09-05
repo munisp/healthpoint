@@ -1220,7 +1220,7 @@ export async function markOnboardingComplete(userId: string): Promise<void> {
     .values({ id: userId, onboardingCompleted: true, onboardingCompletedAt: new Date() })
     .onConflictDoUpdate({
       target: userProfiles.id,
-      set: { onboardingCompleted: true, onboardingCompletedAt: new Date(), updatedAt: now },
+      set: { onboardingCompleted: true, onboardingCompletedAt: new Date(), updatedAt: new Date() },
     });
 }
 
