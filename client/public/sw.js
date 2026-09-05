@@ -20,11 +20,29 @@ const PRECACHE_ASSETS = [
 const STATIC_ASSET_EXTENSIONS = [".js", ".css", ".png", ".svg", ".woff2"];
 
 // Install: precache critical assets, then activate immediately.
+// A single missing asset (e.g. an icon not yet generated) must never block
+// activation: fall back to precaching the offline essentials individually.
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_ASSETS))
+      .then(async (cache) => {
+        try {
+          await cache.addAll(PRECACHE_ASSETS);
+        } catch (err) {
+          console.warn(
+            "Precache addAll failed; caching essentials individually:",
+            err
+          );
+          for (const url of ["/", OFFLINE_URL]) {
+            try {
+              await cache.add(url);
+            } catch (individualErr) {
+              console.warn(`Precache failed for ${url}:`, individualErr);
+            }
+          }
+        }
+      })
       .then(() => self.skipWaiting())
   );
 });
