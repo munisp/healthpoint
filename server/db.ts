@@ -23,6 +23,7 @@ import {
   IDR_STEP, IDRStep, DISPUTE_STATUS, DisputeStatus,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { mirrorDisputeCreation, mirrorOrgMembership } from './permify-write';
 
 export function isPostgresConnectionString(value: string | undefined): value is string {
   return Boolean(value && /^(postgres|postgresql):\/\//.test(value));
@@ -254,6 +255,9 @@ export async function createDispute(data: InsertDispute): Promise<Dispute> {
     performedByName: data.initiatingPartyName,
     metadata: { referenceNumber, openNegotiationDeadline: openNegotiationDeadline.toISOString() },
   });
+  // Mirror-only Permify tuple write (PERMIFY_WRITE_ENABLED, default off);
+  // fail-open — Postgres authz remains the system of record for reads.
+  void mirrorDisputeCreation(id, data.initiatingPartyId, data.createdBy ?? undefined).catch(() => undefined);
   const result = await db.select().from(disputes).where(eq(disputes.id, id)).limit(1);
   return result[0];
 }
@@ -1209,6 +1213,11 @@ export async function upsertUserProfile(profile: InsertUserProfile): Promise<Use
         updatedAt: now,
       },
     });
+  // Mirror-only Permify organization membership tuple (PERMIFY_WRITE_ENABLED,
+  // default off); fail-open — Postgres authz remains the system of record.
+  if (profile.orgName) {
+    void mirrorOrgMembership(profile.orgName, profile.id).catch(() => undefined);
+  }
   const rows = await db.select().from(userProfiles).where(eq(userProfiles.id, profile.id)).limit(1);
   return rows[0];
 }
@@ -1310,7 +1319,7 @@ export async function deleteWebhook(id: string, userId: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
   // Scope by userId so webhook records cannot be deleted cross-tenant.
-  await db.delete(webhooks).where(and(eq(webhooks.id, id), eq(webhooks.userId, userId)));
+  await db.delete(webhooks).where(eq(webhooks.id, id), eq(webhooks.userId, userId)));
 }
 
 // ─── Outcome Predictions Helpers ──────────────────────────────────────────────
