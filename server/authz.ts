@@ -49,7 +49,8 @@ async function checkPermify(
     });
     if (!res.ok) return null;
     const data = (await res.json()) as { can?: string };
-    return data.can === "RESULT_ALLOWED";
+    // Permify's check.v1 API returns the CHECK_RESULT_* enum (never RESULT_ALLOWED).
+    return data.can === "CHECK_RESULT_ALLOWED";
   } catch {
     return null; // Permify unavailable — fall back to PostgreSQL
   }
@@ -110,7 +111,9 @@ export async function canAccessDispute(
   if (userRole === "admin") return true;
 
   // Try Permify first
-  const permifyPermission = permission === "read" ? "view" : permission === "write" ? "edit" : "manage";
+  // Permission names must exist in the canonical mounted schema
+  // (infra/permify/schema.perm): "admin" is defined there; "manage" is not.
+  const permifyPermission = permission === "read" ? "view" : permission === "write" ? "edit" : "admin";
   const permifyResult = await checkPermify("dispute", disputeId, permifyPermission, userId);
   if (permifyResult !== null) return permifyResult;
 
@@ -307,6 +310,10 @@ export function disputeVisibilityFilter(userId: string, userRole: "user" | "admi
 
 // ── Permify schema bootstrap ──────────────────────────────────────────────────
 
+// NOTE: infra/permify/schema.perm is the CANONICAL authorization schema — it is
+// mounted into the Permify container by docker-compose. This inline copy exists
+// only so a bare Permify instance can be initialized from the app at startup;
+// keep it aligned with (and defer to) the mounted schema.perm.
 const PERMIFY_SCHEMA = `
 entity user {}
 
