@@ -187,6 +187,9 @@ services:
       retries: 10
       start_period: 60s
 
+  # NOTE: temporal-ui and opensearch-dashboards are convenience dashboards
+  # whose images carry no reliable curl/wget; they are excluded from the
+  # healthcheck chain intentionally (verify via browser / runbook commands).
   temporal-ui:
     image: temporalio/ui:2.26.2
     restart: unless-stopped
@@ -208,6 +211,12 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command: |
       sleep 15 && tctl --namespace default namespace register --retention 30 2>/dev/null || true && tail -f /dev/null
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health 2>/dev/null | grep -q SERVING || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 ###############################################################################
 # IDENTITY & AUTHORIZATION
@@ -226,12 +235,17 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?Set KC_ADMIN_PASSWORD before starting the Keycloak dev container}
       KC_DB: dev-mem
       KC_HTTP_PORT: 8080
+      # Runtime health endpoints on management port 9000 (the Keycloak image
+      # ships no curl/wget — healthcheck uses bash /dev/tcp below).
+      KC_HEALTH_ENABLED: "true"
     volumes:
       - ./keycloak:/opt/keycloak/data/import
     ports:
       - "8080:8080"   # DEV ONLY: admin console also available via keycloak.healthpoint.example.com through Caddy; remove in production overlay
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/realms/healthpoint/.well-known/openid-configuration | grep issuer"]
+      # The keycloak image (ubi-micro based) has no curl/wget; probe the
+      # management-port readiness endpoint over a raw bash TCP socket.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9000 && printf \"GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && grep -q UP <&3'"]
       interval: 20s
       timeout: 10s
       retries: 15
@@ -441,6 +455,13 @@ services:
       - ./infra/apisix/dashboard.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
     ports:
       - "9000:9000"   # DEV ONLY: render dashboard.yaml placeholders before production use
+    healthcheck:
+      # alpine image: busybox wget is available.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   # ── OpenAppsec WAF (NGINX-based ML WAF) ─────────────────────────────────
   # Sits between Caddy and APISIX: Caddy → OpenAppsec → APISIX → App
@@ -602,6 +623,15 @@ services:
       S3_BUCKET: "idr-documents"
     ports:
       - "3000:3000"   # DEV ONLY: remove in production overlay — traffic enters via Caddy → OpenAppsec → APISIX
+    healthcheck:
+      # node:22-slim ships no curl/wget; use Node's built-in fetch against the
+      # liveness endpoint. Readiness of dependencies is gated by depends_on
+      # above plus /readyz (used by the prod overlay).
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   # ── Python AI service (LangGraph agents) ─────────────────────────────────
   ai-service:
@@ -621,6 +651,12 @@ services:
       LLM_API_KEY: "${LLM_API_KEY:-}"
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health | grep -q '\"status\":\"healthy\"' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   # ── Python Lakehouse ingestion pipeline ───────────────────────────────────
   lakehouse-worker:
@@ -648,6 +684,14 @@ services:
       POSTGRES_URL: "jdbc:postgresql://postgres:5432/${POSTGRES_DB:-idr_demo}"
       POSTGRES_USER: "${POSTGRES_USER:-idr_user}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-idr_pass123}"
+    healthcheck:
+      # Long-running consumer with no HTTP listener: verify the worker
+      # container can still reach Kafka and MinIO (its two hard dependencies).
+      test: ["CMD-SHELL", "python -c \"import socket\nfor h,p in [('kafka',9092),('minio',9000)]:\n s=socket.create_connection((h,p),3); s.close()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   # ── Python Temporal workflow workers ──────────────────────────────────────
   temporal-worker:
@@ -671,6 +715,14 @@ services:
       TEMPORAL_NAMESPACE: "default"
       DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
       KAFKA_BROKERS: "kafka:9092"
+    healthcheck:
+      # No HTTP listener: verify the Temporal gRPC frontend is reachable from
+      # inside the worker container (a dead network/namespace == dead worker).
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('temporal',7233),3); s.close()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   # ── Go services (Permify client, Mojaloop connector, TigerBeetle ledger) ──
   go-services:
@@ -696,6 +748,9 @@ services:
       INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?Set INTERNAL_SERVICE_TOKEN before enabling payment execution}"
     ports:
       - "8001:8001"
+    # NOTE: the go-services image is distroless (no shell/curl), so Docker
+    # cannot exec an in-container healthcheck. Liveness is verified
+    # externally: GET http://localhost:8001/internal/health (see RUNBOOK.md).
 
   # ── Rust services (high-perf Kafka event handlers) ───────────────────────
   # NOTE: Fluvio was removed from this stack (orphan infrastructure). The
@@ -714,6 +769,13 @@ services:
       RUST_SERVICES_PORT: "8002"
     ports:
       - "8002:8002"
+    healthcheck:
+      # debian:bookworm-slim has bash but no curl; probe the TCP listener.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8002"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
 secrets:
   settlement_mtls_ca:
