@@ -1,83 +1,98 @@
 // HealthPoint IDR — Service Worker
-// Provides offline fallback and static asset caching
+// Provides offline fallback, static asset caching, and an update lifecycle.
+//
+// VERSIONING: SW_VERSION is embedded in CACHE_NAME. Bump it on every release
+// that changes precached assets or caching behavior (e.g. -1 → -2) so the
+// activate handler purges stale caches and clients pick up the new version.
+const SW_VERSION = "2026-09-05-1";
+const CACHE_NAME = `healthpoint-idr-${SW_VERSION}`;
+const OFFLINE_URL = "/offline.html";
 
-const CACHE_NAME = 'healthpoint-idr-v1';
-const OFFLINE_URL = '/offline.html';
-
-// Assets to pre-cache on install
+// Critical assets precached at install time.
 const PRECACHE_ASSETS = [
-  '/',
-  '/offline.html',
-  '/manifest.json',
+  "/",
+  "/offline.html",
+  "/manifest.json",
+  "/icons/icon-192.png",
 ];
 
-// Install: pre-cache critical assets
-self.addEventListener('install', (event) => {
+// Same-origin static asset extensions eligible for stale-while-revalidate.
+const STATIC_ASSET_EXTENSIONS = [".js", ".css", ".png", ".svg", ".woff2"];
+
+// Install: precache critical assets, then activate immediately.
+self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_ASSETS);
-    }).then(() => self.skipWaiting())
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => cache.addAll(PRECACHE_ASSETS))
+      .then(() => self.skipWaiting())
   );
 });
 
-// Activate: clean up old caches
-self.addEventListener('activate', (event) => {
+// Activate: delete caches from older versions, then take control of clients.
+self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((name) => name !== CACHE_NAME)
-          .map((name) => caches.delete(name))
-      );
-    }).then(() => self.clients.claim())
+    caches
+      .keys()
+      .then((cacheNames) =>
+        Promise.all(
+          cacheNames
+            .filter((name) => name !== CACHE_NAME)
+            .map((name) => caches.delete(name))
+        )
+      )
+      .then(() => self.clients.claim())
   );
 });
 
-// Fetch: network-first for API calls, cache-first for static assets, offline fallback for navigation
-self.addEventListener('fetch', (event) => {
+self.addEventListener("fetch", (event) => {
   const { request } = event;
+
+  // Only handle same-origin GET requests; let everything else hit the network.
+  if (request.method !== "GET") return;
   const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
 
-  // Skip non-GET requests and cross-origin requests
-  if (request.method !== 'GET' || url.origin !== self.location.origin) {
-    return;
-  }
+  // API calls: network-only (never serve cached tRPC/API responses).
+  if (url.pathname.startsWith("/api/")) return;
 
-  // API calls: network-only (never cache tRPC/API responses)
-  if (url.pathname.startsWith('/api/')) {
-    return;
-  }
-
-  // Navigation requests: network-first with offline fallback
-  if (request.mode === 'navigate') {
+  // Navigation requests: network-first, then cache, then offline fallback.
+  if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request).catch(() => {
-        return caches.match(OFFLINE_URL);
-      })
+      fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(async () => {
+          const cached = await caches.match(request);
+          return cached || caches.match(OFFLINE_URL);
+        })
     );
     return;
   }
 
-  // Static assets (JS, CSS, fonts, images): cache-first
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((response) => {
-        // Only cache successful responses for same-origin assets
-        if (response.ok && url.origin === self.location.origin) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-        }
-        return response;
-      }).catch(() => {
-        // For image requests, return a transparent placeholder
-        if (request.destination === 'image') {
-          return new Response(
-            '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
-            { headers: { 'Content-Type': 'image/svg+xml' } }
-          );
-        }
-      });
-    })
-  );
+  // Static assets: stale-while-revalidate.
+  if (STATIC_ASSET_EXTENSIONS.some((ext) => url.pathname.endsWith(ext))) {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        const network = fetch(request)
+          .then((response) => {
+            if (response.ok) {
+              const clone = response.clone();
+              caches
+                .open(CACHE_NAME)
+                .then((cache) => cache.put(request, clone));
+            }
+            return response;
+          })
+          .catch(() => cached);
+        return cached || network;
+      })
+    );
+    return;
+  }
 });
