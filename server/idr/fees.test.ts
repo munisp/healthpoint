@@ -133,12 +133,17 @@ describe("certified IDRE fee assessment", () => {
 });
 
 describe("fee payment status transitions", () => {
-  it("follows the allowed lifecycle including refund-after-paid", () => {
+  it("follows the allowed lifecycle including refund-after-paid for IDRE fees", () => {
     expect(canTransitionFeeStatus("assessed", "invoiced")).toBe(true);
     expect(canTransitionFeeStatus("invoiced", "paid")).toBe(true);
     expect(canTransitionFeeStatus("assessed", "paid")).toBe(true);
-    expect(canTransitionFeeStatus("paid", "refunded")).toBe(true); // § 149.510(d)(2)(iv) ineligibility refund
+    expect(canTransitionFeeStatus("paid", "refunded", "idre_single")).toBe(true); // § 149.510(d)(2)(iv) ineligibility refund
     expect(canTransitionFeeStatus("assessed", "waived")).toBe(true);
+  });
+
+  it("never refunds the non-refundable administrative fee (§ 149.510(d)(1))", () => {
+    expect(canTransitionFeeStatus("paid", "refunded", "administrative")).toBe(false);
+    expect(canTransitionFeeStatus("paid", "refunded", "idre_batched")).toBe(true);
   });
 
   it("rejects backwards and terminal transitions", () => {
