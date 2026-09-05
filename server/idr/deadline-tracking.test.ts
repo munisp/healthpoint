@@ -38,7 +38,7 @@ function row(over: Partial<DeadlineEventRow> = {}): DeadlineEventRow {
 }
 
 describe("planDeadlineTracking", () => {
-  it("upserts one event row per present deadline column with CFR citations", () => {
+  it("upserts one event row per present deadline column with CFR citations and the deadline date", () => {
     const plan = planDeadlineTracking([dispute({
       openNegotiationDeadline: d("2026-10-16"),
       paymentDeadline: d("2026-11-15"),
@@ -46,6 +46,7 @@ describe("planDeadlineTracking", () => {
     expect(plan.upserts).toHaveLength(2);
     expect(plan.upserts.map(u => u.deadlineType).sort()).toEqual(["open_negotiation_end", "payment_due"]);
     expect(plan.upserts.find(u => u.deadlineType === "open_negotiation_end")!.cfrReference).toContain("149.510(b)(1)");
+    expect(plan.upserts.find(u => u.deadlineType === "open_negotiation_end")!.computedDeadline).toEqual(d("2026-10-16"));
     expect(plan.upserts.find(u => u.deadlineType === "payment_due")!.dayKind).toBe("calendar");
   });
 
