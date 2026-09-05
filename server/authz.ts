@@ -12,10 +12,11 @@
  *           (disputes.initiatingPartyId === ctx.user.id)
  *           or where they have been explicitly granted access via dispute_access table
  *
- * Relations (Zanzibar-style):
- *   dispute#owner@user  — user who created the dispute
- *   dispute#viewer@user — user granted read access
- *   dispute#editor@user — user granted write access (e.g. payer reviewer)
+ * Relations (Zanzibar-style, per infra/permify/schema.perm):
+ *   dispute#owner@user      — user who created the dispute
+ *   dispute#reviewer@user   — payer assigned to review (read + write)
+ *   dispute#arbitrator@user — IDR entity arbitrator (read + admin)
+ *   dispute#org_admin       — organization admins (read + admin + delete)
  */
 
 import { TRPCError } from "@trpc/server";
@@ -112,8 +113,9 @@ export async function canAccessDispute(
 
   // Try Permify first
   // Permission names must exist in the canonical mounted schema
-  // (infra/permify/schema.perm): "admin" is defined there; "manage" is not.
-  const permifyPermission = permission === "read" ? "view" : permission === "write" ? "edit" : "admin";
+  // (infra/permify/schema.perm): "read", "write", and "admin" are defined
+  // there; "view"/"edit" are not.
+  const permifyPermission = permission;
   const permifyResult = await checkPermify("dispute", disputeId, permifyPermission, userId);
   if (permifyResult !== null) return permifyResult;
 
@@ -317,24 +319,43 @@ export function disputeVisibilityFilter(userId: string, userRole: "user" | "admi
 const PERMIFY_SCHEMA = `
 entity user {}
 
-entity dispute {
-  relation owner @user
-  relation reviewer @user
-  relation viewer @user
+entity organization {
+  relation admin @user
+  relation member @user
 
-  action view   = owner or reviewer or viewer
-  action edit   = owner
-  action review = reviewer
-  action delete = owner
+  permission manage = admin
+  permission view = admin or member
+}
+
+entity dispute {
+  relation owner @user              // provider who initiated the dispute
+  relation reviewer @user           // payer assigned to review
+  relation arbitrator @user         // IDR entity arbitrator
+  relation org_admin @organization#admin
+
+  // Permissions
+  permission read = owner or reviewer or arbitrator or org_admin
+  permission write = owner or reviewer
+  permission submit_offer = owner or reviewer
+  permission advance_step = owner or reviewer or arbitrator
+  permission admin = arbitrator or org_admin
+  permission delete = org_admin
 }
 
 entity document {
-  relation owner @user
-  relation viewer @user
+  relation dispute @dispute
+  relation uploader @user
 
-  action view   = owner or viewer
-  action upload = owner
-  action delete = owner
+  permission read = dispute.read
+  permission write = uploader or dispute.admin
+  permission delete = uploader or dispute.admin
+}
+
+entity payment {
+  relation dispute @dispute
+  relation payer @user
+  permission read = dispute.read
+  permission initiate = payer or dispute.admin
 }
 `;
 
