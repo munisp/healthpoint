@@ -165,11 +165,11 @@ export default function DisputeDetailScreen() {
         <AmountRow label="Service date" value={formatDate(dispute.serviceDate)} />
         <AmountRow
           label="CPT codes"
-          value={dispute.cptCodes?.length ? dispute.cptCodes.join(", ") : "\u2014"}
+          value={dispute.cptCodes?.length ? dispute.cptCodes.join(", ") : "—"}
         />
-        <AmountRow label="Patient state" value={dispute.patientState ?? "\u2014"} />
-        <AmountRow label="Facility state" value={dispute.facilityState ?? "\u2014"} />
-        <AmountRow label="IDR entity" value={dispute.idrEntityName ?? "\u2014"} />
+        <AmountRow label="Patient state" value={dispute.patientState ?? "—"} />
+        <AmountRow label="Facility state" value={dispute.facilityState ?? "—"} />
+        <AmountRow label="IDR entity" value={dispute.idrEntityName ?? "—"} />
       </View>
 
       <View style={styles.card}>
@@ -200,7 +200,7 @@ export default function DisputeDetailScreen() {
               </Text>
               <Text style={styles.amountValue}>
                 {formatUsd(offer.amount)}
-                {offer.submittedAt ? `  \u00b7 ${formatDate(offer.submittedAt)}` : ""}
+                {offer.submittedAt ? `  · ${formatDate(offer.submittedAt)}` : ""}
               </Text>
             </View>
           ))}
@@ -232,8 +232,7 @@ export default function DisputeDetailScreen() {
                   {doc.fileName}
                 </Text>
                 <Text style={styles.docMeta}>
-                  {humanize(doc.documentType ?? undefined)} \u00b7{" "}
-                  {formatDate(doc.uploadedAt)}
+                  {`${humanize(doc.documentType ?? undefined)} · ${formatDate(doc.uploadedAt)}`}
                 </Text>
               </View>
             </View>
