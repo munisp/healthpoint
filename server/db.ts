@@ -1319,7 +1319,7 @@ export async function deleteWebhook(id: string, userId: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
   // Scope by userId so webhook records cannot be deleted cross-tenant.
-  await db.delete(webhooks).where(eq(webhooks.id, id), eq(webhooks.userId, userId)));
+  await db.delete(webhooks).where(and(eq(webhooks.id, id), eq(webhooks.userId, userId)));
 }
 
 // ─── Outcome Predictions Helpers ──────────────────────────────────────────────
