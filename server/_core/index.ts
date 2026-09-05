@@ -2,7 +2,6 @@ import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import net from "net";
-import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import slowDown from "express-slow-down";
@@ -14,7 +13,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerKeycloakRoutes } from "./keycloak";
 import { bootstrapOpenSearchIndices } from "../search";
 import { startKafkaConsumer } from "../events/kafka-consumer";
-import { bootstrapPermifySchema } from "../authz";
+import { assertDisputeAccess, bootstrapPermifySchema } from "../authz";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -43,6 +42,9 @@ import { LedgerIntegrityError } from "../ledger";
 import { startOutboxWorker } from "../outbox-worker";
 import { isTigerBeetleEnabled, startTigerBeetleTunnel, stopTigerBeetleTunnel } from "../tigerbeetle";
 import { createScheduledAuth } from "../scheduled-auth";
+import { securityHeaders } from "./security-headers";
+import { apiRateLimiter, authRateLimiter, sensitiveRateLimiter } from "../auth/ratelimit";
+import { requireApiAdmin, requireApiAuth } from "../auth/bearer";
 
 // ─── Startup ENV validation ──────────────────────────────────────────────────
 function validateEnv() {
@@ -122,25 +124,10 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  // ── Security headers (helmet) ──────────────────────────────────────────────
-  app.use(
-    helmet({
-      contentSecurityPolicy: ENV.isProduction
-        ? {
-            directives: {
-              defaultSrc: ["'self'"],
-              scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // Vite HMR needs unsafe-eval in dev
-              styleSrc: ["'self'", "'unsafe-inline'"],
-              imgSrc: ["'self'", "data:", "blob:", "https:"],
-              connectSrc: ["'self'", "https:"],
-              fontSrc: ["'self'", "data:", "https:"],
-              frameSrc: ["'none'"],
-            },
-          }
-        : false, // Disable CSP in dev to allow Vite HMR
-      crossOriginEmbedderPolicy: false, // Allow embedding for dashboard iframes
-    })
-  );
+  // ── Security headers ────────────────────────────────────────────────────────
+  // Centralized in server/_core/security-headers.ts (helmet): hardened CSP for
+  // the Vite PWA client, HSTS, nosniff, Referrer-Policy, frame-ancestors 'none'.
+  app.use(securityHeaders(ENV.isProduction));
 
   // ── CORS ──────────────────────────────────────────────────────────────────
   // Configure via ALLOWED_ORIGINS env var (comma-separated list of origins).
@@ -217,6 +204,16 @@ async function startServer() {
       skip: () => !ENV.isProduction,
     })
   );
+
+  // ── Redis-backed distributed rate limiting (server/auth/ratelimit.ts) ─────
+  // Limits are per-instance-independent (shared via Redis). Auth/token,
+  // settlement/payment, and PHI routes FAIL CLOSED in production when Redis
+  // is unavailable; the general tRPC limiter is fail-open-with-log (documented
+  // in ratelimit.ts). Limits configurable via RATE_LIMIT_* env vars.
+  app.use("/api/auth", authRateLimiter());
+  app.use("/api/settlement", sensitiveRateLimiter());
+  app.use("/api/fhir", sensitiveRateLimiter());
+  app.use("/api/trpc", apiRateLimiter());
 
   // ── Request logging (morgan) ──────────────────────────────────────────────
   // Use 'combined' format in production for full Apache-style logs, 'dev' in development
@@ -404,9 +401,19 @@ async function startServer() {
   });
 
   // ── FHIR R4 read endpoint — GET /api/fhir/Claim/:id ───────────────────────
-  // Returns a dispute as a FHIR R4 Claim resource (application/fhir+json)
-  app.get("/api/fhir/Claim/:id", async (req: Request, res: Response) => {
+  // Returns a dispute as a FHIR R4 Claim resource (application/fhir+json).
+  // PHI: requires authentication (Keycloak Bearer token or session cookie via
+  // requireApiAuth) AND dispute-level read authorization (server/authz.ts).
+  // This route was previously unauthenticated — remediated in the PHI audit.
+  app.get("/api/fhir/Claim/:id", requireApiAuth(), async (req: Request, res: Response) => {
     try {
+      const user = (req as any).user as { id: string; role: "user" | "admin" };
+      try {
+        await assertDisputeAccess(user.id, user.role, req.params.id, "read");
+      } catch {
+        res.status(403).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "forbidden", diagnostics: "You do not have read access to this claim" }] });
+        return;
+      }
       const { getDb } = await import("../db");
       const { disputes: disputesTable } = await import("../../drizzle/schema");
       const { eq } = await import("drizzle-orm");
@@ -442,9 +449,11 @@ async function startServer() {
         ]).filter(Boolean),
       };
       res.setHeader("Content-Type", "application/fhir+json");
+      res.setHeader("Cache-Control", "no-store"); // PHI responses must not be cached
       res.status(200).json(claim);
     } catch (err) {
-      res.status(500).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "exception", diagnostics: String(err) }] });
+      console.error("[fhir] Claim read failed:", err);
+      res.status(500).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "exception", diagnostics: "Failed to read the Claim resource" }] });
     }
   });
 
@@ -493,8 +502,9 @@ async function startServer() {
 
   // ── Ollama pull-stream SSE endpoint ────────────────────────────────────────
   // Streams NDJSON progress from Ollama's /api/pull endpoint as SSE events.
-  // Requires admin role via JWT cookie (same auth as tRPC protectedProcedure).
-  app.get("/api/ollama/pull-stream", async (req: Request, res: Response) => {
+  // Requires an authenticated ADMIN (Bearer token or session cookie), enforced
+  // by requireApiAdmin() — the admin requirement was previously comment-only.
+  app.get("/api/ollama/pull-stream", requireApiAdmin(), async (req: Request, res: Response) => {
     const model = req.query.model as string;
     if (!model || model.trim().length === 0) {
       res.status(400).json({ error: "model query param required" });
