@@ -66,7 +66,7 @@ export interface DisputeDeadlineAnchors {
   determinationIssuedAt?: Date | null;
 }
 
-export interface ComputedIDeadlines {
+export interface ComputedIDRDeadlines {
   /** Last business day of the 30-BD open negotiation period. */
   openNegotiationEnd: Date | null;
   /** First business day of the IDR initiation window. */
@@ -150,13 +150,11 @@ function utcDate(year: number, monthIndex: number, day: number): Date {
 function nthWeekdayOfMonth(year: number, monthIndex: number, weekday: number, n: number): Date {
   if (n === -1) {
     const last = utcDate(year, monthIndex + 1, 0); // last day of month
-    const dow = last.getUTCDay();
-    const back = (dow - weekday + 7) % 7;
+    const back = (last.getUTCDay() - weekday + 7) % 7;
     return utcDate(year, monthIndex, last.getUTCDate() - back);
   }
   const first = utcDate(year, monthIndex, 1);
-  const dow = first.getUTCDay();
-  const offset = (weekday - dow + 7) % 7;
+  const offset = (weekday - first.getUTCDay() + 7) % 7;
   return utcDate(year, monthIndex, 1 + offset + (n - 1) * 7);
 }
 
@@ -221,45 +219,53 @@ export function isBusinessDay(date: Date, policy?: IDRDeadlinePolicy): boolean {
 export function addBusinessDays(start: Date, n: number, policy?: IDRDeadlinePolicy): Date {
   if (!Number.isInteger(n) || n < 0) throw new Error(`addBusinessDays: n must be a non-negative integer, got ${n}`);
   const result = new Date(start.getTime());
-  const years = [result.getUTCFullYear(), result.getUTCFullYear() + 1];
-  let holidays = new Set<string>([...holidaySet(years[0], policy), ...holidaySet(years[1], policy)]);
+  const holidayCache = new Map<number, Set<string>>();
+  const holidaysFor = (y: number) => {
+    let set = holidayCache.get(y);
+    if (!set) {
+      set = holidaySet(y, policy);
+      holidayCache.set(y, set);
+    }
+    return set;
+  };
   let added = 0;
   while (added < n) {
     result.setUTCDate(result.getUTCDate() + 1);
-    const y = result.getUTCFullYear();
-    if (!years.includes(y)) {
-      years.push(y);
-      holidaySet(y, policy).forEach(d => holidays.add(d));
-    }
     const dow = result.getUTCDay();
-    if (dow !== 0 && dow !== 6 && !holidays.has(toISO(result))) added++;
+    if (dow !== 0 && dow !== 6 && !holidaysFor(result.getUTCFullYear()).has(toISO(result))) added++;
   }
   return result;
 }
 
 /**
  * Number of business days strictly after `fromExclusive` up to and including
- * `toInclusive` (date granularity, UTC). Negative when toInclusive is before
- * fromExclusive (calendar-day difference, sign only).
+ * `toInclusive` (date granularity, UTC). Zero when both dates are the same
+ * calendar day; negative (calendar-day difference) when the target precedes
+ * the start date.
  */
 export function businessDaysBetween(fromExclusive: Date, toInclusive: Date, policy?: IDRDeadlinePolicy): number {
   const from = toISO(fromExclusive);
   const to = toISO(toInclusive);
-  if (to <= from) {
-    if (to === from) return 0;
-    return -Math.max(1, Math.round((new Date(from + "T00:00:00Z").getTime() - new Date(to + "T00:00:00Z").getTime()) / 86400000));
+  if (to === from) return 0;
+  if (to < from) {
+    const ms = new Date(from + "T00:00:00Z").getTime() - new Date(to + "T00:00:00Z").getTime();
+    return -Math.round(ms / 86400000);
   }
+  const holidayCache = new Map<number, Set<string>>();
+  const holidaysFor = (y: number) => {
+    let set = holidayCache.get(y);
+    if (!set) {
+      set = holidaySet(y, policy);
+      holidayCache.set(y, set);
+    }
+    return set;
+  };
   let count = 0;
   const cursor = new Date(from + "T00:00:00Z");
-  const years = new Set<number>();
   while (toISO(cursor) < to) {
     cursor.setUTCDate(cursor.getUTCDate() + 1);
-    if (!years.has(cursor.getUTCFullYear())) {
-      years.add(cursor.getUTCFullYear());
-      holidaySet(cursor.getUTCFullYear(), policy); // warm; recomputed per check below
-    }
     const dow = cursor.getUTCDay();
-    if (dow !== 0 && dow !== 6 && !holidaySet(cursor.getUTCFullYear(), policy).has(toISO(cursor))) count++;
+    if (dow !== 0 && dow !== 6 && !holidaysFor(cursor.getUTCFullYear()).has(toISO(cursor))) count++;
   }
   return count;
 }
@@ -276,10 +282,10 @@ export function addCalendarDays(start: Date, n: number): Date {
  * Compute every statutory deadline for a dispute from its anchor dates.
  * Missing anchors yield nulls for the deadlines that depend on them.
  */
-export function computeIDeadlines(
+export function computeIDRDeadlines(
   anchors: DisputeDeadlineAnchors,
   policy: IDRDeadlinePolicy = getDeadlinePolicy()
-): ComputedIDeadlines {
+): ComputedIDRDeadlines {
   const openNegotiationEnd = anchors.openNegotiationEndedAt
     ? anchors.openNegotiationEndedAt
     : anchors.openNegotiationInitiatedAt
@@ -341,5 +347,5 @@ export function deadlineAlertTier(
   return null;
 }
 
-/** Escalation ordering, highest severity last. */
+/** Escalation ordering, lowest severity first. */
 export const ALERT_TIER_ORDER: DeadlineAlertTier[] = ["t_minus_5", "t_minus_1", "overdue"];
