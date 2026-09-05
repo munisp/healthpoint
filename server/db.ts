@@ -555,11 +555,17 @@ export async function listNotifications(userId: string, unreadOnly = false) {
   return db.select().from(notifications).where(and(...conditions)).orderBy(desc(notifications.createdAt)).limit(50);
 }
 
-export async function markNotificationRead(id: string, userId: string) {
+export async function markNotificationRead(id: string, userId?: string) {
   const db = await getDb();
   if (!db) return;
-  // Scope by userId so a user cannot mark another user's notifications read.
-  await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.id, id), eq(notifications.userId, userId)));
+  // When userId is provided, scope by it so a user cannot mark another user's
+  // notifications read. Callers that omit userId MUST be guarded by the
+  // authz-registry middleware (notifications.markRead) — unscoped by design
+  // at this layer. See server/authz-registry.ts.
+  await db
+    .update(notifications)
+    .set({ isRead: true })
+    .where(userId ? and(eq(notifications.id, id), eq(notifications.userId, userId)) : eq(notifications.id, id));
 }
 
 // ─── Event helpers ────────────────────────────────────────────────────────────
@@ -1309,17 +1315,28 @@ export async function listWebhooks(userId: string): Promise<Webhook[]> {
   if (!db) return [];
   return db.select().from(webhooks).where(eq(webhooks.userId, userId)).orderBy(desc(webhooks.createdAt));
 }
-export async function updateWebhook(id: string, userId: string, data: Partial<InsertWebhook>): Promise<void> {
+export async function updateWebhook(id: string, data: Partial<InsertWebhook>, userId?: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  // Scope by userId so webhook records cannot be modified cross-tenant.
-  await db.update(webhooks).set({ ...data, updatedAt: new Date() }).where(and(eq(webhooks.id, id), eq(webhooks.userId, userId)));
+  // When userId is provided, scope by it so webhook records cannot be
+  // modified cross-tenant. Callers that omit userId MUST be guarded by the
+  // authz-registry middleware (webhooks.update / webhooks.test) — unscoped
+  // by design at this layer. See server/authz-registry.ts.
+  await db
+    .update(webhooks)
+    .set({ ...data, updatedAt: new Date() })
+    .where(userId ? and(eq(webhooks.id, id), eq(webhooks.userId, userId)) : eq(webhooks.id, id));
 }
-export async function deleteWebhook(id: string, userId: string): Promise<void> {
+export async function deleteWebhook(id: string, userId?: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  // Scope by userId so webhook records cannot be deleted cross-tenant.
-  await db.delete(webhooks).where(and(eq(webhooks.id, id), eq(webhooks.userId, userId)));
+  // When userId is provided, scope by it so webhook records cannot be deleted
+  // cross-tenant. Callers that omit userId MUST be guarded by the
+  // authz-registry middleware (webhooks.delete) — unscoped by design at this
+  // layer. See server/authz-registry.ts.
+  await db
+    .delete(webhooks)
+    .where(userId ? and(eq(webhooks.id, id), eq(webhooks.userId, userId)) : eq(webhooks.id, id));
 }
 
 // ─── Outcome Predictions Helpers ──────────────────────────────────────────────
