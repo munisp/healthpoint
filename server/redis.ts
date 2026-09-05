@@ -169,7 +169,7 @@ export async function withDisputeLock<T>(
     try {
       await lock.release();
     } catch (err) {
-      console.warn("[Redis] Failed to release lock for dispute ${disputeId}:", err);
+      console.warn(`[Redlock] Failed to release lock for dispute ${disputeId}:`, err);
     }
   }
 }
@@ -329,7 +329,7 @@ export async function cacheGet<T>(key: string): Promise<T | null> {
 /**
  * Generic cache set with JSON serialization.
  */
-export async function cacheSet<T>(key: string, value: string, ttlSeconds = 300): Promise<void> {
+export async function cacheSet<T>(key: string, value: T, ttlSeconds = 300): Promise<void> {
   const client = getRedisClient();
   if (!client) return;
   try {
