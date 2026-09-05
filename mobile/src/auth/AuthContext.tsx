@@ -3,7 +3,15 @@
  *
  * Flow: expo-auth-session `useAuthRequest` (PKCE on by default) →
  * authorization-code exchange → tokens persisted in expo-secure-store →
- * proactive refresh via the stored refresh token.
+ * proactive silent refresh via the stored refresh token (30s expiry skew so
+ * a token never dies mid-request).
+ *
+ * Session lifecycle:
+ * - Any API response with HTTP 401 triggers the unauthorized handler
+ *   registered with the tRPC layer → tokens cleared → router redirects to
+ *   /login (see app/(tabs)/_layout.tsx guard).
+ * - Sign-out clears SecureStore tokens AND the AsyncStorage read cache
+ *   (PHI must not linger) AND the react-query in-memory cache.
  *
  * Discovery document:
  *   ${keycloakUrl}/realms/healthpoint/.well-known/openid-configuration
@@ -23,7 +31,9 @@ import * as AuthSession from "expo-auth-session";
 import * as SecureStore from "expo-secure-store";
 import * as WebBrowser from "expo-web-browser";
 import Constants from "expo-constants";
-import { registerTokenProvider } from "../api/trpc";
+import { registerTokenProvider, registerUnauthorizedHandler } from "../api/trpc";
+import { clearAllCache } from "../api/cache";
+import { queryClient } from "../api/queryClient";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -48,7 +58,7 @@ interface AuthContextValue {
   error: string | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
-  /** Returns a valid access token, refreshing if necessary. */
+  /** Returns a valid access token, refreshing silently if necessary. */
   getAccessToken: () => Promise<string | null>;
 }
 
@@ -99,6 +109,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     null | ((refreshToken: string) => Promise<string | null>)
   >(null);
 
+  // Full local teardown: tokens, offline cache, in-memory query cache.
+  const destroySession = useCallback(async (): Promise<void> => {
+    await clearTokens();
+    await clearAllCache();
+    queryClient.clear();
+    setStatus("unauthenticated");
+  }, []);
+
+  // 401 → re-login: the tRPC layer fires this when the server rejects the
+  // Bearer token (expired refresh, revoked session, role change, etc.).
+  useEffect(() => {
+    registerUnauthorizedHandler(() => {
+      void destroySession();
+    });
+  }, [destroySession]);
+
   // Returns a valid access token: cached if unexpired, otherwise refreshed.
   const getAccessToken = useCallback(async (): Promise<string | null> => {
     const [accessToken, refreshToken, expiresAtRaw] = await Promise.all([
@@ -134,12 +160,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setStatus("authenticated");
         return refreshed.accessToken;
       } catch {
-        await clearTokens();
-        setStatus("unauthenticated");
+        // Refresh token rejected — drop the session; user must sign in again.
+        await destroySession();
         return null;
       }
     };
-  }, [discovery]);
+  }, [discovery, destroySession]);
 
   // Expose the token getter to the tRPC client.
   useEffect(() => {
@@ -214,9 +240,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     // TODO: also hit the Keycloak end-session endpoint to fully log out of SSO.
-    await clearTokens();
-    setStatus("unauthenticated");
-  }, []);
+    await destroySession();
+  }, [destroySession]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
