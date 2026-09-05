@@ -17,6 +17,13 @@
 # orphaned infrastructure). The application talks to Kafka/Redis/Temporal
 # directly. See docs/UPGRADES.md for the image pinning workflow.
 ###############################################################################
+# CREDENTIAL POLICY: the `app` and `migrate` services run NODE_ENV=production.
+# They must never fall back to the data-store containers' development default
+# passwords, so their DATABASE_URL / REDIS_URL / S3 credentials use compose's
+# `:?` required-variable form. Set POSTGRES_PASSWORD / REDIS_PASSWORD /
+# MINIO_ACCESS_KEY / MINIO_SECRET_KEY / KC_ADMIN_PASSWORD in .env (compose
+# auto-loads it); the same values feed the infra containers' defaults.
+###############################################################################
 version: "3.9"
 
 networks:
@@ -214,7 +221,9 @@ services:
     command: start-dev --import-realm
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-admin}
+      # No default admin password — set KC_ADMIN_PASSWORD explicitly (the
+      # `start-dev` mode itself is development-only and must not reach prod).
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?Set KC_ADMIN_PASSWORD before starting the Keycloak dev container}
       KC_DB: dev-mem
       KC_HTTP_PORT: 8080
     volumes:
@@ -534,6 +543,8 @@ services:
 ###############################################################################
 
   # ── Main HealthPoint Node.js app ──────────────────────────────────────────
+  # NOTE: `migrate` and `app` run NODE_ENV=production — they require explicit
+  # credentials (`:?`) and never use the infra containers' dev defaults.
   migrate:
     build:
       context: .
@@ -545,7 +556,7 @@ services:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example) — production-mode services must not use the dev default password}@postgres:5432/${POSTGRES_DB:-idr_demo}"
     command: ["sh", "-c", "pnpm drizzle-kit migrate"]
 
   app:
@@ -568,14 +579,14 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example) — production-mode services must not use the dev default password}@postgres:5432/${POSTGRES_DB:-idr_demo}"
       SETTLEMENT_CALLBACK_SECRET: "${SETTLEMENT_CALLBACK_SECRET:?Set SETTLEMENT_CALLBACK_SECRET before starting the production app}"
       SETTLEMENT_CALLBACK_KEYRING: "${SETTLEMENT_CALLBACK_KEYRING:?Set SETTLEMENT_CALLBACK_KEYRING before starting the production app}"
       SETTLEMENT_MTLS_CLIENT_CA_PEM: "${SETTLEMENT_MTLS_CLIENT_CA_PEM:?Set SETTLEMENT_MTLS_CLIENT_CA_PEM before starting the production app}"
       SETTLEMENT_MTLS_CLIENT_FINGERPRINTS: "${SETTLEMENT_MTLS_CLIENT_FINGERPRINTS:?Set SETTLEMENT_MTLS_CLIENT_FINGERPRINTS before starting the production app}"
       SETTLEMENT_MTLS_INGRESS_TOKEN: "${SETTLEMENT_MTLS_INGRESS_TOKEN:?Set SETTLEMENT_MTLS_INGRESS_TOKEN before starting the production app}"
       SETTLEMENT_CALLBACK_PROVIDER: "${SETTLEMENT_CALLBACK_PROVIDER:-mojaloop}"
-      REDIS_URL: "redis://:${REDIS_PASSWORD:-redis_pass123}@redis:6379"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (see .env.example) — production-mode services must not use the dev default password}@redis:6379"
       KAFKA_BROKERS: "kafka:9092"
       KEYCLOAK_URL: "http://keycloak:8080"
       PERMIFY_GRPC_URL: "permify:3478"
@@ -586,8 +597,8 @@ services:
       TIGERBEETLE_ADDRESS: "tigerbeetle:3000"
       MOJALOOP_URL: "http://mojaloop-simulator:3003"
       S3_ENDPOINT: "http://minio:9000"
-      S3_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minio_admin}"
-      S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
+      S3_ACCESS_KEY: "${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env (see .env.example)}"
+      S3_SECRET_KEY: "${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env (see .env.example)}"
       S3_BUCKET: "idr-documents"
     ports:
       - "3000:3000"   # DEV ONLY: remove in production overlay — traffic enters via Caddy → OpenAppsec → APISIX
