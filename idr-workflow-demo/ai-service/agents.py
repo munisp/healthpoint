@@ -421,7 +421,7 @@ def lookup_nsa_deadline(step: str) -> str:
         "additional_information": "5 business days after offer submission deadline (45 CFR §149.510(c)(4)(iii))",
         "determination": "30 business days from offer submission deadline (45 CFR §149.510(c)(5))",
         "payment": "30 calendar days from determination notice (45 CFR §149.510(c)(6))",
-        "administrative_fee": "Same deadline as payment; $50–$350 per dispute (CMS Fee Schedule)",
+        "administrative_fee": "Same deadline as payment; advisory: $15 flat administrative fee per dispute, applicable to disputes initiated on or after June 11, 2026 (CMS-9897-F, 91 FR 33900)",
         "appeal": "Must be filed in federal district court; no statutory deadline but prompt filing recommended",
     }
     step_lower = step.lower().replace(" ", "_").replace("-", "_")
@@ -455,18 +455,17 @@ Regulatory basis: 45 CFR §149.140; NSA §2799A-1(c)
 def lookup_administrative_fees() -> str:
     """Look up current CMS IDR administrative fee schedule."""
     return """
-CMS IDR Administrative Fee Schedule (2024-2025):
+CMS IDR Administrative Fee Schedule (advisory):
 
-- Standard disputes: $115 per party per dispute (effective 2024)
-- Batched disputes (same service code, same payer-provider pair): $115 per batch
+- Disputes initiated on or after June 11, 2026: $15 flat administrative fee per dispute (CMS-9897-F, 91 FR 33900)
+- Disputes initiated before June 11, 2026: the fee schedule in effect at the IDR initiation date applies — verify against the applicable CMS fee notice before relying on any amount
 - Fee payment deadline: Same as payment deadline (30 calendar days from determination)
-- Who pays: The non-prevailing party pays both parties' administrative fees
 - Waiver: CMS may waive fees in cases of financial hardship (rare)
 - Portal: Fees paid through the federal IDR portal at nsa-idr.cms.gov
 
-Note: Administrative fees are separate from the IDR entity's processing fees, which are set by the certified IDR entity and disclosed upfront.
+Note: This is advisory text, not a fee determination. Administrative fees are separate from the IDR entity's processing fees, which are set by the certified IDR entity and disclosed upfront.
 
-Regulatory basis: 45 CFR §149.510(e); CMS Fee Schedule Notice (2024)
+Regulatory basis: 45 CFR §149.510(e); CMS-9897-F, 91 FR 33900
 """
 
 
