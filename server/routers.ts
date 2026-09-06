@@ -21,6 +21,10 @@ import { financialRouter } from "./financial.routes";
 import { submissionAutomationRouter } from "./idr/submission-automation/routes";
 import { stateProgramsRouter } from "./idr/state-programs/routes";
 import { priorAuthRouter } from "./priorauth/routes";
+import { batchedDisputesRouter } from "./idr/batching/routes";
+import { feeScheduleRouter } from "./idr/clocks-2026/routes";
+import { noticeConsentRouter } from "./notice-consent/routes";
+import { gfePpdrRouter } from "./gfe-ppdr/routes";
 import { auditMiddleware } from "./_core/audit-middleware";
 import {
   checkStepTransition,
@@ -290,6 +294,10 @@ export const appRouter = router({
   submissionAutomation: submissionAutomationRouter,
   statePrograms: stateProgramsRouter,
   priorAuth: priorAuthRouter,
+  batchedDisputes: batchedDisputesRouter,
+  feeSchedule: feeScheduleRouter,
+  noticeConsent: noticeConsentRouter,
+  gfePpdr: gfePpdrRouter,
 
   // ── Disputes ────────────────────────────────────────────────────────────────
   disputes: router({
@@ -475,7 +483,7 @@ export const appRouter = router({
         await eventBus.publish("dispute.advanced", input.disputeId, "dispute", {
           previousStep: currentStep,
           newStep: input.targetStep,
-          newStatus,
+          newStatus: input.targetStep,
           referenceNumber: dispute.referenceNumber,
         }, { userId: ctx.user.id, timestamp: new Date().toISOString() });
 
