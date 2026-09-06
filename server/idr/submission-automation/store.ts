@@ -168,7 +168,7 @@ export class InMemorySubmissionStore implements SubmissionStore {
   private idem = new Map<string, IdemRecord>();
 
   private idemKey(tenantId: string, disputeId: string, key: string): string {
-    return `${tenantId} ${disputeId} ${key}`;
+    return JSON.stringify([tenantId, disputeId, key]);
   }
 
   private clone<T>(v: T): T {
