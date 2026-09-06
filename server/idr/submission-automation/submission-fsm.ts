@@ -92,7 +92,12 @@ export class InvalidTransitionError extends Error {
   }
 }
 
-function assertGuard(entity: SubmissionEntity, to: SubmissionState): void {
+/**
+ * Pure transition guard. Exported (with applyTransition) so the persistence
+ * layer (store.ts) can run load → guard → apply → CAS persist with the exact
+ * same fail-closed semantics as the in-memory transition().
+ */
+export function assertGuard(entity: SubmissionEntity, to: SubmissionState): void {
   if (to === 'WITHDRAWN') {
     if (!PRE_DETERMINATION.includes(entity.state)) {
       throw new InvalidTransitionError(
@@ -127,18 +132,24 @@ function appendEvent(
   entity.state = to;
 }
 
-export function transition(
+export interface TransitionOptions {
+  actorId?: string;
+  now?: Date;
+  attestation?: AttestationPayload;
+  cmsDisputeReferenceNumber?: string;
+  detail?: string;
+}
+
+/**
+ * Apply a transition AFTER assertGuard has passed: validates per-state payload
+ * requirements, mutates the entity, and appends the event. Kept separate from
+ * the guard so store.ts can sequence guard → CAS → apply deterministically.
+ */
+export function applyTransition(
   entity: SubmissionEntity,
   to: SubmissionState,
-  opts: {
-    actorId?: string;
-    now?: Date;
-    attestation?: AttestationPayload;
-    cmsDisputeReferenceNumber?: string;
-    detail?: string;
-  } = {}
+  opts: TransitionOptions = {}
 ): SubmissionEntity {
-  assertGuard(entity, to);
   const at = (opts.now ?? new Date()).toISOString();
 
   if (to === 'SUBMITTED') {
@@ -170,6 +181,21 @@ export function transition(
 
   appendEvent(entity, to, at, opts.actorId ?? opts.attestation?.actorId, opts.detail);
   return entity;
+}
+
+/**
+ * Pure in-memory transition (guard + apply). Retained for unit tests of the
+ * guard table; the server-authoritative path is store.transitionSubmission()
+ * which wraps these same pure functions with persistence, CAS, idempotency,
+ * and hash-chained events.
+ */
+export function transition(
+  entity: SubmissionEntity,
+  to: SubmissionState,
+  opts: TransitionOptions = {}
+): SubmissionEntity {
+  assertGuard(entity, to);
+  return applyTransition(entity, to, opts);
 }
 
 /** Append-only: returns a defensive copy of the event log. */
