@@ -12,6 +12,8 @@
  * complete=false. There is no "partial-ready" state.
  */
 
+import { validateSubmissionFields, resolveStrictMode } from "./validators";
+
 export interface DisputeInput {
   disputeId?: string;
   tenantId?: string;
@@ -39,6 +41,14 @@ export interface DisputeInput {
   initiatingPartyType?: 'provider' | 'facility' | 'oqp' | 'plan' | 'issuer';
   /** Admin fee per party; CMS-9897-F (2026) set it at $15 for standard disputes. */
   adminFeeAmount?: number;
+  /** CMS dispute reference number (validated against CMS_REF_REGEX when present). */
+  cmsDisputeReferenceNumber?: string;
+  /**
+   * Promote validation warnings (format/sanity + advisory) to blocking:
+   * complete=false whenever any warning is present. Default from env
+   * SUBMISSION_STRICT=1; warnings remain non-blocking otherwise.
+   */
+  strictMode?: boolean;
   now?: Date;
 }
 
@@ -157,6 +167,22 @@ export function buildSubmissionPackage(input: DisputeInput): SubmissionPackage {
     warnings.push('Missing initiating-party NPI for provider/facility initiating party.');
   }
 
+  // Format/sanity validators (validators.ts): NPI Luhn, TIN, CMS dispute
+  // reference format, date sanity. Non-blocking warnings unless strictMode.
+  warnings.push(
+    ...validateSubmissionFields({
+      initiatingPartyNpi: input.initiatingPartyNpi,
+      initiatingPartyTin: input.initiatingPartyTin,
+      respondingPartyTin: input.respondingPartyTin,
+      cmsDisputeReferenceNumber: input.cmsDisputeReferenceNumber,
+      dateOfService: input.dateOfService,
+      openNegotiationInitiationDate: input.openNegotiationInitiationDate,
+      now,
+    }).warnings
+  );
+
+  const strict = resolveStrictMode(input.strictMode);
+
   const portalFields: Record<string, string> = {};
   for (const c of checklist) {
     if (c.present && c.value !== null) portalFields[c.key] = c.value;
@@ -166,7 +192,8 @@ export function buildSubmissionPackage(input: DisputeInput): SubmissionPackage {
   if (NONEMPTY(input.initiatingPartyNpi)) portalFields['initiatingPartyNpi'] = String(input.initiatingPartyNpi).trim();
 
   return {
-    complete: missing.length === 0,
+    // strictMode promotes warnings to blocking: complete requires zero warnings.
+    complete: missing.length === 0 && (!strict || warnings.length === 0),
     missing,
     warnings,
     portalFields,
