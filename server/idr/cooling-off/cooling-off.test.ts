@@ -103,6 +103,8 @@ describe("fail-closed guardrails", () => {
   });
 
   it("honors env-driven extra closures in business-day math", () => {
+    // Closure on 2026-12-17 does not move the 30th business day (2026-12-16),
+    // but pushes earliest initiation from 12/17 to 12/18.
     const env = { IDR_BUSINESS_DAY_EXTRA_CLOSURES: "2026-12-17" };
     const r = computeCoolingOff({
       paymentDeterminationDate: D("2026-11-02"),
@@ -110,6 +112,7 @@ describe("fail-closed guardrails", () => {
       openNegotiationInitiatedOn: D("2026-11-02"),
       env,
     });
-    expect(iso(r.coolingOffEnd)).toBe("2026-12-17"); // shifts one day because 12/17 closure pushes the 30th BD... no: closure shifts END by one BD
+    expect(iso(r.coolingOffEnd)).toBe("2026-12-16");
+    expect(iso(r.earliestInitiationDate)).toBe("2026-12-18");
   });
 });
