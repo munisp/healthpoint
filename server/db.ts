@@ -192,30 +192,16 @@ export async function countUsers(): Promise<number> {
 }
 
 // ─── Business day calculation ─────────────────────────────────────────────────
-
-const US_FEDERAL_HOLIDAYS_2024_2025 = [
-  "2024-01-01", "2024-01-15", "2024-02-19", "2024-05-27", "2024-06-19",
-  "2024-07-04", "2024-09-02", "2024-10-14", "2024-11-11", "2024-11-28",
-  "2024-12-25", "2025-01-01", "2025-01-20", "2025-02-17", "2025-05-26",
-  "2025-06-19", "2025-07-04", "2025-09-01", "2025-10-13", "2025-11-11",
-  "2025-11-27", "2025-12-25", "2026-01-01", "2026-01-19", "2026-02-16",
-  "2026-05-25", "2026-06-19", "2026-07-04", "2026-09-07",
-];
-
-export function addBusinessDays(startDate: Date, businessDays: number): Date {
-  const holidays = new Set(US_FEDERAL_HOLIDAYS_2024_2025);
-  let current = new Date(startDate);
-  let added = 0;
-  while (added < businessDays) {
-    current.setDate(current.getDate() + 1);
-    const dayOfWeek = current.getDay();
-    const dateStr = current.toISOString().split('T')[0];
-    if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidays.has(dateStr)) {
-      added++;
-    }
-  }
-  return current;
-}
+//
+// Canonical business-day arithmetic lives in server/idr/deadlines.ts. It
+// computes US federal holidays ALGORITHMICALLY (5 U.S.C. § 6103, with the
+// federal Saturday→Friday / Sunday→Monday observation shifts) instead of
+// relying on a hardcoded holiday table that silently expires, and supports
+// policy overrides (extra closures, holiday opt-out) via IDR_* env vars.
+// Re-exported here so existing callers (seed-demo, routers, etc.) keep their
+// import paths while sharing one implementation.
+import { addBusinessDays } from "./idr/deadlines";
+export { addBusinessDays, isBusinessDay, businessDaysBetween, usFederalHolidays } from "./idr/deadlines";
 
 export function generateReferenceNumber(): string {
   const year = new Date().getFullYear();
@@ -336,9 +322,12 @@ export async function advanceDisputeStep(
   // Calculate step-specific deadlines
   const deadlineUpdates: Partial<InsertDispute> = {};
   if (newStep === "STEP_04_IDR_INITIATED") {
+    // 45 CFR § 149.510(b)(2)(i) — IDR initiation window: 4 business days.
     deadlineUpdates.idrInitiationDeadline = addBusinessDays(now, 4);
   } else if (newStep === "STEP_06_IDR_ENTITY_SELECTION") {
-    deadlineUpdates.entitySelectionDeadline = addBusinessDays(now, 4);
+    // 45 CFR § 149.510(c)(1) — joint certified IDR entity selection:
+    // 3 business days after IDR initiation (not 4).
+    deadlineUpdates.entitySelectionDeadline = addBusinessDays(now, 3);
   } else if (newStep === "STEP_08_ELIGIBILITY_REVIEW") {
     deadlineUpdates.eligibilityDeadline = addBusinessDays(now, 3);
   } else if (newStep === "STEP_09_OFFER_SUBMISSION") {
