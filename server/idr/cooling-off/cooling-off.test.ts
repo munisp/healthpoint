@@ -77,8 +77,8 @@ describe("computeCoolingOff — BATCHED disputes", () => {
       disputeType: "BATCHED",
       openNegotiationInitiatedOn: D("2026-12-18"),
     });
-    expect(iso(r.coolingOffEnd)).toBe("2027-02-01");
-    expect(iso(r.earliestInitiationDate)).toBe("2027-02-02");
+    expect(iso(r.coolingOffEnd)).toBe("2027-02-03"); // skips Christmas, New Year's Day 2027, MLK 2027
+    expect(iso(r.earliestInitiationDate)).toBe("2027-02-04");
   });
 
   it("fails closed when the ONP start date is missing (regime ambiguous)", () => {
