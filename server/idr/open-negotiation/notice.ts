@@ -41,7 +41,7 @@
  * with the element named in missingElements.
  */
 
-import { addBusinessDays, getDeadlinePolicy } from "../../deadlines";
+import { addBusinessDays, getDeadlinePolicy } from "../deadlines";
 
 export interface ContactInfo {
   name: string;
