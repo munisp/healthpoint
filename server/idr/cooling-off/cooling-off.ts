@@ -36,7 +36,7 @@ import {
   addCalendarDays,
   getDeadlinePolicy,
   type IDRDeadlinePolicy,
-} from "../../deadlines";
+} from "../deadlines";
 
 export type DisputeType = "SINGLE" | "BATCHED";
 
