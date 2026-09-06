@@ -81,7 +81,7 @@ describe("missing elements are flagged (fail closed)", () => {
     ["initial payment / denial date", { initialPaymentAmountUsd: undefined }, "(4) initial payment amount"],
     ["QPA", { qpaUsd: undefined }, "(5) qualifying payment amount"],
     ["OON rate offer", { oonRateOffersUsd: undefined }, "(6) offer of an out-of-network rate"],
-    ["nonparticipating flag", { requestingPartyNonparticipating: undefined }, "(7) nonparticipating"],
+    ["nonparticipating flag", { requestingPartyNonparticipating: undefined }, "(7) whether the party requesting open negotiation"],
     ["sender contact", { senderContact: undefined }, "(8) contact information of the party sending"],
   ])("flags missing %s", (_label, overrides, expectedFragment) => {
     const r = buildOpenNegotiationNotice(completeInput(overrides));
