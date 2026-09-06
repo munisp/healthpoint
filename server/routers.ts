@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure, publicProcedure, adminProcedure, requirePermission } from "./_core/trpc";
+import { router, protectedProcedure, publicProcedure } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
 import * as db from "./db";
 import { EXCLUDED_NPI_IDS, isExcludedProvider } from "./npi-exclusions";
@@ -18,12 +18,6 @@ import { authRouter } from "./auth.routes";
 import { memberRouter } from "./member.routes";
 import { authzRouter } from "./authz.routes";
 import { financialRouter } from "./financial.routes";
-import { batchedDisputesRouter } from "./batched-disputes.routes";
-import { idrEntitiesRouter } from "./idr-entities.routes";
-import { complianceRouter } from "./compliance.routes";
-import { idrComplianceRouter } from "./idr-compliance.routes";
-import { negotiationDraftsRouter } from "./negotiation-drafts.routes";
-import { feeScheduleRouter } from "./idr/fee-schedule.routes";
 import { submissionAutomationRouter } from "./idr/submission-automation/routes";
 import { stateProgramsRouter } from "./idr/state-programs/routes";
 import { priorAuthRouter } from "./priorauth/routes";
@@ -51,6 +45,17 @@ import {
 } from "./guards";
 
 const logger = getLogger("routers");
+
+/**
+ * Admin-only procedure. Defined locally (not imported from ./_core/trpc,
+ * which does not export it) using the standard role-check pattern.
+ */
+const adminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  if (ctx.user.role !== "admin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
+  }
+  return next();
+});
 
 // ─── Validation schemas ───────────────────────────────────────────────────────
 const npiSchema = z.string().regex(/^\d{10}$/, "NPI must be exactly 10 digits");
@@ -282,12 +287,6 @@ export const appRouter = router({
   member: memberRouter,
   authz: authzRouter,
   financial: financialRouter,
-  batchedDisputes: batchedDisputesRouter,
-  idrEntities: idrEntitiesRouter,
-  compliance: complianceRouter,
-  idrCompliance: idrComplianceRouter,
-  negotiationDrafts: negotiationDraftsRouter,
-  feeSchedule: feeScheduleRouter,
   submissionAutomation: submissionAutomationRouter,
   statePrograms: stateProgramsRouter,
   priorAuth: priorAuthRouter,
