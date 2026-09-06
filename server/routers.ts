@@ -8,6 +8,7 @@ import { batchedDisputesRouter } from "./idr/batching/routes";
 import { feeScheduleRouter } from "./idr/clocks-2026/routes";
 import { noticeConsentRouter } from "./notice-consent/routes";
 import { gfePpdrRouter } from "./gfe-ppdr/routes";
+import { portalRpaRouter } from "./idr/portal-rpa/routes";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { ENV } from "./_core/env";
@@ -4348,6 +4349,7 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
   feeSchedule: feeScheduleRouter,
   noticeConsent: noticeConsentRouter,
   gfePpdr: gfePpdrRouter,
+  portalRpa: portalRpaRouter,
 
   // ─── Organisation Settings ─────────────────────────────────────────────────
   orgSettings: router({
