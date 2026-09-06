@@ -483,7 +483,7 @@ export const appRouter = router({
         await eventBus.publish("dispute.advanced", input.disputeId, "dispute", {
           previousStep: currentStep,
           newStep: input.targetStep,
-          newStatus: input.targetStep,
+          newStatus,
           referenceNumber: dispute.referenceNumber,
         }, { userId: ctx.user.id, timestamp: new Date().toISOString() });
 
