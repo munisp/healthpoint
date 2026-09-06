@@ -26,6 +26,14 @@ import { withDisputeLock } from "../redis";
 // Import the canonical types from the schema
 import type { IDRStep, DisputeStatus } from "../../drizzle/schema";
 
+// Canonical business-day arithmetic (algorithmic US federal holidays,
+// 5 U.S.C. § 6103) lives in server/idr/deadlines.ts. This module previously
+// maintained its own weekend-only addBusinessDays; it now delegates so every
+// workflow deadline honors federal holidays identically. Re-exported so
+// existing importers (e.g. server/routers.ts) keep working.
+import { addBusinessDays } from "../idr/deadlines";
+export { addBusinessDays } from "../idr/deadlines";
+
 export interface WorkflowStepDefinition {
   id: IDRStep;
   name: string;
@@ -191,12 +199,12 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
   STEP_16_ADMINISTRATIVE_FEE_PAID: {
     id: "STEP_16_ADMINISTRATIVE_FEE_PAID",
     name: "Administrative Fee Paid",
-    description: "Losing party pays administrative fee to federal IDR portal",
+    description: "Each party pays the non-refundable administrative fee to the Departments",
     deadlineBusinessDays: 30,
     allowedTransitions: ["STEP_17_DISPUTE_CLOSED"],
     isTerminal: false,
     requiredFields: [],
-    nsaReference: "45 CFR § 149.510(b)(1)(viii)",
+    nsaReference: "45 CFR § 149.510(d)(1)",
   },
   STEP_17_DISPUTE_CLOSED: {
     id: "STEP_17_DISPUTE_CLOSED",
@@ -369,20 +377,6 @@ export function getStatusForStep(step: IDRStep): DisputeStatus {
 export function getStepNumber(step: IDRStep): number {
   const match = step.match(/^STEP_(\d+)/);
   return match ? parseInt(match[1], 10) : 0;
-}
-
-/**
- * Add N business days to a date (skipping weekends).
- */
-export function addBusinessDays(date: Date, days: number): Date {
-  const result = new Date(date);
-  let added = 0;
-  while (added < days) {
-    result.setDate(result.getDate() + 1);
-    const dow = result.getDay();
-    if (dow !== 0 && dow !== 6) added++;
-  }
-  return result;
 }
 
 /**
