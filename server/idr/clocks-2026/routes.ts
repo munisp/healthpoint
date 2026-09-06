@@ -6,7 +6,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure } from "../../../_core/trpc";
+import { router, protectedProcedure } from "../../_core/trpc";
 import { getEffectiveIDRParameters } from "./params-2026";
 
 const asOfSchema = z.object({ asOf: z.coerce.date() });

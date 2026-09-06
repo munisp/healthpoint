@@ -5,7 +5,7 @@
  * underlying module passes through unchanged.
  */
 import { z } from "zod";
-import { router, protectedProcedure } from "../../../_core/trpc";
+import { router, protectedProcedure } from "../../_core/trpc";
 import { evaluateBatchEligibility } from "./batching";
 
 const lineItemSchema = z.object({

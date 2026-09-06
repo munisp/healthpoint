@@ -6,7 +6,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure, publicProcedure } from "../../../_core/trpc";
+import { router, protectedProcedure, publicProcedure } from "../../_core/trpc";
 import {
   registerStateProgram,
   getStateProgram,
