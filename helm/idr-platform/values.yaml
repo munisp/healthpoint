@@ -361,6 +361,20 @@ caddy:
     size: 1Gi
   internalCaSecret: caddy-internal-ca
 
+# ── Internal mTLS (cert-manager) ─────────────────────────────────────────────
+# Audit P1 (2026-09-05): when enabled, templates/certificates.yaml renders a
+# cert-manager v1 CA Issuer (backed by caddy.internalCaSecret — the internal
+# CA the Caddy layer-4 mTLS listeners already trust) plus Certificate
+# resources issuing service certs for kafka / temporal / tigerbeetle / redis /
+# opensearch into `<release>-<svc>-tls` Secrets. Requires cert-manager v1 CRDs
+# in the cluster. Default OFF — enable with --set internalMtls.enabled=true
+# after cert-manager is installed and the CA secret exists.
+internalMtls:
+  enabled: false
+  caSecretName: ""   # default: .Values.caddy.internalCaSecret
+  duration: "2160h"  # 90 days
+  renewBefore: "360h"  # 15 days
+
 # ── Legacy nginx Ingress (disabled — Caddy replaces it) ──────────────────────
 ingress:
   enabled: false
