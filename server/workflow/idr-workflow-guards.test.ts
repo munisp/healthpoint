@@ -27,4 +27,24 @@ describe("IDR workflow transition guards", () => {
       { billedAmount: "100", qpaAmount: "80", serviceDate: new Date() }
     )).not.toThrow();
   });
+
+  it("appeal path is reachable: STEP_13 → STEP_18 → STEP_19 → STEP_17", () => {
+    // STEP_18_APPEAL_FILED previously had no inbound transition, making the
+    // appeal path unreachable.
+    expect(() => validateWorkflowTransition(
+      "STEP_13_DETERMINATION_ISSUED",
+      "STEP_18_APPEAL_FILED",
+      {}
+    )).not.toThrow();
+    expect(() => validateWorkflowTransition(
+      "STEP_18_APPEAL_FILED",
+      "STEP_19_APPEAL_RESOLVED",
+      {}
+    )).not.toThrow();
+    expect(() => validateWorkflowTransition(
+      "STEP_19_APPEAL_RESOLVED",
+      "STEP_17_DISPUTE_CLOSED",
+      {}
+    )).not.toThrow();
+  });
 });
