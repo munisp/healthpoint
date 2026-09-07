@@ -511,17 +511,23 @@ export async function listIDREntities(opts: { state?: string; specialty?: string
   return db.select().from(idrEntities).where(eq(idrEntities.isActive, true)).orderBy(idrEntities.name);
 }
 
+/**
+ * DEMO-ONLY seed data. These 5 synthetic IDR entities are explicitly labelled
+ * "DEMO" (name prefix + DEMO- certification numbers) so they can never be
+ * mistaken for certified IDR entities. Invoked ONLY from the admin-only
+ * arbitrators.seedDemoEntities mutation — never auto-called from read paths.
+ */
 export async function seedIDREntities() {
   const db = await getDb();
   if (!db) return;
   const existing = await db.select({ count: count() }).from(idrEntities);
   if ((existing[0]?.count ?? 0) > 0) return; // Already seeded
   const entities = [
-    { id: crypto.randomUUID(), name: "JAMS Healthcare Arbitration", certificationNumber: "IDR-CERT-001", specialties: ["emergency_medicine", "anesthesiology", "radiology"], states: ["CA", "NY", "TX", "FL", "IL"], contactEmail: "idr@jams.com", contactPhone: "1-800-352-5267", website: "https://www.jamsadr.com", avgResolutionDays: 28, totalCasesHandled: 1247, isActive: true },
-    { id: crypto.randomUUID(), name: "AAA Healthcare Dispute Resolution", certificationNumber: "IDR-CERT-002", specialties: ["surgery", "hospitalist", "pathology"], states: ["NY", "NJ", "CT", "MA", "PA"], contactEmail: "healthcare@adr.org", contactPhone: "1-800-778-7879", website: "https://www.adr.org", avgResolutionDays: 25, totalCasesHandled: 892, isActive: true },
-    { id: crypto.randomUUID(), name: "AHLA Dispute Resolution Services", certificationNumber: "IDR-CERT-003", specialties: ["air_ambulance", "ground_ambulance", "emergency_medicine"], states: ["TX", "FL", "GA", "NC", "VA"], contactEmail: "idr@ahla.com", contactPhone: "1-202-833-1100", website: "https://www.ahla.org", avgResolutionDays: 22, totalCasesHandled: 634, isActive: true },
-    { id: crypto.randomUUID(), name: "National Arbitration Forum Healthcare", certificationNumber: "IDR-CERT-004", specialties: ["neonatology", "radiology", "anesthesiology"], states: ["MN", "WI", "IA", "ND", "SD"], contactEmail: "healthcare@nafresolution.org", contactPhone: "1-800-474-2371", website: "https://www.nafresolution.org", avgResolutionDays: 30, totalCasesHandled: 445, isActive: true },
-    { id: crypto.randomUUID(), name: "FINRA Healthcare Billing Arbitration", certificationNumber: "IDR-CERT-005", specialties: ["surgery", "emergency_medicine", "hospitalist"], states: ["DC", "MD", "VA", "DE", "WV"], contactEmail: "idr@finra.org", contactPhone: "1-301-590-6500", website: "https://www.finra.org", avgResolutionDays: 27, totalCasesHandled: 318, isActive: true },
+    { id: crypto.randomUUID(), name: "DEMO — JAMS Healthcare Arbitration", certificationNumber: "DEMO-IDR-CERT-001", specialties: ["emergency_medicine", "anesthesiology", "radiology"], states: ["CA", "NY", "TX", "FL", "IL"], contactEmail: "idr@jams.com", contactPhone: "1-800-352-5267", website: "https://www.jamsadr.com", avgResolutionDays: 28, totalCasesHandled: 1247, isActive: true },
+    { id: crypto.randomUUID(), name: "DEMO — AAA Healthcare Dispute Resolution", certificationNumber: "DEMO-IDR-CERT-002", specialties: ["surgery", "hospitalist", "pathology"], states: ["NY", "NJ", "CT", "MA", "PA"], contactEmail: "healthcare@adr.org", contactPhone: "1-800-778-7879", website: "https://www.adr.org", avgResolutionDays: 25, totalCasesHandled: 892, isActive: true },
+    { id: crypto.randomUUID(), name: "DEMO — AHLA Dispute Resolution Services", certificationNumber: "DEMO-IDR-CERT-003", specialties: ["air_ambulance", "ground_ambulance", "emergency_medicine"], states: ["TX", "FL", "GA", "NC", "VA"], contactEmail: "idr@ahla.com", contactPhone: "1-202-833-1100", website: "https://www.ahla.org", avgResolutionDays: 22, totalCasesHandled: 634, isActive: true },
+    { id: crypto.randomUUID(), name: "DEMO — National Arbitration Forum Healthcare", certificationNumber: "DEMO-IDR-CERT-004", specialties: ["neonatology", "radiology", "anesthesiology"], states: ["MN", "WI", "IA", "ND", "SD"], contactEmail: "healthcare@nafresolution.org", contactPhone: "1-800-474-2371", website: "https://www.nafresolution.org", avgResolutionDays: 30, totalCasesHandled: 445, isActive: true },
+    { id: crypto.randomUUID(), name: "DEMO — FINRA Healthcare Billing Arbitration", certificationNumber: "DEMO-IDR-CERT-005", specialties: ["surgery", "emergency_medicine", "hospitalist"], states: ["DC", "MD", "VA", "DE", "WV"], contactEmail: "idr@finra.org", contactPhone: "1-301-590-6500", website: "https://www.finra.org", avgResolutionDays: 27, totalCasesHandled: 318, isActive: true },
   ];
   for (const entity of entities) {
     await db.insert(idrEntities).values(entity).onConflictDoUpdate({ target: idrEntities.id, set: { name: entity.name } });
@@ -1167,7 +1173,7 @@ export async function updateDisputeTemplate(id: string, updates: Partial<InsertD
 
 export async function deleteDisputeTemplate(id: string): Promise<void> {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!db) return;
   await db.delete(disputeTemplates).where(eq(disputeTemplates.id, id));
 }
 
