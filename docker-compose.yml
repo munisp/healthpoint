@@ -295,12 +295,9 @@ services:
       # Runtime health endpoints on management port 9000 (the Keycloak image
       # ships no curl/wget — healthcheck uses bash /dev/tcp below).
       KC_HEALTH_ENABLED: "true"
-      # PRODUCTION HARDENING (uncomment in the production overlay):
-      #   KC_HOSTNAME: "https://keycloak.example.com"
-      #   KC_HOSTNAME_STRICT: "true"        # reject requests for other hosts
-      #   KC_HOSTNAME_STRICT_HTTPS: "true"  # enforce https URLs in redirects
-      #   KC_HTTP_ENABLED: "false"          # TLS terminated at Caddy edge
-      #   KC_PROXY_HEADERS: xforwarded      # honour Caddy's X-Forwarded-*
+      # PRODUCTION HARDENING (set in docker-compose.production.yml):
+      #   KC_HOSTNAME (required), KC_HOSTNAME_STRICT, KC_HOSTNAME_STRICT_HTTPS,
+      #   KC_HTTP_ENABLED=false (TLS at Caddy edge), KC_PROXY_HEADERS=xforwarded
     volumes:
       # Canonical realm export (realm: healthpoint). Previously ./keycloak,
       # which does not exist in this layout — see middleware/keycloak/.
@@ -787,7 +784,7 @@ services:
       # (fail-closed 401 when ML_API_KEY is unset) plus a 60 req/min/key
       # in-process rate limit. Set ML_API_KEY in .env; APISIX must forward
       # the key for /api/ml/* routes. ML_DEV_MODE=1 disables auth for local
-      # development ONLY.
+      # development ONLY. The production overlay makes ML_API_KEY mandatory.
       ML_API_KEY: "${ML_API_KEY:-}"
       ML_RATE_LIMIT_PER_MIN: ${ML_RATE_LIMIT_PER_MIN:-60}
       ML_DEV_MODE: "${ML_DEV_MODE:-}"
@@ -881,13 +878,15 @@ services:
   # Backend store: dedicated `mlflow` database on the shared postgres service
   # (provisioned by infra/postgres/init-mlflow.sql). Artifact root:
   # s3://mlflow-artifacts/ on MinIO (bucket created by minio-init).
-  # Image pinned to v3.15.1 — latest published ghcr.io/mlflow/mlflow release
-  # as of 2026-09 (github.com/orgs/mlflow/packages/container/package/mlflow).
+  # Image pinned to v3.15.2 — verified 2026-09-07 against
+  # github.com/orgs/mlflow/packages/container/package/mlflow (v3.15.2,
+  # published 2026-08-25; v3.16.0 exists but landed 2026-09-04, too fresh to
+  # pin without a soak — bump deliberately).
   # The stock image lacks the Postgres/S3 drivers, so the startup command
   # pip-installs psycopg2-binary and boto3 — PRODUCTION: build a derived
   # image with those deps baked in instead of installing at boot.
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v3.15.1
+    image: ghcr.io/mlflow/mlflow:v3.15.2
     restart: unless-stopped
     profiles: ["ml-tracking"]
     networks: [idr-net]
