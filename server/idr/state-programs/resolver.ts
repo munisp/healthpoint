@@ -32,7 +32,8 @@ const PLAN_TYPES: readonly PlanType[] = ['FULLY_INSURED', 'SELF_FUNDED'];
 const SERVICE_CATEGORIES: readonly ServiceCategory[] = [
   'EMERGENCY',
   'NON_EMERGENCY',
-  'AIR_AMBIANCE',
+  'AIR_AMBULANCE',
+  'AIR_AMBIANCE', // deprecated typo alias — accepted for wire-compat
   'POST_STABILIZATION',
 ];
 
