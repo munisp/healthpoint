@@ -21,8 +21,9 @@
 # They must never fall back to the data-store containers' development default
 # passwords, so their DATABASE_URL / REDIS_URL / S3 credentials use compose's
 # `:?` required-variable form. Set POSTGRES_PASSWORD / REDIS_PASSWORD /
-# MINIO_ACCESS_KEY / MINIO_SECRET_KEY / KC_ADMIN_PASSWORD in .env (compose
-# auto-loads it); the same values feed the infra containers' defaults.
+# MINIO_ACCESS_KEY / MINIO_SECRET_KEY / KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD
+# in .env (compose auto-loads it); the same values feed the infra containers'
+# defaults.
 ###############################################################################
 version: "3.9"
 
@@ -60,6 +61,9 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      # Audit P1 (2026-09-05): provisions the dedicated `keycloak` database
+      # used by Keycloak's production-mode Postgres backend (KC_DB=postgres).
+      - ./infra/postgres/init-keycloak.sql:/docker-entrypoint-initdb.d/02-init-keycloak.sql:ro
     ports:
       - "5432:5432"   # DEV ONLY: host access for local tooling; remove in production overlay
     healthcheck:
@@ -228,21 +232,55 @@ services:
 ###############################################################################
 
   # ── Keycloak 26 (OIDC identity provider) ─────────────────────────────────
+  # Audit P1 (2026-09-05): production mode. `start-dev` + KC_DB=dev-mem ran
+  # the IdP from an in-memory H2 database and was development-only; it must
+  # never reach a deployed environment. The service now runs
+  # `start --optimized` against the shared Postgres (dedicated `keycloak`
+  # database, provisioned by infra/postgres/init-keycloak.sql) with admin
+  # bootstrap credentials that fail fast when unset.
+  #
+  # ── DEV-MODE BLOCK (commented reference — local throwaway dev ONLY) ──────
+  #   command: start-dev --import-realm
+  #   environment:
+  #     KC_BOOTSTRAP_ADMIN_USERNAME: admin
+  #     KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+  #     KC_DB: dev-mem
+  # Do NOT uncomment outside local dev: dev-mem loses all realm/user state on
+  # restart and start-dev disables hostname/HTTPS enforcement.
+  # ──────────────────────────────────────────────────────────────────────────
   keycloak:
     image: quay.io/keycloak/keycloak:26.2.5
     restart: unless-stopped
     networks: [idr-net]
-    command: start-dev --import-realm
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # NOTE: `start --optimized` expects an image augmented at build time
+    # (`kc.sh build`). For this generic image either build an augmented image
+    # once (`docker run --rm quay.io/keycloak/keycloak:26.2.5 build --db=postgres`
+    # and tag the result), or drop `--optimized` (plain `start` auto-builds
+    # at container boot at the cost of a slower first start).
+    command: start --optimized --import-realm
     environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
-      # No default admin password — set KC_ADMIN_PASSWORD explicitly (the
-      # `start-dev` mode itself is development-only and must not reach prod).
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?Set KC_ADMIN_PASSWORD before starting the Keycloak dev container}
-      KC_DB: dev-mem
+      # Fail-if-unset: no default admin credentials in any mode (audit P1).
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:?Set KEYCLOAK_ADMIN before starting Keycloak — no default admin user exists}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD before starting Keycloak — no default admin password exists}
+      # Postgres backend — dedicated `keycloak` database on the shared
+      # postgres service (created by infra/postgres/init-keycloak.sql).
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: ${POSTGRES_USER:-idr_user}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env — Keycloak must not use the dev default password}
       KC_HTTP_PORT: 8080
       # Runtime health endpoints on management port 9000 (the Keycloak image
       # ships no curl/wget — healthcheck uses bash /dev/tcp below).
       KC_HEALTH_ENABLED: "true"
+      # PRODUCTION HARDENING (uncomment in the production overlay):
+      #   KC_HOSTNAME: "https://keycloak.example.com"
+      #   KC_HOSTNAME_STRICT: "true"        # reject requests for other hosts
+      #   KC_HOSTNAME_STRICT_HTTPS: "true"  # enforce https URLs in redirects
+      #   KC_HTTP_ENABLED: "false"          # TLS terminated at Caddy edge
+      #   KC_PROXY_HEADERS: xforwarded      # honour Caddy's X-Forwarded-*
     volumes:
       # Canonical realm export (realm: healthpoint). Previously ./keycloak,
       # which does not exist in this layout — see middleware/keycloak/.
