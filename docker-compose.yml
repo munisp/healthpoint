@@ -171,6 +171,20 @@ services:
 ###############################################################################
 
   # ── Temporal server (durable workflow engine) ─────────────────────────────
+  # Audit P1 (2026-09-05) PRODUCTION NOTES — this service runs
+  # temporalio/auto-setup, which auto-creates schemas and boots a single
+  # all-in-one server. That is dev/integration ONLY. For production:
+  #   - Do NOT use auto-setup. Deploy the multi-role server image
+  #     (temporalio/server:1.24.2 with SERVICES=frontend,history,matching,worker
+  #     as separate replicas) and run schema setup/updates explicitly with
+  #     temporal-sql-tool as a migration step.
+  #   - Point at an EXTERNAL HA Postgres (POSTGRES_SEEDS / DB_PORT /
+  #     credentials via secrets), not this compose postgres container.
+  #   - Use infra/temporal/dynamicconfig/production-sql.yaml as the dynamic
+  #     config: DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/production-sql.yaml
+  #     WARNING: history.numHistoryShards (512 there) is fixed at cluster
+  #     bootstrap and is IMMUTABLE afterwards — choose before first deploy.
+  #   - Reference: https://docs.temporal.io/self-hosted-guide/production-checklist
   temporal:
     image: temporalio/auto-setup:1.24.2
     restart: unless-stopped
