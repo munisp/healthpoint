@@ -1,0 +1,91 @@
+# ==============================================================================
+# Temporal dynamic config — PRODUCTION (SQL persistence) baseline
+# Audit P1 (2026-09-05): the compose stack boots temporalio/auto-setup with
+# development-sql.yaml, which is a dev/integration baseline only. In the
+# production overlay, point DYNAMIC_CONFIG_FILE_PATH at THIS file:
+#   DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/config/dynamicconfig/production-sql.yaml
+# and deploy the multi-role server (SERVICES=frontend,history,matching,worker)
+# against an external HA Postgres — see the commented notes on the temporal
+# service in docker-compose.yml.
+# STATIC-ONLY: values below are reviewed but not load-tested; validate against
+# observed persistence latency/QPS on first production deploy.
+# ==============================================================================
+
+# ── IMMUTABLE AFTER BOOTSTRAP ────────────────────────────────────────────────
+# history.numHistoryShards is fixed when the cluster is first created and can
+# NEVER be raised afterwards (raising it requires provisioning a NEW cluster
+# and migrating namespaces). Choose deliberately: 512 is the recommended
+# starting point for a production SQL-backed cluster of this size.
+history.numHistoryShards:
+  - value: 512
+    constraints: {}
+
+# ── Persistence QPS ceilings (per service role) ──────────────────────────────
+# Ceiling on persistence requests/sec each role may issue. These assume an
+# external HA Postgres; raise them together with database capacity, not in
+# isolation. (Dev baseline was 3000 on history/frontend only.)
+history.persistenceMaxQPS:
+  - value: 9000
+    constraints: {}
+frontend.persistenceMaxQPS:
+  - value: 9000
+    constraints: {}
+matching.persistenceMaxQPS:
+  - value: 9000
+    constraints: {}
+worker.persistenceMaxQPS:
+  - value: 1000
+    constraints: {}
+
+# ── Matching service task-queue partitions ───────────────────────────────────
+# More partitions spread task-dispatch load across matching nodes. Keep read
+# and write counts equal; changing read partitions is safe, but shrinking
+# write partitions strands tasks until they expire.
+matching.numTaskqueueWritePartitions:
+  - value: 4
+    constraints: {}
+matching.numTaskqueueReadPartitions:
+  - value: 4
+    constraints: {}
+
+# ── Persistence connection pools ─────────────────────────────────────────────
+frontend.historyMgrNumConns:
+  - value: 30
+    constraints: {}
+history.historyMgrNumConns:
+  - value: 100
+    constraints: {}
+frontend.throttledLogRPS:
+  - value: 20
+    constraints: {}
+
+# ── Retry policy defaults (unchanged from dev baseline) ──────────────────────
+limit.maxIDLength:
+  - value: 255
+    constraints: {}
+history.defaultActivityRetryPolicy:
+  - value:
+      InitialIntervalInSeconds: 1
+      MaximumIntervalCoefficient: 100.0
+      BackoffCoefficient: 2.0
+      MaximumAttempts: 0
+history.defaultWorkflowRetryPolicy:
+  - value:
+      InitialIntervalInSeconds: 1
+      MaximumIntervalCoefficient: 100.0
+      BackoffCoefficient: 2.0
+      MaximumAttempts: 0
+
+# ── Archival — PLACEHOLDER (intentionally not enabled) ───────────────────────
+# Enable only after choosing a blob store (S3/MinIO/GCS) and wiring its
+# credentials into the Temporal deployment. Typical enablement is per-cluster
+# defaults here plus per-namespace URIs, e.g.:
+#   archival.history.state:        enabled
+#   archival.visibility.state:     enabled
+#   system.historyArchivalState / namespace defaults with
+#     archivalNamespaceDefaults.history.URI: s3://idr-temporal-archive/history
+#   then: tctl --ns <ns> namespace update --has true --huri s3://... \
+#                                     --vas true --vuri s3://...
+# References: docs.temporal.io/self-hosted-guide/archival. Do NOT flip the
+# state keys without the storage + namespace URIs in place — archival queues
+# will back up and history service writes will stall.
