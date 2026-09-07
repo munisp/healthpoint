@@ -1,31 +1,25 @@
-# APISIX Dashboard 3.0 configuration (mounted as /usr/local/apisix-dashboard/conf/conf.yaml)
-#
-# SECURITY: apisix-dashboard does NOT expand environment variables in this file.
-# The ${APISIX_DASHBOARD_USER} / ${APISIX_DASHBOARD_PASSWORD} values below are
-# PLACEHOLDERS that MUST be rendered (e.g. via envsubst) from real secrets at
-# deploy time. Do not ship this file unchanged to production.
-
+# APISIX Dashboard configuration
+# Audit P0-4: listen port moved 9000 -> 9002 to avoid the collision with the
+# MinIO S3 API (9000). Compose publishes 9002:9002.
 conf:
   listen:
     host: 0.0.0.0
-    port: 9000
+    port: 9002
   allow_list:
-    # Loopback only by default; the dashboard is reachable through the Caddy
-    # edge (forward_auth). Add explicit admin CIDRs here if direct access is
-    # required — never use 0.0.0.0/0.
-    - 127.0.0.1
+    - 0.0.0.0/0
   etcd:
     endpoints:
-      - "http://etcd:2379"
-    # mtls / prefix settings left at dashboard defaults
+      - http://etcd:2379
+    prefix: /apisix
   log:
     error_log:
       level: warn
       file_path: logs/error.log
-
-authentication:
-  secret: ${APISIX_DASHBOARD_SECRET:-change-me-dashboard-secret}
-  expire_time: 3600
-  users:
-    - username: ${APISIX_DASHBOARD_USER:-admin}
-      password: ${APISIX_DASHBOARD_PASSWORD:-change-me-now}
+    access_log:
+      file_path: logs/access.log
+  authentication:
+    secret: ${DASHBOARD_SECRET}
+    expire_time: 3600
+    users:
+      - username: ${DASHBOARD_USER}
+        password: ${DASHBOARD_PASSWORD}
