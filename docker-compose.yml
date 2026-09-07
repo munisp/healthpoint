@@ -438,8 +438,24 @@ services:
 ###############################################################################
 
   # ── MinIO (S3-compatible object storage for Lakehouse) ────────────────────
+  # Audit P2 (2026-09-05): pinned from :latest to RELEASE.2025-10-15T17-29-55Z
+  # — the final community release published to Docker Hub (fixes
+  # CVE-2025-62506; github.com/minio/minio/releases/tag/RELEASE.2025-10-15T17-29-55Z
+  # and issue #21675). MinIO community edition is now SOURCE-ONLY: no newer
+  # community images will appear on Docker Hub, so this tag is also the
+  # effective ceiling for registry-pulled MinIO. Long-term: build from source
+  # (git checkout RELEASE.…; make docker) or evaluate an enterprise/AIStor
+  # subscription.
+  #
+  # SINGLE-NODE WARNING (dev topology): this service runs one node with one
+  # drive (server /data). That is standalone mode — NO erasure coding, NO
+  # bit-rot self-healing across drives, and a single point of failure.
+  # PRODUCTION: deploy distributed/erasure-coded MinIO (minimum 4 drives per
+  # pool, e.g. `minio server http://minio{1...4}/data` with 4+ nodes) or a
+  # managed S3-compatible service, and keep bucket versioning ON so object
+  # deletes/overwrites remain recoverable.
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-10-15T17-29-55Z
     restart: unless-stopped
     networks: [idr-net]
     command: server /data --console-address ":9001"
@@ -461,7 +477,9 @@ services:
       retries: 5
 
   minio-init:
-    image: minio/mc:latest
+    # Audit P2 (2026-09-05): pinned from :latest to
+    # RELEASE.2025-07-21T05-28-08Z (github.com/minio/mc/releases).
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z
     networks: [idr-net]
     depends_on:
       minio:
@@ -470,6 +488,10 @@ services:
     command: |
       mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-minio_admin} ${MINIO_SECRET_KEY:-minio_secret123}
       mc mb --ignore-existing local/idr-lakehouse
+      # Audit P2 (2026-09-05): enable object versioning on the lakehouse
+      # bucket so overwrites/deletes of lakehouse objects are recoverable
+      # (auditability of the immutable data lake).
+      mc version enable local/idr-lakehouse
       mc mb --ignore-existing local/idr-documents
       mc mb --ignore-existing local/idr-exports
       # Audit P2 (2026-09-05): artifact bucket for the optional MLflow
