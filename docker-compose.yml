@@ -10,7 +10,7 @@
 #   - minio/minio:latest                (minio)
 #   - minio/mc:latest                   (minio-init)
 #   - mojaloop/simulator:latest         (mojaloop-simulator)
-#   - openappsec/nginx:latest           (openappsec)
+#   - openappsec/nginx:latest           (openappsec — waf-agent profile only)
 # (tigerbeetle was pinned to 0.17.6 below — audit P1-11.)
 ###############################################################################
 # NOTE: Dapr and Fluvio were removed on 2026-09-05 (zero application adoption;
@@ -523,11 +523,18 @@ services:
       retries: 5
       start_period: 15s
 
-  # ── OpenAppsec WAF (NGINX-based ML WAF) ─────────────────────────────────
-  # Sits between Caddy and APISIX: Caddy → OpenAppsec → APISIX → App
+  # ── OpenAppsec WAF (NGINX-based ML WAF) — OPTIONAL (profile: waf-agent) ──
+  # Audit P1 / ADR-003 (one-WAF decision, 2026-09-05): the stack previously
+  # ran TWO WAF layers in series (Caddy/Coraza at the edge + this ML-WAF hop
+  # Caddy → OpenAppsec → APISIX). Coraza is now the single default WAF and
+  # Caddy proxies directly to apisix:9080. This service is opt-in for users
+  # who want the ML-WAF agent and does NOT start by default:
+  #     docker compose --profile waf-agent up -d openappsec
+  # and uncomment the openappsec upstream block in infra/caddy/Caddyfile.
   openappsec:
     image: openappsec/nginx:latest
     restart: unless-stopped
+    profiles: ["waf-agent"]
     networks: [idr-net]
     depends_on: [apisix]
     volumes:
@@ -552,8 +559,10 @@ services:
 ###############################################################################
 
   # ── Caddy (TLS termination, HTTP/3, Coraza WAF, Keycloak forward_auth) ──────
-  # Traffic flow: Internet → Caddy → OpenAppsec → APISIX → App
-  # Layer 4:       Clients → Caddy (mTLS) → Kafka/Temporal/TigerBeetle/Redis
+  # Traffic flow: Internet → Caddy → APISIX → App
+  #               (optional ML-WAF hop Caddy → OpenAppsec → APISIX behind the
+  #                `waf-agent` profile — ADR-003, one-WAF decision)
+  # Layer 4:      Clients → Caddy (mTLS) → Kafka/Temporal/TigerBeetle/Redis
   caddy:
     build:
       context: ./infra/caddy
@@ -561,8 +570,10 @@ services:
     restart: unless-stopped
     networks: [idr-net]
     depends_on:
-      openappsec:
-        condition: service_healthy
+      # ADR-003: openappsec removed from the default dependency chain — Caddy
+      # proxies directly to APISIX. Re-add `openappsec: {condition:
+      # service_healthy}` here only together with `--profile waf-agent` and
+      # the commented upstream block in infra/caddy/Caddyfile.
       keycloak:
         condition: service_healthy
     volumes:
@@ -686,7 +697,7 @@ services:
       S3_SECRET_KEY: "${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env (see .env.example)}"
       S3_BUCKET: "idr-documents"
     ports:
-      - "3000:3000"   # DEV ONLY: remove in production overlay — traffic enters via Caddy → OpenAppsec → APISIX
+      - "3000:3000"   # DEV ONLY: remove in production overlay — traffic enters via Caddy → APISIX (optional openappsec hop, ADR-003)
     healthcheck:
       # node:22-slim ships no curl/wget; use Node's built-in fetch against the
       # liveness endpoint. Readiness of dependencies is gated by depends_on
