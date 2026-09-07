@@ -1173,7 +1173,7 @@ export async function updateDisputeTemplate(id: string, updates: Partial<InsertD
 
 export async function deleteDisputeTemplate(id: string): Promise<void> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) throw new Error("Database not available");
   await db.delete(disputeTemplates).where(eq(disputeTemplates.id, id));
 }
 
