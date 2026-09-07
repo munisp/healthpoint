@@ -1,1 +1,139 @@
-<PLACEHOLDER_CADDYFILE>
+# ==============================================================================
+# Caddyfile — TLS termination, HTTP/3, Coraza WAF, rate limiting, forward_auth
+# ==============================================================================
+# Audit P0-6: the domain is no longer hardcoded to healthpoint.example.com.
+# Set CADDY_DOMAIN in the environment (docker-compose already does; default
+# shown below keeps previous behavior for unconfigured deployments).
+{
+    email {$ADMIN_EMAIL:admin@healthpoint.example.com}
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+    servers {
+        protocols h1 h2 h3
+        timeouts {
+            read 30s
+            write 30s
+            idle 120s
+        }
+    }
+}
+
+# WAF + rate limit + forward_auth snippet
+(waf_and_rate_limit) {
+    # Coraza WAF with OWASP Core Rule Set — the SINGLE WAF layer (ADR-003,
+    # one-WAF decision). There is deliberately no second WAF downstream.
+    coraza_waf {
+        directives `
+            SecRuleEngine On
+            SecRequestBodyAccess On
+            SecResponseBodyAccess Off
+            SecRequestBodyLimit 13107200
+            SecAuditEngine RelevantOnly
+            SecAuditLogParts ABIJDEFHZ
+            SecAuditLogType Serial
+            SecAuditLog /var/log/caddy/waf-audit.log
+            SecAction "id:900990,phase:1,pass,log,setvar:'tx.crs_setup_version=400'"
+        `
+        include /etc/caddy/crs/*.conf
+    }
+    # Audit P1-8 (rate-limit consolidation): Caddy owns the EDGE per-IP burst
+    # limit (200 req/min, burst 20). APISIX owns identity-aware quota
+    # (limit-count after openid-connect). The nginx limit_req layer was
+    # removed from infra/openappsec/nginx.conf.
+    rate_limit {
+        zone {
+            key {remote_host}
+            events 200
+            window 1m
+        }
+        burst 20
+        log_key true
+    }
+    # Keycloak forward_auth for protected routes
+    forward_auth keycloak:8080 {
+        uri /realms/healthpoint/protocol/openid-connect/auth?client_id=healthpoint-backend&response_type=code
+        copy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Roles
+        header_up X-Forwarded-Method {method}
+        header_up X-Forwarded-Uri {uri}
+    }
+}
+
+# Main site — API and web traffic
+{$CADDY_DOMAIN:healthpoint.example.com}, www.{$CADDY_DOMAIN:healthpoint.example.com} {
+    # WAF + rate limiting + forward_auth
+    import waf_and_rate_limit
+    # Security headers (HSTS, CSP, etc.)
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'"
+        Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
+        -Server
+    }
+    # HTTP/3 Alt-Svc advertisement
+    header Alt-Svc "h3=\":443\"; ma=86400"
+    # Default upstream: proxy DIRECTLY to the APISIX gateway (ADR-003,
+    # one-WAF decision — the Coraza WAF above is the single WAF layer;
+    # APISIX listens on 9080 per infra/apisix/config.yaml).
+    reverse_proxy apisix:9080
+    # REMOVED (2026-09-07): the optional openappsec ML-WAF hop
+    # (`reverse_proxy openappsec:80 { ... }`). The hop was decorative — a
+    # bypass defect meant it inspected only a subset of traffic while adding
+    # a second WAF to tune. See infra/openappsec/DEPRECATED.md and ADR-003
+    # in infra/ARCHITECTURE-DECISIONS.md; restore from git history only with
+    # the bypass fixed and the image pinned.
+    # Health check passthrough
+    handle /health {
+        reverse_proxy apisix:9080
+    }
+    # Compression
+    encode gzip zstd
+    # Logging
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+}
+
+# Keycloak admin interface
+keycloak.{$CADDY_DOMAIN:healthpoint.example.com} {
+    reverse_proxy keycloak:8080 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+# Temporal UI
+temporal.{$CADDY_DOMAIN:healthpoint.example.com} {
+    # Internal only — require client certificate via layer4 or restrict by IP
+    reverse_proxy temporal-ui:8080
+    # Basic IP restriction for internal tools
+    @internal {
+        not remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+    }
+    respond @internal "Access denied" 403
+}
+
+# APISIX Dashboard (admin only)
+dashboards.{$CADDY_DOMAIN:healthpoint.example.com} {
+    # Audit P0-4: dashboard now listens on 9002 (was 9000, MinIO collision).
+    reverse_proxy apisix-dashboard:9002
+    # Basic IP restriction for admin tools
+    @internal {
+        not remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+    }
+    respond @internal "Access denied" 403
+}
+
+# Catch-all redirect to HTTPS
+http:// {
+    redir https://{host}{uri} permanent
+}
