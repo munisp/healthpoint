@@ -1,13 +1,16 @@
-# OPTIONAL Neo4j service block.
+# OPTIONAL Neo4j service block — MERGED.
 #
-# Merge this block into the root docker-compose.yml `services:` section IF
-# graph exploration of fraud rings (shared TIN/address motifs) is wanted.
+# This block has been merged into docker-compose.yml under profile `graph`
+# (audit P2, 2026-09-05). This file is kept as a reference copy of the
+# service definition; edit the compose service, not this snippet.
+#
+# Enable: docker compose --profile graph up -d neo4j
+# and set NEO4J_URI=bolt://neo4j:7687 in the ml-serving / training
+# environment.
+#
 # Neo4j is NOT required for GNN training or inference — DisputeGNN reads the
 # dispute graph directly from Postgres. ml/graph/neo4j_sync.py is a no-op
 # unless NEO4J_URI is set.
-#
-# To enable: copy the block below into docker-compose.yml and set
-# NEO4J_URI=bolt://neo4j:7687 in the ml-serving / training environment.
 
 services:
   neo4j:
