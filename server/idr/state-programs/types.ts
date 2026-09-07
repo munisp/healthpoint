@@ -77,6 +77,8 @@ export type PlanType = 'FULLY_INSURED' | 'SELF_FUNDED';
 export type ServiceCategory =
   | 'EMERGENCY'
   | 'NON_EMERGENCY'
+  | 'AIR_AMBULANCE'
+  /** @deprecated Typo retained for wire-compat; use 'AIR_AMBULANCE'. */
   | 'AIR_AMBIANCE'
   | 'POST_STABILIZATION';
 
