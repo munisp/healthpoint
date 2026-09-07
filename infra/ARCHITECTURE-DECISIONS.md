@@ -45,3 +45,33 @@ be wired in later without changing callers.
   If Mojaloop is ever adopted for real, prefer a central-ledger version
   whose chart supports Postgres so the platform does not inherit a second
   database engine; until then the adapter boundary keeps the option open.
+
+## ADR-003: One WAF — Coraza at the edge; openappsec becomes an optional hop (ACCEPTED)
+
+**Status:** Accepted and implemented 2026-09-05.
+
+**Finding (audit P1):** The request path ran TWO web application firewalls
+in series — Caddy's embedded Coraza (OWASP CRS) at the edge AND the
+openappsec NGINX ML-WAF hop (`Caddy → openappsec:80 → apisix:9080`). Two
+WAFs double the latency and false-positive surface, and their block pages /
+rule-tuning workflows diverge, making incident response ambiguous about
+which layer blocked a request.
+
+**Decision:** Caddy keeps Coraza as the single, always-on WAF at the edge.
+The default chain is now:
+
+    Internet → Caddy (TLS + Coraza + rate limit + forward_auth) → APISIX → App
+
+The openappsec ML-WAF agent is OPTIONAL:
+- the `openappsec` compose service is gated behind the `waf-agent` profile
+  and does not start by default (`docker compose --profile waf-agent up`
+  to enable);
+- `infra/caddy/Caddyfile` proxies directly to `apisix:9080`, with the
+  previous `reverse_proxy openappsec:80` block preserved (commented) for
+  users who want the ML-WAF hop — re-enabling requires both the profile
+  and the Caddyfile swap.
+
+**Consequences:** one WAF to tune and monitor; openappsec's `latest`-tagged
+image no longer runs in the default topology (see the release-blocking
+image-pinning note in docker-compose.yml). If ML-based detection is wanted
+later, the hop can be reinstated without schema or route changes.
