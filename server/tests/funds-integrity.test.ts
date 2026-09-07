@@ -3,7 +3,8 @@
  *
  * Unit tests for the double-entry ledger (server/ledger.ts) money invariants:
  *   - entry validation guards (positive whole cents, distinct accounts, payment evidence)
- *   - per-transaction debit == credit (both account balances move by the same amount)
+ *   - per-transaction debit == credit (debit account +amount, credit account
+ *     −amount; signed balances across all accounts sum to zero)
  *   - idempotency-key dedupe (replayed payment does not double-post)
  *   - no overpayment / no over-reversal paths (no negative-balance escape hatches)
  *
@@ -284,9 +285,12 @@ describe("recordEntry double-entry invariant", () => {
     expect(debit).toBeDefined();
     expect(credit).toBeDefined();
     const total = amounts.reduce((s, a) => s + a, 0);
-    // Both legs of every entry carried the identical amount — books balance.
+    // Double-entry: debit account +amount, credit account −amount.
     expect(debit!.balanceCents).toBe(total);
-    expect(credit!.balanceCents).toBe(total);
+    expect(credit!.balanceCents).toBe(-total);
+    // Books balance: signed balances across all accounts sum to zero.
+    const balanceSum = fakeState.accounts.reduce((s, a) => s + a.balanceCents, 0);
+    expect(balanceSum).toBe(0);
     // Per-entry: debit account, credit account and amount are internally consistent.
     for (const entry of fakeState.entries) {
       expect(entry.debitAccountId).toBe(debit!.id);
