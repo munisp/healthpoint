@@ -1,41 +1,44 @@
-# ci/ — GitHub Actions workflow pending manual installation
+# CI — typecheck-and-test
 
-**Why this file exists:** the automation token used by the remediation pipeline
-lacks the `workflow` OAuth scope, so pushing to `.github/workflows/` returns
-HTTP 403. The CI pipeline definition therefore lives here until a maintainer
-copies it into place.
+**Move `ci/typecheck-and-test.yml` to `.github/workflows/` — the automation
+token used by the remediation pipeline lacks the `workflow` scope, so pushes
+to `.github/workflows/` are rejected with 403.** Until a maintainer with a
+full-scope token moves the file, this pipeline does not run automatically.
 
-## Install (one-time, requires `workflow` scope)
+After moving, the workflow runs on push/PR:
 
-```bash
-mkdir -p .github/workflows
-cp ci/github-actions.ci.yml .github/workflows/ci.yml
-git add .github/workflows/ci.yml
-git commit -m "ci: enable CI pipeline"
-git push
-```
+1. `actions/checkout@v4`
+2. `actions/setup-node@v4` (Node 20, npm cache)
+3. `npm ci --legacy-peer-deps`
+4. `npx tsc --noEmit`
+5. `npx vitest run` (service-free only; Kafka/Redis-backed tests are skipped
+   — no compose profile is started in this job)
 
-No edits are needed — the file is a complete, self-contained workflow.
+## Warn-only start (intentional)
 
-## pnpm version requirement
+Both `tsc --noEmit` and `vitest run` run with `continue-on-error: true`
+(with TODO comments to tighten) because the gate would otherwise block on
+**pre-existing** errors that predate this pipeline. Known pre-existing
+TypeScript errors as of 2026-09-05 include:
 
-The repo pins `packageManager: pnpm@10.34.5` and the lockfile
-(`lockfileVersion: 9.0`) only installs reproducibly under **pnpm 10** —
-`pnpm install --frozen-lockfile` is not guaranteed to succeed under pnpm 9.
-The workflow satisfies this with `pnpm/action-setup@v4` (`version: 10.34.5`)
-in both the `node` and `integration` jobs. For local runs, use
-`corepack enable` (honors the `packageManager` pin) or
-`npm install -g pnpm@10.34.5`.
+- **portal-rpa** (`server/portal-rpa/` / `client` portal RPA pages):
+  - `TS2802` — `Map`/iterator iteration requires `--downlevelIteration` or a
+    `target`/`lib` of ES2015+ (spread of a `Map` / iteration over Map
+    iterators in the portal-rpa code paths)
+  - `TS2322` — type assignment errors in the dispute registry mapping
+    (`server/idr/` registry types assigned to the portal-rpa view models
+    with mismatched optional/nullable fields)
 
-## What the workflow does
+(Symptom labels from the 2026-09-05 audit; exact file/line list should be
+captured from the first `npx tsc --noEmit` CI run and pasted here so the
+warn-only list is evidence-based, not from memory.)
 
-| Job | Steps |
-| --- | --- |
-| `node` | `pnpm install --frozen-lockfile` → `pnpm check` (tsc --noEmit) → vitest unit suite (live-infra connectivity suites excluded, they need running Redis/Kafka/Permify/TigerBeetle) → `pnpm build` (client + server) |
-| `python` | `python -m compileall` over `ai-service`, `services`, `scripts`, and root-level `*.py` |
-| `go` | `go build ./...` + `go vet ./...` in `services/go` (module cache enabled) |
-| `rust` | `cargo check` in `services/rust` (Swatinem/rust-cache) |
-| `integration` | postgres:16-alpine + redis:7-alpine service containers → `RUN_INTEGRATION=1 pnpm vitest run server/tests/integration` (the harness applies drizzle migrations itself) |
-| `gitleaks` | gitleaks-action@v2 full-history secret scan |
+Once those are fixed, remove `continue-on-error: true` from both steps so
+the gate becomes blocking.
 
-Triggers: pushes to `main` and `assurance/**`, and PRs to `main`.
+## Service-dependent tests
+
+Tests that need Postgres/Redis/Kafka are out of scope for this job. When
+integration coverage is added, start the data stores with the compose
+services (e.g. `docker compose up -d postgres redis kafka` + health gating)
+in a dedicated job rather than extending this one.
