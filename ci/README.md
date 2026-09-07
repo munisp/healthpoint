@@ -5,7 +5,17 @@ token used by the remediation pipeline lacks the `workflow` scope, so pushes
 to `.github/workflows/` are rejected with 403.** Until a maintainer with a
 full-scope token moves the file, this pipeline does not run automatically.
 
-After moving, the workflow runs on push/PR:
+## Run the gate without GitHub Actions
+
+`scripts/typecheck.sh` (added in the same remediation pass) runs the exact
+same steps — `npm ci --legacy-peer-deps` then `npx tsc --noEmit` — from any
+shell or CI system:
+
+```sh
+./scripts/typecheck.sh
+```
+
+After moving the workflow file, the GitHub Actions job runs on push/PR:
 
 1. `actions/checkout@v4`
 2. `actions/setup-node@v4` (Node 20, npm cache)
@@ -32,6 +42,11 @@ TypeScript errors as of 2026-09-05 include:
 (Symptom labels from the 2026-09-05 audit; exact file/line list should be
 captured from the first `npx tsc --noEmit` CI run and pasted here so the
 warn-only list is evidence-based, not from memory.)
+
+Note (2026-09-07): these fixes were deliberately NOT made in the
+remediation branch — the files live under `server/**`, which is owned by the
+concurrent server/idr workstream, so they are documented-only here and in
+`scripts/typecheck.sh`.
 
 Once those are fixed, remove `continue-on-error: true` from both steps so
 the gate becomes blocking.
