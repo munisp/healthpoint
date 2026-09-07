@@ -7,11 +7,11 @@
 # tags (`latest`). Before any release, replace each with a registry-verified
 # immutable digest (image@sha256:...):
 #   - ghcr.io/permify/permify:latest    (permify)
-#   - ghcr.io/tigerbeetle/tigerbeetle:latest (tigerbeetle)
 #   - minio/minio:latest                (minio)
 #   - minio/mc:latest                   (minio-init)
 #   - mojaloop/simulator:latest         (mojaloop-simulator)
 #   - openappsec/nginx:latest           (openappsec)
+# (tigerbeetle was pinned to 0.17.6 below — audit P1-11.)
 ###############################################################################
 # NOTE: Dapr and Fluvio were removed on 2026-09-05 (zero application adoption;
 # orphaned infrastructure). The application talks to Kafka/Redis/Temporal
@@ -73,7 +73,9 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     networks: [idr-net]
-    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_pass123} --appendonly yes
+    # Audit P1-12: added memory ceiling + LRU eviction (previously unbounded),
+    # AOF fsync every second, and a larger TCP backlog for burst fan-in.
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_pass123} --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru --appendfsync everysec --tcp-backlog 511
     volumes:
       - redis_data:/data
     # Internal only — reached via idr-net (app) and via Caddy
@@ -121,7 +123,10 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # Audit P1-10: auto topic creation disabled — kafka-init provisions all
+      # topics with explicit partitions/replication; auto-created topics got
+      # broker defaults and masked misconfiguration.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_RETENTION_HOURS: 168
     volumes:
       - kafka_data:/var/lib/kafka/data
@@ -297,7 +302,16 @@ services:
       node.name: opensearch-node1
       discovery.type: single-node
       bootstrap.memory_lock: "true"
-      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      # Audit P1-14: heap raised from 512m to 2g.
+      OPENSEARCH_JAVA_OPTS: "-Xms2g -Xmx2g"
+      # Audit P1-14: the security plugin stays DISABLED for local dev only.
+      # PRODUCTION (uncomment in the production overlay and provide certs):
+      #   DISABLE_SECURITY_PLUGIN: "false"
+      #   OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_ADMIN_PASSWORD:?required}
+      #   plugins.security.ssl.transport.pemcert_filepath: /usr/share/opensearch/config/node.pem
+      #   plugins.security.ssl.transport.pemkey_filepath: /usr/share/opensearch/config/node-key.pem
+      #   plugins.security.ssl.transport.pemtrustedcas_filepath: /usr/share/opensearch/config/root-ca.pem
+      #   plugins.security.ssl.http.enabled: "true"
       DISABLE_SECURITY_PLUGIN: "true"
     ulimits:
       memlock:
@@ -306,7 +320,8 @@ services:
     volumes:
       - opensearch_data:/usr/share/opensearch/data
     # Internal only — consumers reach OpenSearch over idr-net; host access
-    # goes through the Caddy layer-4 mTLS listener on port 9201.
+    # goes through the Caddy layer-4 mTLS listener on port 9201. The
+    # performance-analyzer port 9600 is NOT published (audit P0-4).
     expose:
       - "9200"
       - "9600"
@@ -336,7 +351,10 @@ services:
 
   # ── TigerBeetle (double-entry financial ledger) ───────────────────────────
   tigerbeetle:
-    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    # Audit P1-11: pinned to a concrete release tag (was :latest).
+    # 0.17.6 is the latest release in the 0.17 line as of 2026-09
+    # (github.com/tigerbeetle/tigerbeetle releases).
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.17.6
     restart: unless-stopped
     networks: [idr-net]
     volumes:
