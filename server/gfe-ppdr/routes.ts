@@ -1,10 +1,15 @@
 /**
  * GFE / PPDR routes — thin tRPC wrappers over the verified Good Faith
- * Estimate clock (gfe-clock.ts, 45 CFR 149.610) and Patient-Provider Dispute
- * Resolution engine (ppdr.ts, 45 CFR 149.620) in this directory. No business
- * logic is duplicated here; fail-closed behavior of the underlying modules
- * passes through unchanged. Wire date strings are revived to Date instances
- * via z.coerce.date(); the PPDR admin fee must be injected (never defaulted).
+ * Estimate clock (gfe-clock.ts, 45 CFR 149.610), the Patient-Provider Dispute
+ * Resolution engine (ppdr.ts, 45 CFR 149.620), and the generic persisted FSM
+ * case store (server/fsm-store). No business logic is duplicated here;
+ * fail-closed behavior of the underlying modules passes through unchanged.
+ * Wire date strings are revived to Date instances via z.coerce.date(); the
+ * PPDR admin fee must be injected (never defaulted).
+ *
+ * SERVER-AUTHORITATIVE: PPDR disputes are persisted server-side in the
+ * fsm-store and addressed by (tenantId, disputeId). Clients NEVER round-trip
+ * dispute state — transition takes only disputeId + target state + params.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -19,11 +24,47 @@ import {
   evaluatePpdrEligibility,
   createPpdrDispute,
   transition as ppdrTransition,
+  type PpdrDispute,
+  type PpdrState,
 } from "./ppdr";
+import {
+  getFsmCaseStore,
+  FsmCaseNotFoundError,
+  FsmDuplicateCaseError,
+  FsmVersionConflictError,
+} from "../fsm-store/store";
 
-/** Map module fail-closed Errors to BAD_REQUEST. */
+const CASE_TYPE = "gfe-ppdr";
+const TERMINAL_STATES: readonly PpdrState[] = ["CLOSED", "INELIGIBLE"];
+
+const idSchema = z.string().min(1).max(128);
+const tenantIdSchema = idSchema.default("default");
+const idempotencyKeySchema = z.string().min(1).max(128).optional();
+
+/**
+ * Revive Date fields after loading a dispute from the fsm-store (JSONB
+ * round-trip turns Dates into ISO strings).
+ */
+function reviveDispute(raw: PpdrDispute): PpdrDispute {
+  return {
+    ...raw,
+    billedAt: new Date(raw.billedAt),
+    determination: raw.determination
+      ? { ...raw.determination, determinedAt: new Date(raw.determination.determinedAt) }
+      : null,
+    events: (raw.events ?? []).map((e) => ({ ...e, at: new Date(e.at) })),
+  };
+}
+
+/** Map module/store fail-closed Errors to tRPC errors. */
 function toTrpcError(err: unknown): never {
   if (err instanceof TRPCError) throw err;
+  if (err instanceof FsmCaseNotFoundError) {
+    throw new TRPCError({ code: "NOT_FOUND", message: err.message });
+  }
+  if (err instanceof FsmDuplicateCaseError || err instanceof FsmVersionConflictError) {
+    throw new TRPCError({ code: "CONFLICT", message: err.message });
+  }
   throw new TRPCError({
     code: "BAD_REQUEST",
     message: err instanceof Error ? err.message : "GFE/PPDR validation failed",
@@ -45,32 +86,12 @@ const ppdrStateSchema = z.enum([
   "INELIGIBLE",
 ]);
 
-const ppdrEventSchema = z.object({
-  type: z.enum(["TRANSITION", "ELIGIBILITY_CHECK", "DETERMINATION_RECORDED"]),
-  at: z.coerce.date(),
-  from: ppdrStateSchema.optional(),
-  to: ppdrStateSchema.optional(),
-  detail: z.string().optional(),
-});
-
 const ppdrDeterminationSchema = z.object({
   entityId: z.string().min(1).max(128),
   determinedAt: z.coerce.date(),
   patientOwesUsd: z.number().nonnegative(),
   binding: z.boolean(),
   rationale: z.string().max(5000),
-});
-
-const ppdrDisputeSchema = z.object({
-  id: z.string().min(1).max(128),
-  state: ppdrStateSchema,
-  gfeTotalUsd: z.number().nonnegative(),
-  billedTotalUsd: z.number().nonnegative(),
-  billedAt: z.coerce.date(),
-  insuranceBilled: z.boolean(),
-  adminFeeUsd: z.number().nonnegative().nullable(),
-  determination: ppdrDeterminationSchema.nullable(),
-  events: z.array(ppdrEventSchema),
 });
 
 export const gfePpdrRouter = router({
@@ -153,48 +174,101 @@ export const gfePpdrRouter = router({
       }
     }),
 
-  /** Create a PPDR dispute in DRAFT state. */
+  /**
+   * Create a PPDR dispute in DRAFT state, persisted server-side.
+   * Duplicate (tenantId, disputeId) → CONFLICT.
+   */
   createDispute: protectedProcedure
     .input(z.object({
-      id: z.string().min(1).max(128),
+      tenantId: tenantIdSchema,
+      disputeId: idSchema,
       gfeTotalUsd: z.number().nonnegative(),
       billedTotalUsd: z.number().nonnegative(),
       billedAt: z.coerce.date(),
       insuranceBilled: z.boolean(),
+      idempotencyKey: idempotencyKeySchema,
     }))
-    .mutation(({ input }) => {
+    .mutation(async ({ input }) => {
       try {
-        return createPpdrDispute(input);
+        return await getFsmCaseStore().createCase<PpdrDispute>({
+          tenantId: input.tenantId,
+          caseType: CASE_TYPE,
+          caseId: input.disputeId,
+          create: () =>
+            createPpdrDispute({
+              id: input.disputeId,
+              gfeTotalUsd: input.gfeTotalUsd,
+              billedTotalUsd: input.billedTotalUsd,
+              billedAt: input.billedAt,
+              insuranceBilled: input.insuranceBilled,
+            }),
+          terminalStates: TERMINAL_STATES,
+          idempotencyKey: input.idempotencyKey,
+        });
       } catch (err) {
         toTrpcError(err);
       }
     }),
 
+  /** Load the server-authoritative PPDR dispute (null when not found). */
+  getDispute: protectedProcedure
+    .input(z.object({ tenantId: tenantIdSchema, disputeId: idSchema }))
+    .query(async ({ input }) => {
+      return getFsmCaseStore().getCase<PpdrDispute>(input.tenantId, CASE_TYPE, input.disputeId);
+    }),
+
   /**
-   * Guarded PPDR FSM transition. INITIATED requires the caller-injected
+   * Guarded PPDR FSM transition, server-authoritative. The client supplies
+   * only (tenantId, disputeId, to, transition params) — never dispute state;
+   * the store loads the persisted dispute, applies the module's pure
+   * guard/transition, and CAS-persists. INITIATED requires the caller-injected
    * adminFeeUsd from current annual HHS guidance (never defaulted);
    * DETERMINED requires a determination payload and the module caps
    * patientOwesUsd at the GFE total (149.620(f)). Guard rejections and
-   * invalid transitions map to BAD_REQUEST.
+   * invalid transitions map to BAD_REQUEST; unknown dispute → NOT_FOUND;
+   * version conflict → CONFLICT.
    */
   transition: protectedProcedure
     .input(z.object({
-      dispute: ppdrDisputeSchema,
+      tenantId: tenantIdSchema,
+      disputeId: idSchema,
       to: ppdrStateSchema,
       now: z.coerce.date().optional(),
       adminFeeUsd: z.number().nonnegative().optional(),
       determination: ppdrDeterminationSchema.omit({ binding: true }).optional(),
+      idempotencyKey: idempotencyKeySchema,
     }))
-    .mutation(({ input }) => {
+    .mutation(async ({ input }) => {
       try {
-        return ppdrTransition(input.dispute, input.to, {
-          now: input.now,
-          adminFeeUsd: input.adminFeeUsd,
-          determination: input.determination,
-        });
+        return await getFsmCaseStore().transitionCase<PpdrDispute>(
+          input.tenantId,
+          CASE_TYPE,
+          input.disputeId,
+          {
+            apply: (current) =>
+              ppdrTransition(reviveDispute(current), input.to, {
+                now: input.now,
+                adminFeeUsd: input.adminFeeUsd,
+                determination: input.determination,
+              }),
+            terminalStates: TERMINAL_STATES,
+            idempotencyKey: input.idempotencyKey,
+            now: input.now,
+          }
+        );
       } catch (err) {
         toTrpcError(err);
       }
+    }),
+
+  /** Append-only hash-chained event log + tamper-evident chain verification. */
+  getEvents: protectedProcedure
+    .input(z.object({ tenantId: tenantIdSchema, disputeId: idSchema }))
+    .query(async ({ input }) => {
+      const store = getFsmCaseStore();
+      const events = await store.getEventLog(input.tenantId, CASE_TYPE, input.disputeId);
+      const verification = await store.verifyEventChain(input.tenantId, CASE_TYPE, input.disputeId);
+      return { events, verification };
     }),
 });
 
