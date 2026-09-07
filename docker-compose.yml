@@ -455,11 +455,13 @@ services:
     depends_on: [apisix]
     volumes:
       - ./infra/apisix/dashboard.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
+    # Audit P0-4: host port moved 9000 -> 9002 to avoid the collision with the
+    # MinIO S3 API (9000). dashboard.yaml listens on 9002 as well.
     ports:
-      - "9000:9000"   # DEV ONLY: render dashboard.yaml placeholders before production use
+      - "9002:9002"   # DEV ONLY: render dashboard.yaml placeholders before production use
     healthcheck:
       # alpine image: busybox wget is available.
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/ >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9002/ >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -522,11 +524,14 @@ services:
       SETTLEMENT_MTLS_INGRESS_TOKEN: "${SETTLEMENT_MTLS_INGRESS_TOKEN:?Set SETTLEMENT_MTLS_INGRESS_TOKEN before starting settlement ingress}"
     secrets:
       - settlement_mtls_ca
+    # Admin API (2019) is NOT published on the host — in-cluster only via
+    # `expose` (used by entrypoint.sh to load the layer4 config). Audit P0-4.
+    expose:
+      - "2019"
     ports:
       - "80:80"         # HTTP → HTTPS redirect
       - "443:443"       # HTTPS (HTTP/1.1 + HTTP/2)
       - "443:443/udp"   # HTTP/3 (QUIC)
-      - "2019:2019"     # Caddy Admin API (localhost only in production)
       # Layer 4 TLS-terminated TCP ports
       - "9093:9093"     # Kafka (mTLS)
       - "7234:7234"     # Temporal gRPC (mTLS)
