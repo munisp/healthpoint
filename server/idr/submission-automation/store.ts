@@ -535,6 +535,12 @@ export class PostgresSubmissionStore implements SubmissionStore {
     const expectedVersion = row.version;
 
     const events = await this.loadEvents(row.id);
+    // Capture the chain tip BEFORE applyTransition: rowToStored aliases this
+    // array into working.events and applyTransition pushes the new (still
+    // unhashed) event onto it, so reading events[events.length-1] afterwards
+    // would yield the new event with an undefined eventHash.
+    const prevEventHash =
+      events.length > 0 ? events[events.length - 1].eventHash : GENESIS_HASH;
     const working = rowToStored(row, events);
     assertGuard(working, input.to);
     const at = input.now ?? new Date();
@@ -570,7 +576,6 @@ export class PostgresSubmissionStore implements SubmissionStore {
     }
 
     const newEvent = working.events[working.events.length - 1];
-    const prevEventHash = events.length > 0 ? events[events.length - 1].eventHash : GENESIS_HASH;
     await db.insert(submissionAutomationEvents).values({
       id: `ev_${randomUUID()}`,
       submissionId: row.id,
