@@ -7,11 +7,12 @@
 # tags (`latest`). Before any release, replace each with a registry-verified
 # immutable digest (image@sha256:...):
 #   - ghcr.io/permify/permify:latest    (permify)
-#   - minio/minio:latest                (minio)
-#   - minio/mc:latest                   (minio-init)
 #   - mojaloop/simulator:latest         (mojaloop-simulator)
 #   - openappsec/nginx:latest           (openappsec — waf-agent profile only)
-# (tigerbeetle was pinned to 0.17.6 below — audit P1-11.)
+# (tigerbeetle was pinned to 0.17.6 below — audit P1-11. minio and minio/mc
+# were pinned to RELEASE.2025-10-15T17-29-55Z / RELEASE.2025-07-21T05-28-08Z
+# — audit P2, 2026-09-05; note MinIO community Docker Hub publishing stopped
+# after that tag — see the minio service comment.)
 ###############################################################################
 # NOTE: Dapr and Fluvio were removed on 2026-09-05 (zero application adoption;
 # orphaned infrastructure). The application talks to Kafka/Redis/Temporal
@@ -64,6 +65,9 @@ services:
       # Audit P1 (2026-09-05): provisions the dedicated `keycloak` database
       # used by Keycloak's production-mode Postgres backend (KC_DB=postgres).
       - ./infra/postgres/init-keycloak.sql:/docker-entrypoint-initdb.d/02-init-keycloak.sql:ro
+      # Audit P2 (2026-09-05): provisions the dedicated `mlflow` database
+      # used by the optional MLflow tracking server (profile `ml-tracking`).
+      - ./infra/postgres/init-mlflow.sql:/docker-entrypoint-initdb.d/03-init-mlflow.sql:ro
     ports:
       - "5432:5432"   # DEV ONLY: host access for local tooling; remove in production overlay
     healthcheck:
@@ -467,6 +471,10 @@ services:
       mc mb --ignore-existing local/idr-lakehouse
       mc mb --ignore-existing local/idr-documents
       mc mb --ignore-existing local/idr-exports
+      # Audit P2 (2026-09-05): artifact bucket for the optional MLflow
+      # tracking server (profile `ml-tracking`; artifact root
+      # s3://mlflow-artifacts/).
+      mc mb --ignore-existing local/mlflow-artifacts
       mc anonymous set download local/idr-exports
       echo 'MinIO buckets created.'
     restart: on-failure
@@ -812,6 +820,55 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  # ── MLflow tracking server — OPTIONAL (profile: ml-tracking) ─────────────
+  # Audit P2 (2026-09-05). MLflow is OPTIONAL infrastructure: the canonical
+  # model registry in ml/registry/ (file + Postgres backed) works without it;
+  # ml/registry/mlflow_adapter.py syncs runs/models into MLflow when
+  # MLFLOW_TRACKING_URI is set in the training/serving environment.
+  #   Enable: docker compose --profile ml-tracking up -d mlflow
+  #   Then set MLFLOW_TRACKING_URI=http://localhost:5000 (host tooling) or
+  #   http://mlflow:5000 (in-cluster services).
+  # Backend store: dedicated `mlflow` database on the shared postgres service
+  # (provisioned by infra/postgres/init-mlflow.sql). Artifact root:
+  # s3://mlflow-artifacts/ on MinIO (bucket created by minio-init).
+  # Image pinned to v3.15.1 — latest published ghcr.io/mlflow/mlflow release
+  # as of 2026-09 (github.com/orgs/mlflow/packages/container/package/mlflow).
+  # The stock image lacks the Postgres/S3 drivers, so the startup command
+  # pip-installs psycopg2-binary and boto3 — PRODUCTION: build a derived
+  # image with those deps baked in instead of installing at boot.
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.15.1
+    restart: unless-stopped
+    profiles: ["ml-tracking"]
+    networks: [idr-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      pip install --quiet psycopg2-binary boto3 &&
+      mlflow server \
+        --backend-store-uri postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/mlflow \
+        --default-artifact-root s3://mlflow-artifacts/ \
+        --host 0.0.0.0 \
+        --port 5000
+    environment:
+      # MinIO S3 endpoint + credentials for artifact storage (boto3 envs).
+      MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
+      AWS_ACCESS_KEY_ID: "${MINIO_ACCESS_KEY:-minio_admin}"
+      AWS_SECRET_ACCESS_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
+    ports:
+      - "5000:5000"   # DEV ONLY: tracking UI; remove in production overlay
+    healthcheck:
+      # The mlflow image is python-based; probe the ping endpoint with python.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health').status==200 else 1)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
 
   # ── Go services (Permify client, Mojaloop connector, TigerBeetle ledger) ──
   go-services:
