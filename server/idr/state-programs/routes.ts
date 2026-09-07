@@ -31,7 +31,8 @@ const triStateSchema = z.union([z.boolean(), z.literal("UNKNOWN")]);
 const jurisdictionInputSchema = z.object({
   planType: z.enum(["FULLY_INSURED", "SELF_FUNDED"]),
   stateCode: stateCodeSchema,
-  serviceCategory: z.enum(["EMERGENCY", "NON_EMERGENCY", "AIR_AMBIANCE", "POST_STABILIZATION"]),
+  // AIR_AMBIANCE: deprecated typo alias for AIR_AMBULANCE (wire-compat).
+  serviceCategory: z.enum(["EMERGENCY", "NON_EMERGENCY", "AIR_AMBULANCE", "AIR_AMBIANCE", "POST_STABILIZATION"]),
   dateOfService: isoDateSchema,
   optedIn: z.boolean().optional(),
 });
