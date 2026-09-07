@@ -3,10 +3,13 @@
 Records decisions from the 2026-09-05 infrastructure audit. These are
 documented, not deleted: removal requires owner sign-off.
 
-## ADR-001: Fluvio is decorative — recommend removal (PARKED)
+## ADR-001: Fluvio is decorative — removed (ACCEPTED — REMOVED)
 
-**Status:** Removed from the dev compose stack on 2026-09-05; permanent
-removal of any remaining Fluvio assets is parked pending owner sign-off.
+**Status:** Accepted — removed 2026-09-05. The `fluvio-sc` / `fluvio-spu`
+services are gone from docker-compose.yml, no Fluvio route exists in
+infra/caddy/layer4.json, and the Fluvio scaffolding in
+services/rust/src/main.rs has been dropped — the Rust services are pure
+rdkafka consumers/producers. Kafka is the single event backbone.
 
 **Finding (audit P1-15a):** The Fluvio cluster carried no application
 traffic. The Rust services (`services/rust`) consume and produce via
@@ -17,6 +20,12 @@ was orphan infrastructure.
 
 **Recommendation:** Do not reintroduce Fluvio. Kafka remains the single
 event backbone.
+
+**Reversal path:** if a future requirement genuinely needs Fluvio, restore
+the `fluvio-sc` / `fluvio-spu` service definitions from git history
+(pre-2026-09-05 docker-compose.yml) and re-add a layer-4 route in
+infra/caddy/layer4.json. No application-code changes are required because
+no application ever depended on Fluvio — that is why removal is safe.
 
 ## ADR-002: Mojaloop is simulator-only — recommend dropping the simulator (PARKED)
 

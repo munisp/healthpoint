@@ -1,8 +1,9 @@
 // HealthPoint IDR — Rust Services
 // High-performance event processing on Kafka (rdkafka).
-// NOTE: the Fluvio cluster was removed (orphan infrastructure); the
-// "fluvio processor" below is a Kafka consumer/producer and predates the
-// removal. It no longer takes any Fluvio configuration.
+// Fluvio scaffolding removed 2026-09-05 (ADR-001, audit P1-15a): the former
+// "fluvio processor" was always a Kafka consumer/producer in disguise, and
+// all Fluvio client code/configuration is gone. Kafka is the single event
+// backbone; the reversal path is documented in infra/ARCHITECTURE-DECISIONS.md.
 // Exposes HTTP API for health and metrics on port 8002
 
 use std::env;
