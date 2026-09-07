@@ -45,6 +45,22 @@ impl Config {
     }
 }
 
+// Audit P1-10: producer batching — the default rdkafka producer sends with
+// linger.ms=0 and no compression, i.e. one broker request per message. All
+// producers below are configured with linger.ms=20, lz4 compression and
+// batch.num.messages=10000. These services publish enrichment/analytics
+// events only (no settlement-critical writes), so the small added latency
+// is safe here.
+fn new_batched_producer(brokers: &str) -> Result<FutureProducer, rdkafka::error::KafkaError> {
+    ClientConfig::new()
+        .set("bootstrap.servers", brokers)
+        .set("message.timeout.ms", "5000")
+        .set("linger.ms", "20")
+        .set("compression.type", "lz4")
+        .set("batch.num.messages", "10000")
+        .create()
+}
+
 // ── Shared state ──────────────────────────────────────────────────────────────
 
 #[derive(Default)]
@@ -114,10 +130,7 @@ async fn process_state_change_stream(
 
     consumer.subscribe(&["idr.disputes.state_changes"])?;
 
-    let producer: FutureProducer = ClientConfig::new()
-        .set("bootstrap.servers", &config.kafka_brokers)
-        .set("message.timeout.ms", "5000")
-        .create()?;
+    let producer: FutureProducer = new_batched_producer(&config.kafka_brokers)?;
 
     info!("[stream-processor] subscribed to idr.disputes.state_changes");
 
@@ -363,10 +376,7 @@ async fn publish_handler(
 ) -> Result<Json<PublishResponse>, (StatusCode, String)> {
     let (config, metrics) = state;
 
-    let producer: FutureProducer = ClientConfig::new()
-        .set("bootstrap.servers", &config.kafka_brokers)
-        .set("message.timeout.ms", "5000")
-        .create()
+    let producer: FutureProducer = new_batched_producer(&config.kafka_brokers)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let payload = serde_json::to_string(&req.payload)
