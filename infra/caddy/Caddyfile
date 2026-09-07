@@ -1,6 +1,9 @@
 # ==============================================================================
 # Caddyfile — TLS termination, HTTP/3, Coraza WAF, rate limiting, forward_auth
 # ==============================================================================
+# Audit P0-6: the domain is no longer hardcoded to healthpoint.example.com.
+# Set CADDY_DOMAIN in the environment (docker-compose already does; default
+# shown below keeps previous behavior for unconfigured deployments).
 {
     email {$ADMIN_EMAIL:admin@healthpoint.example.com}
     log {
@@ -55,7 +58,7 @@
 }
 
 # Main site — API and web traffic
-healthpoint.example.com, www.healthpoint.example.com {
+{$CADDY_DOMAIN:healthpoint.example.com}, www.{$CADDY_DOMAIN:healthpoint.example.com} {
     # WAF + rate limiting + forward_auth
     import waf_and_rate_limit
     # Security headers (HSTS, CSP, etc.)
@@ -100,7 +103,7 @@ healthpoint.example.com, www.healthpoint.example.com {
 }
 
 # Keycloak admin interface
-keycloak.healthpoint.example.com {
+keycloak.{$CADDY_DOMAIN:healthpoint.example.com} {
     reverse_proxy keycloak:8080 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -109,7 +112,7 @@ keycloak.healthpoint.example.com {
 }
 
 # Temporal UI
-temporal.healthpoint.example.com {
+temporal.{$CADDY_DOMAIN:healthpoint.example.com} {
     # Internal only — require client certificate via layer4 or restrict by IP
     reverse_proxy temporal-ui:8080
     # Basic IP restriction for internal tools
@@ -120,8 +123,9 @@ temporal.healthpoint.example.com {
 }
 
 # APISIX Dashboard (admin only)
-dashboards.healthpoint.example.com {
-    reverse_proxy apisix-dashboard:9000
+dashboards.{$CADDY_DOMAIN:healthpoint.example.com} {
+    # Audit P0-4: dashboard now listens on 9002 (was 9000, MinIO collision).
+    reverse_proxy apisix-dashboard:9002
     # Basic IP restriction for admin tools
     @internal {
         not remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
