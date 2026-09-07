@@ -239,7 +239,9 @@ services:
       # ships no curl/wget — healthcheck uses bash /dev/tcp below).
       KC_HEALTH_ENABLED: "true"
     volumes:
-      - ./keycloak:/opt/keycloak/data/import
+      # Canonical realm export (realm: healthpoint). Previously ./keycloak,
+      # which does not exist in this layout — see middleware/keycloak/.
+      - ./middleware/keycloak:/opt/keycloak/data/import
     ports:
       - "8080:8080"   # DEV ONLY: admin console also available via keycloak.healthpoint.example.com through Caddy; remove in production overlay
     healthcheck:
