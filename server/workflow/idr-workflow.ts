@@ -171,7 +171,10 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "Determination Issued",
     description: "IDR entity selects one party's offer as the out-of-network rate",
     deadlineBusinessDays: null,
-    allowedTransitions: ["STEP_14_PAYMENT_DETERMINATION"],
+    // Appeal path: a party may seek judicial review of the determination
+    // (45 CFR § 149.510(b)(2)) — STEP_18_APPEAL_FILED must be reachable
+    // from the determination step, otherwise the appeal steps are dead.
+    allowedTransitions: ["STEP_14_PAYMENT_DETERMINATION", "STEP_18_APPEAL_FILED"],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.510(b)(1)(vi)(A)",
