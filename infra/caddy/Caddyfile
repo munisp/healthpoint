@@ -38,7 +38,10 @@
         `
         include /etc/caddy/crs/*.conf
     }
-    # Per-IP rate limiting: 200 req/min with burst of 20
+    # Audit P1-8 (rate-limit consolidation): Caddy owns the EDGE per-IP burst
+    # limit (200 req/min, burst 20). APISIX owns identity-aware quota
+    # (limit-count after openid-connect). The nginx limit_req layer was
+    # removed from infra/openappsec/nginx.conf.
     rate_limit {
         zone {
             key {remote_host}
