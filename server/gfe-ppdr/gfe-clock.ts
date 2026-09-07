@@ -18,9 +18,12 @@
  * of required content categories; exact wording must follow current HHS
  * standard templates (re-verify before production use).
  *
- * Business-day computation uses Monday–Friday only; federal holidays are a
- * caller-supplied calendar (never hardcoded) because the observed holiday
- * set can change by statute (e.g., Juneteenth added 2021).
+ * Business-day computation DELEGATES to the canonical holiday-aware engine
+ * in ../idr/deadlines (weekends + US federal holidays + configurable extra
+ * closures); caller-supplied `holidays` sets are merged in as extra
+ * closures. Previously this module maintained its own weekend-only math with
+ * holidays defaulting to none, which produced statutory deadlines that
+ * ignored federal holidays.
  */
 
 export const GFE_MAX_BUSINESS_DAYS_LONG_HORIZON = 3;
@@ -31,37 +34,37 @@ export const RECURRING_GFE_MAX_MONTHS = 12;
 
 export type HorizonBand = 'LONG' | 'SHORT' | 'IMMEDIATE';
 
-export function isBusinessDay(d: Date, holidays: ReadonlySet<string> = new Set()): boolean {
-  const day = d.getUTCDay();
-  if (day === 0 || day === 6) return false;
-  return !holidays.has(d.toISOString().slice(0, 10));
+import {
+  addBusinessDays as idrAddBusinessDays,
+  businessDaysBetween as idrBusinessDaysBetween,
+  isBusinessDay as idrIsBusinessDay,
+  getDeadlinePolicy,
+  type IDRDeadlinePolicy,
+} from '../idr/deadlines';
+
+/**
+ * Resolve the deadline policy: canonical defaults (weekends + US federal
+ * holidays + env-configured extra closures) with any caller-supplied holiday
+ * set merged in as extra closures.
+ */
+function policyFor(holidays?: ReadonlySet<string>): IDRDeadlinePolicy {
+  const base = getDeadlinePolicy();
+  if (!holidays || holidays.size === 0) return base;
+  return { ...base, extraClosures: new Set([...Array.from(base.extraClosures), ...Array.from(holidays)]) };
 }
 
-/** Add n business days to a date (n >= 0). Holidays are caller-supplied YYYY-MM-DD keys. */
-export function addBusinessDays(start: Date, n: number, holidays: ReadonlySet<string> = new Set()): Date {
-  if (n < 0) throw new Error('n must be >= 0');
-  const d = new Date(start.getTime());
-  let added = 0;
-  while (added < n) {
-    d.setUTCDate(d.getUTCDate() + 1);
-    if (isBusinessDay(d, holidays)) added += 1;
-  }
-  return d;
+export function isBusinessDay(d: Date, holidays?: ReadonlySet<string>): boolean {
+  return idrIsBusinessDay(d, policyFor(holidays));
+}
+
+/** Add n business days to a date (n >= 0). Holidays are caller-supplied YYYY-MM-DD keys, merged over the canonical federal-holiday calendar. */
+export function addBusinessDays(start: Date, n: number, holidays?: ReadonlySet<string>): Date {
+  return idrAddBusinessDays(start, n, policyFor(holidays));
 }
 
 /** Business days strictly between two dates (exclusive of start, inclusive of end). */
-export function businessDaysBetween(start: Date, end: Date, holidays: ReadonlySet<string> = new Set()): number {
-  if (end <= start) return 0;
-  const d = new Date(start.getTime());
-  d.setUTCHours(0, 0, 0, 0);
-  const endDay = new Date(end.getTime());
-  endDay.setUTCHours(0, 0, 0, 0);
-  let count = 0;
-  while (d < endDay) {
-    d.setUTCDate(d.getUTCDate() + 1);
-    if (isBusinessDay(d, holidays)) count += 1;
-  }
-  return count;
+export function businessDaysBetween(start: Date, end: Date, holidays?: ReadonlySet<string>): number {
+  return idrBusinessDaysBetween(start, end, policyFor(holidays));
 }
 
 /**
