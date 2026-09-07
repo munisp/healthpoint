@@ -210,11 +210,17 @@ export async function recordEntry(input: LedgerEntryInput): Promise<LedgerEntry>
       referenceId: input.referenceId ?? null, referenceType: input.referenceType ?? null,
       idempotencyKey: input.idempotencyKey ?? null, metadata: input.metadata ?? null, createdAt: now,
     });
+    // Double-entry balance convention (schema: single signed balanceCents per
+    // account, drizzle/schema.ts ledger_accounts): the DEBIT account increases
+    // by +amount and the CREDIT account decreases by −amount, so the sum of
+    // all account balances for a dispute is always 0 (books balance). The
+    // previous implementation incremented BOTH accounts by +amount, which
+    // fabricated value on every entry.
     await tx.update(ledgerAccounts).set({
       balanceCents: sql`${ledgerAccounts.balanceCents} + ${input.amountCents}`, updatedAt: now,
     }).where(eq(ledgerAccounts.id, debitAccount.id));
     await tx.update(ledgerAccounts).set({
-      balanceCents: sql`${ledgerAccounts.balanceCents} + ${input.amountCents}`, updatedAt: now,
+      balanceCents: sql`${ledgerAccounts.balanceCents} - ${input.amountCents}`, updatedAt: now,
     }).where(eq(ledgerAccounts.id, creditAccount.id));
     const entries = await tx.select().from(ledgerEntries).where(eq(ledgerEntries.id, entryId)).limit(1);
     if (!entries[0]) throw new LedgerIntegrityError("Ledger entry was not persisted");
@@ -366,8 +372,9 @@ export async function recordPaymentInTransaction(
     referenceId, referenceType: "payment", idempotencyKey,
     metadata: { paymentEvidence: true, settlementExecution: "external" }, createdAt: now,
   });
+  // Debit paid (+) / credit determination (−) — see recordEntry convention.
   await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} + ${paidCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, paidAccount.id));
-  await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} + ${paidCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, determinationAccount.id));
+  await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} - ${paidCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, determinationAccount.id));
   await tx.update(disputes).set({ paidAmount: centsToDecimal(paidToDateCents + paidCents), updatedAt: now }).where(eq(disputes.id, disputeId));
   const entries = await tx.select().from(ledgerEntries).where(eq(ledgerEntries.id, entryId)).limit(1);
   if (!entries[0]) throw new LedgerIntegrityError("Payment evidence was not persisted");
@@ -425,8 +432,10 @@ export async function reversePaymentInTransaction(
     metadata: { paymentEvidenceReversal: true, settlementExecution: "external" },
     createdAt: now,
   });
+  // Reversal entry: debit determination (+) / credit paid (−) — the exact
+  // inverse of the payment entry, restoring both balances.
   await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} - ${reversedCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, paidAccount.id));
-  await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} - ${reversedCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, determinationAccount.id));
+  await tx.update(ledgerAccounts).set({ balanceCents: sql`${ledgerAccounts.balanceCents} + ${reversedCents}`, updatedAt: now }).where(eq(ledgerAccounts.id, determinationAccount.id));
   await tx.update(disputes).set({ paidAmount: centsToDecimal(paidToDateCents - reversedCents), updatedAt: now }).where(eq(disputes.id, disputeId));
   const entries = await tx.select().from(ledgerEntries).where(eq(ledgerEntries.id, entryId)).limit(1);
   if (!entries[0]) throw new LedgerIntegrityError("Settlement reversal was not persisted");
