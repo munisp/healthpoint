@@ -18,6 +18,7 @@ import {
   SidebarProvider,
   useSidebar,
 } from "@/components/ui/sidebar";
+import StatusBadge from "@/components/StatusBadge";
 import { APP_LOGO, APP_TITLE } from "@/const";
 import { trpc } from "@/lib/trpc";
 import {
@@ -309,6 +310,19 @@ const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
 const OPEN_GROUPS_KEY = "sidebar-open-groups";
 
+/** Short chip label for dispute statuses in the sidebar lists. */
+function statusChipLabel(status: string): string {
+  return status === "open_negotiation"
+    ? "NEGO"
+    : status === "idr_active"
+    ? "IDR"
+    : status === "closed"
+    ? "DONE"
+    : status === "ineligible"
+    ? "INELIG"
+    : status.toUpperCase().slice(0, 4);
+}
+
 export default function DashboardLayout({
   children,
 }: {
@@ -437,6 +451,13 @@ function DashboardLayoutContent({
 
   return (
     <>
+      {/* Keyboard/screen-reader skip link — visible on focus only */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-[110] focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
       <div className="relative" ref={sidebarRef}>
         <Sidebar collapsible="icon" className="border-r-0" disableTransition={isResizing}>
           <SidebarHeader className="border-b h-14 justify-center">
@@ -479,21 +500,11 @@ function DashboardLayoutContent({
                           >
                             <Pin className="h-3.5 w-3.5 shrink-0 opacity-60" />
                             <span className="flex-1 truncate font-mono text-[11px]">{d.referenceNumber}</span>
-                            <span
-                              className={`text-[9px] px-1 rounded font-medium shrink-0 ${
-                                d.status === "closed"
-                                  ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
-                                  : d.status === "ineligible"
-                                  ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
-                                  : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
-                              }`}
-                            >
-                              {d.status === "open_negotiation" ? "NEGO"
-                                : d.status === "idr_active" ? "IDR"
-                                : d.status === "closed" ? "DONE"
-                                : d.status === "ineligible" ? "INELIG"
-                                : d.status.toUpperCase().slice(0, 4)}
-                            </span>
+                            <StatusBadge
+                              size="xs"
+                              status={d.status}
+                              label={statusChipLabel(d.status)}
+                            />
                           </SidebarMenuButton>
                         </SidebarMenuItem>
                       ))}
@@ -522,21 +533,11 @@ function DashboardLayoutContent({
                           >
                             <FileWarning className="h-3.5 w-3.5 shrink-0 opacity-60" />
                             <span className="flex-1 truncate font-mono text-[11px]">{d.referenceNumber}</span>
-                            <span
-                              className={`text-[9px] px-1 rounded font-medium shrink-0 ${
-                                d.status === "closed"
-                                  ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
-                                  : d.status === "ineligible"
-                                  ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
-                                  : "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400"
-                              }`}
-                            >
-                              {d.status === "open_negotiation" ? "NEGO"
-                                : d.status === "idr_active" ? "IDR"
-                                : d.status === "closed" ? "DONE"
-                                : d.status === "ineligible" ? "INELIG"
-                                : d.status.toUpperCase().slice(0, 4)}
-                            </span>
+                            <StatusBadge
+                              size="xs"
+                              status={d.status}
+                              label={statusChipLabel(d.status)}
+                            />
                           </SidebarMenuButton>
                         </SidebarMenuItem>
                       ))}
@@ -586,13 +587,16 @@ function DashboardLayoutContent({
                     >
                       {/* Group header */}
                       <CollapsibleTrigger asChild>
-                        <button className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors select-none">
-                          <GroupIcon className="h-3.5 w-3.5 shrink-0" />
+                        <button
+                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors select-none"
+                          aria-label={`${group.label} navigation group`}
+                        >
+                          <GroupIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                           <span className="flex-1 text-left">{group.label}</span>
                           {isOpen ? (
-                            <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
+                            <ChevronDown className="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
                           ) : (
-                            <ChevronRight className="h-3 w-3 shrink-0 opacity-60" />
+                            <ChevronRight className="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
                           )}
                         </button>
                       </CollapsibleTrigger>
@@ -673,7 +677,7 @@ function DashboardLayoutContent({
 
       <SidebarInset>
         {/* Top bar */}
-        <div className="h-14 border-b flex items-center justify-between px-4 gap-3 bg-background">
+        <header className="h-14 border-b flex items-center justify-between px-4 gap-3 bg-background">
           <MobileMenuButton />
           <div className="flex items-center gap-3 ml-auto">
             <CommandPaletteButton />
@@ -681,14 +685,23 @@ function DashboardLayoutContent({
             {/* Notification bell */}
             <Popover open={notifOpen} onOpenChange={setNotifOpen}>
               <PopoverTrigger asChild>
-                <Button variant="ghost" size="icon" className="relative h-9 w-9">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="relative h-9 w-9"
+                  aria-label={
+                    unreadCount > 0
+                      ? `Notifications, ${unreadCount} unread`
+                      : "Notifications"
+                  }
+                >
                   {unreadCount > 0 ? (
-                    <BellRing className="h-5 w-5 text-amber-500" />
+                    <BellRing className="h-5 w-5 text-warning-foreground" />
                   ) : (
                     <Bell className="h-5 w-5" />
                   )}
                   {unreadCount > 0 && (
-                    <Badge className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-[10px] bg-red-500 text-white border-0">
+                    <Badge className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-[10px] bg-destructive text-white border-0">
                       {unreadCount > 9 ? "9+" : unreadCount}
                     </Badge>
                   )}
@@ -737,12 +750,12 @@ function DashboardLayoutContent({
                           <div
                             key={n.id}
                             className={`px-4 py-3 hover:bg-accent/50 transition-colors ${
-                              !n.isRead ? "bg-blue-50/50 dark:bg-blue-950/20" : ""
+                              !n.isRead ? "bg-accent/60" : ""
                             }`}
                           >
                             <div className="flex items-start gap-2">
                               {!n.isRead && (
-                                <div className="mt-1.5 h-2 w-2 rounded-full bg-blue-500 shrink-0" />
+                                <div className="mt-1.5 h-2 w-2 rounded-full bg-primary shrink-0" />
                               )}
                               <div className={!n.isRead ? "" : "ml-4"}>
                                 <p className="text-sm font-medium leading-tight">
@@ -786,8 +799,8 @@ function DashboardLayoutContent({
               </PopoverContent>
             </Popover>
           </div>
-        </div>
-        <main className="flex-1 p-6">{children}</main>
+        </header>
+        <main id="main-content" tabIndex={-1} className="flex-1 p-6">{children}</main>
       </SidebarInset>
     </>
   );
@@ -817,6 +830,7 @@ function SidebarToggleButton() {
       size="icon"
       className="h-7 w-7 shrink-0"
       onClick={toggleSidebar}
+      aria-label="Toggle sidebar"
     >
       <PanelLeft className="h-4 w-4" />
     </Button>
@@ -826,13 +840,15 @@ function SidebarToggleButton() {
 function DarkModeToggle() {
   const { theme, toggleTheme, switchable } = useTheme();
   if (!switchable || !toggleTheme) return null;
+  const label = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
   return (
     <Button
       variant="ghost"
       size="icon"
       className="h-9 w-9"
       onClick={toggleTheme}
-      title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      title={label}
+      aria-label={label}
     >
       {theme === "dark" ? (
         <Sun className="h-4 w-4" />
@@ -878,6 +894,7 @@ function CommandPaletteButton() {
         size="sm"
         className="h-8 gap-2 text-muted-foreground text-xs hidden md:flex"
         onClick={() => setOpen(true)}
+        aria-label="Open command palette"
       >
         <Command className="h-3 w-3" />
         <span>Search</span>
@@ -892,6 +909,9 @@ function CommandPaletteButton() {
         >
           <div className="absolute inset-0 bg-black/40" />
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Command palette"
             className="relative w-full max-w-lg bg-background border rounded-xl shadow-2xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
@@ -899,6 +919,7 @@ function CommandPaletteButton() {
               <Command className="h-4 w-4 text-muted-foreground shrink-0" />
               <input
                 autoFocus
+                aria-label="Search pages and actions"
                 className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                 placeholder="Search pages and actions…"
                 value={query}

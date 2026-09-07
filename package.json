@@ -1,10 +1,11 @@
 {
-  "name": "idr-workflow-demo",
+  "name": "healthpoint-idr",
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx watch server/_core/index.ts",
+    "prebuild": "node scripts/generate-pwa-icons.mjs",
     "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc --noEmit",
@@ -22,7 +23,6 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1109.0",
     "@aws-sdk/s3-request-presigner": "^3.1109.0",
-    "@dapr/dapr": "^3.18.0",
     "@opensearch-project/opensearch": "^3.6.0",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -148,7 +148,7 @@
   "packageManager": "pnpm@10.34.5",
   "pnpm": {
     "overrides": {
-      "lodash": "4.18.1",
+      "lodash": "4.17.21",
       "tailwindcss>nanoid": "3.3.7"
     },
     "patchedDependencies": {

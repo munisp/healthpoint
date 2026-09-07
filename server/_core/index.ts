@@ -2,7 +2,6 @@ import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import net from "net";
-import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import slowDown from "express-slow-down";
@@ -14,13 +13,17 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerKeycloakRoutes } from "./keycloak";
 import { bootstrapOpenSearchIndices } from "../search";
 import { startKafkaConsumer } from "../events/kafka-consumer";
-import { bootstrapPermifySchema } from "../authz";
-import { appRouter } from "../routers";
+import { assertDisputeAccess, bootstrapPermifySchema } from "../authz";
+// rootRouter (server/app-router.ts) = appRouter + idrCompliance barrel merge;
+// routers.ts itself is workstream-owned and intentionally not edited here.
+import { rootRouter } from "../app-router";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { deadlineCheckHandler } from "../scheduled/deadlineCheck";
+import { idrDeadlineCheckHandler } from "../scheduled/idrDeadlineCheck";
 import { weeklyDigestHandler } from "../scheduled/weeklyDigest";
 import { settlementBalanceProofHandler } from "../scheduled/settlementBalanceProof";
+import { ledgerReconciliationHandler } from "../scheduled/ledgerReconciliation";
 import { ENV } from "./env";
 import {
   SETTLEMENT_EVENT_ID_HEADER,
@@ -41,8 +44,12 @@ import { reconcileAuthenticatedSettlementCallback, settlementCallbackSchema } fr
 import { providerSettlementReportSchema, reconcileProviderSettlementReport } from "../settlement-lifecycle";
 import { LedgerIntegrityError } from "../ledger";
 import { startOutboxWorker } from "../outbox-worker";
+import { startLedgerReconciliationScheduler } from "../reconciliation-scheduler";
 import { isTigerBeetleEnabled, startTigerBeetleTunnel, stopTigerBeetleTunnel } from "../tigerbeetle";
 import { createScheduledAuth } from "../scheduled-auth";
+import { securityHeaders } from "./security-headers";
+import { apiRateLimiter, authRateLimiter, sensitiveRateLimiter } from "../auth/ratelimit";
+import { requireApiAdmin, requireApiAuth } from "../auth/bearer";
 
 // ─── Startup ENV validation ──────────────────────────────────────────────────
 function validateEnv() {
@@ -98,7 +105,11 @@ async function findAvailablePort(startPort = 3000): Promise<number> {
 }
 
 // ─── Scheduled endpoint auth ─────────────────────────────────────────────────
-const SCHEDULED_SECRET = process.env.SCHEDULED_SECRET ?? "dev-scheduled-secret";
+// Production fails closed: createScheduledAuth throws when the secret is empty.
+const SCHEDULED_SECRET = process.env.SCHEDULED_SECRET ?? (ENV.isProduction ? "" : "dev-scheduled-secret");
+if (!process.env.SCHEDULED_SECRET && !ENV.isProduction) {
+  console.warn("[startup] SCHEDULED_SECRET is not set — using the insecure development default; never deploy without it");
+}
 const scheduledAuth = createScheduledAuth(ENV.isProduction, SCHEDULED_SECRET);
 
 // ─── Server startup ───────────────────────────────────────────────────────────
@@ -118,25 +129,10 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  // ── Security headers (helmet) ──────────────────────────────────────────────
-  app.use(
-    helmet({
-      contentSecurityPolicy: ENV.isProduction
-        ? {
-            directives: {
-              defaultSrc: ["'self'"],
-              scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // Vite HMR needs unsafe-eval in dev
-              styleSrc: ["'self'", "'unsafe-inline'"],
-              imgSrc: ["'self'", "data:", "blob:", "https:"],
-              connectSrc: ["'self'", "https:"],
-              fontSrc: ["'self'", "data:", "https:"],
-              frameSrc: ["'none'"],
-            },
-          }
-        : false, // Disable CSP in dev to allow Vite HMR
-      crossOriginEmbedderPolicy: false, // Allow embedding for dashboard iframes
-    })
-  );
+  // ── Security headers ────────────────────────────────────────────────────────
+  // Centralized in server/_core/security-headers.ts (helmet): hardened CSP for
+  // the Vite PWA client, HSTS, nosniff, Referrer-Policy, frame-ancestors 'none'.
+  app.use(securityHeaders(ENV.isProduction));
 
   // ── CORS ──────────────────────────────────────────────────────────────────
   // Configure via ALLOWED_ORIGINS env var (comma-separated list of origins).
@@ -151,7 +147,9 @@ async function startServer() {
         if (!origin) return callback(null, true);
         // In dev, allow all origins
         if (!ENV.isProduction) return callback(null, true);
-        if (configuredOrigins.some(o => origin === o || origin.startsWith(o))) return callback(null, true);
+        // Exact match only — prefix matching would admit evil-suffix origins
+        // such as https://app.example.com.evil.tld
+        if (configuredOrigins.some(o => origin === o)) return callback(null, true);
         callback(new Error(`CORS: origin ${origin} not allowed. Add it to ALLOWED_ORIGINS env var.`));
       },
       credentials: true,
@@ -212,6 +210,16 @@ async function startServer() {
     })
   );
 
+  // ── Redis-backed distributed rate limiting (server/auth/ratelimit.ts) ─────
+  // Limits are per-instance-independent (shared via Redis). Auth/token,
+  // settlement/payment, and PHI routes FAIL CLOSED in production when Redis
+  // is unavailable; the general tRPC limiter is fail-open-with-log (documented
+  // in ratelimit.ts). Limits configurable via RATE_LIMIT_* env vars.
+  app.use("/api/auth", authRateLimiter());
+  app.use("/api/settlement", sensitiveRateLimiter());
+  app.use("/api/fhir", sensitiveRateLimiter());
+  app.use("/api/trpc", apiRateLimiter());
+
   // ── Request logging (morgan) ──────────────────────────────────────────────
   // Use 'combined' format in production for full Apache-style logs, 'dev' in development
   app.use(morgan(ENV.isProduction ? "combined" : "dev"));
@@ -237,9 +245,9 @@ async function startServer() {
     const verification = verifySettlementCallbackSignature({
       secret: process.env.SETTLEMENT_CALLBACK_SECRET,
       keyring: parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING),
-      keyId: req.header(SETTLEMENT_KEY_ID_HEADER) ?? undefined,
-      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
-      signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+      keyId: req.header(SETTLEMENT_KEY_ID_HEADER),
+      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER),
+      signature: req.header(SETTLEMENT_SIGNATURE_HEADER),
       rawBody,
     });
     if (!verification.valid) {
@@ -306,9 +314,9 @@ async function startServer() {
     const verification = verifySettlementCallbackSignature({
       secret: process.env.SETTLEMENT_CALLBACK_SECRET,
       keyring: parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING),
-      keyId: req.header(SETTLEMENT_KEY_ID_HEADER) ?? undefined,
-      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
-      signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+      keyId: req.header(SETTLEMENT_KEY_ID_HEADER),
+      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER),
+      signature: req.header(SETTLEMENT_SIGNATURE_HEADER),
       rawBody,
     });
     if (!verification.valid) {
@@ -324,7 +332,7 @@ async function startServer() {
     }
     const parsed = providerSettlementReportSchema.safeParse(parsedPayload);
     if (!parsed.success) {
-      res.status(400).json({ error: "Invalid settlement report payload", issues: parsed.error.issues });
+      res.status(400).json({ error: "Settlement report payload", issues: parsed.error.issues });
       return;
     }
     if (req.header(SETTLEMENT_EVENT_ID_HEADER) !== parsed.data.reportId) {
@@ -362,9 +370,9 @@ async function startServer() {
         requestId: tokens["request-id"](req, res),
         method: tokens.method(req, res),
         url: tokens.url(req, res),
-        status: parseInt(tokens.status(req, res) ?? "0"),
+        status: tokens.status(req, res),
         responseTimeMs: parseFloat(tokens["response-time"](req, res) ?? "0"),
-        contentLength: tokens.res(req, res, "content-length") ?? "-",
+        contentLength: parseFloat(tokens["content-length"](req, res) ?? "-"),
         userId: tokens["user-id"](req, res),
         userAgent: tokens["user-agent"](req, res),
         remoteAddr: tokens["remote-addr"](req, res),
@@ -397,10 +405,69 @@ async function startServer() {
     res.status(200).json({ ready: true, uptime: Math.round((Date.now() - startTime) / 1000) });
   });
 
-  // ── FHIR R4 read endpoint — GET /api/fhir/Claim/:id ───────────────────────
-  // Returns a dispute as a FHIR R4 Claim resource (application/fhir+json)
-  app.get("/api/fhir/Claim/:id", async (req: Request, res: Response) => {
+  // ── /healthz — process liveness only ──────────────────────────────────────
+  // Never touches dependencies; returns 200 as long as the HTTP server answers.
+  // Used by Docker/Kubernetes liveness probes. Do not point load balancers here.
+  app.get("/healthz", (_req: Request, res: Response) => {
+    res.status(200).json({ status: "ok", uptime: Math.round((Date.now() - startTime) / 1000) });
+  });
+
+  // ── /readyz — dependency readiness gate ───────────────────────────────────
+  // Fails closed (503) unless PostgreSQL AND Redis answer within
+  // READYZ_TIMEOUT_MS (default 2000). Compose healthchecks, orchestrator
+  // readiness probes, and load balancers must gate traffic on this endpoint.
+  app.get("/readyz", async (_req: Request, res: Response) => {
+    const timeoutMs = parseInt(process.env.READYZ_TIMEOUT_MS ?? "2000", 10);
+    const withTimeout = (p: Promise<unknown>, label: string) =>
+      Promise.race([
+        p,
+        new Promise((_resolve, reject) =>
+          setTimeout(() => reject(new Error(`${label} probe timed out after ${timeoutMs}ms`)), timeoutMs)
+        ),
+      ]);
+
+    let dbOk = false;
     try {
+      // getDb() verifies connectivity with SELECT 1 before resolving.
+      const { getDb } = await import("../db");
+      const db = (await withTimeout(getDb(), "postgres")) as unknown;
+      dbOk = db !== null;
+    } catch { /* stays false */ }
+
+    let redisOk = false;
+    try {
+      const { getRedisClient } = await import("../redis");
+      const client = getRedisClient();
+      if (!client) throw new Error("Redis client not configured");
+      await withTimeout(client.ping(), "redis");
+      redisOk = true;
+    } catch { /* stays false */ }
+
+    const ready = dbOk && redisOk;
+    res.status(ready ? 200 : 503).json({
+      ready,
+      checks: {
+        postgres: dbOk ? "ok" : "unavailable",
+        redis: redisOk ? "ok" : "unavailable",
+      },
+      uptime: Math.round((Date.now() - startTime) / 1000),
+    });
+  });
+
+  // ── FHIR R4 read endpoint — GET /api/fhir/Claim/:id ───────────────────────
+  // Returns a dispute as a FHIR R4 Claim resource (application/fhir+json).
+  // PHI: requires authentication (Keycloak Bearer token or session cookie via
+  // requireApiAuth) AND dispute-level read authorization (server/authz.ts).
+  // This route was previously unauthenticated — remediated in the PHI audit.
+  app.get("/api/fhir/Claim/:id", requireApiAuth(), async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user as { id: string; role: "user" | "admin" };
+      try {
+        await assertDisputeAccess(user.id, user.role, req.params.id, "read");
+      } catch {
+        res.status(403).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "forbidden", diagnostics: "You do not have read access to this claim" }] });
+        return;
+      }
       const { getDb } = await import("../db");
       const { disputes: disputesTable } = await import("../../drizzle/schema");
       const { eq } = await import("drizzle-orm");
@@ -436,36 +503,20 @@ async function startServer() {
         ]).filter(Boolean),
       };
       res.setHeader("Content-Type", "application/fhir+json");
+      res.setHeader("Cache-Control", "no-store"); // PHI responses must not be cached
       res.status(200).json(claim);
     } catch (err) {
-      res.status(500).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "exception", diagnostics: String(err) }] });
+      console.error("[fhir] Claim read failed:", err);
+      res.status(500).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "exception", diagnostics: "Failed to read the Claim resource" }] });
     }
   });
 
   // ── Keycloak OIDC routes ──────────────────────────────────────────────────────
   registerKeycloakRoutes(app);
 
-  // ── Dapr pub/sub subscription discovery + event handlers ─────────────────
-  app.get("/dapr/subscribe", (_req: Request, res: Response) => {
-    res.json([
-      { pubsubname: "idr-pubsub", topic: "idr.dispute.events", route: "/api/events/dispute" },
-      { pubsubname: "idr-pubsub", topic: "idr.payments",        route: "/api/events/payment" },
-      { pubsubname: "idr-pubsub", topic: "idr.audit",           route: "/api/events/audit" },
-    ]);
-  });
-  app.post("/api/events/dispute", express.json(), (req: Request, res: Response) => {
-    const event = (req.body as Record<string, unknown>)?.data ?? req.body;
-    console.info("[Dapr] dispute event:", (event as Record<string, unknown>)?.eventType ?? "unknown");
-    res.status(200).json({ status: "SUCCESS" });
-  });
-  app.post("/api/events/payment", express.json(), (req: Request, res: Response) => {
-    const event = (req.body as Record<string, unknown>)?.data ?? req.body;
-    console.info("[Dapr] payment event:", (event as Record<string, unknown>)?.type ?? "unknown");
-    res.status(200).json({ status: "SUCCESS" });
-  });
-  app.post("/api/events/audit", express.json(), (_req: Request, res: Response) => {
-    res.status(200).json({ status: "SUCCESS" });
-  });
+  // NOTE: the Dapr pub/sub ingress (GET /dapr/subscribe + POST /api/events/*)
+  // was removed — Dapr infrastructure is retired branch-wide and the internal
+  // event flow uses the in-process/Kafka bus in server/events/bus.ts instead.
 
   // ── Legacy unauthenticated transfer callback retirement ───────────────────
   app.post("/api/mojaloop/callbacks/transfers", (_req: Request, res: Response) => {
@@ -477,18 +528,27 @@ async function startServer() {
 
   // ── Scheduled heartbeat endpoints (auth-guarded in production) ───────────
   app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
+  app.post("/api/scheduled/idr-deadline-check", scheduledAuth, idrDeadlineCheckHandler);
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
   app.post("/api/scheduled/settlement-balance-proof", scheduledAuth, settlementBalanceProofHandler);
+  app.post("/api/scheduled/ledger-reconciliation", scheduledAuth, ledgerReconciliationHandler);
 
   // Durable settlement and payment-evidence events are reconciled after their
   // transaction commits. The worker is single-flight in each process; database
   // event claims prevent duplicate in-process dispatch across instances.
   startOutboxWorker();
 
+  // Postgres ↔ TigerBeetle ledger reconciliation on an env-configurable
+  // cadence (LEDGER_RECONCILIATION_INTERVAL_MINUTES, default hourly; 0
+  // disables the in-process scheduler — e.g. when an external cron drives
+  // POST /api/scheduled/ledger-reconciliation above).
+  startLedgerReconciliationScheduler();
+
   // ── Ollama pull-stream SSE endpoint ────────────────────────────────────────
   // Streams NDJSON progress from Ollama's /api/pull endpoint as SSE events.
-  // Requires admin role via JWT cookie (same auth as tRPC protectedProcedure).
-  app.get("/api/ollama/pull-stream", async (req: Request, res: Response) => {
+  // Requires an authenticated ADMIN (Bearer token or session cookie), enforced
+  // by requireApiAdmin() — the admin requirement was previously comment-only.
+  app.get("/api/ollama/pull-stream", requireApiAdmin(), async (req: Request, res: Response) => {
     const model = req.query.model as string;
     if (!model || model.trim().length === 0) {
       res.status(400).json({ error: "model query param required" });
@@ -532,7 +592,6 @@ async function startServer() {
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
@@ -576,7 +635,7 @@ async function startServer() {
   app.use(
     "/api/trpc",
     createExpressMiddleware({
-      router: appRouter,
+      router: rootRouter,
       createContext,
       onError: ({ error, path }) => {
         if (error.code === "INTERNAL_SERVER_ERROR") {

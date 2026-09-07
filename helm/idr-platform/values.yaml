@@ -1,4 +1,6 @@
-# HealthPoint IDR Platform — Helm Values
+# HealthPoint IDR Platform — Helm Values (LEGACY CHART)
+# This chart is superseded by deploy/helm/healthpoint/ (pinned images, no
+# Dapr/Fluvio). It is kept for reference only.
 # Override any value with: helm install idr-platform ./helm/idr-platform -f my-values.yaml
 
 global:
@@ -13,7 +15,7 @@ app:
   replicaCount: 2
   image:
     repository: healthpoint/idr-app
-    tag: "latest"
+    tag: ""  # REQUIRED: set an immutable release tag or digest (never "latest")
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -74,7 +76,7 @@ goServices:
   replicaCount: 2
   image:
     repository: healthpoint/idr-go-services
-    tag: "latest"
+    tag: ""  # REQUIRED: set an immutable release tag or digest (never "latest")
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -93,7 +95,7 @@ rustServices:
   replicaCount: 2
   image:
     repository: healthpoint/idr-rust-services
-    tag: "latest"
+    tag: ""  # REQUIRED: set an immutable release tag or digest (never "latest")
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -109,7 +111,7 @@ temporalWorker:
   replicaCount: 2
   image:
     repository: healthpoint/idr-temporal-worker
-    tag: "latest"
+    tag: ""  # REQUIRED: set an immutable release tag or digest (never "latest")
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -125,7 +127,7 @@ lakehousePipeline:
   replicaCount: 1
   image:
     repository: healthpoint/idr-lakehouse
-    tag: "latest"
+    tag: ""  # REQUIRED: set an immutable release tag or digest (never "latest")
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -247,7 +249,7 @@ permify:
   replicaCount: 2
   image:
     repository: ghcr.io/permify/permify
-    tag: "latest"
+    tag: ""  # REQUIRED: pin a registry-verified tag/digest (never "latest")
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -282,7 +284,7 @@ openappsec:
   replicaCount: 2
   image:
     repository: openappsec/nginx
-    tag: "latest"
+    tag: ""  # REQUIRED: pin a registry-verified tag/digest (never "latest")
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -303,18 +305,6 @@ tigerbeetle:
     type: ClusterIP
     port: 3000
 
-# ── Fluvio ────────────────────────────────────────────────────────────────────
-fluvio:
-  enabled: true
-  replicaCount: 3
-  image:
-    repository: infinyon/fluvio
-    tag: "latest"
-    pullPolicy: IfNotPresent
-  persistence:
-    enabled: true
-    size: 20Gi
-
 # ── Mojaloop ──────────────────────────────────────────────────────────────────
 mojaloop:
   enabled: false  # Enable when payment interoperability is needed
@@ -322,17 +312,6 @@ mojaloop:
     enabled: true
   centralSettlement:
     enabled: true
-
-# ── Dapr ──────────────────────────────────────────────────────────────────────
-dapr:
-  enabled: true
-  global:
-    ha:
-      enabled: true
-  dapr_operator:
-    replicaCount: 2
-  dapr_sidecar_injector:
-    replicaCount: 2
 
 # ── MinIO (Lakehouse object storage) ─────────────────────────────────────────
 minio:
@@ -370,8 +349,6 @@ caddy:
       port: 6380
     opensearch:
       port: 9201
-    fluvio:
-      port: 9004
   resources:
     requests:
       memory: "128Mi"
@@ -395,17 +372,6 @@ ingress:
     - host: idr.healthpoint.io
       paths:
         - path: /
-          pathType: Prefix
-          service: app
-  tls:
-    - secretName: idr-tls
-      hosts:
-        - idr.healthpoint.io
-      paths:
-        - path: /
-          pathType: Prefix
-          service: app
-        - path: /api/
           pathType: Prefix
           service: app
   tls:

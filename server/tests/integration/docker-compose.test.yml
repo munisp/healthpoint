@@ -1,0 +1,31 @@
+# Isolated throwaway stack for server/tests/integration (RUN_INTEGRATION=1).
+# Non-standard host ports so it never collides with the dev docker-compose.yml.
+# Wipe with: docker compose -f server/tests/integration/docker-compose.test.yml down -v
+name: healthpoint-test
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: healthpoint_test
+      POSTGRES_PASSWORD: healthpoint_test
+      POSTGRES_DB: healthpoint_test
+    ports:
+      - "54329:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U healthpoint_test -d healthpoint_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

@@ -1,0 +1,81 @@
+{
+  "expo": {
+    "name": "HealthPoint IDR",
+    "slug": "healthpoint-idr",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "healthpoint",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f8fafc"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.healthpoint.idr",
+      "buildNumber": "1",
+      "associatedDomains": [
+        "applinks:app.healthpoint.example.com"
+      ],
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "HealthPoint IDR uses Face ID to unlock the app and protect patient and claims information when you return to it.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.healthpoint.idr",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#f8fafc"
+      },
+      "permissions": [
+        "POST_NOTIFICATIONS"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            { "scheme": "healthpoint" },
+            {
+              "scheme": "https",
+              "host": "app.healthpoint.example.com",
+              "pathPrefix": "/"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "HealthPoint IDR uses Face ID to unlock the app and protect patient and claims information when you return to it."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#0f766e"
+        }
+      ]
+    ],
+    "extra": {
+      "apiUrl": "http://localhost:3000",
+      "keycloakUrl": "http://localhost:8080",
+      "keycloakRealm": "healthpoint",
+      "keycloakClientId": "healthpoint-app",
+      "eas": {
+        "projectId": "00000000-0000-0000-0000-000000000000"
+      }
+    }
+  }
+}

@@ -3,6 +3,27 @@
 # This file is not a production deployment baseline. Use the production overlay
 # only with mandatory production secrets and non-simulator provider endpoints.
 ###############################################################################
+# RELEASE-BLOCKING ACTION ITEM: the following images use unpinned mutable
+# tags (`latest`). Before any release, replace each with a registry-verified
+# immutable digest (image@sha256:...):
+#   - ghcr.io/permify/permify:latest    (permify)
+#   - minio/minio:latest                (minio)
+#   - minio/mc:latest                   (minio-init)
+#   - mojaloop/simulator:latest         (mojaloop-simulator)
+#   - openappsec/nginx:latest           (openappsec)
+# (tigerbeetle was pinned to 0.17.6 below — audit P1-11.)
+###############################################################################
+# NOTE: Dapr and Fluvio were removed on 2026-09-05 (zero application adoption;
+# orphaned infrastructure). The application talks to Kafka/Redis/Temporal
+# directly. See docs/UPGRADES.md for the image pinning workflow.
+###############################################################################
+# CREDENTIAL POLICY: the `app` and `migrate` services run NODE_ENV=production.
+# They must never fall back to the data-store containers' development default
+# passwords, so their DATABASE_URL / REDIS_URL / S3 credentials use compose's
+# `:?` required-variable form. Set POSTGRES_PASSWORD / REDIS_PASSWORD /
+# MINIO_ACCESS_KEY / MINIO_SECRET_KEY / KC_ADMIN_PASSWORD in .env (compose
+# auto-loads it); the same values feed the infra containers' defaults.
+###############################################################################
 version: "3.9"
 
 networks:
@@ -18,7 +39,6 @@ volumes:
   temporal_data:
   minio_data:
   tigerbeetle_data:
-  fluvio_data:
   permify_data:
   caddy_data:
   caddy_config:
@@ -41,7 +61,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     ports:
-      - "5432:5432"
+      - "5432:5432"   # DEV ONLY: host access for local tooling; remove in production overlay
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-idr_user} -d ${POSTGRES_DB:-idr_demo}"]
       interval: 10s
@@ -53,11 +73,15 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     networks: [idr-net]
-    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_pass123} --appendonly yes
+    # Audit P1-12: added memory ceiling + LRU eviction (previously unbounded),
+    # AOF fsync every second, and a larger TCP backlog for burst fan-in.
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_pass123} --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru --appendfsync everysec --tcp-backlog 511
     volumes:
       - redis_data:/data
-    ports:
-      - "6379:6379"
+    # Internal only — reached via idr-net (app) and via Caddy
+    # layer-4 mTLS (host port 6380). Not published directly.
+    expose:
+      - "6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_pass123}", "ping"]
       interval: 10s
@@ -99,7 +123,10 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # Audit P1-10: auto topic creation disabled — kafka-init provisions all
+      # topics with explicit partitions/replication; auto-created topics got
+      # broker defaults and masked misconfiguration.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_RETENTION_HOURS: 168
     volumes:
       - kafka_data:/var/lib/kafka/data
@@ -121,7 +148,6 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/bash", "-c"]
     command: |
-      "
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.disputes --partitions 6 --replication-factor 1
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.disputes.state_changes --partitions 6 --replication-factor 1
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.documents --partitions 3 --replication-factor 1
@@ -131,39 +157,10 @@ services:
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.users --partitions 3 --replication-factor 1
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.payments --partitions 6 --replication-factor 1
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.lakehouse.ingest --partitions 3 --replication-factor 1
+      # Dead-letter queue — server consumer routes poison messages here
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic idr.dlq --partitions 3 --replication-factor 1
       echo 'Kafka topics created.'
-      "
     restart: on-failure
-
-  # ── Fluvio (edge real-time stream processing) ─────────────────────────────
-  fluvio-sc:
-    image: infinyon/fluvio:latest
-    restart: unless-stopped
-    networks: [idr-net]
-    command: fluvio-run sc --local
-    environment:
-      RUST_LOG: info
-    volumes:
-      - fluvio_data:/var/lib/fluvio
-    ports:
-      - "9003:9003"
-    healthcheck:
-      test: ["CMD-SHELL", "fluvio cluster status 2>/dev/null || exit 0"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-
-  fluvio-spu:
-    image: infinyon/fluvio:latest
-    restart: unless-stopped
-    networks: [idr-net]
-    depends_on: [fluvio-sc]
-    command: fluvio-run spu -i 5001 -p fluvio-spu:9010 -v fluvio-spu:9011 --sc-addr fluvio-sc:9004
-    environment:
-      RUST_LOG: info
-    ports:
-      - "9010:9010"
 
 ###############################################################################
 # WORKFLOW ORCHESTRATION
@@ -195,6 +192,9 @@ services:
       retries: 10
       start_period: 60s
 
+  # NOTE: temporal-ui and opensearch-dashboards are convenience dashboards
+  # whose images carry no reliable curl/wget; they are excluded from the
+  # healthcheck chain intentionally (verify via browser / runbook commands).
   temporal-ui:
     image: temporalio/ui:2.26.2
     restart: unless-stopped
@@ -204,7 +204,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:3000
     ports:
-      - "8088:8080"
+      - "8088:8080"   # DEV ONLY: also reachable via temporal.healthpoint.example.com through Caddy
 
   temporal-admin-tools:
     image: temporalio/admin-tools:1.24.2
@@ -215,7 +215,13 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
     entrypoint: ["/bin/bash", "-c"]
     command: |
-      "sleep 15 && tctl --namespace default namespace register --retention 30 2>/dev/null || true && tail -f /dev/null"
+      sleep 15 && tctl --namespace default namespace register --retention 30 2>/dev/null || true && tail -f /dev/null
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health 2>/dev/null | grep -q SERVING || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 ###############################################################################
 # IDENTITY & AUTHORIZATION
@@ -229,15 +235,24 @@ services:
     command: start-dev --import-realm
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-admin}
+      # No default admin password — set KC_ADMIN_PASSWORD explicitly (the
+      # `start-dev` mode itself is development-only and must not reach prod).
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?Set KC_ADMIN_PASSWORD before starting the Keycloak dev container}
       KC_DB: dev-mem
       KC_HTTP_PORT: 8080
+      # Runtime health endpoints on management port 9000 (the Keycloak image
+      # ships no curl/wget — healthcheck uses bash /dev/tcp below).
+      KC_HEALTH_ENABLED: "true"
     volumes:
-      - ./keycloak:/opt/keycloak/data/import
+      # Canonical realm export (realm: healthpoint). Previously ./keycloak,
+      # which does not exist in this layout — see middleware/keycloak/.
+      - ./middleware/keycloak:/opt/keycloak/data/import
     ports:
-      - "8080:8080"
+      - "8080:8080"   # DEV ONLY: admin console also available via keycloak.healthpoint.example.com through Caddy; remove in production overlay
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/realms/healthpoint/.well-known/openid-configuration | grep issuer"]
+      # The keycloak image (ubi-micro based) has no curl/wget; probe the
+      # management-port readiness endpoint over a raw bash TCP socket.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9000 && printf \"GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && grep -q UP <&3'"]
       interval: 20s
       timeout: 10s
       retries: 15
@@ -262,9 +277,10 @@ services:
     volumes:
       - permify_data:/var/lib/permify
       - ./infra/permify/schema.perm:/etc/permify/schema.perm:ro
-    ports:
-      - "3476:3476"   # HTTP
-      - "3478:3478"   # gRPC
+    # Internal only — app and go-services reach Permify over idr-net.
+    expose:
+      - "3476"   # HTTP
+      - "3478"   # gRPC
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:3476/healthz | grep SERVING"]
       interval: 15s
@@ -286,7 +302,16 @@ services:
       node.name: opensearch-node1
       discovery.type: single-node
       bootstrap.memory_lock: "true"
-      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      # Audit P1-14: heap raised from 512m to 2g.
+      OPENSEARCH_JAVA_OPTS: "-Xms2g -Xmx2g"
+      # Audit P1-14: the security plugin stays DISABLED for local dev only.
+      # PRODUCTION (uncomment in the production overlay and provide certs):
+      #   DISABLE_SECURITY_PLUGIN: "false"
+      #   OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_ADMIN_PASSWORD:?required}
+      #   plugins.security.ssl.transport.pemcert_filepath: /usr/share/opensearch/config/node.pem
+      #   plugins.security.ssl.transport.pemkey_filepath: /usr/share/opensearch/config/node-key.pem
+      #   plugins.security.ssl.transport.pemtrustedcas_filepath: /usr/share/opensearch/config/root-ca.pem
+      #   plugins.security.ssl.http.enabled: "true"
       DISABLE_SECURITY_PLUGIN: "true"
     ulimits:
       memlock:
@@ -294,12 +319,15 @@ services:
         hard: -1
     volumes:
       - opensearch_data:/usr/share/opensearch/data
-    ports:
-      - "9200:9200"
-      - "9600:9600"
+    # Internal only — consumers reach OpenSearch over idr-net; host access
+    # goes through the Caddy layer-4 mTLS listener on port 9201. The
+    # performance-analyzer port 9600 is NOT published (audit P0-4).
+    expose:
+      - "9200"
+      - "9600"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -E 'green|yellow'"]
-      interval: 20s
+      interval: 10s
       timeout: 10s
       retries: 10
       start_period: 60s
@@ -323,21 +351,24 @@ services:
 
   # ── TigerBeetle (double-entry financial ledger) ───────────────────────────
   tigerbeetle:
-    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    # Audit P1-11: pinned to a concrete release tag (was :latest).
+    # 0.17.6 is the latest release in the 0.17 line as of 2026-09
+    # (github.com/tigerbeetle/tigerbeetle releases).
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.17.6
     restart: unless-stopped
     networks: [idr-net]
     volumes:
       - tigerbeetle_data:/data
     entrypoint: ["/bin/sh", "-c"]
     command: |
-      "
       if [ ! -f /data/0_0.tigerbeetle ]; then
         /tigerbeetle format --cluster=0 --replica=0 --replica-count=1 /data/0_0.tigerbeetle
       fi
       /tigerbeetle start --addresses=0.0.0.0:3000 /data/0_0.tigerbeetle
-      "
-    ports:
-      - "3002:3000"
+    # Internal only — app/go-services use idr-net; host access goes through
+    # the Caddy layer-4 mTLS listener on port 3001.
+    expose:
+      - "3000"
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 3000 && echo ok"]
       interval: 10s
@@ -361,8 +392,11 @@ services:
     volumes:
       - minio_data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9001:9001"   # MinIO console (DEV ONLY: remove in production overlay)
+    # S3 API (9000) is internal only — lakehouse-worker, ai-service and the
+    # app reach it over idr-net.
+    expose:
+      - "9000"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -377,14 +411,12 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
     command: |
-      "
       mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-minio_admin} ${MINIO_SECRET_KEY:-minio_secret123}
       mc mb --ignore-existing local/idr-lakehouse
       mc mb --ignore-existing local/idr-documents
       mc mb --ignore-existing local/idr-exports
       mc anonymous set download local/idr-exports
       echo 'MinIO buckets created.'
-      "
     restart: on-failure
 
 ###############################################################################
@@ -399,8 +431,9 @@ services:
     environment:
       ALLOW_NONE_AUTHENTICATION: "yes"
       ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
-    ports:
-      - "2379:2379"
+    # Internal only — only APISIX and apisix-dashboard talk to etcd.
+    expose:
+      - "2379"
     healthcheck:
       test: ["CMD-SHELL", "etcdctl endpoint health"]
       interval: 10s
@@ -421,7 +454,10 @@ services:
     ports:
       - "9080:9080"   # HTTP gateway
       - "9443:9443"   # HTTPS gateway
-      - "9092:9092"   # Admin API
+    # Admin API (9092) is NOT published — in-cluster only via `expose`.
+    # Restricted to loopback by deployment.admin.allow_admin in config.yaml.
+    expose:
+      - "9092"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9080/apisix/status | grep ok"]
       interval: 15s
@@ -437,8 +473,17 @@ services:
     depends_on: [apisix]
     volumes:
       - ./infra/apisix/dashboard.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
+    # Audit P0-4: host port moved 9000 -> 9002 to avoid the collision with the
+    # MinIO S3 API (9000). dashboard.yaml listens on 9002 as well.
     ports:
-      - "9000:9000"
+      - "9002:9002"   # DEV ONLY: render dashboard.yaml placeholders before production use
+    healthcheck:
+      # alpine image: busybox wget is available.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9002/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   # ── OpenAppsec WAF (NGINX-based ML WAF) ─────────────────────────────────
   # Sits between Caddy and APISIX: Caddy → OpenAppsec → APISIX → App
@@ -458,7 +503,8 @@ services:
     expose:
       - "80"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost/healthz || exit 1"]
+      # nginx.conf serves /health (not /healthz) — audit P0-3.
+      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -496,61 +542,26 @@ services:
       SETTLEMENT_MTLS_INGRESS_TOKEN: "${SETTLEMENT_MTLS_INGRESS_TOKEN:?Set SETTLEMENT_MTLS_INGRESS_TOKEN before starting settlement ingress}"
     secrets:
       - settlement_mtls_ca
+    # Admin API (2019) is NOT published on the host — in-cluster only via
+    # `expose` (used by entrypoint.sh to load the layer4 config). Audit P0-4.
+    expose:
+      - "2019"
     ports:
       - "80:80"         # HTTP → HTTPS redirect
       - "443:443"       # HTTPS (HTTP/1.1 + HTTP/2)
       - "443:443/udp"   # HTTP/3 (QUIC)
-      - "2019:2019"     # Caddy Admin API (localhost only in production)
       # Layer 4 TLS-terminated TCP ports
       - "9093:9093"     # Kafka (mTLS)
       - "7234:7234"     # Temporal gRPC (mTLS)
       - "3001:3001"     # TigerBeetle (mTLS via go-services)
       - "6380:6380"     # Redis (mTLS)
       - "9201:9201"     # OpenSearch (mTLS)
-      - "9004:9004"     # Fluvio (mTLS)
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:2019/config/ | grep -q '.' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
-
-###############################################################################
-# DAPR SIDECAR INFRASTRUCTURE
-###############################################################################
-
-  # ── Dapr placement service ────────────────────────────────────────────────
-  dapr-placement:
-    image: daprio/dapr:1.13.4
-    restart: unless-stopped
-    networks: [idr-net]
-    command: ["./placement", "--port", "50006", "--log-level", "info"]
-    ports:
-      - "50006:50006"
-
-  # ── Dapr sidecar for the main app ─────────────────────────────────────────
-  dapr-sidecar:
-    image: daprio/daprd:1.13.4
-    restart: unless-stopped
-    networks: [idr-net]
-    depends_on:
-      - dapr-placement
-      - redis
-      - kafka
-    command:
-      - "./daprd"
-      - "--app-id=idr-app"
-      - "--app-port=3000"
-      - "--dapr-http-port=3500"
-      - "--dapr-grpc-port=50001"
-      - "--placement-host-address=dapr-placement:50006"
-      - "--components-path=/components"
-      - "--log-level=info"
-    volumes:
-      - ./infra/dapr/components:/components:ro
-    ports:
-      - "3500:3500"   # Dapr HTTP API
-      - "50001:50001" # Dapr gRPC API
 
 ###############################################################################
 # PAYMENT INTEROPERABILITY
@@ -579,6 +590,8 @@ services:
 ###############################################################################
 
   # ── Main HealthPoint Node.js app ──────────────────────────────────────────
+  # NOTE: `migrate` and `app` run NODE_ENV=production — they require explicit
+  # credentials (`:?`) and never use the infra containers' dev defaults.
   migrate:
     build:
       context: .
@@ -590,7 +603,7 @@ services:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example) — production-mode services must not use the dev default password}@postgres:5432/${POSTGRES_DB:-idr_demo}"
     command: ["sh", "-c", "pnpm drizzle-kit migrate"]
 
   app:
@@ -613,28 +626,38 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example) — production-mode services must not use the dev default password}@postgres:5432/${POSTGRES_DB:-idr_demo}"
       SETTLEMENT_CALLBACK_SECRET: "${SETTLEMENT_CALLBACK_SECRET:?Set SETTLEMENT_CALLBACK_SECRET before starting the production app}"
       SETTLEMENT_CALLBACK_KEYRING: "${SETTLEMENT_CALLBACK_KEYRING:?Set SETTLEMENT_CALLBACK_KEYRING before starting the production app}"
       SETTLEMENT_MTLS_CLIENT_CA_PEM: "${SETTLEMENT_MTLS_CLIENT_CA_PEM:?Set SETTLEMENT_MTLS_CLIENT_CA_PEM before starting the production app}"
       SETTLEMENT_MTLS_CLIENT_FINGERPRINTS: "${SETTLEMENT_MTLS_CLIENT_FINGERPRINTS:?Set SETTLEMENT_MTLS_CLIENT_FINGERPRINTS before starting the production app}"
       SETTLEMENT_MTLS_INGRESS_TOKEN: "${SETTLEMENT_MTLS_INGRESS_TOKEN:?Set SETTLEMENT_MTLS_INGRESS_TOKEN before starting the production app}"
       SETTLEMENT_CALLBACK_PROVIDER: "${SETTLEMENT_CALLBACK_PROVIDER:-mojaloop}"
-      REDIS_URL: "redis://:${REDIS_PASSWORD:-redis_pass123}@redis:6379"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (see .env.example) — production-mode services must not use the dev default password}@redis:6379"
       KAFKA_BROKERS: "kafka:9092"
       KEYCLOAK_URL: "http://keycloak:8080"
       PERMIFY_GRPC_URL: "permify:3478"
+      # server/authz.ts reads PERMIFY_URL (REST) — keep in sync with PERMIFY_GRPC_URL
+      PERMIFY_URL: "http://permify:3476"
       OPENSEARCH_URL: "http://opensearch:9200"
       TEMPORAL_ADDRESS: "temporal:7233"
       TIGERBEETLE_ADDRESS: "tigerbeetle:3000"
       MOJALOOP_URL: "http://mojaloop-simulator:3003"
-      DAPR_HTTP_ENDPOINT: "http://dapr-sidecar:3500"
       S3_ENDPOINT: "http://minio:9000"
-      S3_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minio_admin}"
-      S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
+      S3_ACCESS_KEY: "${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env (see .env.example)}"
+      S3_SECRET_KEY: "${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env (see .env.example)}"
       S3_BUCKET: "idr-documents"
     ports:
-      - "3000:3000"
+      - "3000:3000"   # DEV ONLY: remove in production overlay — traffic enters via Caddy → OpenAppsec → APISIX
+    healthcheck:
+      # node:22-slim ships no curl/wget; use Node's built-in fetch against the
+      # liveness endpoint. Readiness of dependencies is gated by depends_on
+      # above plus /readyz (used by the prod overlay).
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   # ── Python AI service (LangGraph agents) ─────────────────────────────────
   ai-service:
@@ -654,6 +677,12 @@ services:
       LLM_API_KEY: "${LLM_API_KEY:-}"
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health | grep -q '\"status\":\"healthy\"' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   # ── Python Lakehouse ingestion pipeline ───────────────────────────────────
   lakehouse-worker:
@@ -673,6 +702,22 @@ services:
       S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
       OPENSEARCH_URL: "http://opensearch:9200"
       DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
+      # services/lakehouse/pipeline.py reads MINIO_* and a JDBC POSTGRES_URL;
+      # S3_* above are kept for backward compatibility with other tooling.
+      MINIO_ENDPOINT: "http://minio:9000"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minio_admin}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:-minio_secret123}"
+      POSTGRES_URL: "jdbc:postgresql://postgres:5432/${POSTGRES_DB:-idr_demo}"
+      POSTGRES_USER: "${POSTGRES_USER:-idr_user}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-idr_pass123}"
+    healthcheck:
+      # Long-running consumer with no HTTP listener: verify the worker
+      # container can still reach Kafka and MinIO (its two hard dependencies).
+      test: ["CMD-SHELL", "python -c \"import socket\nfor h,p in [('kafka',9092),('minio',9000)]:\n s=socket.create_connection((h,p),3); s.close()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   # ── Python Temporal workflow workers ──────────────────────────────────────
   temporal-worker:
@@ -688,9 +733,22 @@ services:
         condition: service_healthy
     environment:
       TEMPORAL_ADDRESS: "temporal:7233"
+      # services/temporal-worker/worker.py reads TEMPORAL_HOST (not
+      # TEMPORAL_ADDRESS); both are provided so server and worker align with
+      # the server/temporal.ts defaults.
+      TEMPORAL_HOST: "temporal:7233"
+      TEMPORAL_TASK_QUEUE: "healthpoint-idr"
       TEMPORAL_NAMESPACE: "default"
       DATABASE_URL: "postgresql://${POSTGRES_USER:-idr_user}:${POSTGRES_PASSWORD:-idr_pass123}@postgres:5432/${POSTGRES_DB:-idr_demo}"
       KAFKA_BROKERS: "kafka:9092"
+    healthcheck:
+      # No HTTP listener: verify the Temporal gRPC frontend is reachable from
+      # inside the worker container (a dead network/namespace == dead worker).
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('temporal',7233),3); s.close()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   # ── Go services (Permify client, Mojaloop connector, TigerBeetle ledger) ──
   go-services:
@@ -716,8 +774,13 @@ services:
       INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?Set INTERNAL_SERVICE_TOKEN before enabling payment execution}"
     ports:
       - "8001:8001"
+    # NOTE: the go-services image is distroless (no shell/curl), so Docker
+    # cannot exec an in-container healthcheck. Liveness is verified
+    # externally: GET http://localhost:8001/internal/health (see RUNBOOK.md).
 
-  # ── Rust services (Fluvio processor, high-perf event handlers) ────────────
+  # ── Rust services (high-perf Kafka event handlers) ───────────────────────
+  # NOTE: Fluvio was removed from this stack (orphan infrastructure). The
+  # Rust services are pure rdkafka consumers/producers.
   rust-services:
     build:
       context: ./services/rust
@@ -726,14 +789,19 @@ services:
     networks: [idr-net]
     depends_on:
       - kafka
-      - fluvio-sc
     environment:
       KAFKA_BROKERS: "kafka:9092"
-      FLUVIO_SC_ADDR: "fluvio-sc:9003"
       RUST_LOG: "info"
       RUST_SERVICES_PORT: "8002"
     ports:
       - "8002:8002"
+    healthcheck:
+      # debian:bookworm-slim has bash but no curl; probe the TCP listener.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8002"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
 secrets:
   settlement_mtls_ca:

@@ -1,6 +1,14 @@
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { hermesRouter } from "./routers/hermes";
+import { submissionAutomationRouter } from "./idr/submission-automation/routes";
+import { stateProgramsRouter } from "./idr/state-programs/routes";
+import { priorAuthRouter } from "./priorauth/routes";
+import { batchedDisputesRouter } from "./idr/batching/routes";
+import { feeScheduleRouter } from "./idr/clocks-2026/routes";
+import { noticeConsentRouter } from "./notice-consent/routes";
+import { gfePpdrRouter } from "./gfe-ppdr/routes";
+import { portalRpaRouter } from "./idr/portal-rpa/routes";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { ENV } from "./_core/env";
@@ -378,7 +386,7 @@ export const appRouter = router({
             userId: ctx.user.id,
             notificationType: "step_advanced",
             title: `IDR Initiated — ${dispute.referenceNumber}`,
-            message: `Federal IDR has been initiated. You have 4 business days to select a certified IDR entity.`,
+            message: `IDR initiated for dispute ${dispute.referenceNumber}. The parties have 3 business days to jointly select a certified IDR entity (45 CFR § 149.510(c)(1)).`,
             dueDate: dispute.idrInitiationDeadline ?? null,
           });
         } else if (newStep === "STEP_09_OFFER_SUBMISSION") {
@@ -4333,6 +4341,16 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
 
   hermes: hermesRouter,
 
+  // ── Wave routers (2026 compliance waves) ───────────────────────────────────
+  submissionAutomation: submissionAutomationRouter,
+  statePrograms: stateProgramsRouter,
+  priorAuth: priorAuthRouter,
+  batchedDisputes: batchedDisputesRouter,
+  feeSchedule: feeScheduleRouter,
+  noticeConsent: noticeConsentRouter,
+  gfePpdr: gfePpdrRouter,
+  portalRpa: portalRpaRouter,
+
   // ─── Organisation Settings ─────────────────────────────────────────────────
   orgSettings: router({
     get: protectedProcedure.query(async ({ ctx }) => {
@@ -4714,7 +4732,7 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         { id: "cl-001", version: "2.4.0", releasedAt: new Date("2025-07-15"), title: "Left Sidebar Navigation", description: "Added persistent left sidebar navigation to all authenticated pages, providing consistent access to all features without page-level headers.", category: "feature" as const, isHighlight: true },
         { id: "cl-002", version: "2.4.0", releasedAt: new Date("2025-07-15"), title: "Session Expiry Warning", description: "Implemented real-time session expiry countdown modal with 'Stay Signed In' refresh capability and 5-minute advance warning.", category: "feature" as const, isHighlight: true },
         { id: "cl-003", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Step Advancement Confirmation Dialog", description: "Added confirmation dialog to all dispute step advancement CTAs to prevent accidental workflow progression.", category: "improvement" as const, isHighlight: false },
-        { id: "cl-004", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Workflow Progress Bar Fix", description: "Fixed progress bar showing 0% when a dispute was at Step 1. Progress now correctly includes the current active step.", category: "bugfix" as const, isHighlight: false },
+        { id: "cl-004", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Workflow Progress Bar Fix", description: "Fixed progress bar showing 0% when a dispute was at Step 1. Progress now correctly includes the current active step.", category: "improvement" as const, isHighlight: false },
         { id: "cl-005", version: "2.2.0", releasedAt: new Date("2025-07-01"), title: "IDR Entity Dashboard KPI Skeleton Loaders", description: "Added animated skeleton loaders to KPI cards on the IDR Entity Dashboard to eliminate flash-of-zeros on initial load.", category: "improvement" as const, isHighlight: false },
         { id: "cl-006", version: "2.2.0", releasedAt: new Date("2025-07-01"), title: "Database-Backed Settings", description: "GlobalSettings, TwoFactorAuth, QPA Benchmarks, Regulatory Feed, Expert Panel, and Compliance Checklist are now fully persisted to PostgreSQL.", category: "feature" as const, isHighlight: true },
         { id: "cl-007", version: "2.1.0", releasedAt: new Date("2025-06-20"), title: "Keycloak Forward Authentication", description: "Replaced Manus OAuth with Keycloak OIDC forward authentication, supporting PKCE, token refresh, and multi-realm configuration.", category: "security" as const, isHighlight: true },

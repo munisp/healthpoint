@@ -1,6 +1,7 @@
 {
   "name": "HealthPoint IDR",
   "short_name": "HealthPoint",
+  "id": "/",
   "description": "NSA Independent Dispute Resolution workflow platform for providers, payers, and arbitrators",
   "start_url": "/dashboard",
   "display": "standalone",

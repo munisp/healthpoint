@@ -23,6 +23,7 @@ import {
   IDR_STEP, IDRStep, DISPUTE_STATUS, DisputeStatus,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { mirrorDisputeCreation, mirrorOrgMembership } from './permify-write';
 
 export function isPostgresConnectionString(value: string | undefined): value is string {
   return Boolean(value && /^(postgres|postgresql):\/\//.test(value));
@@ -191,30 +192,16 @@ export async function countUsers(): Promise<number> {
 }
 
 // ─── Business day calculation ─────────────────────────────────────────────────
-
-const US_FEDERAL_HOLIDAYS_2024_2025 = [
-  "2024-01-01", "2024-01-15", "2024-02-19", "2024-05-27", "2024-06-19",
-  "2024-07-04", "2024-09-02", "2024-10-14", "2024-11-11", "2024-11-28",
-  "2024-12-25", "2025-01-01", "2025-01-20", "2025-02-17", "2025-05-26",
-  "2025-06-19", "2025-07-04", "2025-09-01", "2025-10-13", "2025-11-11",
-  "2025-11-27", "2025-12-25", "2026-01-01", "2026-01-19", "2026-02-16",
-  "2026-05-25", "2026-06-19", "2026-07-04", "2026-09-07",
-];
-
-export function addBusinessDays(startDate: Date, businessDays: number): Date {
-  const holidays = new Set(US_FEDERAL_HOLIDAYS_2024_2025);
-  let current = new Date(startDate);
-  let added = 0;
-  while (added < businessDays) {
-    current.setDate(current.getDate() + 1);
-    const dayOfWeek = current.getDay();
-    const dateStr = current.toISOString().split('T')[0];
-    if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidays.has(dateStr)) {
-      added++;
-    }
-  }
-  return current;
-}
+//
+// Canonical business-day arithmetic lives in server/idr/deadlines.ts. It
+// computes US federal holidays ALGORITHMICALLY (5 U.S.C. § 6103, with the
+// federal Saturday→Friday / Sunday→Monday observation shifts) instead of
+// relying on a hardcoded holiday table that silently expires, and supports
+// policy overrides (extra closures, holiday opt-out) via IDR_* env vars.
+// Re-exported here so existing callers (seed-demo, routers, etc.) keep their
+// import paths while sharing one implementation.
+import { addBusinessDays } from "./idr/deadlines";
+export { addBusinessDays, isBusinessDay, businessDaysBetween, usFederalHolidays } from "./idr/deadlines";
 
 export function generateReferenceNumber(): string {
   const year = new Date().getFullYear();
@@ -254,6 +241,9 @@ export async function createDispute(data: InsertDispute): Promise<Dispute> {
     performedByName: data.initiatingPartyName,
     metadata: { referenceNumber, openNegotiationDeadline: openNegotiationDeadline.toISOString() },
   });
+  // Mirror-only Permify tuple write (PERMIFY_WRITE_ENABLED, default off);
+  // fail-open — Postgres authz remains the system of record for reads.
+  void mirrorDisputeCreation(id, data.initiatingPartyId, data.createdBy ?? undefined).catch(() => undefined);
   const result = await db.select().from(disputes).where(eq(disputes.id, id)).limit(1);
   return result[0];
 }
@@ -285,6 +275,17 @@ export async function listDisputes(opts: {
   if (!db) return { items: [], total: 0 };
   const { limit = 20, offset = 0, status, serviceType, search } = opts;
   const conditions = [];
+  // Object-level authorization: when a userId is supplied (non-admin callers),
+  // restrict results to disputes that user initiated/created. Admin listing
+  // paths omit userId and remain unfiltered.
+  if (opts.userId) {
+    conditions.push(
+      or(
+        eq(disputes.initiatingPartyId, opts.userId),
+        eq(disputes.createdBy, opts.userId)
+      )
+    );
+  }
   if (status) conditions.push(eq(disputes.status, status));
   if (serviceType) conditions.push(sql`${disputes.serviceType} = ${serviceType}`);
   if (search) {
@@ -321,9 +322,12 @@ export async function advanceDisputeStep(
   // Calculate step-specific deadlines
   const deadlineUpdates: Partial<InsertDispute> = {};
   if (newStep === "STEP_04_IDR_INITIATED") {
+    // 45 CFR § 149.510(b)(2)(i) — IDR initiation window: 4 business days.
     deadlineUpdates.idrInitiationDeadline = addBusinessDays(now, 4);
   } else if (newStep === "STEP_06_IDR_ENTITY_SELECTION") {
-    deadlineUpdates.entitySelectionDeadline = addBusinessDays(now, 4);
+    // 45 CFR § 149.510(c)(1) — joint certified IDR entity selection:
+    // 3 business days after IDR initiation (not 4).
+    deadlineUpdates.entitySelectionDeadline = addBusinessDays(now, 3);
   } else if (newStep === "STEP_08_ELIGIBILITY_REVIEW") {
     deadlineUpdates.eligibilityDeadline = addBusinessDays(now, 3);
   } else if (newStep === "STEP_09_OFFER_SUBMISSION") {
@@ -515,8 +519,8 @@ export async function seedIDREntities() {
   const entities = [
     { id: crypto.randomUUID(), name: "JAMS Healthcare Arbitration", certificationNumber: "IDR-CERT-001", specialties: ["emergency_medicine", "anesthesiology", "radiology"], states: ["CA", "NY", "TX", "FL", "IL"], contactEmail: "idr@jams.com", contactPhone: "1-800-352-5267", website: "https://www.jamsadr.com", avgResolutionDays: 28, totalCasesHandled: 1247, isActive: true },
     { id: crypto.randomUUID(), name: "AAA Healthcare Dispute Resolution", certificationNumber: "IDR-CERT-002", specialties: ["surgery", "hospitalist", "pathology"], states: ["NY", "NJ", "CT", "MA", "PA"], contactEmail: "healthcare@adr.org", contactPhone: "1-800-778-7879", website: "https://www.adr.org", avgResolutionDays: 25, totalCasesHandled: 892, isActive: true },
-    { id: crypto.randomUUID(), name: "AHLA Dispute Resolution Services", certificationNumber: "IDR-CERT-003", specialties: ["air_ambulance", "ground_ambulance", "emergency_medicine"], states: ["TX", "FL", "GA", "NC", "VA"], contactEmail: "disputes@ahla.com", contactPhone: "1-202-833-1100", website: "https://www.americanhealthlaw.org", avgResolutionDays: 22, totalCasesHandled: 634, isActive: true },
-    { id: crypto.randomUUID(), name: "National Arbitration Forum Healthcare", certificationNumber: "IDR-CERT-004", specialties: ["neonatology", "radiology", "anesthesiology"], states: ["MN", "WI", "IA", "ND", "SD"], contactEmail: "healthcare@nafresolution.com", contactPhone: "1-800-474-2371", website: "https://www.nafresolution.com", avgResolutionDays: 30, totalCasesHandled: 445, isActive: true },
+    { id: crypto.randomUUID(), name: "AHLA Dispute Resolution Services", certificationNumber: "IDR-CERT-003", specialties: ["air_ambulance", "ground_ambulance", "emergency_medicine"], states: ["TX", "FL", "GA", "NC", "VA"], contactEmail: "idr@ahla.com", contactPhone: "1-202-833-1100", website: "https://www.ahla.org", avgResolutionDays: 22, totalCasesHandled: 634, isActive: true },
+    { id: crypto.randomUUID(), name: "National Arbitration Forum Healthcare", certificationNumber: "IDR-CERT-004", specialties: ["neonatology", "radiology", "anesthesiology"], states: ["MN", "WI", "IA", "ND", "SD"], contactEmail: "healthcare@nafresolution.org", contactPhone: "1-800-474-2371", website: "https://www.nafresolution.org", avgResolutionDays: 30, totalCasesHandled: 445, isActive: true },
     { id: crypto.randomUUID(), name: "FINRA Healthcare Billing Arbitration", certificationNumber: "IDR-CERT-005", specialties: ["surgery", "emergency_medicine", "hospitalist"], states: ["DC", "MD", "VA", "DE", "WV"], contactEmail: "idr@finra.org", contactPhone: "1-301-590-6500", website: "https://www.finra.org", avgResolutionDays: 27, totalCasesHandled: 318, isActive: true },
   ];
   for (const entity of entities) {
@@ -540,10 +544,17 @@ export async function listNotifications(userId: string, unreadOnly = false) {
   return db.select().from(notifications).where(and(...conditions)).orderBy(desc(notifications.createdAt)).limit(50);
 }
 
-export async function markNotificationRead(id: string) {
+export async function markNotificationRead(id: string, userId?: string) {
   const db = await getDb();
   if (!db) return;
-  await db.update(notifications).set({ isRead: true }).where(eq(notifications.id, id));
+  // When userId is provided, scope by it so a user cannot mark another user's
+  // notifications read. Callers that omit userId MUST be guarded by the
+  // authz-registry middleware (notifications.markRead) — unscoped by design
+  // at this layer. See server/authz-registry.ts.
+  await db
+    .update(notifications)
+    .set({ isRead: true })
+    .where(userId ? and(eq(notifications.id, id), eq(notifications.userId, userId)) : eq(notifications.id, id));
 }
 
 // ─── Event helpers ────────────────────────────────────────────────────────────
@@ -657,7 +668,7 @@ const QPA_BENCHMARKS_BY_CPT: Record<string, { median: number; p25: number; p75: 
   // Surgery
   "27447": { median: 1842, p25: 1285, p75: 2498, description: "Total knee arthroplasty" },
   "27130": { median: 1985, p25: 1385, p75: 2698, description: "Total hip arthroplasty" },
-  "43239": { median: 485,  p25: 338,  p75: 658,  description: "Upper GI endoscopy w/ biopsy" },
+  "43239": { median: 485,  p25: 338,  p75: 585,  description: "Upper GI endoscopy w/ biopsy" },
   "47562": { median: 1248, p25: 872,  p75: 1698, description: "Laparoscopic cholecystectomy" },
   // Pathology
   "88305": { median: 98,   p25: 68,   p75: 135,  description: "Tissue exam, surgical pathology" },
@@ -1197,6 +1208,11 @@ export async function upsertUserProfile(profile: InsertUserProfile): Promise<Use
         updatedAt: now,
       },
     });
+  // Mirror-only Permify organization membership tuple (PERMIFY_WRITE_ENABLED,
+  // default off); fail-open — Postgres authz remains the system of record.
+  if (profile.orgName) {
+    void mirrorOrgMembership(profile.orgName, profile.id).catch(() => undefined);
+  }
   const rows = await db.select().from(userProfiles).where(eq(userProfiles.id, profile.id)).limit(1);
   return rows[0];
 }
@@ -1288,15 +1304,28 @@ export async function listWebhooks(userId: string): Promise<Webhook[]> {
   if (!db) return [];
   return db.select().from(webhooks).where(eq(webhooks.userId, userId)).orderBy(desc(webhooks.createdAt));
 }
-export async function updateWebhook(id: string, data: Partial<InsertWebhook>): Promise<void> {
+export async function updateWebhook(id: string, data: Partial<InsertWebhook>, userId?: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  await db.update(webhooks).set({ ...data, updatedAt: new Date() }).where(eq(webhooks.id, id));
+  // When userId is provided, scope by it so webhook records cannot be
+  // modified cross-tenant. Callers that omit userId MUST be guarded by the
+  // authz-registry middleware (webhooks.update / webhooks.test) — unscoped
+  // by design at this layer. See server/authz-registry.ts.
+  await db
+    .update(webhooks)
+    .set({ ...data, updatedAt: new Date() })
+    .where(userId ? and(eq(webhooks.id, id), eq(webhooks.userId, userId)) : eq(webhooks.id, id));
 }
-export async function deleteWebhook(id: string): Promise<void> {
+export async function deleteWebhook(id: string, userId?: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  await db.delete(webhooks).where(eq(webhooks.id, id));
+  // When userId is provided, scope by it so webhook records cannot be deleted
+  // cross-tenant. Callers that omit userId MUST be guarded by the
+  // authz-registry middleware (webhooks.delete) — unscoped by design at this
+  // layer. See server/authz-registry.ts.
+  await db
+    .delete(webhooks)
+    .where(userId ? and(eq(webhooks.id, id), eq(webhooks.userId, userId)) : eq(webhooks.id, id));
 }
 
 // ─── Outcome Predictions Helpers ──────────────────────────────────────────────

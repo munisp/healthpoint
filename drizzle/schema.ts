@@ -1867,3 +1867,5 @@ export const documentVersions = pgTable(
 );
 export type DocumentVersion = typeof documentVersions.$inferSelect;
 export type InsertDocumentVersion = typeof documentVersions.$inferInsert;
+export * from "./schema-idr-compliance";
+export * from "./schema-reconciliation";

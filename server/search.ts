@@ -21,6 +21,7 @@
 import Fuse from "fuse.js";
 import { Client as OpenSearchClient } from "@opensearch-project/opensearch";
 import { getDb } from "./db";
+import { canAccessDispute } from "./authz";
 import {
   disputes,
   disputeDocuments,
@@ -337,6 +338,9 @@ async function buildIndex(): Promise<IndexCache> {
         notes:          d.notes ?? "",
         billedAmount:   d.billedAmount ?? "",
         currentStep:    d.currentStep ?? "",
+        // ownership fields for object-level visibility filtering (not search keys)
+        initiatingPartyId: d.initiatingPartyId ?? "",
+        createdBy:      d.createdBy ?? "",
       }));
     } catch (err) { console.warn("[Search] disputes:", err); }
 
@@ -349,6 +353,8 @@ async function buildIndex(): Promise<IndexCache> {
         fileName:     d.fileName ?? "",
         documentType: d.documentType ?? "",
         extractedText: "",
+        // ownership field for object-level visibility filtering (not a search key)
+        uploadedBy:   d.uploadedBy ?? "",
       }));
     } catch (err) { console.warn("[Search] documents:", err); }
 
@@ -472,6 +478,39 @@ const ALL_ENTITY_TYPES: SearchEntityType[] = [
   "payer_contact", "idr_entity", "expert", "regulatory", "qpa_benchmark",
 ];
 
+// Entity types whose hits embed tenant-private data (PHI/financials/audit).
+// These are filtered by object-level ownership for non-admin callers.
+const RESTRICTED_ENTITY_TYPES: ReadonlySet<SearchEntityType> = new Set<SearchEntityType>(["dispute", "document", "audit"]);
+
+/**
+ * Fail-closed visibility filter for search hits (IDOR guard).
+ * Admins and unscoped internal callers see everything; regular users only see
+ * hits on objects they own or — for dispute-linked hits — have been granted
+ * access to via the authz layer.
+ */
+async function filterVisibleHits(
+  hits: SearchHit[],
+  userId?: string,
+  userRole?: "user" | "admin"
+): Promise<SearchHit[]> {
+  if (!userId || userRole === "admin") return hits;
+  const checks = await Promise.all(hits.map(async (hit) => {
+    if (!RESTRICTED_ENTITY_TYPES.has(hit.entityType)) return true;
+    const item = hit.item as Record<string, unknown>;
+    if (hit.entityType === "audit") return item.userId === userId;
+    if (hit.entityType === "dispute") {
+      if (item.initiatingPartyId === userId || item.createdBy === userId) return true;
+      try { return await canAccessDispute(userId, userRole ?? "user", hit.id, "read"); } catch { return false; }
+    }
+    // documents: uploader, or read access to the parent dispute
+    if (item.uploadedBy === userId) return true;
+    const disputeId = typeof item.disputeId === "string" ? item.disputeId : null;
+    if (!disputeId) return false;
+    try { return await canAccessDispute(userId, userRole ?? "user", disputeId, "read"); } catch { return false; }
+  }));
+  return hits.filter((_, i) => checks[i]);
+}
+
 /**
  * Execute a full-text search across all indexed entity types.
  * Returns results ranked by relevance score.
@@ -490,7 +529,12 @@ export async function search(query: SearchQuery): Promise<SearchResult> {
 
   // Try OpenSearch first
   const osResult = await searchOpenSearch(q, entityTypes, limit);
-  if (osResult) return osResult;
+  if (osResult) {
+    // Enforce object-level visibility on externally-served hits.
+    osResult.hits = await filterVisibleHits(osResult.hits, query.userId, query.userRole);
+    osResult.total = osResult.hits.length;
+    return osResult;
+  }
 
   // Fall back to Fuse.js
   const index = await getIndex();
@@ -525,9 +569,12 @@ export async function search(query: SearchQuery): Promise<SearchResult> {
   // Sort by score descending
   hits.sort((a, b) => b.score - a.score);
 
+  // Enforce object-level visibility before returning hits.
+  const visibleHits = await filterVisibleHits(hits, query.userId, query.userRole);
+
   return {
-    total: hits.length,
-    hits: hits.slice(0, limit),
+    total: visibleHits.length,
+    hits: visibleHits.slice(0, limit),
     query: q,
     entityTypes,
     took: Date.now() - start,
@@ -715,7 +762,7 @@ const INDEX_MAPPINGS: Record<string, object> = {
     mappings: {
       properties: {
         name:         { type: "text", fields: { keyword: { type: "keyword" } } },
-        credentials:  { type: "text" },
+        credentials:  { type: "keyword" },
         specialty:    { type: "keyword" },
         bio:          { type: "text", analyzer: "english" },
         availability: { type: "keyword" },
@@ -795,9 +842,16 @@ export interface SuggestResult {
  */
 export async function suggest(
   prefix: string,
-  limit = 8
+  limit = 8,
+  userId?: string,
+  userRole?: "user" | "admin"
 ): Promise<SuggestResult[]> {
   if (!prefix || prefix.trim().length < 2) return [];
+
+  // IDOR guard: suggestions for tenant-private entity types (disputes, documents,
+  // audit) would leak reference numbers/labels across tenants. Non-admin callers
+  // only receive suggestions from shared reference data.
+  const includeRestricted = !userId || userRole === "admin";
 
   const client = getOpenSearchClient();
   if (client) {
@@ -832,7 +886,7 @@ export async function suggest(
           else if (idx.includes("regulatory")) entityType = "regulatory";
           else if (idx.includes("qpa"))   entityType = "qpa_benchmark";
           return { text: o.text, score: o._score || 0, entityType };
-        });
+        }).filter(s => includeRestricted || !RESTRICTED_ENTITY_TYPES.has(s.entityType));
       }
     } catch {
       // Fall through to Fuse.js prefix fallback
@@ -862,7 +916,9 @@ export async function suggest(
 
   // Access internal Fuse docs via _docs (undocumented but stable)
   type FuseInternal = { _docs: Record<string, unknown>[] };
-  prefixScan((index.disputes as unknown as FuseInternal)._docs ?? [], "referenceNumber", "dispute");
+  if (includeRestricted) {
+    prefixScan((index.disputes as unknown as FuseInternal)._docs ?? [], "referenceNumber", "dispute");
+  }
   prefixScan((index.payerContacts as unknown as FuseInternal)._docs ?? [], "payerName", "payer_contact");
   prefixScan((index.idrEntities as unknown as FuseInternal)._docs ?? [], "name", "idr_entity");
   prefixScan((index.expertPanel as unknown as FuseInternal)._docs ?? [], "name", "expert");

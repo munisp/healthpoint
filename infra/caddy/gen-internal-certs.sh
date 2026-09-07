@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # gen-internal-certs.sh
 # Generates a self-signed internal CA and per-service mTLS certificates
-# for Kafka, TigerBeetle, Temporal, Redis, OpenSearch, and Fluvio.
+# for Kafka, TigerBeetle, Temporal, Redis, and OpenSearch.
 # Run once before starting the stack: ./infra/caddy/gen-internal-certs.sh
 set -euo pipefail
 
@@ -63,7 +63,6 @@ generate_cert "tigerbeetle" "tigerbeetle.healthpoint.internal" "DNS:go-services,
 generate_cert "temporal"    "temporal.healthpoint.internal"    "DNS:temporal,DNS:temporal.healthpoint.internal,IP:127.0.0.1"
 generate_cert "redis"       "redis.healthpoint.internal"       "DNS:redis,DNS:redis.healthpoint.internal,IP:127.0.0.1"
 generate_cert "opensearch"  "opensearch.healthpoint.internal"  "DNS:opensearch,DNS:opensearch.healthpoint.internal,IP:127.0.0.1"
-generate_cert "fluvio"      "fluvio.healthpoint.internal"      "DNS:fluvio-sc,DNS:fluvio.healthpoint.internal,IP:127.0.0.1"
 generate_cert "caddy-client" "caddy-client.healthpoint.internal" "DNS:caddy,DNS:caddy.healthpoint.internal,IP:127.0.0.1"
 
 echo ""

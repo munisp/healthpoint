@@ -1,4 +1,4 @@
-{{/* ── Permify ──────────────────────────────────────────────────────────────── */}}
+{{/* ── Permify ─────────────────────────────────────────────────────────────── */}}
 {{- if .Values.permify.enabled }}
 apiVersion: apps/v1
 kind: Deployment
@@ -152,70 +152,6 @@ spec:
   selector:
     {{- include "idr-platform.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: tigerbeetle
-{{- end }}
-
----
-
-{{/* ── Fluvio Streaming Cluster ─────────────────────────────────────────────── */}}
-{{- if .Values.fluvio.enabled }}
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: {{ include "idr-platform.fullname" . }}-fluvio-sc
-  namespace: {{ .Values.global.namespace }}
-  labels:
-    {{- include "idr-platform.labels" . | nindent 4 }}
-    app.kubernetes.io/component: fluvio-sc
-spec:
-  serviceName: {{ include "idr-platform.fullname" . }}-fluvio-sc
-  replicas: 1
-  selector:
-    matchLabels:
-      {{- include "idr-platform.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: fluvio-sc
-  template:
-    metadata:
-      labels:
-        {{- include "idr-platform.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: fluvio-sc
-    spec:
-      containers:
-        - name: fluvio-sc
-          image: "{{ .Values.fluvio.image.repository }}:{{ .Values.fluvio.image.tag }}"
-          args: ["run", "sc", "--local", "/data"]
-          ports:
-            - name: sc
-              containerPort: 9003
-            - name: sc-public
-              containerPort: 9004
-          volumeMounts:
-            - name: data
-              mountPath: /data
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: {{ .Values.global.storageClass }}
-        resources:
-          requests:
-            storage: {{ .Values.fluvio.persistence.size }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "idr-platform.fullname" . }}-fluvio-sc
-  namespace: {{ .Values.global.namespace }}
-spec:
-  clusterIP: None
-  ports:
-    - name: sc
-      port: 9003
-    - name: sc-public
-      port: 9004
-  selector:
-    {{- include "idr-platform.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: fluvio-sc
 {{- end }}
 
 ---
