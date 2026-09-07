@@ -1,0 +1,31 @@
+# OPTIONAL Neo4j service block.
+#
+# Merge this block into the root docker-compose.yml `services:` section IF
+# graph exploration of fraud rings (shared TIN/address motifs) is wanted.
+# Neo4j is NOT required for GNN training or inference — DisputeGNN reads the
+# dispute graph directly from Postgres. ml/graph/neo4j_sync.py is a no-op
+# unless NEO4J_URI is set.
+#
+# To enable: copy the block below into docker-compose.yml and set
+# NEO4J_URI=bolt://neo4j:7687 in the ml-serving / training environment.
+
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: healthpoint-neo4j
+    ports:
+      - "7474:7474"   # browser
+      - "7687:7687"   # bolt
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-change-me-in-env}
+      NEO4J_PLUGINS: '["graph-data-science"]'   # optional GDS for motif analytics
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  neo4j_data:
