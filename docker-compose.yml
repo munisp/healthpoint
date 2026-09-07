@@ -44,6 +44,7 @@ volumes:
   permify_data:
   caddy_data:
   caddy_config:
+  neo4j_data:
 
 ###############################################################################
 # CORE DATA STORES
@@ -869,6 +870,35 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+
+  # ── Neo4j (graph exploration of fraud rings) — OPTIONAL (profile: graph) ─
+  # Audit P2 (2026-09-05): merged from ml/deploy/compose-neo4j.snippet.yml
+  # behind the `graph` profile. Neo4j is NOT required for GNN training or
+  # inference — DisputeGNN reads the dispute graph directly from Postgres;
+  # ml/graph/neo4j_sync.py is a no-op unless NEO4J_URI is set. This service
+  # exists for interactive exploration of shared-TIN/address fraud-ring
+  # motifs (with the optional Graph Data Science plugin).
+  #   Enable: docker compose --profile graph up -d neo4j
+  #   Then set NEO4J_URI=bolt://neo4j:7687 in the ml-serving / training env.
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    profiles: ["graph"]
+    networks: [idr-net]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env — no default graph database password}
+      NEO4J_PLUGINS: '["graph-data-science"]'   # optional GDS for motif analytics
+    volumes:
+      - neo4j_data:/data
+    ports:
+      - "7474:7474"   # browser (DEV ONLY: remove in production overlay)
+      - "7687:7687"   # bolt    (DEV ONLY: remove in production overlay)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   # ── Go services (Permify client, Mojaloop connector, TigerBeetle ledger) ──
   go-services:
