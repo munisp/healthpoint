@@ -1,0 +1,30 @@
+# NOTE: this file was copied verbatim from main (2026-09-05) because the
+# remediation branch was cut before infra/dapr landed; the remediation
+# comment below and the sibling redis-secret.example.yaml are the only
+# additions. Audit P1-13.
+#
+# This component references secret `redis-secret` (key: `password`), which
+# was missing. Create it from infra/dapr/components/redis-secret.example.yaml
+# (never commit the real secret; in Kubernetes, inject via your secret
+# manager instead).
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: idr-statestore
+  namespace: default
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: "redis:6379"
+    - name: redisPassword
+      secretKeyRef:
+        name: redis-secret
+        key: password
+    - name: actorStateStore
+      value: "true"
+    - name: keyPrefix
+      value: "dapr"
+    - name: enableTLS
+      value: "false"
