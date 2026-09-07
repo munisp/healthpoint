@@ -9,6 +9,7 @@ import { feeScheduleRouter } from "./idr/clocks-2026/routes";
 import { noticeConsentRouter } from "./notice-consent/routes";
 import { gfePpdrRouter } from "./gfe-ppdr/routes";
 import { portalRpaRouter } from "./idr/portal-rpa/routes";
+import { qpaEngineRouter } from "./idr/qpa/routes";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { ENV } from "./_core/env";
@@ -1094,7 +1095,6 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { eq } = await import("drizzle-orm");
         await db.update(users).set({
           suspendedAt: null,
           suspendedUntil: null,
@@ -4441,6 +4441,7 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
   noticeConsent: noticeConsentRouter,
   gfePpdr: gfePpdrRouter,
   portalRpa: portalRpaRouter,
+  qpaEngine: qpaEngineRouter,
 
   // ─── Organisation Settings ─────────────────────────────────────────────────
   orgSettings: router({
