@@ -117,6 +117,7 @@ const HeartbeatOperations = lazy(() => import("./pages/HeartbeatOperations"));
 const ProviderDisputeManagement = lazy(() => import("./pages/ProviderDisputeManagement"));
 const ProviderSandboxAcceptance = lazy(() => import("./pages/ProviderSandboxAcceptance"));
 const TemporalOperations = lazy(() => import("./pages/TemporalOperations"));
+const WorkflowMonitor = lazy(() => import("./pages/WorkflowMonitor"));
 
 /** Helper: wraps a component in ProtectedRoute */
 function P({ component: C, admin }: { component: ComponentType; admin?: boolean }) {
@@ -178,7 +179,6 @@ function Router() {
       <Route path={"/lakehouse"} component={() => <PL component={LakehouseExport} />} />
       <Route path={"/system-health"} component={() => <PL component={SystemHealthMonitor} />} />
       <Route path={"/settings"} component={() => <PL component={GlobalSettings} />} />
-      <Route path={"/disputes/:id/negotiate"} component={() => <P component={OfferNegotiationThread} />} />
       <Route path="/templates" component={() => <PL component={DisputeTemplates} />} />
       <Route path="/payer-contacts" component={() => <PL component={PayerContactBook} />} />
       <Route path="/api-keys" component={() => <PL component={APIKeyManagement} />} />
@@ -248,6 +248,7 @@ function Router() {
       <Route path="/admin/heartbeat" component={() => <PL component={HeartbeatOperations} admin />} />
       <Route path="/admin/provider-acceptance" component={() => <PL component={ProviderSandboxAcceptance} admin />} />
       <Route path="/admin/temporal-operations" component={() => <PL component={TemporalOperations} admin />} />
+      <Route path="/workflow-monitor" component={() => <PL component={WorkflowMonitor} admin />} />
       <Route path={"/admin/users"} component={() => <PL component={AdminUserManagement} admin />} />
       <Route path="/admin" component={() => <PL component={Admin} admin />} />
 
