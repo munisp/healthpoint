@@ -6,9 +6,12 @@
  *
  * WHY THIS FILE EXISTS:
  * Binary assets cannot be committed reliably through the remote file API used
- * by the assurance/remediation pipeline, so this script embeds the icon PNGs
- * as base64 payloads and materializes them on disk. It is the single source
- * of truth for the icons referenced by client/public/manifest.json.
+ * by the assurance/remediation pipeline. Earlier revisions embedded the PNGs
+ * as base64 payloads, but those blobs were corrupted in transit (truncated
+ * IDAT streams). This revision instead RENDERS the icons at runtime: a small
+ * pure-Node PNG encoder (built-in node:zlib only) draws the app icon —
+ * teal #0e6e5d background with a white plus mark inside the maskable safe
+ * zone — so there is no binary payload to corrupt.
  *
  * HOW TO RUN (required before every production build):
  *   node scripts/generate-pwa-icons.mjs          # writes icons; refuses to overwrite
@@ -20,14 +23,8 @@
  * equivalent CI step) so that client/public/icons/*.png exists when Vite
  * copies publicDir into dist/public. Without these files the web app
  * manifest references missing icons and PWA installability is broken.
- *
- * NOTE (2026-09-05): the embedded payloads were regenerated — the previous
- * base64 blobs decoded to truncated PNGs (incomplete IDAT stream, no IEND
- * chunk; zlib "incomplete or truncated stream" on decode). The current
- * payloads were verified by decode + image-library round-trip: teal #0e6e5d
- * background with a white plus mark inside the maskable safe zone.
- * client/public/icons/icon.svg is also committed directly as an always-
- * present SVG fallback (manifest references it with purpose "any").
+ * (client/public/icons/icon.svg is committed directly as an always-present
+ * SVG fallback, referenced by the manifest with purpose "any".)
  *
  * Output files (under client/public/icons/):
  *   - icon-192.png          (192x192, web manifest)
@@ -35,6 +32,7 @@
  *   - apple-touch-icon.png  (180x180, iOS home screen)
  */
 
+import { deflateSync } from "node:zlib";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,120 +40,100 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = join(__dirname, "..", "client", "public", "icons");
 
-const ICON_192_B64 = [
-  "iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAACVElEQVR4",
-  "2u3dsbGCQBSG0WXHGCvEErAWW7BDK8AKCHQE5P7npM68YPd+LAQPhnGe",
-  "lgahuiVAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAI",
-  "AAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAAPCh",
-  "iyXY3+vxXP3ter9ZoB0N4zwtluHYoReDAAy+EDwDGP5t/w4CON3wi0AA",
-  "8cMvAgHED78IBBA//CIQAAgg+ervFBAACAAEEHr74zZIACAAEAAIAAQA",
-  "AgABgABAACAAEAAIAAQAAgABIABLgABAACAAEAAIAAQAAgABgACgmNLf",
-  "CPPmtN+p+p2ycgEYejFEBmDwhRD7DGD4rXtsAIbf+scGYPjtQ2wAht9+",
-  "xAZg+O2LWyBIDMDV3/44AUAAEBaA2x/75AQAAYAAQAAgABAAFA+g6r/l",
-  "VXOmfXIC4AQAATheCdwfJwBOAFcZUvelW2yS96NbdJL3oVt8kte/2wSS",
-  "1927QYm+4Hg7NNGnbOkAEkJz++cZAAQAAgABgABAACAAEAAIAAQAAgAB",
-  "gAAQAAgABAACAAGAAEAAIAAQAAgABAACAAHQ2nFvZ/NWOAGAAEAAYbdB",
-  "bn8EAAJIPAVc/QUQG4HhF0BsBIZfALERGH4BxEZg+LfjG2E7+eY7YgZf",
-  "AHExGHoBgGcAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAI",
-  "AAQAAgABIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAEAAIAAQAAgABAACAAEAAI",
-  "/tsbLz+Ml3wdCGEAAAAASUVORK5CYII="
-].join("");
+const TEAL = [14, 110, 93, 255]; // #0e6e5d — deep-teal primary design token
+const WHITE = [255, 255, 255, 255];
 
-const ICON_180_B64 = [
-  "iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAYAAAA9zQYyAAACJUlEQVR4",
-  "2u3dsXFCMRBFUf4fYqgQSoBaaIEOqQAqIEFIo306J/U4WV+vN7Dl7XS7",
-  "vA8QYjcCBA2CBkGDoBE0CBoEDYIGQSNoEDQIGgQNgkbQIGgQNAgaBI2g",
-  "QdAgaBA0CBpBg6BB0CBoEDSCBkGDoEHQIGgEDYIGQYOgWdvRCPp5PZ5f",
-  "P3a+Xw2og80/3hwXsbidHPExt3weNvRUIdvWNnR0zLa1oKNiFrWgQdAV",
-  "tqgtLeiYmEUtaBA0gnZuDD4DnB2CRtAgaBA0CBoEjaBB0CBoEDQIGkGD",
-  "oEHQIGgQNIIGQYOgQdAgaAQNggZBQ6uoB889yvK7lIfWywctYnHHnBxi",
-  "NteIDS1k2zpmQ4vZvGOCFrO5R9/QUDZo29n8Y4IWs6+DkwMnBwjajzln",
-  "h6BB0CBoBA2CBkHDakGn/CVFitm/HjY0NjQI2tnh3BC0qM3fyYGTw5Yg",
-  "Y+674ZI079IPzfjVUiFH3dC2tblGbWgbW8TRQad+0/hJtMjJAYJG0CBo",
-  "EDQIGgSNoEHQIGgQNAgaQYOgQdAgaAQNggZBg6BB0AgaBA2CBkHPYfSj",
-  "Lx6ZETSCBkE7O5wbgha1mAUNgq67pW1nQcdELeY2Hjz/o5bH0IVsQ8ds",
-  "azHb0OU3togFDU4OBA2CBkGDoEHQCBoEDYIGQYOgETQIGgQNggZBI2gQ",
-  "NAgaBA2CRtAgaBA0CBpBg6BB0CBoEDSCBkGDoEHQIGgEDYIGQUMHH47U",
-  "gH+IQvW8AAAAAElFTkSuQmCC"
-].join("");
+// ── CRC32 (PNG chunk checksums) ─────────────────────────────────────────
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (const byte of buf) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
 
-const ICON_512_B64 = [
-  "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAIeklEQVR4",
-  "2u3bQW6DMBBA0Tjq2pzQHMGchStwQ07grLuqKiISz7y3r1Qs2fMxSqm9",
-  "jQcAkMrTEgCAAAAABAAAIAAAAAEAAAgAAEAAAAACAAAQAACAAAAABAAA",
-  "IAAAAAEAAAgAAEAAAAACAAAQAACAAAAAAQAACAAAQAAAAAIAABAAAIAA",
-  "AAAEAAAgAAAAAQAACAAAQAAAAAIAABAAAIAAAAAEAAAgAAAAAQAAAgAA",
-  "EAAAgAAAAAQAACAAAAABAAAIAABAAAAAAgAAEAAAgAAAAAQAACAAAAAB",
-  "AAAIAABAAAAAAgAABAAAIAAAAAEAAAgAAEAAAAACAAAQAACAAAAABAAA",
-  "IAAAAAEAAAgAAEAAAAACAAAQAACAAAAABAAACAAAQAAAAAIAABAAAIAA",
-  "AAAEAAAgAAAAAQAACAAAQAAAAAIAABAAAIAAAAAEAAAgAAAAAQAACAAA",
-  "EACWAAAEAAAgAAAAAQAACAAAQAAAAAIAABAAAIAAAAAEAAAgAAAAAQAA",
-  "CAAAQAAAAAIAABAAAIAAAAAEAAAIAABAAAAAAgAAEAAAgAAAAAQAACAA",
-  "AAABAAB81I8lgPjO/fj33yzbauEgsFJ7G5YBDHxBAAIAMPTFAAgAwNAX",
-  "AyAAAINfCIAAAHIPfiEAc/IzQDD8U/6f4AbADQAYqG4DwA0AYPj7/0EA",
-  "AIan54CAfAIAA/M2PgmAGwAg4duy2wAQAEDS4SgCQAAASYeiCAABAAAI",
-  "APD277kBAQCGoOcHBAAYftYBEAAAgAAAb73WAxAAYNhZF0AAAAACALzl",
-  "Wh8QAACAAAC83VonEAAAgAAAAAQA8DfX2tYLBAAAIAAAAAEA4bjOtm4g",
-  "AAAAAQAACAAAQADA/HzHtn4gAAAAAQAACAAAQAAAAAIAABAAAIAAAAAE",
-  "AAAgAAAAAQAACAAAEAAAgAAAAAQAACAAAAABAAAIAABAAAAAAgAAEAAA",
-  "gAAAAAQAACAAAAABAAAIAABAAAAAAgAAEAAAIAAAAAEAAAgAAEAAAAAC",
-  "AAAQAACAAAAABAAAIAAAAAEAAAgAAEAAAAACAAAQAACAAAAABAAAIAAA",
-  "QAAAAAIAABAAAIAAAAAEAAAgAAAAAQAACAAAQAAAAAIAABAAAIAAAAAE",
-  "AAAgAAAAAQAACAAAQAAAgAAAAAQAACAAAAABAAAIAABAAAAAMyi1t2EZ",
-  "eIdzPywC3GDZVouAAMDAB0EgCBAAGPogBkAAYOiDGAABgMEPQgAEAAY/",
-  "CAGy8jNADH+wv3EDgIMBcBuAGwAMf8C+RwDgEADsf2LwCcDGB/BJwA0A",
-  "hj/gXEAAYJMDzgcEADY34JxAAAAAAgBVDzgvEADYzIBzAwGATQw4PxAA",
-  "AIAAQL0DzhEEADYt4DxBAAAAAgC1DjhXEAAAgABQ6RYBcL4gAAAAAQAA",
-  "CIBYXM8BzhkEAAAgAAAAARCOaznAeYMAAAAEAAAgAABAAFiC+fkeBzh3",
-  "EAAAgAAAAAQAACAAAEAAAAACAAAQAACAAAAABAAAIAAAAAEAAAgAAEAA",
-  "cNGyrRYBcO4gAAAAAQAACAAAQAAE4Xsc4LxBAAAAAgAAEABhuZYDnDMI",
-  "AABAAAAAAiAs13OA8wUBAAAIAJUO4FxBAACAAECtAzhPBAA2LYBzRAAA",
-  "AAIA9Q44PxAA2MSAcwMBgM0MOC8QAACAAEDVA84JBAA2N+B8QABgkwPO",
-  "BW5Qam/DMuR17odFAIMfNwDY/ID9jwDAIQDY94TkEwC/+CQABj9uAHA4",
-  "APY3bgBwGwAY/AgAhABg8CMAEAOAoY8AQAwAhj4CAEEAGPgIABBFGHbw",
-  "UX4GCAACAAAQAACAAAAABAAAIAAAAAEAAAgAAEAAAAACAAAQAACAAAAA",
-  "BAAAIAAAAAEAAAgAAEAAAAACAAAEAAAgAAAAAQAACAAAQAAAAAIAABAA",
-  "AIAAAAAEAAAgAAAAAQAACAAAQAAAAAIAABAAAIAAAAAEAAAgAAAAAQAA",
-  "CAAAQAAAAAIAABAAAIAAAAAEAAAIAABAAAAAAgAAEAAAgAAAAAQAACAA",
-  "AAABAAAIAABAAAAAAgAAEAAAgAAAAAQAACAAAAABAAACAAAQAACAAAAA",
-  "BAAAIAAAAAEAAAgAAEAAAAACAAAQAACAAAAABAAAIAAAAAEAAAgAAEAA",
-  "ECAACCBAAABAkAAAgSAAAQJAAAIEgAAECQAACAIAEAAEECAACCBAAABAk",
-  "AAAgAAAAAQAACAAAQAAAAAIAABAAAIAAAAABAAAIAABAAAAAAgAAEAAA",
-  "gAAAAAQAACAAAAABAAACAAAEAAAgAAAAAQAACAAAAABAAACAAAQAHCTZ",
-  "VstgvUDAQAACAAAQAAAAAIA",
-  "gvAd27qBAAAABAAAIAAgLNfZ1gsEAAAgAAAAAQBhuda2TiAAAAABAN5u",
-  "sT4gAAAAAQDecq0LIADAsLMegAAAAAQAeOu1DoAAAMPP8wMCAAxBzw0I",
-  "AAAQAIC3Yc8LAgAwFD0nCADAcPR8EEipvQ3LAN/n3A+DH3ADAG4DPAcg",
-  "AEAE+P+BC3wCgEnM9EnA4Ac3AECyoWr4gxsAINFtgMEPAgBIFAIGPwgA",
-  "IEkMGPogAIAkMWDogwAAEgSBgQ8CAAAIxs8AAUAAAAACAAAQAACAAAAA",
-  "BAAAIAAAAAEAAAgAAEAAAAACAAAQAACAAAAABAAAIAAAAAEAAAgAAEAA",
-  "AIAAAAAEAAAgAAAAAQAACAAAQAAAAAIAABAAAIAAAAAEAAAgAAAAAQAA",
-  "CAAAQAAAAAIAABAAAIAAAAABAAAIAABAAAAAAgAAEAAAgAAAAAQAACAA",
-  "AAABAAAIAABAAAAAAgAAEAAAgAAAAAQAACAAAAABAAACAAAQAACAAAAA",
-  "BAAAIAAAAAEAAAgAAEAAAAACAAAQAACAAAAABAAAIAAAAAEAAAgAAEAA",
-  "AAACAAAEAAAgAAAAAQAACAAAQAAAAAIAABAAAIAAAAAEAAAgAAAAAQAA",
-  "CAAAQAAAAAIAABAAAIAAAAAEAAAgAABAAAAAAgAAEAAAgAAAAAQAACAA",
-  "AAABAAAIAABAAAAAAgAAEAAAgAAAAAQAACAAAAABAAAIAABAAACAAAAA",
-  "BAAAIAAAAAEAAAgAAEAAAAACAAD4Ki8tlVvyidrCegAAAABJRU5ErkJg",
-  "gg=="
-].join("");
+function chunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([len, body, crc]);
+}
 
-const ICONS = [
-  { file: "icon-192.png", b64: ICON_192_B64 },
-  { file: "icon-512.png", b64: ICON_512_B64 },
-  { file: "apple-touch-icon.png", b64: ICON_180_B64 },
+/** Rasterize the icon: teal square + centered white plus (rounded ends). */
+function renderPixels(size) {
+  const px = new Uint8Array(size * size * 4);
+  const barW = Math.round(size * 0.16);
+  const barL = Math.round(size * 0.56); // stays inside maskable safe zone
+  const c = size / 2;
+  const r = barW / 2;
+  const half = barL / 2;
+  const inRoundedBar = (x, y, x0, y0, x1, y1) => {
+    // rectangle with semicircular (rounded) short ends
+    if (x >= x0 + r && x <= x1 - r && y >= y0 && y <= y1) return true;
+    if (y >= y0 + r && y <= y1 - r && x >= x0 && x <= x1) return true;
+    const cx = Math.min(Math.max(x, x0 + r), x1 - r);
+    const cy = Math.min(Math.max(y, y0 + r), y1 - r);
+    return (x - cx) ** 2 + (y - cy) ** 2 <= r * r;
+  };
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const vertical = inRoundedBar(x, y, c - r, c - half, c + r, c + half);
+      const horizontal = inRoundedBar(x, y, c - half, c - r, c + half, c + r);
+      const color = vertical || horizontal ? WHITE : TEAL;
+      px.set(color, (y * size + x) * 4);
+    }
+  }
+  return px;
+}
+
+/** Encode raw RGBA pixels as a non-interlaced 8-bit RGBA PNG. */
+function encodePng(size, px) {
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // color type RGBA
+  // filter type 0 (none) per scanline
+  const raw = Buffer.alloc(size * (1 + size * 4));
+  for (let y = 0; y < size; y++) {
+    const rowStart = y * (1 + size * 4);
+    raw[rowStart] = 0;
+    Buffer.from(px.buffer, y * size * 4, size * 4).copy(raw, rowStart + 1);
+  }
+  return Buffer.concat([
+    sig,
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(raw, { level: 9 })),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+const SIZES = [
+  { file: "icon-192.png", size: 192 },
+  { file: "icon-512.png", size: 512 },
+  { file: "apple-touch-icon.png", size: 180 },
 ];
 
 const force = process.env.FORCE === "1";
 mkdirSync(OUT_DIR, { recursive: true });
 
 let written = 0;
-for (const { file, b64 } of ICONS) {
+for (const { file, size } of SIZES) {
   const target = join(OUT_DIR, file);
+  const buf = encodePng(size, renderPixels(size));
   if (existsSync(target) && !force) {
     // Idempotent for repeated prebuild runs: identical content is fine,
     // diverging content still requires FORCE=1 to overwrite.
-    const buf = Buffer.from(b64, "base64");
     const existing = readFileSync(target);
     if (existing.equals(buf)) {
       console.log(`Up-to-date ${target}; skipping.`);
@@ -168,18 +146,11 @@ for (const { file, b64 } of ICONS) {
     process.exitCode = 1;
     continue;
   }
-  const buf = Buffer.from(b64, "base64");
-  // Sanity check: valid PNG signature
-  const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  if (!buf.subarray(0, 8).equals(PNG_SIGNATURE)) {
-    console.error(`Embedded payload for ${file} is not a valid PNG. Aborting.`);
-    process.exit(1);
-  }
   writeFileSync(target, buf);
   console.log(`Wrote ${target} (${buf.length} bytes)`);
   written++;
 }
 
-if (written === ICONS.length) {
+if (written === SIZES.length) {
   console.log("All PWA icons generated.");
 }
