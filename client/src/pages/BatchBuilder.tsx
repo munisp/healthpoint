@@ -66,7 +66,7 @@ export default function BatchBuilder() {
     { enabled: !!submitted, retry: false }
   );
   const result = evalQuery.data as any;
-  // Cap preview mirrors the server rule: ONP on/after 2026-11-01 \u2192 50, else 25.
+  // Cap preview mirrors the server rule: ONP on/after 2026-11-01 -> 50, else 25.
   const capPreview = !onpDate ? 25 : onpDate >= "2026-11-01" ? 50 : 25;
 
   const runEvaluation = () => {
@@ -87,7 +87,7 @@ export default function BatchBuilder() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Batched Dispute Builder</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Evaluate 45 CFR 149.510(c)(4)(i)(A)\u2013(D) batching eligibility and the effective-dated line-item cap.
+          Evaluate 45 CFR 149.510(c)(4)(i)(A)-(D) batching eligibility and the effective-dated line-item cap.
         </p>
       </div>
 
@@ -99,7 +99,7 @@ export default function BatchBuilder() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
-            <Label>Line items CSV \u2014 lineItemId, serviceCode, providerNpi, providerTin, payerId, qualified (1/0), dateOfService</Label>
+            <Label>Line items CSV - lineItemId, serviceCode, providerNpi, providerTin, payerId, qualified (1/0), dateOfService</Label>
             <Textarea
               className="font-mono text-xs min-h-40"
               value={csv}
@@ -134,7 +134,7 @@ export default function BatchBuilder() {
           </CardHeader>
           <CardContent className="space-y-4">
             {evalQuery.isFetching ? (
-              <p className="text-sm text-muted-foreground">Evaluating\u2026</p>
+              <p className="text-sm text-muted-foreground">Evaluating...</p>
             ) : evalQuery.isError ? (
               <p className="text-sm text-destructive">{evalQuery.error.message}</p>
             ) : result ? (
