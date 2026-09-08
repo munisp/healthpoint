@@ -279,6 +279,20 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    id: "account",
+    label: "Account",
+    icon: Settings,
+    defaultOpen: false,
+    items: [
+      { icon: Settings, label: "Settings", path: "/settings" },
+      { icon: Shield, label: "Two-Factor Auth", path: "/two-factor-auth" },
+      { icon: Mail, label: "Email Prefs", path: "/email-prefs" },
+      { icon: Search, label: "Global Search", path: "/search" },
+      { icon: HelpCircle, label: "Help Center", path: "/help" },
+      { icon: BookMarked, label: "Changelog", path: "/changelog" },
+    ],
+  },
+  {
     id: "admin",
     label: "Administration",
     icon: ShieldCheck,
@@ -294,12 +308,6 @@ const NAV_GROUPS: NavGroup[] = [
       { icon: Receipt, label: "DaVinci Transactions", path: "/davinci" },
       { icon: Activity, label: "System Health", path: "/system-health" },
       { icon: Activity, label: "System Health Dashboard", path: "/system-health-dashboard" },
-      { icon: Settings, label: "Settings", path: "/settings" },
-      { icon: Shield, label: "Two-Factor Auth", path: "/two-factor-auth" },
-      { icon: Mail, label: "Email Prefs", path: "/email-prefs" },
-      { icon: BookMarked, label: "Changelog", path: "/changelog" },
-      { icon: HelpCircle, label: "Help Center", path: "/help" },
-      { icon: Search, label: "Global Search", path: "/search" },
     ],
   },
 ];
