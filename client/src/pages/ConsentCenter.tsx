@@ -171,7 +171,7 @@ export default function ConsentCenter() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Consent &amp; GFE Center</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Notice-and-consent waivers (45 CFR 149.410\u2013450) and GFE / patient-provider dispute resolution (45 CFR 149.610/149.620).
+          Notice-and-consent waivers (45 CFR 149.410-450) and GFE / patient-provider dispute resolution (45 CFR 149.610/149.620).
         </p>
       </div>
 
@@ -283,7 +283,7 @@ export default function ConsentCenter() {
                   </Badge>
                   <p className="text-xs text-muted-foreground">
                     Notice {timingResult.noticeHoursBeforeService?.toFixed(1)}h before service
-                    {timingResult.consentHoursBeforeService != null && ` \u00b7 consent ${timingResult.consentHoursBeforeService.toFixed(1)}h before service`}
+                    {timingResult.consentHoursBeforeService != null && ` - consent ${timingResult.consentHoursBeforeService.toFixed(1)}h before service`}
                   </p>
                   {(timingResult.violations ?? []).map((v: string, i: number) => (
                     <p key={i} className="text-xs text-foreground flex gap-1.5">
@@ -371,7 +371,7 @@ export default function ConsentCenter() {
                     <Button key={s} size="sm" variant="outline" className="text-xs"
                       disabled={!caseId || ncTransitionMutation.isPending}
                       onClick={() => ncTransitionMutation.mutate({ tenantId, caseId, to: s })}>
-                      \u2192 {s.replace(/_/g, " ")}
+                      {`-> ${s.replace(/_/g, " ")}`}
                     </Button>
                   ))}
                 </div>
@@ -399,7 +399,7 @@ export default function ConsentCenter() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <HeartHandshake size={16} className="text-primary" /> PPDR Eligibility ($400 / 120-day / uninsured \u2014 149.620(b))
+                <HeartHandshake size={16} className="text-primary" /> PPDR Eligibility ($400 / 120-day / uninsured - 149.620(b))
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -454,7 +454,7 @@ export default function ConsentCenter() {
                     <Input value={ppdrDisputeId} onChange={e => setPpdrDisputeId(e.target.value)} placeholder="e.g. PPDR-2026-0001" />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Admin fee ($, per current HHS guidance \u2014 required to initiate)</Label>
+                    <Label className="text-xs">Admin fee ($, per current HHS guidance - required to initiate)</Label>
                     <Input type="number" value={adminFeeUsd} onChange={e => setAdminFeeUsd(e.target.value)} />
                   </div>
                   <Button size="sm" disabled={!ppdrDisputeId || !ppdr.billedAt || createPpdrMutation.isPending}
@@ -479,7 +479,7 @@ export default function ConsentCenter() {
                         to: s,
                         adminFeeUsd: s === "INITIATED" && adminFeeUsd ? Number(adminFeeUsd) : undefined,
                       })}>
-                      \u2192 {s.replace(/_/g, " ")}
+                      {`-> ${s.replace(/_/g, " ")}`}
                     </Button>
                   ))}
                 </div>
@@ -505,7 +505,7 @@ export default function ConsentCenter() {
                   <Input type="datetime-local" value={gfeClock.serviceAt} onChange={e => setGfeClock({ ...gfeClock, serviceAt: e.target.value })} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Delivered at (optional \u2014 late check)</Label>
+                  <Label className="text-xs">Delivered at (optional - late check)</Label>
                   <Input type="datetime-local" value={gfeClock.deliveredAt} onChange={e => setGfeClock({ ...gfeClock, deliveredAt: e.target.value })} />
                 </div>
                 <label className="flex items-center gap-2 text-xs text-foreground pb-2">
@@ -573,7 +573,7 @@ export default function ConsentCenter() {
                   <Input type="date" value={recurring.firstServiceAt} onChange={e => setRecurring({ ...recurring, firstServiceAt: e.target.value })} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Last service (\u2264 12 months)</Label>
+                  <Label className="text-xs">Last service (within 12 months)</Label>
                   <Input type="date" value={recurring.lastServiceAt} onChange={e => setRecurring({ ...recurring, lastServiceAt: e.target.value })} />
                 </div>
                 <Button size="sm" variant="outline" disabled={!recurring.firstServiceAt || !recurring.lastServiceAt}
@@ -588,7 +588,7 @@ export default function ConsentCenter() {
                 )}
                 {recurringSubmitted && recurringResult && (
                   <Badge variant={recurringResult.valid ? "secondary" : "destructive"}>
-                    {recurringResult.months} months \u2014 {recurringResult.valid ? "within 12-month window" : "exceeds 12-month window"}
+                    {recurringResult.months} months - {recurringResult.valid ? "within 12-month window" : "exceeds 12-month window"}
                   </Badge>
                 )}
               </div>
