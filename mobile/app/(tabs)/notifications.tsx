@@ -24,11 +24,13 @@ import {
   SkeletonRows,
   StaleBanner,
 } from "../../src/components/Feedback";
+import { hapticConfirm, hapticSelection } from "../../src/lib/haptics";
 import { formatDateTime } from "../../src/lib/format";
-import { colors } from "../../src/theme";
+import { fontSize, spacing, useColors, MIN_TOUCH_TARGET } from "../../src/theme";
 import type { NotificationItem } from "../../src/api/types";
 
 export default function NotificationsScreen() {
+  const c = useColors();
   const router = useRouter();
   const {
     data,
@@ -47,12 +49,13 @@ export default function NotificationsScreen() {
   const hasUnread = items.some((n) => !n.isRead);
 
   const onPress = (item: NotificationItem) => {
+    hapticSelection();
     if (!item.isRead) markRead.mutate(item.id);
     if (item.disputeId) router.push(`/dispute/${item.disputeId}`);
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: c.bg }]}>
       {isFromCache && <StaleBanner fetchedAtMs={dataUpdatedAtMs} />}
 
       {isLoading ? (
@@ -75,17 +78,21 @@ export default function NotificationsScreen() {
             <RefreshControl
               refreshing={isRefetching}
               onRefresh={refetch}
-              tintColor={colors.primary}
+              tintColor={c.primary}
             />
           }
           ListHeaderComponent={
             hasUnread ? (
               <Pressable
                 style={styles.markAll}
+                accessibilityRole="button"
                 disabled={markAll.isPending}
-                onPress={() => markAll.mutate()}
+                onPress={() => {
+                  hapticConfirm();
+                  markAll.mutate();
+                }}
               >
-                <Text style={styles.markAllText}>
+                <Text style={[styles.markAllText, { color: c.primary }]}>
                   {markAll.isPending ? "Marking\u2026" : "Mark all as read"}
                 </Text>
               </Pressable>
@@ -99,15 +106,21 @@ export default function NotificationsScreen() {
           }
           renderItem={({ item }) => (
             <Pressable
-              style={[styles.row, !item.isRead && styles.rowUnread]}
+              style={[
+                styles.row,
+                { backgroundColor: c.card, borderBottomColor: c.border },
+                !item.isRead && { backgroundColor: c.primarySoft },
+              ]}
               onPress={() => onPress(item)}
             >
               <View style={styles.dotWrap}>
-                {!item.isRead && <View style={styles.dot} />}
+                {!item.isRead && (
+                  <View style={[styles.dot, { backgroundColor: c.primary }]} />
+                )}
               </View>
               <View style={styles.rowBody}>
                 <View style={styles.rowTop}>
-                  <Text style={styles.rowTitle} numberOfLines={1}>
+                  <Text style={[styles.rowTitle, { color: c.text }]} numberOfLines={1}>
                     {item.title ?? "Notification"}
                   </Text>
                   {item.notificationType ? (
@@ -115,11 +128,11 @@ export default function NotificationsScreen() {
                   ) : null}
                 </View>
                 {item.message ? (
-                  <Text style={styles.rowMessage} numberOfLines={2}>
+                  <Text style={[styles.rowMessage, { color: c.textMuted }]} numberOfLines={2}>
                     {item.message}
                   </Text>
                 ) : null}
-                <Text style={styles.rowDate}>
+                <Text style={[styles.rowDate, { color: c.textFaint }]}>
                   {formatDateTime(item.createdAt)}
                 </Text>
               </View>
@@ -132,33 +145,30 @@ export default function NotificationsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
-  markAll: { alignItems: "flex-end", paddingHorizontal: 16, paddingVertical: 10 },
-  markAllText: { fontSize: 13, fontWeight: "600", color: colors.primary },
+  container: { flex: 1 },
+  markAll: {
+    alignItems: "flex-end",
+    justifyContent: "center",
+    paddingHorizontal: spacing.lg,
+    minHeight: MIN_TOUCH_TARGET,
+  },
+  markAllText: { fontSize: 13, fontWeight: "600" },
   row: {
     flexDirection: "row",
-    backgroundColor: colors.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    paddingVertical: 12,
-    paddingRight: 16,
+    paddingVertical: spacing.md,
+    paddingRight: spacing.lg,
   },
-  rowUnread: { backgroundColor: "#f0fdfa" }, // teal-50 unread tint
   dotWrap: { width: 24, alignItems: "center", paddingTop: 6 },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
+  dot: { width: 8, height: 8, borderRadius: 4 },
   rowBody: { flex: 1 },
   rowTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: 8,
+    gap: spacing.sm,
   },
-  rowTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: colors.text,
-    flexShrink: 1,
-  },
-  rowMessage: { marginTop: 3, fontSize: 13, color: colors.textMuted, lineHeight: 18 },
-  rowDate: { marginTop: 6, fontSize: 11, color: colors.textFaint },
+  rowTitle: { fontSize: fontSize.body, fontWeight: "600", flexShrink: 1 },
+  rowMessage: { marginTop: 3, fontSize: 13, lineHeight: 18 },
+  rowDate: { marginTop: 6, fontSize: fontSize.caption },
 });
