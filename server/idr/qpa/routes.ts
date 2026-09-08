@@ -59,7 +59,7 @@ const rateRowSchema = z.object({
 
 /** Postgres-backed ContractedRateStore over drizzle/schema-qpa.ts tables. */
 export function createPostgresStore(db: any): ContractedRateStore & {
-  loadRates(dimension: { serviceCode: string; market: string; region: string }): Promise<ContractedRateRow[]>;
+  loadRates(): Promise<ContractedRateRow[]>;
   loadCpiFactors(): Promise<CpiFactorTable | null>;
   batchStats(): Promise<{ batches: number; rates: number; cpiYears: number }>;
 } {

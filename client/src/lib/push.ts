@@ -50,7 +50,11 @@ export async function getCurrentSubscription(): Promise<PushSubscription | null>
  * server-side. Returns true on success.
  */
 export async function subscribeToPush(
-  subscribeMutation: { mutateAsync: (input: { subscription: Record<string, unknown> }) => Promise<unknown> }
+  subscribeMutation: {
+    mutateAsync: (input: {
+      subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
+    }) => Promise<unknown>;
+  }
 ): Promise<boolean> {
   const reg = await getRegistration();
   if (!reg) return false;
@@ -78,10 +82,12 @@ export async function subscribeToPush(
       applicationServerKey: urlBase64ToUint8Array(vapidKey) as BufferSource,
     });
     const json = sub.toJSON();
+    const keys = json.keys;
+    if (!keys?.p256dh || !keys?.auth) return false;
     await subscribeMutation.mutateAsync({
       subscription: {
         endpoint: sub.endpoint,
-        keys: json.keys ?? {},
+        keys: { p256dh: keys.p256dh, auth: keys.auth },
       },
     });
     return true;
