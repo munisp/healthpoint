@@ -6,13 +6,15 @@
  *   1. requests OS permission,
  *   2. creates the Android channel,
  *   3. obtains the Expo push token locally,
- *   4. SKIPS the network POST until PUSH_TOKEN_ENDPOINT is set to a real
+ *   4. persists it to AsyncStorage (hp.pushToken.v1) for later reconcilation,
+ *   5. SKIPS the network POST until PUSH_TOKEN_ENDPOINT is set to a real
  *      route (do not invent one — add the server route first, then set the
  *      constant). The rest of the flow is wired and tested from that point.
  *
  * Notification taps deep-link into the app: payloads carrying
  * `data.disputeId` route to /dispute/[id] (see app/_layout.tsx).
  */
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
@@ -23,6 +25,9 @@ import { Platform } from "react-native";
  * push-token registration endpoint, e.g. `${API_URL}/api/push-tokens`.
  */
 const PUSH_TOKEN_ENDPOINT: string | null = null;
+
+/** AsyncStorage key holding the last obtained Expo push token. */
+const PUSH_TOKEN_STORAGE_KEY = "hp.pushToken.v1";
 
 let handlerConfigured = false;
 
@@ -77,6 +82,14 @@ export async function registerForPushNotifications(
       usableProjectId ? { projectId: usableProjectId } : undefined
     );
 
+    // Persist locally so the token can be reconciled once the server route
+    // exists (or inspected in support flows). Best effort, never throws.
+    try {
+      await AsyncStorage.setItem(PUSH_TOKEN_STORAGE_KEY, token.data);
+    } catch {
+      // ignore quota errors
+    }
+
     if (PUSH_TOKEN_ENDPOINT) {
       const accessToken = await getAccessToken();
       if (accessToken) {
@@ -92,8 +105,25 @@ export async function registerForPushNotifications(
           }),
         });
       }
+    } else {
+      // TODO(server): server/routers.ts has no push-token registration
+      // mutation (verified 2026-09-08). The token is stored locally under
+      // hp.pushToken.v1; wire the POST once the endpoint exists.
+      console.info(
+        "[push] Expo push token obtained and stored locally " +
+          "(no server endpoint yet — see TODO in src/notifications/push.ts)"
+      );
     }
     return token.data;
+  } catch {
+    return null;
+  }
+}
+
+/** Read the locally stored Expo push token (null when never registered). */
+export async function getStoredPushToken(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
   } catch {
     return null;
   }
