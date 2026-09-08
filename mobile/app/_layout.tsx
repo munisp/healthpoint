@@ -1,12 +1,17 @@
 import React, { useEffect } from "react";
 import { Stack, useRouter } from "expo-router";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { StatusBar } from "expo-status-bar";
 import { useColorScheme } from "react-native";
 import * as Notifications from "expo-notifications";
 import { AuthProvider } from "../src/auth/AuthContext";
 import { BiometricGate } from "../src/auth/BiometricGate";
 import { queryClient } from "../src/api/queryClient";
+import {
+  asyncStoragePersister,
+  PERSIST_BUSTER,
+  PERSIST_MAX_AGE,
+} from "../src/api/persister";
 import {
   configureNotificationHandler,
   disputeIdFromResponse,
@@ -60,13 +65,25 @@ function RootStack() {
 export default function RootLayout() {
   const scheme = useColorScheme();
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: asyncStoragePersister,
+        maxAge: PERSIST_MAX_AGE,
+        buster: PERSIST_BUSTER,
+        dehydrateOptions: {
+          // Read-only cache: only successful queries are persisted, never
+          // mutations — offline writes are not supported by the server API.
+          shouldDehydrateQuery: (query) => query.state.status === "success",
+        },
+      }}
+    >
       <AuthProvider>
         <BiometricGate>
           <StatusBar style={scheme === "dark" ? "light" : "dark"} />
           <RootStack />
         </BiometricGate>
       </AuthProvider>
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   );
 }
