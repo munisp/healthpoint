@@ -56,7 +56,7 @@ export default function PortalOps() {
   });
   const resolveMutation = trpc.portalRpa.resolveCheckpoint.useMutation({
     onSuccess: (r) => {
-      toast.success(`Checkpoint resolved \u2014 run ${r.status}`);
+      toast.success(`Checkpoint resolved - run ${r.status}`);
       setRunId(r.runId);
       setResolveTarget(null);
       setMfaCode("");
@@ -294,7 +294,7 @@ export default function PortalOps() {
                 <div key={c.checkpointId ?? c.id ?? i} className="flex items-center justify-between py-3">
                   <div>
                     <p className="text-sm font-medium text-foreground">
-                      {c.checkpoint?.kind ?? "CHECKPOINT"} \u2014 run {c.runId}
+                      {c.checkpoint?.kind ?? "CHECKPOINT"}{" - run "}{c.runId}
                     </p>
                     <p className="text-xs text-muted-foreground">{c.checkpoint?.prompt ?? c.checkpoint?.detail ?? ""}</p>
                   </div>
