@@ -100,6 +100,33 @@ function RiskBadge({ dispute }: { dispute: any }) {
   );
 }
 
+/**
+ * Win-probability badge — reads the latest server-side outcome prediction
+ * (trpc.predictions.get) for the row. One query per visible row; renders
+ * nothing while loading, when no prediction exists, or on error.
+ */
+function WinProbBadge({ disputeId }: { disputeId: string }) {
+  const q = trpc.predictions.get.useQuery(
+    { disputeId },
+    { retry: false, staleTime: 5 * 60_000 }
+  );
+  const pred = q.data as { winProbability?: number | null } | null | undefined;
+  if (q.isLoading || q.isError || !pred || pred.winProbability == null) return null;
+  const p = Math.round(Number(pred.winProbability));
+  const tone =
+    p >= 60 ? "text-success-foreground border-success-foreground/40"
+    : p >= 40 ? "text-warning-foreground border-warning-foreground/40"
+    : "text-danger-foreground border-danger-foreground/40";
+  return (
+    <span
+      title={`Model win probability for the initiating party: ${p}%`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-transparent ${tone}`}
+    >
+      Win {p}%
+    </span>
+  );
+}
+
 const SERVICE_TYPES = [
   { value: "all", label: "All Service Types" },
   { value: "emergency_medicine", label: "Emergency Medicine" },
@@ -576,7 +603,10 @@ export default function DisputesList() {
                           <td className="px-4 py-3 text-sm font-semibold text-foreground">{formatUSD(Number(d.billedAmount))}</td>
                           <td className="px-4 py-3 text-sm text-muted-foreground">{d.qpaAmount ? formatUSD(Number(d.qpaAmount)) : <span className="text-muted-foreground/70">—</span>}</td>
                           <td className="px-4 py-3">
-                            <RiskBadge dispute={d} />
+                            <div className="flex flex-col items-start gap-1">
+                              <RiskBadge dispute={d} />
+                              <WinProbBadge disputeId={d.id} />
+                            </div>
                           </td>
                           <td className="px-4 py-3">
                             <StatusBadge
