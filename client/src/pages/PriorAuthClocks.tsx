@@ -103,7 +103,7 @@ export default function PriorAuthClocks() {
   const createMutation = trpc.priorAuth.createRequest.useMutation({
     onSuccess: (_r, vars) => {
       toast.success("PA request created (DRAFT)");
-      const next = [{ requestId: vars.requestId, tenantId: vars.tenantId }, ...recent.filter(r => r.requestId !== vars.requestId)].slice(0, 10);
+      const next = [{ requestId: vars.requestId, tenantId: vars.tenantId ?? tenantId }, ...recent.filter(r => r.requestId !== vars.requestId)].slice(0, 10);
       setRecent(next);
       localStorage.setItem(RECENT_KEY, JSON.stringify(next));
       requestQuery.refetch();

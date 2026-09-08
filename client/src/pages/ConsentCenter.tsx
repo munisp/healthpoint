@@ -114,7 +114,7 @@ export default function ConsentCenter() {
   const createCaseMutation = trpc.noticeConsent.createCase.useMutation({
     onSuccess: (_r, vars) => {
       toast.success("Notice-consent case created (NOTICE_REQUIRED)");
-      const next = [{ caseId: vars.caseId, tenantId: vars.tenantId }, ...recent.filter(r => r.caseId !== vars.caseId)].slice(0, 10);
+      const next = [{ caseId: vars.caseId, tenantId: vars.tenantId ?? tenantId }, ...recent.filter(r => r.caseId !== vars.caseId)].slice(0, 10);
       setRecent(next);
       localStorage.setItem(RECENT_KEY, JSON.stringify(next));
     },
