@@ -10,8 +10,9 @@
  * - Any API response with HTTP 401 triggers the unauthorized handler
  *   registered with the tRPC layer → tokens cleared → router redirects to
  *   /login (see app/(tabs)/_layout.tsx guard).
- * - Sign-out clears SecureStore tokens AND the AsyncStorage read cache
- *   (PHI must not linger) AND the react-query in-memory cache.
+ * - Sign-out calls trpc.auth.logout (best effort), then clears SecureStore
+ *   tokens AND the AsyncStorage read cache (PHI must not linger) AND the
+ *   react-query in-memory cache.
  *
  * Discovery document:
  *   ${keycloakUrl}/realms/healthpoint/.well-known/openid-configuration
@@ -32,6 +33,7 @@ import * as SecureStore from "expo-secure-store";
 import * as WebBrowser from "expo-web-browser";
 import Constants from "expo-constants";
 import { registerTokenProvider, registerUnauthorizedHandler } from "../api/trpc";
+import { logoutServerSide } from "../api/hooks";
 import { clearAllCache } from "../api/cache";
 import { queryClient } from "../api/queryClient";
 
@@ -239,7 +241,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [promptAsync]);
 
   const signOut = useCallback(async () => {
-    // TODO: also hit the Keycloak end-session endpoint to fully log out of SSO.
+    // Best-effort server-side session teardown (trpc.auth.logout) BEFORE
+    // local tokens are wiped — after destroySession the Bearer token is gone
+    // and the call would 401. Failure must not block local sign-out.
+    try {
+      await logoutServerSide();
+    } catch {
+      // offline / server unreachable — local teardown still proceeds
+    }
     await destroySession();
   }, [destroySession]);
 
