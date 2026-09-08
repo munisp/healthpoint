@@ -181,11 +181,11 @@ export default function SubmissionTimeline() {
               <Skeleton className="h-9 w-full" />
             ) : (
               <Select value={disputeId} onValueChange={setDisputeId}>
-                <SelectTrigger><SelectValue placeholder="Choose a dispute\u2026" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Choose a dispute..." /></SelectTrigger>
                 <SelectContent>
                   {disputes.map(d => (
                     <SelectItem key={d.id} value={String(d.id)}>
-                      {d.referenceNumber ?? d.id} \u2014 {d.initiatingPartyName ?? "Unknown party"}
+                      {d.referenceNumber ?? d.id}{" - "}{d.initiatingPartyName ?? "Unknown party"}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -292,11 +292,11 @@ export default function SubmissionTimeline() {
                   <div className="flex items-center gap-2">
                     {pkg.complete ? (
                       <Badge variant="secondary" className="flex items-center gap-1">
-                        <CheckCircle2 size={12} /> Complete \u2014 portal-ready
+                        <CheckCircle2 size={12} /> Complete - portal-ready
                       </Badge>
                     ) : (
                       <Badge variant="destructive" className="flex items-center gap-1">
-                        <XCircle size={12} /> Incomplete \u2014 {pkg.missing?.length ?? 0} missing
+                        <XCircle size={12} /> Incomplete - {pkg.missing?.length ?? 0} missing
                       </Badge>
                     )}
                     <span className="text-xs text-muted-foreground">Generated {new Date(pkg.generatedAt).toLocaleString()}</span>
@@ -348,7 +348,7 @@ export default function SubmissionTimeline() {
                 </div>
               ) : eventLogQuery.isError ? (
                 <div className="p-6 text-sm text-muted-foreground">
-                  No event log yet \u2014 create the submission first. ({eventLogQuery.error.message})
+                  No event log yet - create the submission first. ({eventLogQuery.error.message})
                 </div>
               ) : ((eventLogQuery.data as any)?.events ?? []).length === 0 ? (
                 <div className="p-6 text-sm text-muted-foreground">No events recorded yet.</div>
@@ -366,11 +366,11 @@ export default function SubmissionTimeline() {
                   <TableBody>
                     {((eventLogQuery.data as any).events as any[]).map((e, i) => (
                       <TableRow key={e.id ?? i}>
-                        <TableCell className="text-xs">{e.at ? new Date(e.at).toLocaleString() : "\u2014"}</TableCell>
-                        <TableCell className="text-xs">{e.from ?? "\u2014"}</TableCell>
-                        <TableCell className="text-xs font-medium">{e.to ?? e.type ?? "\u2014"}</TableCell>
-                        <TableCell className="text-xs">{e.actorId ?? "\u2014"}</TableCell>
-                        <TableCell className="text-xs max-w-64 truncate">{e.detail ?? "\u2014"}</TableCell>
+                        <TableCell className="text-xs">{e.at ? new Date(e.at).toLocaleString() : "-"}</TableCell>
+                        <TableCell className="text-xs">{e.from ?? "-"}</TableCell>
+                        <TableCell className="text-xs font-medium">{e.to ?? e.type ?? "-"}</TableCell>
+                        <TableCell className="text-xs">{e.actorId ?? "-"}</TableCell>
+                        <TableCell className="text-xs max-w-64 truncate">{e.detail ?? "-"}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
