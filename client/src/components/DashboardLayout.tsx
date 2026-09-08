@@ -112,8 +112,11 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useLocation } from "wouter";
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal";
 import OnboardingTour from "./OnboardingTour";
+import MobileNavFab from "./MobileNavFab";
 import { useRecentDisputes } from "../hooks/useRecentDisputes";
 import { usePinnedDisputes } from "../hooks/usePinnedDisputes";
+import { getCurrentSubscription, isPushSupported, subscribeToPush, unsubscribeFromPush } from "../lib/push";
+import { toast } from "sonner";
 
 // ─── Navigation structure ────────────────────────────────────────────────────
 // Each group has a label, icon, default-open state, and list of items.
@@ -219,6 +222,22 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    id: "cms-compliance",
+    label: "Compliance & CMS",
+    icon: ClipboardCheck,
+    defaultOpen: false,
+    items: [
+      { icon: GitBranch, label: "Submission Automation", path: "/submission-automation" },
+      { icon: Activity, label: "Portal Ops", path: "/portal-ops" },
+      { icon: ShieldCheck, label: "Compliance Center", path: "/compliance-center" },
+      { icon: Network, label: "State Path", path: "/state-path" },
+      { icon: DollarSign, label: "QPA Explorer", path: "/qpa-explorer" },
+      { icon: Layers, label: "Batch Builder", path: "/batch-builder" },
+      { icon: Lock, label: "Consent Center", path: "/consent-center" },
+      { icon: Clock, label: "Prior Auth", path: "/prior-auth" },
+    ],
+  },
+  {
     id: "integrations",
     label: "Integrations & Data",
     icon: Database,
@@ -304,6 +323,7 @@ const NAV_GROUPS: NavGroup[] = [
       { icon: Clock, label: "Heartbeats & Proofs", path: "/admin/heartbeat", adminOnly: true },
       { icon: Workflow, label: "Temporal Operations", path: "/admin/temporal-operations", adminOnly: true },
       { icon: ShieldCheck, label: "Provider Acceptance", path: "/admin/provider-acceptance", adminOnly: true },
+      { icon: CreditCard, label: "Settlement Inbox", path: "/admin/settlements", adminOnly: true },
       { icon: BookOpen, label: "Fin. Ledger", path: "/ledger" },
       { icon: Receipt, label: "DaVinci Transactions", path: "/davinci" },
       { icon: Activity, label: "System Health", path: "/system-health" },
@@ -682,6 +702,7 @@ function DashboardLayoutContent({
 
       <KeyboardShortcutsModal />
       <OnboardingTour />
+      <MobileNavFab />
 
       <SidebarInset>
         {/* Top bar */}
@@ -791,6 +812,7 @@ function DashboardLayoutContent({
                   )}
                 </ScrollArea>
                 <Separator />
+                <PushAlertsToggle />
                 <div className="p-2">
                   <Button
                     variant="ghost"
@@ -827,6 +849,77 @@ function MobileMenuButton() {
     >
       <PanelLeft className="h-5 w-5" />
     </Button>
+  );
+}
+
+/**
+ * Web Push toggle shown at the bottom of the notification bell popover.
+ * Subscribes/unsubscribes this browser via the service worker PushManager and
+ * persists the subscription through trpc.pushSubscriptions. Hidden when the
+ * Push API is unsupported; shows a hint when the server has no VAPID key.
+ */
+function PushAlertsToggle() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const subscribeMutation = trpc.pushSubscriptions.subscribe.useMutation();
+  const unsubscribeMutation = trpc.pushSubscriptions.unsubscribe.useMutation();
+  const vapidQuery = trpc.pushSubscriptions.getVapidPublicKey.useQuery(undefined, {
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentSubscription().then((sub) => {
+      if (!cancelled) setEnabled(!!sub);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!isPushSupported()) return null;
+  if (vapidQuery.data && !vapidQuery.data.key) {
+    return (
+      <div className="px-4 py-2 text-[11px] text-muted-foreground/80">
+        Deadline push alerts are not configured on this deployment.
+      </div>
+    );
+  }
+
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      const ok = enabled
+        ? await unsubscribeFromPush(unsubscribeMutation)
+        : await subscribeToPush(subscribeMutation);
+      if (ok) {
+        setEnabled(!enabled);
+        toast.success(enabled ? "Deadline alerts disabled" : "Deadline alerts enabled");
+      } else if (!enabled) {
+        toast.error("Could not enable push alerts (permission denied or unsupported)");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between px-4 py-2">
+      <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+        <BellRing className="h-3.5 w-3.5" /> Deadline alerts (push)
+      </span>
+      <Button
+        variant={enabled ? "secondary" : "outline"}
+        size="sm"
+        className="h-7 text-xs"
+        disabled={busy || enabled === null}
+        onClick={toggle}
+        aria-pressed={!!enabled}
+      >
+        {enabled ? "Enabled" : "Enable"}
+      </Button>
+    </div>
   );
 }
 
@@ -871,16 +964,59 @@ function CommandPaletteButton() {
   const [, setLocation] = useLocation();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const { theme, toggleTheme, switchable } = useTheme();
+  const utils = trpc.useUtils();
+  const markAllRead = trpc.notifications.markAllRead.useMutation({
+    onSuccess: () => utils.notifications.list.invalidate(),
+  });
+
+  // Action items (verbs), rendered above page navigation entries
+  type PaletteEntry = {
+    icon: React.ElementType;
+    label: string;
+    hint?: string;
+    run: () => void;
+  };
+  const ACTION_COMMANDS: PaletteEntry[] = [
+    {
+      icon: PlusCircle,
+      label: "New dispute",
+      hint: "Create",
+      run: () => setLocation("/disputes/new"),
+    },
+    {
+      icon: CheckCheck,
+      label: "Mark all notifications read",
+      hint: "Action",
+      run: () => markAllRead.mutate(),
+    },
+    {
+      icon: Search,
+      label: "Global search",
+      hint: "Go to",
+      run: () => setLocation("/search"),
+    },
+    ...(switchable && toggleTheme
+      ? [{
+          icon: theme === "dark" ? Sun : Moon,
+          label: "Toggle theme",
+          hint: theme === "dark" ? "Light mode" : "Dark mode",
+          run: () => toggleTheme(),
+        }]
+      : []),
+  ];
 
   // Flatten all nav items for the command palette
   const ALL_COMMANDS = NAV_GROUPS.flatMap((g) =>
     g.items.map((item) => ({ ...item }))
   );
 
+  const q = query.toLowerCase();
+  const filteredActions = query
+    ? ACTION_COMMANDS.filter((c) => c.label.toLowerCase().includes(q))
+    : ACTION_COMMANDS;
   const filtered = query
-    ? ALL_COMMANDS.filter((c) =>
-        c.label.toLowerCase().includes(query.toLowerCase())
-      )
+    ? ALL_COMMANDS.filter((c) => c.label.toLowerCase().includes(q))
     : ALL_COMMANDS;
 
   useEffect(() => {
@@ -936,10 +1072,40 @@ function CommandPaletteButton() {
               <kbd className="text-xs text-muted-foreground">ESC</kbd>
             </div>
             <div className="py-2 max-h-80 overflow-y-auto">
-              {filtered.length === 0 && (
+              {filtered.length === 0 && filteredActions.length === 0 && (
                 <p className="text-sm text-muted-foreground text-center py-8">
                   No results
                 </p>
+              )}
+              {filteredActions.length > 0 && (
+                <>
+                  <p className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                    Actions
+                  </p>
+                  {filteredActions.map((cmd) => {
+                    const Icon = cmd.icon;
+                    return (
+                      <button
+                        key={`action:${cmd.label}`}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-accent/60 transition-colors text-left"
+                        onClick={() => {
+                          cmd.run();
+                          setOpen(false);
+                          setQuery("");
+                        }}
+                      >
+                        <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <span className="flex-1">{cmd.label}</span>
+                        {cmd.hint && (
+                          <span className="text-[10px] text-muted-foreground/70">{cmd.hint}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                  <p className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                    Pages
+                  </p>
+                </>
               )}
               {filtered.map((cmd) => {
                 const Icon = cmd.icon;
