@@ -291,7 +291,7 @@ const NAV_GROUPS: NavGroup[] = [
       { icon: Workflow, label: "Temporal Operations", path: "/admin/temporal-operations", adminOnly: true },
       { icon: ShieldCheck, label: "Provider Acceptance", path: "/admin/provider-acceptance", adminOnly: true },
       { icon: BookOpen, label: "Fin. Ledger", path: "/ledger" },
-      { icon: Receipt, label: "Transaction History", path: "/transactions" },
+      { icon: Receipt, label: "DaVinci Transactions", path: "/davinci" },
       { icon: Activity, label: "System Health", path: "/system-health" },
       { icon: Activity, label: "System Health Dashboard", path: "/system-health-dashboard" },
       { icon: Settings, label: "Settings", path: "/settings" },
