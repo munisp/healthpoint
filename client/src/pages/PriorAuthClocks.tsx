@@ -238,7 +238,7 @@ export default function PriorAuthClocks() {
               ) : !request ? (
                 <div className="py-6 flex flex-col items-center text-muted-foreground">
                   <AlarmClock size={28} className="mb-2 opacity-30" />
-                  <p className="text-sm">Request not found \u2014 create it above.</p>
+                  <p className="text-sm">Request not found - create it above.</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -255,7 +255,7 @@ export default function PriorAuthClocks() {
                   {deadlineQuery.isLoading ? (
                     <Skeleton className="h-10 w-64" />
                   ) : deadline?.basis === "NOT_SUBJECT" || !deadline?.deadline ? (
-                    <p className="text-sm text-muted-foreground">{deadline?.notes ?? "No decision deadline computed yet \u2014 submit the request first."}</p>
+                    <p className="text-sm text-muted-foreground">{deadline?.notes ?? "No decision deadline computed yet - submit the request first."}</p>
                   ) : (
                     <div className="flex flex-wrap items-center gap-4">
                       <div>
@@ -271,7 +271,7 @@ export default function PriorAuthClocks() {
                         </div>
                       )}
                       {breached && undecided && (
-                        <Badge variant="destructive">DEADLINE BREACHED \u2014 escalate now</Badge>
+                        <Badge variant="destructive">DEADLINE BREACHED - escalate now</Badge>
                       )}
                       {request.decidedAt && (
                         <Badge variant="secondary" className="flex items-center gap-1">
@@ -295,11 +295,11 @@ export default function PriorAuthClocks() {
                 {(ALLOWED[request.state as PaState] ?? []).map(to => (
                   <Button key={to} size="sm" variant="outline" disabled={transitionMutation.isPending}
                     onClick={() => doTransition(to)}>
-                    \u2192 {to.replace(/_/g, " ")}
+                    {"\u2192 "}{to.replace(/_/g, " ")}
                   </Button>
                 ))}
                 {(ALLOWED[request.state as PaState] ?? []).length === 0 && (
-                  <p className="text-sm text-muted-foreground">Terminal state \u2014 no further transitions.</p>
+                  <p className="text-sm text-muted-foreground">Terminal state - no further transitions.</p>
                 )}
                 <div className="flex gap-2 ml-auto">
                   <Button size="sm" variant="outline" onClick={() => setPasOpen(true)}>
@@ -348,7 +348,7 @@ export default function PriorAuthClocks() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Da Vinci PAS Bundle (FHIR R4 skeleton)</DialogTitle>
-            <DialogDescription>Static bundle preview \u2014 no transmission occurs here.</DialogDescription>
+            <DialogDescription>Static bundle preview - no transmission occurs here.</DialogDescription>
           </DialogHeader>
           {pasBundleQuery.isLoading ? (
             <Skeleton className="h-64 w-full" />
