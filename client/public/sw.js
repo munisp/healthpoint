@@ -4,7 +4,7 @@
 // VERSIONING: SW_VERSION is embedded in CACHE_NAME. Bump it on every release
 // that changes precached assets or caching behavior (e.g. -1 → -2) so the
 // activate handler purges stale caches and clients pick up the new version.
-const SW_VERSION = "2026-09-05-1";
+const SW_VERSION = "2026-09-05-2";
 const CACHE_NAME = `healthpoint-idr-${SW_VERSION}`;
 const OFFLINE_URL = "/offline.html";
 
@@ -13,7 +13,7 @@ const PRECACHE_ASSETS = [
   "/",
   "/offline.html",
   "/manifest.json",
-  "/icons/icon-192.png",
+  "/icons/icon.svg",
 ];
 
 // Same-origin static asset extensions eligible for stale-while-revalidate.
@@ -113,4 +113,50 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
+});
+
+// ── Web Push groundwork (deadline alerts) ────────────────────────────────
+// NOTE: the client-side PushManager.subscribe() flow and the server-side
+// push-subscription tRPC mutation are NOT wired yet — this handler pair is
+// the service-worker half only, so deadline push alerts can be enabled by
+// adding the subscription round-trip later without another SW change.
+// Expected payload (JSON): { "title": string, "body": string,
+//   "url": string, "tag"?: string }
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+  let payload = { title: "HealthPoint IDR", body: event.data.text(), url: "/" };
+  try {
+    payload = { ...payload, ...event.data.json() };
+  } catch {
+    // plain-text payload — the defaults above already cover it
+  }
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      tag: payload.tag || "healthpoint-idr",
+      data: { url: payload.url || "/" },
+    })
+  );
+});
+
+// Focus an existing app window on the target URL, or open a new one.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl =
+    (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clients) => {
+        for (const client of clients) {
+          if ("focus" in client) {
+            client.navigate(targetUrl);
+            return client.focus();
+          }
+        }
+        return self.clients.openWindow(targetUrl);
+      })
+  );
 });
