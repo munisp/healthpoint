@@ -47,7 +47,9 @@ const SystemHealthMonitor = lazy(() => import("./pages/SystemHealthMonitor"));
 const GlobalSettings = lazy(() => import("./pages/GlobalSettings"));
 const Changelog = lazy(() => import("./pages/Changelog"));
 const HelpCenter = lazy(() => import("./pages/HelpCenter"));
-const OfferNegotiationThread = lazy(() => import("./pages/OfferNegotiationThread"));
+// NOTE: the /disputes/:id/negotiate route below now renders OfferThreadLive
+// (server-persisted thread) instead of the legacy localStorage demo
+// OfferNegotiationThread, so that page is no longer lazy-loaded here.
 const PayerContactBook = lazy(() => import("./pages/PayerContactBook"));
 const APIKeyManagement = lazy(() => import("./pages/APIKeyManagement"));
 const SLABreachMonitor = lazy(() => import("./pages/SLABreachMonitor"));
@@ -118,6 +120,19 @@ const ProviderDisputeManagement = lazy(() => import("./pages/ProviderDisputeMana
 const ProviderSandboxAcceptance = lazy(() => import("./pages/ProviderSandboxAcceptance"));
 const TemporalOperations = lazy(() => import("./pages/TemporalOperations"));
 const WorkflowMonitor = lazy(() => import("./pages/WorkflowMonitor"));
+const SubmissionTimeline = lazy(() => import("./pages/SubmissionTimeline"));
+const PortalOps = lazy(() => import("./pages/PortalOps"));
+const PriorAuthClocks = lazy(() => import("./pages/PriorAuthClocks"));
+const BatchBuilder = lazy(() => import("./pages/BatchBuilder"));
+const ConsentCenter = lazy(() => import("./pages/ConsentCenter"));
+const QpaExplorer = lazy(() => import("./pages/QpaExplorer"));
+const ComplianceCenter = lazy(() => import("./pages/ComplianceCenter"));
+const StatePathResolver = lazy(() => import("./pages/StatePathResolver"));
+const SettlementInbox = lazy(() => import("./pages/SettlementInbox"));
+// OfferThreadLive replaces the localStorage-based OfferNegotiationThread demo
+// on the same /disputes/:id/negotiate path (server-persisted offer thread).
+const OfferThreadLive = lazy(() => import("./pages/OfferThreadLive"));
+const OutcomeSimulatorShell = lazy(() => import("./pages/OutcomeSimulatorShell"));
 
 /** Helper: wraps a component in ProtectedRoute */
 function P({ component: C, admin }: { component: ComponentType; admin?: boolean }) {
@@ -157,7 +172,7 @@ function Router() {
       <Route path={"/disputes/merge"} component={() => <PL component={DisputeMerge} />} />
       <Route path={"/disputes/wizard"} component={() => <PL component={MobileDisputeWizard} />} />
       <Route path={"/disputes/clone"} component={() => <PL component={DisputeClone} />} />
-      <Route path={"/disputes/:id/negotiate"} component={() => <PL component={OfferNegotiationThread} />} />
+      <Route path={"/disputes/:id/negotiate"} component={() => <PL component={OfferThreadLive} />} />
       <Route path={"/disputes/:id"} component={() => <PL component={DisputeDetail} />} />
       <Route path="/disputes" component={() => <PL component={DisputesList} />} />
       <Route path="/provider/disputes" component={() => <PL component={ProviderDisputeManagement} />} />
@@ -242,8 +257,18 @@ function Router() {
       <Route path="/hermes" component={() => <PL component={HermesAssistant} />} />
       <Route path="/smartform-guide" component={() => <PL component={SmartFormVisualization} />} />
       <Route path="/cohort-analysis" component={() => <PL component={CohortAnalysis} />} />
+      <Route path="/submission-automation" component={() => <PL component={SubmissionTimeline} />} />
+      <Route path="/portal-ops" component={() => <PL component={PortalOps} />} />
+      <Route path="/prior-auth" component={() => <PL component={PriorAuthClocks} />} />
+      <Route path="/batch-builder" component={() => <PL component={BatchBuilder} />} />
+      <Route path="/consent-center" component={() => <PL component={ConsentCenter} />} />
+      <Route path="/qpa-explorer" component={() => <PL component={QpaExplorer} />} />
+      <Route path="/compliance-center" component={() => <PL component={ComplianceCenter} />} />
+      <Route path="/state-path" component={() => <PL component={StatePathResolver} />} />
+      <Route path="/outcome-simulator" component={() => <PL component={OutcomeSimulatorShell} />} />
 
       {/* Admin-only routes */}
+      <Route path="/admin/settlements" component={() => <PL component={SettlementInbox} admin />} />
       <Route path="/admin/leads" component={() => <PL component={LeadsManager} admin />} />
       <Route path="/admin/heartbeat" component={() => <PL component={HeartbeatOperations} admin />} />
       <Route path="/admin/provider-acceptance" component={() => <PL component={ProviderSandboxAcceptance} admin />} />
