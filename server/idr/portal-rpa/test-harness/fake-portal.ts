@@ -126,7 +126,7 @@ export function createFakePortalPage(opts: FakePortalOptions = {}): {
   calls: Array<{ op: string; selector?: string; value?: string }>;
 } {
   const calls: Array<{ op: string; selector?: string; value?: string }> = [];
-  let currentUrl = FAKE_URLS.login;
+  let currentUrl: string = FAKE_URLS.login;
   let mfaCleared = false; // one-shot: a completed MFA challenge is not re-issued
 
   function htmlFor(url: string): string {
