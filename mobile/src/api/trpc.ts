@@ -12,7 +12,7 @@
  *   statuses are never retried.
  *
  * NOTE: the web app's AppRouter type (server/routers.ts) is not published as
- * a shared package, so this client is typed loosely. Replace `any` with the
+ * a shared package, so this client is typed loosely (`any`). Replace with the
  * real AppRouter type once a shared types package exists.
  */
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
@@ -72,7 +72,7 @@ async function fetchWithRetry(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const trpc = createTRPCClient<any>({
+export const trpc: any = createTRPCClient<any>({
   links: [
     httpBatchLink({
       url: `${API_URL}/api/trpc`,

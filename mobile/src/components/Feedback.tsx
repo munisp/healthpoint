@@ -1,9 +1,11 @@
 /**
  * Shared list/screen feedback states: skeleton loading, empty, error+retry,
- * and the offline staleness banner. All are dark-mode aware via useColors().
+ * connectivity banner, and the offline staleness banner. All are dark-mode
+ * aware via useColors().
  */
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
+import NetInfo from "@react-native-community/netinfo";
 import { fontSize, spacing, useColors, MIN_TOUCH_TARGET } from "../theme";
 import { timeAgo } from "../lib/format";
 
@@ -84,6 +86,33 @@ export function ErrorState({
       >
         <Text style={styles.retryText}>Retry</Text>
       </Pressable>
+    </View>
+  );
+}
+
+/**
+ * Connectivity banner driven by NetInfo: rendered at the top of the tab
+ * shell whenever the device reports no connection. Lists additionally fall
+ * back to cached payloads with the StaleBanner below.
+ */
+export function OfflineBanner() {
+  const c = useColors();
+  const [offline, setOffline] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      // isConnected is null while unknown — only flag explicit disconnects.
+      setOffline(state.isConnected === false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  if (!offline) return null;
+  return (
+    <View style={[styles.staleBanner, { backgroundColor: c.warningSoft }]}>
+      <Text style={[styles.staleText, { color: c.warning }]}>
+        No connection — showing cached data; changes will sync when you’re back online
+      </Text>
     </View>
   );
 }

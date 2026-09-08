@@ -11,6 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../src/auth/AuthContext";
 import { useNotifications } from "../../src/api/hooks";
 import { registerForPushNotifications } from "../../src/notifications/push";
+import { OfflineBanner } from "../../src/components/Feedback";
 import { useColors } from "../../src/theme";
 
 type IconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -50,7 +51,9 @@ export default function TabsLayout() {
   const unreadCount = unread.data?.length ?? 0;
 
   return (
-    <Tabs
+    <View style={{ flex: 1, backgroundColor: c.bg }}>
+      <OfflineBanner />
+      <Tabs
       screenOptions={{
         tabBarActiveTintColor: c.primary,
         tabBarInactiveTintColor: c.textFaint,
@@ -90,7 +93,8 @@ export default function TabsLayout() {
           tabBarIcon: tabIcon("ellipsis-horizontal-circle-outline"),
         }}
       />
-    </Tabs>
+      </Tabs>
+    </View>
   );
 }
 
