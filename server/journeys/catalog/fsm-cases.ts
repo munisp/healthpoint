@@ -273,7 +273,7 @@ export const j09: Journey = {
           disputeId,
           gfeTotalUsd: 800,
           billedTotalUsd: 1500,
-          billedAt: new Date(now0() - 30 * 86400_000),
+          billedAt: new Date(Date.now() - 30 * 86400_000),
           insuranceBilled: false,
           idempotencyKey: ctx.idem("j09-create"),
         });
@@ -331,7 +331,7 @@ export const j09: Journey = {
         await ctx.patient.gfePpdr.createDispute({
           tenantId: JOURNEY_TENANT, disputeId: overId,
           gfeTotalUsd: 800, billedTotalUsd: 1500,
-          billedAt: new Date(now0() - 30 * 86400_000), insuranceBilled: false,
+          billedAt: new Date(Date.now() - 30 * 86400_000), insuranceBilled: false,
           idempotencyKey: ctx.idem("j09-overcap-create"),
         });
         await ctx.patient.gfePpdr.transition({
