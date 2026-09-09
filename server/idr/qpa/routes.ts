@@ -88,7 +88,11 @@ export function createPostgresStore(db: any): ContractedRateStore & {
           .insert(qpaContractedRates)
           .values(
             batch.accepted.map((r) => ({
-              id: `${batch.batchId}:${r.rowHash}`,
+              // Gap fix (journey J06): `${batchId}:${rowHash}` is 86+ chars and
+              // overflows id varchar(80) (Postgres 22001 on every ingest).
+              // The rowHash is already the unique dedupe key (unique index +
+              // ON CONFLICT target), so use it as the primary key directly.
+              id: r.rowHash,
               batchId: batch.batchId,
               payerId: r.payerId,
               serviceCode: r.serviceCode,
