@@ -268,9 +268,14 @@ export const idrComplianceRouter = router({
       const dispute = await loadDispute(db, input.disputeId);
       const schedules = await db.select().from(idrFeeSchedules);
       const active = selectActiveSchedule(schedules as FeeScheduleLike[], new Date());
+      // Gap fix (journey J15): disputes created via the API never populate
+      // respondingPartyId (only respondingPartyName), which made this
+      // endpoint permanently fail with invalid_party. Fall back to the
+      // recorded party NAME as the assessment's party reference so the
+      // statutory per-party fee can be assessed for API-created disputes.
       const result = buildAdminFeeAssessments(input.disputeId, active, {
-        initiatingPartyId: dispute.initiatingPartyId,
-        respondingPartyId: dispute.respondingPartyId,
+        initiatingPartyId: dispute.initiatingPartyId ?? dispute.initiatingPartyName ?? null,
+        respondingPartyId: dispute.respondingPartyId ?? dispute.respondingPartyName ?? null,
       });
       if (!result.ok) {
         throw new TRPCError({
@@ -294,7 +299,9 @@ export const idrComplianceRouter = router({
             feeScheduleId: result.scheduleId,
             feeType: line.feeType,
             partyRole: line.partyRole,
-            partyId: line.partyRole === "initiating_party" ? dispute.initiatingPartyId : dispute.respondingPartyId,
+            partyId: line.partyRole === "initiating_party"
+              ? (dispute.initiatingPartyId ?? dispute.initiatingPartyName)
+              : (dispute.respondingPartyId ?? dispute.respondingPartyName),
             amountCents: line.amountCents,
             currency: line.currency,
             status: "assessed",
