@@ -52,11 +52,17 @@ async function pkceDelete(state: string): Promise<void> {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getKeycloakConfig() {
+  // Fail closed in production: placeholder IdP configuration must never be
+  // used there. Missing values surface as login-flow failures (redirect to
+  // /?auth_error=...), never as a silently-working placeholder.
+  const production = ENV.isProduction;
   return {
-    url: ENV.keycloakUrl || "https://auth.placeholder.example.com",
+    url: ENV.keycloakUrl || (production ? "" : "https://auth.placeholder.example.com"),
     realm: ENV.keycloakRealm || "healthpoint",
     clientId: ENV.keycloakClientId || "healthpoint-app",
-    clientSecret: ENV.keycloakClientSecret || "placeholder-secret",
+    // The web client (healthpoint-app) is a public client; an empty secret is
+    // correct there. A fake placeholder secret must never leave development.
+    clientSecret: ENV.keycloakClientSecret || (production ? "" : "placeholder-secret"),
   };
 }
 
@@ -72,6 +78,12 @@ function getCallbackUrl(req: Request): string {
 }
 
 function getSessionSecret(): Uint8Array {
+  // Defense in depth: production must never sign or verify session cookies
+  // with the development placeholder secret (validateEnv in _core/index.ts
+  // already enforces JWT_SECRET at startup).
+  if (ENV.isProduction && !ENV.cookieSecret) {
+    throw new Error("JWT_SECRET is required in production");
+  }
   return new TextEncoder().encode(ENV.cookieSecret || "placeholder-jwt-secret-change-me");
 }
 
@@ -92,7 +104,8 @@ export async function verifySessionToken(token: string): Promise<{ sub: string; 
     const { payload } = await jwtVerify(token, getSessionSecret(), { algorithms: ["HS256"] });
     const { sub, name, email, jti } = payload as Record<string, unknown>;
     if (typeof sub !== "string" || !sub) return null;
-    // Check Redis token revocation list (graceful: if Redis is down, allow through)
+    // Check Redis token revocation list (fails closed in production — see
+    // server/redis.ts isTokenRevoked; do not regress).
     if (typeof jti === "string" && jti) {
       const { isTokenRevoked } = await import("../redis");
       const revoked = await isTokenRevoked(jti).catch(() => false);

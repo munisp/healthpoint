@@ -1,0 +1,51 @@
+{
+  "torch_version": "2.8.0+cu128",
+  "seed": 42,
+  "data_meta": {
+    "seed": 42,
+    "n_disputes": 6000,
+    "n_entities": 400,
+    "n_providers": 300,
+    "n_payers": 100,
+    "n_ring_members": 12,
+    "gnn_num_nodes": 1200,
+    "gnn_num_edges": 1621,
+    "fraud_rate": 0.09616667032241821,
+    "credit_rate": 0.39283332228660583,
+    "outcome_rate": 0.5509999990463257
+  },
+  "models": {
+    "fraudnet": {
+      "val_auc": 0.758942430108652,
+      "test_auc": 0.7746411064425771,
+      "test_acc": 0.9422222222222222,
+      "epochs_trained": 194,
+      "params": 5313,
+      "train_seconds": 4.99
+    },
+    "creditnet": {
+      "val_auc": 0.806071450929655,
+      "test_auc": 0.8135471150702844,
+      "test_acc": 0.7677777777777778,
+      "epochs_trained": 200,
+      "params": 3025,
+      "train_seconds": 1.77
+    },
+    "outcomenet": {
+      "val_auc": 0.7763204537398085,
+      "test_auc": 0.8135319067959998,
+      "test_acc": 0.7233333333333334,
+      "epochs_trained": 200,
+      "params": 2929,
+      "train_seconds": 1.81
+    },
+    "disputegnn": {
+      "val_auc": 0.8774801587301586,
+      "test_auc": 0.9457799145299145,
+      "test_acc": 0.8666666666666667,
+      "params": 449,
+      "train_seconds": 2.31
+    }
+  },
+  "total_seconds": 10.96
+}

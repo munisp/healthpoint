@@ -1,14 +1,21 @@
 {
   "name": "HealthPoint IDR",
   "short_name": "HealthPoint",
+  "id": "/",
   "description": "NSA Independent Dispute Resolution workflow platform for providers, payers, and arbitrators",
-  "start_url": "/dashboard",
+  "start_url": "/",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#ffffff",
-  "theme_color": "#2563eb",
+  "theme_color": "#0e6e5d",
   "categories": ["medical", "business", "productivity"],
   "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
     {
       "src": "/icons/icon-192.png",
       "sizes": "192x192",

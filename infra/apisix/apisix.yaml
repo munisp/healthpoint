@@ -17,6 +17,12 @@ upstreams:
     nodes:
       "go-services:8001": 1
 
+  # ML serving (owned by the ml wave; gateway-side wiring only)
+  - id: idr-ml-serving
+    type: roundrobin
+    nodes:
+      "ml-service:8100": 1
+
 routes:
   # ── Auth endpoints (public, no JWT required) ────────────────────────────
   - id: auth-login
@@ -46,11 +52,25 @@ routes:
     methods: [GET, POST, OPTIONS]
     upstream_id: idr-app
     plugins:
+      # Audit P1-7: this route claimed "JWT required" but had no auth plugin.
+      # bearer-only access-token validation against the Keycloak `healthpoint`
+      # realm using the existing apisix-gateway client (see
+      # middleware/keycloak/realm-export.json). Secret is injected via env.
+      openid-connect:
+        client_id: apisix-gateway
+        client_secret: ${KEYCLOAK_APISIX_CLIENT_SECRET}
+        discovery: http://keycloak:8080/realms/healthpoint/.well-known/openid-configuration
+        bearer_only: true
+        realm: healthpoint
+        introspection_endpoint_auth_method: client_secret_basic
       cors:
         allow_origins: "${ALLOWED_ORIGINS:-http://localhost:3000}"
         allow_methods: "GET,POST,OPTIONS"
         allow_headers: "Content-Type,Authorization,X-Correlation-ID"
         max_age: 3600
+      # Identity-aware quota (per-IP here; the openid-connect plugin above
+      # establishes identity before this runs). Division of labor:
+      # Caddy = edge per-IP burst (200/min), APISIX = this quota. Audit P1-8.
       limit-count:
         count: 1000
         time_window: 60
@@ -77,6 +97,47 @@ routes:
         time_window: 60
         key: remote_addr
         rejected_code: 429
+
+  # ── ML serving (protected, JWT required) ────────────────────────────────
+  # Audit P1 (2026-09-05): the ML serving endpoint (port 8100) previously
+  # bypassed the gateway's auth. It is now reachable ONLY through this
+  # route — mirrors the trpc-api openid-connect pattern (bearer-only token
+  # validation against the Keycloak `healthpoint` realm).
+  # NETWORK POLICY (required, enforced in the deployment layer): the
+  # ml-service must not publish port 8100 on the host and must accept
+  # traffic only from the apisix pod/container — i.e. no direct path around
+  # this gateway route may exist.
+  - id: ml-serving
+    uri: /api/ml/*
+    methods: [GET, POST, OPTIONS]
+    upstream_id: idr-ml-serving
+    plugins:
+      openid-connect:
+        client_id: apisix-gateway
+        client_secret: ${KEYCLOAK_APISIX_CLIENT_SECRET}
+        discovery: http://keycloak:8080/realms/healthpoint/.well-known/openid-configuration
+        bearer_only: true
+        realm: healthpoint
+        introspection_endpoint_auth_method: client_secret_basic
+      cors:
+        allow_origins: "${ALLOWED_ORIGINS:-http://localhost:3000}"
+        allow_methods: "GET,POST,OPTIONS"
+        allow_headers: "Content-Type,Authorization,X-Correlation-ID"
+        max_age: 3600
+      limit-count:
+        count: 200
+        time_window: 60
+        key: remote_addr
+        rejected_code: 429
+      request-id:
+        header_name: X-Correlation-ID
+        include_in_response: true
+      kafka-logger:
+        broker_list:
+          kafka:9092: 1
+        kafka_topic: idr.audit
+        timeout: 3
+        required_acks: 1
 
   # ── Go services (ledger, authz, payments) ───────────────────────────────
   - id: go-services

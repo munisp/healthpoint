@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, lte, or } from "drizzle-orm";
 import { eventLog } from "../drizzle/schema";
 import { getDb } from "./db";
 import { eventBus, type IDREvent, type IDREventType, type IDRTopic } from "./events/bus";
@@ -37,12 +37,21 @@ export async function dispatchOutboxBatch(limit = 25): Promise<{ claimed: number
   // Recover work interrupted after it was claimed but before delivery completed.
   await db.update(eventLog)
     .set({ status: "failed", failureReason: "outbox worker lease expired", nextAttemptAt: now })
-    .where(and(eq(eventLog.status, "processing"), lte(eventLog.lastAttemptAt, staleBefore)));
+    .where(and(
+      eq(eventLog.status, "processing"),
+      lte(eventLog.lastAttemptAt, staleBefore),
+      // Do not resurrect events that already exhausted their retry budget.
+      lt(eventLog.retryCount, MAX_RETRIES),
+    ));
 
   const candidates = await db.select().from(eventLog)
     .where(and(
       inArray(eventLog.status, ["pending", "failed"]),
       or(isNull(eventLog.nextAttemptAt), lte(eventLog.nextAttemptAt, now)),
+      // Exhausted events (retryCount >= MAX_RETRIES) are terminal — their
+      // nextAttemptAt is NULL, so without this guard they would be re-claimed
+      // and re-dispatched forever.
+      lt(eventLog.retryCount, MAX_RETRIES),
     ))
     .orderBy(asc(eventLog.createdAt))
     .limit(limit);
@@ -54,6 +63,7 @@ export async function dispatchOutboxBatch(limit = 25): Promise<{ claimed: number
       .where(and(
         eq(eventLog.id, candidate.id),
         inArray(eventLog.status, ["pending", "failed"]),
+        lt(eventLog.retryCount, MAX_RETRIES),
       ))
       .returning();
     if (rows[0]) claimed.push(rows[0]);
@@ -70,6 +80,8 @@ export async function dispatchOutboxBatch(limit = 25): Promise<{ claimed: number
       delivered++;
     } catch (error) {
       const retryCount = row.retryCount + 1;
+      // On exhaustion the event becomes terminal: nextAttemptAt is cleared and
+      // the retry-count guard in the claim query above permanently excludes it.
       await db.update(eventLog)
         .set({
           status: "failed",

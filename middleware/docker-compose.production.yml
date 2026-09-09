@@ -2,8 +2,10 @@ version: '3.8'
 
 # HealthPoint NSA/IDR Platform — Production-grade Docker Compose
 # Includes: Vault, PostgreSQL (production config), Redis, Kafka, Keycloak,
-#           APISIX, Permify, Temporal, Dapr, TigerBeetle, OpenSearch,
-#           Fluvio, Mojaloop proxy, OpenAppSec
+#           APISIX, Permify, Temporal, TigerBeetle, OpenSearch,
+#           Mojaloop proxy, OpenAppSec
+# NOTE: Dapr and Fluvio were removed on 2026-09-05 (orphan infrastructure with
+# zero application adoption).
 
 x-healthpoint-env: &healthpoint-env
   DATABASE_URL: postgresql://healthpoint:${POSTGRES_PASSWORD:-changeme}@postgres:5432/healthpoint
@@ -269,19 +271,6 @@ services:
     networks:
       - middleware_net
 
-  # ── Fluvio (High-throughput streaming) ─────────────────────────────────────
-  fluvio:
-    image: infinyon/fluvio:latest
-    container_name: fluvio
-    command: cluster start --local
-    ports:
-      - "9003:9003"
-      - "9010:9010"
-    volumes:
-      - fluvio_data:/var/lib/fluvio
-    networks:
-      - middleware_net
-
   # ── OpenSearch ──────────────────────────────────────────────────────────────
   opensearch:
     image: opensearchproject/opensearch:2.11.0
@@ -435,16 +424,6 @@ services:
     networks:
       - middleware_net
 
-  # ── Dapr ────────────────────────────────────────────────────────────────────
-  dapr-placement:
-    image: daprio/dapr:1.12.0
-    container_name: dapr-placement
-    command: ["./placement", "-port", "50006"]
-    ports:
-      - "50006:50006"
-    networks:
-      - middleware_net
-
   # ── OpenAppSec ──────────────────────────────────────────────────────────────
   openappsec:
     image: openappsec/agent:latest
@@ -540,7 +519,6 @@ volumes:
   kafka_data:
   zookeeper_data:
   zookeeper_log:
-  fluvio_data:
   opensearch_data:
   etcd_data:
   mojaloop_mysql_data:

@@ -1,0 +1,42 @@
+# Ray autoscaler config notes for the HealthPoint ML cluster.
+#
+# STATUS: STATIC-ONLY. Ray is NOT currently deployed or installed in the repo
+# images. `ml/ray_cluster.py` falls back to local training when ray is absent.
+# This file documents the intended bring-up for when distributed sweeps are
+# justified (e.g., nightly full-platform retrains over >1M dispute rows).
+#
+# Bring-up:
+#   pip install "ray[train,tune,default]"
+#   ray up ml/ray_cluster.yaml        # provisions head + workers
+#   ray submit ml/ray_cluster.yaml -- python -m ml.ray_cluster --model fraudnet --num-samples 16
+#
+# Design notes:
+# - CPU-only workers (c5.2xlarge-class); all models are <1M params, so the
+#   value of Ray here is hyperparameter parallelism and data sharding, not GPU.
+# - Head node also runs the registry promotion gate (champion/challenger).
+
+cluster_name: healthpoint-ml
+max_workers: 4
+
+provider:
+  type: aws            # or local / gcp; adjust to platform cloud
+  region: us-east-1
+
+available_node_types:
+  ray.head.default:
+    node_config:
+      InstanceType: c5.2xlarge
+    resources: {"CPU": 8}
+  ray.worker.default:
+    node_config:
+      InstanceType: c5.2xlarge
+    min_workers: 0
+    max_workers: 4
+    resources: {"CPU": 8}
+
+setup_commands:
+  - pip install torch --index-url https://download.pytorch.org/whl/cpu
+  - pip install "ray[train,tune]" scikit-learn numpy
+
+head_setup_commands:
+  - pip install psycopg[binary] pyarrow s3fs   # for continuous_training data pulls

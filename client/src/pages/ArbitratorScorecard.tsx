@@ -25,18 +25,18 @@ function StarRating({ value }: { value: number }) {
         <Star
           key={i}
           size={12}
-          className={i <= Math.round(value) ? "text-amber-400 fill-amber-400" : "text-slate-200 fill-slate-200"}
+          className={i <= Math.round(value) ? "text-warning-foreground fill-warning-foreground" : "text-border fill-border"}
         />
       ))}
-      <span className="text-xs text-slate-500 ml-1">{value.toFixed(1)}</span>
+      <span className="text-xs text-muted-foreground ml-1">{value.toFixed(1)}</span>
     </div>
   );
 }
 
 function TrendIcon({ value }: { value: number }) {
-  if (value > 55) return <TrendingUp size={14} className="text-green-500" />;
+  if (value > 55) return <TrendingUp size={14} className="text-success-foreground" />;
   if (value < 45) return <TrendingDown size={14} className="text-red-500" />;
-  return <Minus size={14} className="text-slate-400" />;
+  return <Minus size={14} className="text-muted-foreground" />;
 }
 
 function computeScore(entity: EntityCaseload): number {
@@ -79,12 +79,12 @@ export default function ArbitratorScorecard() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-amber-100">
-              <Award size={20} className="text-amber-600" />
+            <div className="p-2 rounded-lg bg-warning">
+              <Award size={20} className="text-warning-foreground" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-800">Arbitrator Scorecard</h1>
-              <p className="text-sm text-slate-500">Track and compare IDR entity performance across disputes</p>
+              <h1 className="text-xl font-bold text-foreground">Arbitrator Scorecard</h1>
+              <p className="text-sm text-muted-foreground">Track and compare IDR entity performance across disputes</p>
             </div>
           </div>
         </div>
@@ -92,7 +92,7 @@ export default function ArbitratorScorecard() {
         {/* Controls */}
         <div className="flex items-center gap-3">
           <div className="relative flex-1 max-w-sm">
-            <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+            <Search size={14} className="absolute left-3 top-2.5 text-muted-foreground" />
             <Input
               placeholder="Search IDR entities..."
               value={search}
@@ -100,13 +100,13 @@ export default function ArbitratorScorecard() {
               className="pl-8 text-sm"
             />
           </div>
-          <div className="flex items-center gap-2 text-sm text-slate-600">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span>Sort by:</span>
             {(["score", "cases", "speed"] as const).map(s => (
               <button
                 key={s}
                 onClick={() => setSortBy(s)}
-                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${sortBy === s ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${sortBy === s ? "bg-primary text-white" : "bg-muted text-muted-foreground hover:bg-muted"}`}
               >
                 {s === "score" ? "Score" : s === "cases" ? "Volume" : "Speed"}
               </button>
@@ -117,20 +117,20 @@ export default function ArbitratorScorecard() {
         {/* Summary Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: "Total IDR Entities", value: entities.length, icon: Award, color: "text-blue-600 bg-blue-50" },
+            { label: "Total IDR Entities", value: entities.length, icon: Award, color: "text-info-foreground bg-info" },
             { label: "Total Cases", value: entities.reduce((s, e) => s + e.totalCases, 0), icon: BarChart3, color: "text-purple-600 bg-purple-50" },
-            { label: "Avg Resolution Days", value: entities.length > 0 ? Math.round(entities.reduce((s, e) => s + e.avgDaysToResolution, 0) / entities.length) : 0, icon: TrendingUp, color: "text-green-600 bg-green-50" },
-            { label: "Avg Score", value: entities.length > 0 ? (entities.reduce((s, e) => s + computeScore(e), 0) / entities.length).toFixed(1) : "—", icon: Star, color: "text-amber-600 bg-amber-50" },
+            { label: "Avg Resolution Days", value: entities.length > 0 ? Math.round(entities.reduce((s, e) => s + e.avgDaysToResolution, 0) / entities.length) : 0, icon: TrendingUp, color: "text-success-foreground bg-success" },
+            { label: "Avg Score", value: entities.length > 0 ? (entities.reduce((s, e) => s + computeScore(e), 0) / entities.length).toFixed(1) : "—", icon: Star, color: "text-warning-foreground bg-warning" },
           ].map(stat => (
-            <Card key={stat.label} className="border-slate-200">
+            <Card key={stat.label} className="border-border">
               <CardContent className="pt-4">
                 <div className="flex items-center gap-2 mb-1">
                   <div className={`p-1.5 rounded-lg ${stat.color.split(" ")[1]}`}>
                     <stat.icon size={14} className={stat.color.split(" ")[0]} />
                   </div>
-                  <span className="text-xs text-slate-500">{stat.label}</span>
+                  <span className="text-xs text-muted-foreground">{stat.label}</span>
                 </div>
-                <div className="text-2xl font-bold text-slate-800">{stat.value}</div>
+                <div className="text-2xl font-bold text-foreground">{stat.value}</div>
               </CardContent>
             </Card>
           ))}
@@ -138,31 +138,31 @@ export default function ArbitratorScorecard() {
 
         {/* Scorecard Table */}
         {isLoading ? (
-          <Card className="border-slate-200">
-            <CardContent className="py-12 text-center text-sm text-slate-400">Loading IDR entity data...</CardContent>
+          <Card className="border-border">
+            <CardContent className="py-12 text-center text-sm text-muted-foreground">Loading IDR entity data...</CardContent>
           </Card>
         ) : filtered.length === 0 ? (
-          <Card className="border-slate-200">
-            <CardContent className="py-12 text-center text-sm text-slate-400">No IDR entities found</CardContent>
+          <Card className="border-border">
+            <CardContent className="py-12 text-center text-sm text-muted-foreground">No IDR entities found</CardContent>
           </Card>
         ) : (
-          <Card className="border-slate-200">
+          <Card className="border-border">
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold text-slate-700">IDR Entity Performance</CardTitle>
+              <CardTitle className="text-sm font-semibold text-foreground">IDR Entity Performance</CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-slate-100 bg-slate-50">
-                      <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500">Entity</th>
-                      <th className="text-center px-3 py-2 text-xs font-semibold text-slate-500">Score</th>
-                      <th className="text-center px-3 py-2 text-xs font-semibold text-slate-500">Cases</th>
-                      <th className="text-center px-3 py-2 text-xs font-semibold text-slate-500">Resolved</th>
-                      <th className="text-center px-3 py-2 text-xs font-semibold text-slate-500">Avg Days</th>
-                      <th className="text-center px-3 py-2 text-xs font-semibold text-slate-500">Provider Win%</th>
-                      <th className="text-center px-3 py-2 text-xs font-semibold text-slate-500">Payer Win%</th>
-                      <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500">Avg Award</th>
+                    <tr className="border-b border-border bg-muted">
+                      <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Entity</th>
+                      <th className="text-center px-3 py-2 text-xs font-semibold text-muted-foreground">Score</th>
+                      <th className="text-center px-3 py-2 text-xs font-semibold text-muted-foreground">Cases</th>
+                      <th className="text-center px-3 py-2 text-xs font-semibold text-muted-foreground">Resolved</th>
+                      <th className="text-center px-3 py-2 text-xs font-semibold text-muted-foreground">Avg Days</th>
+                      <th className="text-center px-3 py-2 text-xs font-semibold text-muted-foreground">Provider Win%</th>
+                      <th className="text-center px-3 py-2 text-xs font-semibold text-muted-foreground">Payer Win%</th>
+                      <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">Avg Award</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -170,27 +170,27 @@ export default function ArbitratorScorecard() {
                       const score = computeScore(entity);
                       const resolutionRate = entity.totalCases > 0 ? Math.round((entity.resolvedCases / entity.totalCases) * 100) : 0;
                       return (
-                        <tr key={entity.entityId} className={`border-b border-slate-50 hover:bg-slate-50 transition-colors ${idx === 0 ? "bg-amber-50/30" : ""}`}>
+                        <tr key={entity.entityId} className={`border-b border-border hover:bg-muted transition-colors ${idx === 0 ? "bg-warning/30" : ""}`}>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
-                              {idx === 0 && <Award size={12} className="text-amber-500 shrink-0" />}
-                              <span className="font-medium text-slate-800 text-xs">{entity.entityName}</span>
+                              {idx === 0 && <Award size={12} className="text-warning-foreground shrink-0" />}
+                              <span className="font-medium text-foreground text-xs">{entity.entityName}</span>
                             </div>
                           </td>
                           <td className="px-3 py-3 text-center">
                             <StarRating value={score} />
                           </td>
                           <td className="px-3 py-3 text-center">
-                            <span className="text-slate-700 font-medium">{entity.totalCases}</span>
+                            <span className="text-foreground font-medium">{entity.totalCases}</span>
                           </td>
                           <td className="px-3 py-3 text-center">
-                            <Badge className={`text-xs ${resolutionRate >= 80 ? "bg-green-100 text-green-700" : resolutionRate >= 50 ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"}`}>
+                            <Badge className={`text-xs ${resolutionRate >= 80 ? "bg-success text-success-foreground" : resolutionRate >= 50 ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"}`}>
                               {resolutionRate}%
                             </Badge>
                           </td>
                           <td className="px-3 py-3 text-center">
                             <div className="flex items-center justify-center gap-1">
-                              <span className={`text-xs font-medium ${entity.avgDaysToResolution <= 30 ? "text-green-600" : entity.avgDaysToResolution <= 60 ? "text-yellow-600" : "text-red-600"}`}>
+                              <span className={`text-xs font-medium ${entity.avgDaysToResolution <= 30 ? "text-success-foreground" : entity.avgDaysToResolution <= 60 ? "text-yellow-600" : "text-red-600"}`}>
                                 {entity.avgDaysToResolution}d
                               </span>
                             </div>
@@ -198,17 +198,17 @@ export default function ArbitratorScorecard() {
                           <td className="px-3 py-3 text-center">
                             <div className="flex items-center justify-center gap-1">
                               <TrendIcon value={entity.providerFavorableRate} />
-                              <span className="text-xs text-slate-700">{entity.providerFavorableRate.toFixed(0)}%</span>
+                              <span className="text-xs text-foreground">{entity.providerFavorableRate.toFixed(0)}%</span>
                             </div>
                           </td>
                           <td className="px-3 py-3 text-center">
                             <div className="flex items-center justify-center gap-1">
                               <TrendIcon value={entity.payerFavorableRate} />
-                              <span className="text-xs text-slate-700">{entity.payerFavorableRate.toFixed(0)}%</span>
+                              <span className="text-xs text-foreground">{entity.payerFavorableRate.toFixed(0)}%</span>
                             </div>
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <span className="text-xs font-medium text-slate-700">
+                            <span className="text-xs font-medium text-foreground">
                               {entity.avgDeterminationAmount > 0 ? `$${entity.avgDeterminationAmount.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}
                             </span>
                           </td>

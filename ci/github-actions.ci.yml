@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "assurance/**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Node — typecheck, unit tests, client+server build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck (tsc --noEmit)
+        run: pnpm check
+      - name: Unit tests (vitest — live-infra integration tests excluded)
+        # The *-connectivity / temporal-operations / provider-onboarding-simulation
+        # suites require running Redis/Kafka/Permify/TigerBeetle/Postgres and are
+        # covered by the integration job (Postgres) and staging smoke tests.
+        run: |
+          pnpm vitest run \
+            --exclude server/redis-connectivity.test.ts \
+            --exclude server/kafka-connectivity.test.ts \
+            --exclude server/permify-connectivity.test.ts \
+            --exclude server/tigerbeetle-connectivity.test.ts \
+            --exclude server/temporal-operations.test.ts \
+            --exclude server/provider-onboarding-simulation.test.ts
+      - name: Build (client + server bundle)
+        run: pnpm build
+
+  python:
+    name: Python — compile check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Byte-compile all Python sources
+        run: |
+          python -m compileall -q ai-service services scripts
+          shopt -s globstar nullglob
+          python -m compileall -q *.py
+
+  go:
+    name: Go — build and vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.13"
+          cache-dependency-path: services/go/go.sum
+      - name: go build ./...
+        working-directory: services/go
+        run: go build ./...
+      - name: go vet ./...
+        working-directory: services/go
+        run: go vet ./...
+
+  rust:
+    name: Rust — cargo check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/rust
+      - name: cargo check
+        working-directory: services/rust
+        run: cargo check --locked || cargo check
+
+  integration:
+    name: Integration — payment → ledger → outbox (real Postgres + Redis)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: healthpoint_test
+          POSTGRES_PASSWORD: healthpoint_test
+          POSTGRES_DB: healthpoint_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U healthpoint_test -d healthpoint_test"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      RUN_INTEGRATION: "1"
+      DATABASE_URL: postgresql://healthpoint_test:healthpoint_test@localhost:5432/healthpoint_test
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run integration harness (self-migrating)
+        run: pnpm vitest run server/tests/integration
+
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

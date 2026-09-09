@@ -8,19 +8,15 @@ import { toast } from "sonner";
  * when the network connection drops or is restored.
  *
  * Mount this hook once in the app shell (App.tsx) so it is active on
- * every page without duplicating listeners.
+ * every page without duplicating listeners. A persistent OfflineBanner
+ * complements these transient toasts.
  */
 export function useNetworkStatus() {
-  // Track whether we have already shown the "offline" toast so we can
-  // dismiss it when the connection comes back.
+  // Track whether the "offline" toast is currently showing so we can
+  // dismiss it — and only announce a restore after an actual outage.
   const offlineToastId = useRef<string | number | null>(null);
-  // Suppress the "restored" toast on the very first mount (the browser
-  // fires "online" immediately if the tab loads while connected).
-  const mounted = useRef(false);
 
   useEffect(() => {
-    mounted.current = true;
-
     const handleOffline = () => {
       offlineToastId.current = toast.error("No internet connection", {
         description:
@@ -31,14 +27,13 @@ export function useNetworkStatus() {
     };
 
     const handleOnline = () => {
-      // Dismiss the offline toast if it is still showing
-      if (offlineToastId.current !== null) {
-        toast.dismiss("network-offline");
-        offlineToastId.current = null;
-      }
-
-      // Don't fire "restored" on initial page load
-      if (!mounted.current) return;
+      // Only announce a restore if we previously showed an outage notice;
+      // this suppresses noise from the initial "online" event some
+      // browsers fire on page load.
+      const wasOffline = offlineToastId.current !== null;
+      toast.dismiss("network-offline");
+      offlineToastId.current = null;
+      if (!wasOffline) return;
 
       toast.success("Connection restored", {
         description: "You are back online. Your data will refresh automatically.",

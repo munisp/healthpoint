@@ -1,5 +1,7 @@
 # HealthPoint NSA/IDR Platform — Comprehensive Production Readiness Audit
 
+> **RETRACTED — 2026-09-05 assurance audit (branch `assurance/remediation-2026-09-05`):** This document's completion/compliance/infrastructure claims were verified against the codebase at commit 642b193 and found materially false (phantom services, nonexistent Vault/Strimzi manifests, unverifiable test counts). Do not rely on it. See legacy/README.md and the assurance report.
+
 **Audit Date:** July 7, 2026  
 **Repository:** munisp/healthpoint  
 **Auditor:** Manus AI  

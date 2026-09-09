@@ -1,0 +1,94 @@
+{{- if .Values.goLedger.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "healthpoint.fullname" . }}-go-ledger
+  labels:
+    {{- include "healthpoint.labels" . | nindent 4 }}
+    app.kubernetes.io/component: go-ledger
+spec:
+  replicas: {{ .Values.goLedger.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "healthpoint.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: go-ledger
+  template:
+    metadata:
+      labels:
+        {{- include "healthpoint.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: go-ledger
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: go-ledger
+          image: {{ include "healthpoint.image" (dict "image" .Values.goLedger.image "root" .) | quote }}
+          imagePullPolicy: {{ .Values.imageDefaults.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.goLedger.service.port }}
+          env:
+            - name: GO_ENV
+              value: "production"
+            - name: GO_SERVICES_PORT
+              value: {{ .Values.goLedger.service.port | quote }}
+            - name: PERMIFY_GRPC_URL
+              value: {{ .Values.config.permifyGrpcUrl | quote }}
+            - name: TIGERBEETLE_ADDRESS
+              value: {{ .Values.config.tigerbeetleAddress | quote }}
+            - name: KAFKA_BROKERS
+              value: {{ .Values.config.kafkaBrokers | quote }}
+            # Fail-closed: payment execution stays disabled unless explicitly
+            # enabled AND wired to a real (non-simulator) provider endpoint.
+            - name: PAYMENT_EXECUTION_MODE
+              value: {{ .Values.config.paymentExecutionMode | quote }}
+            - name: ALLOW_INSECURE_INTERNAL_TRANSPORT
+              value: "false"
+            - name: INTERNAL_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: internal-service-token }
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.goLedger.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.goLedger.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.goLedger.probes.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.goLedger.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.goLedger.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.goLedger.probes.readiness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.goLedger.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "healthpoint.fullname" . }}-go-ledger
+  labels:
+    {{- include "healthpoint.labels" . | nindent 4 }}
+    app.kubernetes.io/component: go-ledger
+spec:
+  type: {{ .Values.goLedger.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.goLedger.service.port }}
+      targetPort: http
+  selector:
+    {{- include "healthpoint.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: go-ledger
+{{- end }}

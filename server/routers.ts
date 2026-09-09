@@ -1,6 +1,15 @@
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { hermesRouter } from "./routers/hermes";
+import { submissionAutomationRouter } from "./idr/submission-automation/routes";
+import { stateProgramsRouter } from "./idr/state-programs/routes";
+import { priorAuthRouter } from "./priorauth/routes";
+import { batchedDisputesRouter } from "./idr/batching/routes";
+import { feeScheduleRouter } from "./idr/clocks-2026/routes";
+import { noticeConsentRouter } from "./notice-consent/routes";
+import { gfePpdrRouter } from "./gfe-ppdr/routes";
+import { portalRpaRouter } from "./idr/portal-rpa/routes";
+import { qpaEngineRouter } from "./idr/qpa/routes";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { ENV } from "./_core/env";
@@ -33,6 +42,7 @@ import { withDisputeLock } from "./redis";
 import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDisputeAccess, listDisputeAccess } from "./authz";
 import { eventBus } from "./events/bus";
 import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, getStatusForStep, addBusinessDays, daysUntilDeadline, validateWorkflowTransition } from "./workflow/idr-workflow";
+import { addBusinessDays as addIdrBusinessDays, businessDaysBetween } from "./idr/deadlines";
 import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
 import { dispatchOutboxBatch } from "./outbox";
 import { createSettlementTransfer, decideSettlementTransfer, getSettlementTransfer, listSettlementTransfers, markSettlementTransferSubmitted } from "./settlement-lifecycle";
@@ -46,7 +56,7 @@ import { generateDisputePDF } from "./pdf-export";
 import { generateReportsPDF, generateReportsCSV } from "./reports-export";
 import { getDb, checkDbHealth } from "./db";
 import { encryptCredentials } from "./credential-crypto";
-import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
+import { eq, and, or, ilike, desc, asc, sql, type SQL } from "drizzle-orm";
 import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections, providerSandboxAcceptances } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
 import { describeTemporalFailure, getDisputeTemporalWorkflow, getTemporalClient, getTemporalConfiguration, isTemporalDispatchEnabled, listTemporalWorkflows, runControlledTemporalDispatchDrill, startDisputeTemporalWorkflow, summarizeTemporalConnectionFailures, type TemporalRecoveryDetails } from "./temporal";
@@ -245,23 +255,29 @@ export const appRouter = router({
     cohortAnalysis: protectedProcedure
       .input(z.object({
         groupBy: z.enum(["serviceType", "state", "month"]).default("serviceType"),
-        dateFrom: z.string().optional(),
-        dateTo: z.string().optional(),
+        // Strict ISO-date shape; anything else is rejected by zod before it
+        // can reach SQL (defense in depth alongside parameterization).
+        dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dateFrom must be YYYY-MM-DD").optional(),
+        dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dateTo must be YYYY-MM-DD").optional(),
       }))
       .query(async ({ input }) => {
         const db = await (await import("./db")).getDb();
         if (!db) return { rows: [] };
         const { groupBy, dateFrom, dateTo } = input;
-        const dateFilter = [
-          dateFrom ? `AND "createdAt" >= '${dateFrom}'` : "",
-          dateTo ? `AND "createdAt" <= '${dateTo}'` : "",
-        ].join(" ");
-        let groupCol: string;
-        if (groupBy === "serviceType") groupCol = '"serviceType"';
-        else if (groupBy === "state") groupCol = '"patientState"';
-        else groupCol = `TO_CHAR("createdAt", 'YYYY-MM')`;
+        // Parameterized via drizzle sql template — dates are bound parameters,
+        // never interpolated. Only the group-by column (a fixed enum-derived
+        // fragment, never user input) uses sql.raw.
+        const dateClauses = [
+          dateFrom ? sql`AND "createdAt" >= ${dateFrom}` : null,
+          dateTo ? sql`AND "createdAt" <= ${dateTo}` : null,
+        ].filter((c): c is SQL => c !== null);
+        const dateFilter = dateClauses.length > 0 ? sql.join(dateClauses, sql` `) : sql``;
+        let groupCol: SQL;
+        if (groupBy === "serviceType") groupCol = sql.raw('"serviceType"');
+        else if (groupBy === "state") groupCol = sql.raw('"patientState"');
+        else groupCol = sql.raw(`TO_CHAR("createdAt", 'YYYY-MM')`);
         const result = await db.execute(
-          `SELECT ${groupCol} AS label,
+          sql`SELECT ${groupCol} AS label,
                   COUNT(*) AS total,
                   SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
                   SUM(CASE WHEN "determinationWinner" = 'responding_party' THEN 1 ELSE 0 END) AS losses,
@@ -378,7 +394,7 @@ export const appRouter = router({
             userId: ctx.user.id,
             notificationType: "step_advanced",
             title: `IDR Initiated — ${dispute.referenceNumber}`,
-            message: `Federal IDR has been initiated. You have 4 business days to select a certified IDR entity.`,
+            message: `IDR initiated for dispute ${dispute.referenceNumber}. The parties have 3 business days to jointly select a certified IDR entity (45 CFR § 149.510(c)(1)).`,
             dueDate: dispute.idrInitiationDeadline ?? null,
           });
         } else if (newStep === "STEP_09_OFFER_SUBMISSION") {
@@ -626,19 +642,37 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
         const { eq } = await import("drizzle-orm");
         const { disputeEvents: disputeEventsTable } = await import("../drizzle/schema");
-        // Mark dispute as rejected / ineligible and record in timeline
-        await db.update(disputesTable)
-          .set({
-            status: "ineligible" as any,
-            currentStep: "STEP_19_APPEAL_RESOLVED",
-            updatedAt: new Date(),
-          })
-          .where(eq(disputesTable.id, input.disputeId));
+        // Business intent: rejecting the other party's offer escalates the
+        // dispute to judicial review / appeal (STEP_18_APPEAL_FILED, 45 CFR
+        // § 149.510(b)(2)). Route through advanceWorkflow so the transition
+        // is validated (validateWorkflowTransition) — never write
+        // currentStep/status directly. Previously this wrote STEP_19 +
+        // status "ineligible" directly, bypassing the workflow guard.
+        const dispute = await getDisputeById(input.disputeId);
+        if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        try {
+          validateWorkflowTransition(
+            dispute.currentStep as Parameters<typeof validateWorkflowTransition>[0],
+            "STEP_18_APPEAL_FILED",
+            dispute as Record<string, unknown>
+          );
+        } catch (err) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: err instanceof Error ? err.message : "Cannot file an appeal from the current step",
+          });
+        }
+        await advanceWorkflow(
+          input.disputeId,
+          "STEP_18_APPEAL_FILED",
+          ctx.user.id,
+          input.reason ? `Offer rejected: ${input.reason}` : "Offer rejected by initiating party"
+        );
         // Record timeline event
         await db.insert(disputeEventsTable).values({
           id: crypto.randomUUID(),
           disputeId: input.disputeId,
-          step: "STEP_19_APPEAL_RESOLVED",
+          step: "STEP_18_APPEAL_FILED",
           eventType: "offer_rejected",
           description: input.reason ? `Offer rejected: ${input.reason}` : "Offer rejected by initiating party",
           performedBy: ctx.user.id,
@@ -652,7 +686,7 @@ export const appRouter = router({
           userId: ctx.user.id,
           notificationType: "system_alert",
           title: "Offer Rejected",
-          message: input.reason ? `Offer was rejected: ${input.reason}` : "The offer has been rejected and the dispute has been closed.",
+          message: input.reason ? `Offer was rejected: ${input.reason}` : "The offer has been rejected and an appeal has been filed.",
           dueDate: null,
         });
         return { success: true };
@@ -777,14 +811,14 @@ export const appRouter = router({
         specialty: z.string().optional(),
       }))
       .query(async ({ input }) => {
-        await seedIDREntities(); // Seed on first call
+        // No auto-seed: production reads must never fabricate entities.
+        // Returns [] when no certified IDR entities are registered.
         return listIDREntities(input);
       }),
 
     caseload: protectedProcedure
       .input(z.object({ entityId: z.string() }))
       .query(async ({ input }) => {
-        await seedIDREntities();
         const result = await getIDREntityCaseload(input.entityId);
         if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "IDR entity not found" });
         return result;
@@ -792,9 +826,18 @@ export const appRouter = router({
 
     allCaseloads: protectedProcedure
       .query(async () => {
-        await seedIDREntities();
         return listAllIDREntityCaseloads();
       }),
+
+    /**
+     * Admin-only explicit demo seed. Inserts the 5 synthetic IDR entities,
+     * all clearly labelled "DEMO" (see seedIDREntities in server/db.ts).
+     * Never invoked implicitly from read paths.
+     */
+    seedDemoEntities: adminProcedure.mutation(async () => {
+      await seedIDREntities();
+      return { seeded: true };
+    }),
   }),
 
   // --- Draft disputes -----------------------------------------------------------
@@ -1052,7 +1095,6 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { eq } = await import("drizzle-orm");
         await db.update(users).set({
           suspendedAt: null,
           suspendedUntil: null,
@@ -1559,10 +1601,11 @@ export const appRouter = router({
             triggeredBy: ctx.user.id,
           }).catch(() => { /* non-blocking */ });
           return result;
-        } catch {
-          const fallback = { success: true, confidence: 0.85, message: "Connection verified (offline mode)", resourcesFound: ["Patient", "Claim"], mappingValidation: [], aiAnalysis: "Fallback test" };
-          await createEMRSyncLog({ id: crypto.randomUUID(), connectionId: input.connectionId, triggerType: "test", status: "success", fieldsExtracted: 2, fieldConfidence: { overall: 0.85 }, fhirResourcesAccessed: ["Patient", "Claim"], warnings: ["AI service unavailable — offline test"], summary: "Offline test", durationMs: Date.now() - startMs, triggeredBy: ctx.user.id }).catch(() => {});
-          return fallback;
+        } catch (err) {
+          // FAIL CLOSED: never fabricate a successful connection test.
+          const reason = err instanceof Error ? err.message : "EMR connection test service unavailable";
+          await createEMRSyncLog({ id: crypto.randomUUID(), connectionId: input.connectionId, triggerType: "test", status: "failed", fieldsExtracted: 0, fieldConfidence: { overall: 0 }, fhirResourcesAccessed: [], warnings: [reason], summary: `EMR connection test failed: ${reason}`, durationMs: Date.now() - startMs, triggeredBy: ctx.user.id }).catch(() => {});
+          throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: `EMR connection test failed: ${reason}` });
         }
       }),
 
@@ -1607,41 +1650,29 @@ export const appRouter = router({
             }).catch(() => { /* non-blocking */ });
           }
           return result;
-        } catch {
-          // Graceful fallback: simulate a successful test with mock data
-          const fhirResources = ["Patient", "Claim", "Coverage", "Organization", "ExplanationOfBenefit"];
-          const mappingValidation = Object.entries(input.fieldMappings).map(([field, pathVal]) => {
-            const p = String(pathVal ?? "");
-            return {
-              field,
-              status: p.length > 0 ? "ok" : "missing",
-              sample: p ? `<${p.split(".")[0]}>` : undefined,
-            };
-          });
-          const fallbackResult = {
-            success: true,
-            message: `FHIR R4 endpoint reachable at ${input.baseUrl}. All required resources found.`,
-            resourcesFound: fhirResources,
-            mappingValidation,
-            aiAnalysis: `The ${input.emrSystem} FHIR server responded correctly. All 8 IDR field mappings resolved successfully. The connection is ready for production use.`,
-            confidence: 0.91,
-          };
+        } catch (err) {
+          // FAIL CLOSED: never fabricate a successful connection test. Record
+          // the real failure and surface it.
+          const reason = err instanceof Error ? err.message : "EMR connection test service unavailable";
           if (input.connectionId) {
             await createEMRSyncLog({
               id: crypto.randomUUID(),
               connectionId: input.connectionId,
               triggerType: "test",
-              status: "success",
-              fieldsExtracted: fhirResources.length,
-              fieldConfidence: { overall: 0.91 },
-              fhirResourcesAccessed: fhirResources,
-              warnings: ["AI service unavailable; used fallback test"],
-              summary: fallbackResult.message,
+              status: "failed",
+              fieldsExtracted: 0,
+              fieldConfidence: { overall: 0 },
+              fhirResourcesAccessed: [],
+              warnings: [reason],
+              summary: `EMR connection test failed: ${reason}`,
               durationMs: Date.now() - startMs,
               triggeredBy: ctx.user.id,
             }).catch(() => { /* non-blocking */ });
           }
-          return fallbackResult;
+          throw new TRPCError({
+            code: "SERVICE_UNAVAILABLE",
+            message: `EMR connection test failed: ${reason}`,
+          });
         }
       }),
 
@@ -2106,17 +2137,20 @@ export const appRouter = router({
           }
         }
         const outcomeByMonth = Object.values(outcomeMap);
-        // avgDaysByStep: average days spent at each IDR step
-        const IDR_STEPS = ["STEP_1","STEP_2","STEP_3","STEP_4","STEP_5","STEP_6","STEP_7","STEP_8","STEP_9","STEP_10","STEP_11","STEP_12","STEP_13","STEP_14","STEP_15","STEP_16","STEP_17","STEP_18","STEP_19"] as const;
+        // avgDaysByStep: average days spent at each IDR step. Keys MUST be
+        // the real IDRStep enum values (STEP_01_… etc.) — the previous
+        // "STEP_1"… keys never matched dispute.currentStep, so every bucket
+        // was permanently zero.
+        const IDR_STEPS = Object.keys(IDR_WORKFLOW_STEPS);
         const stepDayMap: Record<string, number[]> = {};
         for (const d of filtered) {
-          const step = d.currentStep ?? "STEP_1";
+          const step = d.currentStep ?? "STEP_01_OPEN_NEGOTIATION_INITIATED";
           if (!stepDayMap[step]) stepDayMap[step] = [];
           const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now());
           stepDayMap[step].push(ms / 86400000);
         }
-        const avgDaysByStep = IDR_STEPS.slice(0, 10).map(step => ({
-          step: step.replace("STEP_", "Step "),
+        const avgDaysByStep = IDR_STEPS.map(step => ({
+          step: step.replace(/^STEP_\d+_/, "").replace(/_/g, " "),
           avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a, b) => a + b, 0) / stepDayMap[step].length) : 0,
         }));
                 return { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
@@ -2154,10 +2188,11 @@ export const appRouter = router({
         const outcomeMap: Record<string, { month: string; won: number; lost: number; pending: number }> = {};
         for (const d of filtered) { const dt = d.createdAt ?? new Date(); const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`; const label = MONTHS[dt.getMonth()]!; if (!outcomeMap[key]) outcomeMap[key] = { month: label, won: 0, lost: 0, pending: 0 }; if (d.status === "closed") { if (Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0)) outcomeMap[key].won++; else outcomeMap[key].lost++; } else { outcomeMap[key].pending++; } }
         const outcomeByMonth = Object.values(outcomeMap);
-        const IDR_STEPS = ["STEP_1","STEP_2","STEP_3","STEP_4","STEP_5","STEP_6","STEP_7","STEP_8","STEP_9","STEP_10"] as const;
+        // Real IDRStep enum keys (see reports.summary) — "STEP_1"… keys never matched.
+        const IDR_STEPS = Object.keys(IDR_WORKFLOW_STEPS);
         const stepDayMap: Record<string, number[]> = {};
-        for (const d of filtered) { const step = d.currentStep ?? "STEP_1"; if (!stepDayMap[step]) stepDayMap[step] = []; const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); stepDayMap[step].push(ms / 86400000); }
-        const avgDaysByStep = IDR_STEPS.map(step => ({ step: step.replace("STEP_", "Step "), avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a,b)=>a+b,0)/stepDayMap[step].length) : 0 }));
+        for (const d of filtered) { const step = d.currentStep ?? "STEP_01_OPEN_NEGOTIATION_INITIATED"; if (!stepDayMap[step]) stepDayMap[step] = []; const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); stepDayMap[step].push(ms / 86400000); }
+        const avgDaysByStep = IDR_STEPS.map(step => ({ step: step.replace(/^STEP_\d+_/, "").replace(/_/g, " "), avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a,b)=>a+b,0)/stepDayMap[step].length) : 0 }));
         const summary = { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
         const csv = generateReportsCSV(summary, filtered as any, input.dateRangeLabel);
         return {
@@ -2194,10 +2229,11 @@ export const appRouter = router({
         const outcomeMap: Record<string, { month: string; won: number; lost: number; pending: number }> = {};
         for (const d of filtered) { const dt = d.createdAt ?? new Date(); const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`; const label = MONTHS[dt.getMonth()]!; if (!outcomeMap[key]) outcomeMap[key] = { month: label, won: 0, lost: 0, pending: 0 }; if (d.status === "closed") { if (Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0)) outcomeMap[key].won++; else outcomeMap[key].lost++; } else { outcomeMap[key].pending++; } }
         const outcomeByMonth = Object.values(outcomeMap);
-        const IDR_STEPS = ["STEP_1","STEP_2","STEP_3","STEP_4","STEP_5","STEP_6","STEP_7","STEP_8","STEP_9","STEP_10"] as const;
+        // Real IDRStep enum keys (see reports.summary) — "STEP_1"… keys never matched.
+        const IDR_STEPS = Object.keys(IDR_WORKFLOW_STEPS);
         const stepDayMap: Record<string, number[]> = {};
-        for (const d of filtered) { const step = d.currentStep ?? "STEP_1"; if (!stepDayMap[step]) stepDayMap[step] = []; const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); stepDayMap[step].push(ms / 86400000); }
-        const avgDaysByStep = IDR_STEPS.map(step => ({ step: step.replace("STEP_", "Step "), avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a,b)=>a+b,0)/stepDayMap[step].length) : 0 }));
+        for (const d of filtered) { const step = d.currentStep ?? "STEP_01_OPEN_NEGOTIATION_INITIATED"; if (!stepDayMap[step]) stepDayMap[step] = []; const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); stepDayMap[step].push(ms / 86400000); }
+        const avgDaysByStep = IDR_STEPS.map(step => ({ step: step.replace(/^STEP_\d+_/, "").replace(/_/g, " "), avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a,b)=>a+b,0)/stepDayMap[step].length) : 0 }));
         const summary = { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
         const pdfBuffer = await generateReportsPDF(summary, filtered as any, input.dateRangeLabel);
         return {
@@ -2254,7 +2290,9 @@ export const appRouter = router({
         events: z.array(z.string()).min(1),
       }))
       .mutation(async ({ ctx, input }) => {
-        const secret = `whsec_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+        // Cryptographically secure signing secret (never Math.random):
+        // 256 bits of CSPRNG entropy as hex via two UUIDs.
+        const secret = `whsec_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
         return createWebhook({
           userId: ctx.user.id,
           name: input.name,
@@ -3281,19 +3319,32 @@ Based on NSA IDR historical data and legal precedent, provide:
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        // Check current dispute step against statutory deadlines
+        // Check current dispute step against statutory deadlines. Deadlines
+        // come from the workflow definition (IDR_WORKFLOW_STEPS — the single
+        // source of truth for real IDRStep keys); the previous hardcoded map
+        // used keys (STEP_01_OPEN_NEGOTIATION etc.) that NEVER matched real
+        // currentStep values, and a silent 30-day default masked every
+        // unknown step. Unknown step now fails explicitly; elapsed time is
+        // measured in business days (the statutory basis) via
+        // server/idr/deadlines.
         const [dispute] = await db.select().from(disputesTable).where(eq(disputesTable.id, input.disputeId)).limit(1);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND" });
-        const stepDeadlines: Record<string, number> = {
-          STEP_01_OPEN_NEGOTIATION: 30, STEP_02_IDR_NOTICE: 4, STEP_03_IDR_INITIATION: 3,
-          STEP_04_ENTITY_SELECTION: 3, STEP_05_ENTITY_SELECTION_PERIOD: 3, STEP_06_ENTITY_CONFIRMATION: 1,
-          STEP_07_ADDITIONAL_INFO: 10, STEP_08_PRELIMINARY_PAYMENT: 30, STEP_09_OFFER_SUBMISSION: 10,
-          STEP_10_ARBITRATION: 30, STEP_11_DETERMINATION: 30, STEP_12_PAYMENT: 30,
-        };
-        const currentStep = dispute.currentStep ?? "STEP_01_OPEN_NEGOTIATION";
-        const deadlineDays = stepDeadlines[currentStep] ?? 30;
+        const currentStep = dispute.currentStep ?? "STEP_01_OPEN_NEGOTIATION_INITIATED";
+        const stepDef = IDR_WORKFLOW_STEPS[currentStep as keyof typeof IDR_WORKFLOW_STEPS];
+        if (!stepDef) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Unknown workflow step '${currentStep}'; cannot evaluate SLA (no silent default is applied)`,
+          });
+        }
+        if (stepDef.deadlineBusinessDays === null) {
+          // Step has no statutory business-day deadline (e.g. determination
+          // issued, dispute closed) — nothing to breach.
+          return { breached: false, breachDays: 0, severity: null };
+        }
+        const deadlineDays = stepDef.deadlineBusinessDays;
         const createdAt = dispute.createdAt ? new Date(dispute.createdAt) : new Date();
-        const actualDays = Math.floor((Date.now() - createdAt.getTime()) / 86400000);
+        const actualDays = businessDaysBetween(createdAt, new Date());
         const breachDays = actualDays - deadlineDays;
         if (breachDays > 0) {
           await db.insert(slaBreaches).values({
@@ -3393,7 +3444,14 @@ Based on NSA IDR historical data and legal precedent, provide:
               : (step === "STEP_14_PAYMENT_DETERMINATION" || step === "STEP_15_PAYMENT_MADE") && d.paymentDeadline
               ? new Date(d.paymentDeadline)
               : d.createdAt
-              ? new Date(new Date(d.createdAt).getTime() + deadlineDays * 24 * 60 * 60 * 1000)
+              // stepDeadlines above are statutory BUSINESS-day deadlines
+              // (45 CFR §149.510), so the fallback must use business-day
+              // math (server/idr/deadlines.addBusinessDays, with US federal
+              // holidays), not calendar-day multiplication. (Stored deadline
+              // columns — openNegotiationDeadline, offerSubmissionDeadline,
+              // paymentDeadline — are real persisted dates and are used
+              // as-is above.)
+              ? addIdrBusinessDays(new Date(d.createdAt), deadlineDays)
               : null;
           const startDate = d.createdAt ? new Date(d.createdAt) : new Date();
           const totalMs = deadlineDate
@@ -3807,21 +3865,62 @@ Based on NSA IDR historical data and legal precedent, provide:
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        // In production this would call the EMR's /metadata endpoint
-        // For now we store a synthetic capability statement
+        // Fetch the REAL capability statement from the EMR's FHIR /metadata
+        // endpoint. Fail closed on any error — never store a synthetic one.
+        const conn = await getEMRConnection(input.emrConnectionId);
+        if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: "EMR connection not found" });
+        const baseUrl = String(conn.baseUrl ?? "").replace(/\/+$/, "");
+        if (!baseUrl) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "EMR connection has no baseUrl configured" });
+        }
+        let statement: any;
+        try {
+          const res = await fetch(`${baseUrl}/metadata`, {
+            headers: { Accept: "application/fhir+json, application/json" },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!res.ok) throw new Error(`GET /metadata returned HTTP ${res.status}`);
+          statement = await res.json();
+          if (statement?.resourceType !== "CapabilityStatement") {
+            throw new Error(`GET /metadata did not return a FHIR CapabilityStatement (resourceType=${statement?.resourceType ?? "none"})`);
+          }
+        } catch (err) {
+          throw new TRPCError({
+            code: "SERVICE_UNAVAILABLE",
+            message: `Failed to fetch FHIR capability statement from ${baseUrl}/metadata: ${err instanceof Error ? err.message : "unknown error"}`,
+          });
+        }
+        const rest = Array.isArray(statement.rest) ? statement.rest : [];
+        const resources: string[] = rest.flatMap((r: any) =>
+          Array.isArray(r?.resource) ? r.resource.map((x: any) => String(x?.type)).filter(Boolean) : []
+        );
+        const searchParams: Record<string, string[]> = {};
+        for (const r of rest) {
+          for (const x of r?.resource ?? []) {
+            if (x?.type && Array.isArray(x.searchParam)) {
+              searchParams[String(x.type)] = x.searchParam.map((p: any) => String(p?.name)).filter(Boolean);
+            }
+          }
+        }
+        const smartScopes: string[] = rest.flatMap((r: any) =>
+          (r?.security?.extension ?? []).flatMap((e: any) =>
+            (e?.extension ?? []).filter((x: any) => x?.url === "scope").map((x: any) => String(x?.valueString ?? ""))
+          )
+        ).filter(Boolean);
+        const operations: string[] = rest.flatMap((r: any) => (r?.operation ?? []).map((o: any) => String(o?.name ?? "")));
         const { nanoid } = await import("nanoid");
-        const id = nanoid();
         const [cap] = await db.insert(fhirCapabilityStatements).values({
-          id,
+          id: nanoid(),
           emrConnectionId: input.emrConnectionId,
-          fhirVersion: "R4",
-          softwareName: "HealthPoint IDR",
-          softwareVersion: "1.0.0",
-          supportedResources: ["Patient", "Claim", "Coverage", "Organization", "Practitioner", "ExplanationOfBenefit", "ServiceRequest", "Encounter"],
-          supportedSearchParams: { Patient: ["_id", "identifier", "name"], Claim: ["patient", "status", "use"] },
-          smartScopes: ["openid", "profile", "launch", "patient/*.read", "user/*.read"],
-          bulkExportSupported: true,
-          cdsHooksSupported: true,
+          fhirVersion: String(statement.fhirVersion ?? "R4").slice(0, 8),
+          softwareName: statement.software?.name ? String(statement.software.name).slice(0, 128) : null,
+          softwareVersion: statement.software?.version ? String(statement.software.version).slice(0, 64) : null,
+          supportedResources: Array.from(new Set(resources)),
+          supportedSearchParams: searchParams,
+          smartScopes: Array.from(new Set(smartScopes)),
+          bulkExportSupported: operations.some((o) => o.includes("export")),
+          cdsHooksSupported: false, // not derivable from a FHIR capability statement
+          rawStatement: statement,
         }).returning();
         return cap;
       }),
@@ -4333,6 +4432,17 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
 
   hermes: hermesRouter,
 
+  // ── Wave routers (2026 compliance waves) ───────────────────────────────────
+  submissionAutomation: submissionAutomationRouter,
+  statePrograms: stateProgramsRouter,
+  priorAuth: priorAuthRouter,
+  batchedDisputes: batchedDisputesRouter,
+  feeSchedule: feeScheduleRouter,
+  noticeConsent: noticeConsentRouter,
+  gfePpdr: gfePpdrRouter,
+  portalRpa: portalRpaRouter,
+  qpaEngine: qpaEngineRouter,
+
   // ─── Organisation Settings ─────────────────────────────────────────────────
   orgSettings: router({
     get: protectedProcedure.query(async ({ ctx }) => {
@@ -4714,7 +4824,7 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         { id: "cl-001", version: "2.4.0", releasedAt: new Date("2025-07-15"), title: "Left Sidebar Navigation", description: "Added persistent left sidebar navigation to all authenticated pages, providing consistent access to all features without page-level headers.", category: "feature" as const, isHighlight: true },
         { id: "cl-002", version: "2.4.0", releasedAt: new Date("2025-07-15"), title: "Session Expiry Warning", description: "Implemented real-time session expiry countdown modal with 'Stay Signed In' refresh capability and 5-minute advance warning.", category: "feature" as const, isHighlight: true },
         { id: "cl-003", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Step Advancement Confirmation Dialog", description: "Added confirmation dialog to all dispute step advancement CTAs to prevent accidental workflow progression.", category: "improvement" as const, isHighlight: false },
-        { id: "cl-004", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Workflow Progress Bar Fix", description: "Fixed progress bar showing 0% when a dispute was at Step 1. Progress now correctly includes the current active step.", category: "bugfix" as const, isHighlight: false },
+        { id: "cl-004", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Workflow Progress Bar Fix", description: "Fixed progress bar showing 0% when a dispute was at Step 1. Progress now correctly includes the current active step.", category: "improvement" as const, isHighlight: false },
         { id: "cl-005", version: "2.2.0", releasedAt: new Date("2025-07-01"), title: "IDR Entity Dashboard KPI Skeleton Loaders", description: "Added animated skeleton loaders to KPI cards on the IDR Entity Dashboard to eliminate flash-of-zeros on initial load.", category: "improvement" as const, isHighlight: false },
         { id: "cl-006", version: "2.2.0", releasedAt: new Date("2025-07-01"), title: "Database-Backed Settings", description: "GlobalSettings, TwoFactorAuth, QPA Benchmarks, Regulatory Feed, Expert Panel, and Compliance Checklist are now fully persisted to PostgreSQL.", category: "feature" as const, isHighlight: true },
         { id: "cl-007", version: "2.1.0", releasedAt: new Date("2025-06-20"), title: "Keycloak Forward Authentication", description: "Replaced Manus OAuth with Keycloak OIDC forward authentication, supporting PKCE, token refresh, and multi-realm configuration.", category: "security" as const, isHighlight: true },

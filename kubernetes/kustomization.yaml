@@ -1,42 +1,34 @@
+# ── LEGACY / DO NOT USE FOR NEW DEPLOYMENTS ─────────────────────────────────
+# This kustomize tree references fictional microservice images
+# (healthpoint/api-gateway:latest, healthpoint/nsa-idr-service:latest, ...)
+# that do not exist as buildable artifacts in this repository. The supported
+# Kubernetes path is the Helm chart at deploy/helm/healthpoint/ (pinned
+# images, secrets by name only). This tree is retained for reference pending
+# owner review.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 namespace: healthpoint
 
 resources:
-  - namespaces/namespaces.yaml
-  - rbac/rbac.yaml
-  - configmaps/platform-config.yaml
+  - namespace.yaml
   - secrets/external-secrets.yaml
-  - deployments/core-services.yaml
-  - services/core-services.yaml
-  - hpa/hpa.yaml
+  - databases/postgresql.yaml
+  - databases/redis.yaml
+  - databases/kafka.yaml
+  - databases/opensearch.yaml
+  - databases/minio.yaml
+  - auth/keycloak.yaml
+  - auth/permify.yaml
+  - workflows/temporal.yaml
+  - ledger/tigerbeetle.yaml
+  - gateway/apisix.yaml
+  - microservices/api-gateway.yaml
+  - microservices/nsa-idr-service.yaml
+  - microservices/ai-services.yaml
+  - frontend/web-app.yaml
   - ingress/ingress.yaml
 
 commonLabels:
+  app.kubernetes.io/part-of: healthpoint
   app.kubernetes.io/managed-by: kustomize
-  app.kubernetes.io/part-of: healthpoint-platform
-
-images:
-  - name: healthpoint/api-gateway
-    newTag: latest
-  - name: healthpoint/nsa-idr-dispute
-    newTag: latest
-  - name: healthpoint/payment-processing
-    newTag: latest
-  - name: healthpoint/claims-processing
-    newTag: latest
-  - name: healthpoint/provider-management
-    newTag: latest
-  - name: healthpoint/security-auth
-    newTag: latest
-  - name: healthpoint/audit-compliance
-    newTag: latest
-  - name: healthpoint/ai-fraud-detection
-    newTag: latest
-  - name: healthpoint/notification
-    newTag: latest
-  - name: healthpoint/gfe-management
-    newTag: latest
-  - name: healthpoint/predictive-analytics
-    newTag: latest
