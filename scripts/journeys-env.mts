@@ -10,5 +10,7 @@ process.env.EMR_CREDENTIALS_ENCRYPTION_KEY ??=
 // the engine correctly fails closed with computable:false, which J06 also
 // covers in step 1).
 process.env.QPA_CPI_FACTORS_JSON ??=
-  JSON.stringify({ baseYear: 2019, factors: { 2025: 1.19, 2026: 1.23 } });
+  // NOTE: the base-year factor (2019: 1) is required by resolveCpiFactor —
+  // without it every QPA compute fails closed with CPI_FACTOR_UNAVAILABLE.
+  JSON.stringify({ baseYear: 2019, factors: { 2019: 1, 2025: 1.19, 2026: 1.23 } });
 export {};
