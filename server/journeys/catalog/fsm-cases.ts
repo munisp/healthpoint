@@ -371,14 +371,14 @@ export const j10: Journey = {
   title: "Submission automation: package build → submission FSM → eventLog → determination",
   actor: "biller",
   description:
-    "submissionAutomation.buildPackage + create + transition DRAFT→PACKAGE_READY→SUBMITTED→ACKNOWLEDGED→IDRE_ASSIGNED→OFFER_SUBMITTED + recordDetermination + hash-chained eventLog.",
+    "submissionAutomation.buildPackage + create + transition DRAFT→PACKAGE_READY→SUBMITTED→ACKNOWLEDGED→IDRE_ASSIGNED→OFFER_SUBMITTED + recordDetermination + hash-chained eventLog. Uses the admin caller because recordDetermination is now restricted to admins / dispute admins (X8) and tenants are caller-derived (X1/X8).",
   steps: [
     {
       name: "build-package-and-create",
       async run(ctx) {
         const disputeId = ctx.ns("j10-sub");
         (ctx as unknown as { _d: string })._d = disputeId;
-        const pkg = await ctx.provider.submissionAutomation.buildPackage({
+        const pkg = await ctx.admin.submissionAutomation.buildPackage({
           initiatingPartyName: "Journey Provider",
           initiatingPartyContactEmail: "provider@journey.test",
           respondingPartyName: "Journey Payer",
@@ -391,7 +391,7 @@ export const j10: Journey = {
           openNegotiationInitiationDate: "2026-08-15",
         });
         ctx.assert(pkg !== null, "package built", { pkg: JSON.stringify(pkg).slice(0, 200) });
-        const sub = await ctx.provider.submissionAutomation.create({
+        const sub = await ctx.admin.submissionAutomation.create({
           tenantId: JOURNEY_TENANT,
           disputeId,
           idempotencyKey: ctx.idem("j10-create"),
@@ -400,7 +400,7 @@ export const j10: Journey = {
         // Duplicate active submission for same dispute → CONFLICT.
         await expectTrpcError(
           ctx,
-          ctx.provider.submissionAutomation.create({ tenantId: JOURNEY_TENANT, disputeId }),
+          ctx.admin.submissionAutomation.create({ tenantId: JOURNEY_TENANT, disputeId }),
           "CONFLICT",
           "duplicate active submission rejected"
         );
@@ -411,12 +411,12 @@ export const j10: Journey = {
       name: "fsm-advance-to-offer-submitted",
       async run(ctx) {
         const disputeId = (ctx as unknown as { _d: string })._d;
-        const ready = await ctx.provider.submissionAutomation.transition({
+        const ready = await ctx.admin.submissionAutomation.transition({
           tenantId: JOURNEY_TENANT, disputeId, to: "PACKAGE_READY",
           idempotencyKey: ctx.idem("j10-ready"),
         });
         ctx.assertEqual(ready.state, "PACKAGE_READY", "package ready");
-        const submitted = await ctx.provider.submissionAutomation.transition({
+        const submitted = await ctx.admin.submissionAutomation.transition({
           tenantId: JOURNEY_TENANT, disputeId, to: "SUBMITTED",
           idempotencyKey: ctx.idem("j10-submit"),
         });
@@ -424,7 +424,7 @@ export const j10: Journey = {
         // ACKNOWLEDGED without a CMS-format reference must fail closed.
         await expectTrpcError(
           ctx,
-          ctx.provider.submissionAutomation.transition({
+          ctx.admin.submissionAutomation.transition({
             tenantId: JOURNEY_TENANT, disputeId, to: "ACKNOWLEDGED",
             cmsDisputeReferenceNumber: "not a valid ref!",
             idempotencyKey: ctx.idem("j10-ack-bad"),
@@ -432,18 +432,18 @@ export const j10: Journey = {
           "BAD_REQUEST",
           "bad CMS reference rejected"
         );
-        const acked = await ctx.provider.submissionAutomation.transition({
+        const acked = await ctx.admin.submissionAutomation.transition({
           tenantId: JOURNEY_TENANT, disputeId, to: "ACKNOWLEDGED",
           cmsDisputeReferenceNumber: `CMS-${ctx.runId.replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 20)}`,
           idempotencyKey: ctx.idem("j10-ack"),
         });
         ctx.assertEqual(acked.state, "ACKNOWLEDGED", "acknowledged with valid CMS ref");
-        const assigned = await ctx.provider.submissionAutomation.transition({
+        const assigned = await ctx.admin.submissionAutomation.transition({
           tenantId: JOURNEY_TENANT, disputeId, to: "IDRE_ASSIGNED",
           idempotencyKey: ctx.idem("j10-assign"),
         });
         ctx.assertEqual(assigned.state, "IDRE_ASSIGNED", "IDRE assigned");
-        const offered = await ctx.provider.submissionAutomation.transition({
+        const offered = await ctx.admin.submissionAutomation.transition({
           tenantId: JOURNEY_TENANT, disputeId, to: "OFFER_SUBMITTED",
           idempotencyKey: ctx.idem("j10-offer"),
         });
@@ -455,7 +455,7 @@ export const j10: Journey = {
       name: "record-determination-and-verify-log",
       async run(ctx) {
         const disputeId = (ctx as unknown as { _d: string })._d;
-        const det = await ctx.provider.submissionAutomation.recordDetermination({
+        const det = await ctx.admin.submissionAutomation.recordDetermination({
           tenantId: JOURNEY_TENANT,
           disputeId,
           determination: {
@@ -472,7 +472,7 @@ export const j10: Journey = {
           idempotencyKey: ctx.idem("j10-det"),
         });
         ctx.assert(det !== null, "determination recorded", { det: JSON.stringify(det).slice(0, 200) });
-        const log = await ctx.provider.submissionAutomation.eventLog({
+        const log = await ctx.admin.submissionAutomation.eventLog({
           tenantId: JOURNEY_TENANT, disputeId,
         });
         ctx.assert(log.events.length >= 6, "event log covers all transitions", {
