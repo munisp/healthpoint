@@ -54,6 +54,10 @@ export const qpaContractedRates = pgTable(
     derivedAmountCents: integer("derivedAmountCents"),
     // 45 CFR 149.140(a)(15)(ii)(B) claims share / ghost-rate documentation hook.
     claimsSharePercent: numeric("claimsSharePercent", { precision: 5, scale: 2 }),
+    // Payer contract identifier from the source MRF/negotiated-rates data.
+    // The 45 CFR 149.140(b)(1) median is computed with ONE rate per contract;
+    // rows sharing a contractId are collapsed to the contract median first.
+    contractId: varchar("contractId", { length: 128 }),
     // sha256 of the canonical row (per-row dedupe key).
     rowHash: varchar("rowHash", { length: 64 }).notNull(),
     provenance: jsonb("provenance").notNull(),
