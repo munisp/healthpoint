@@ -38,7 +38,18 @@ const CASE_TYPE = "gfe-ppdr";
 const TERMINAL_STATES: readonly PpdrState[] = ["CLOSED", "INELIGIBLE"];
 
 const idSchema = z.string().min(1).max(128);
-const tenantIdSchema = idSchema.default("default");
+/**
+ * BACKWARD COMPAT ONLY: clients may still send tenantId, but it is IGNORED.
+ * The tenant is always derived server-side from the authenticated caller
+ * (X1: tenant binding) so a client can never read or mutate another
+ * tenant's cases/disputes.
+ */
+const tenantIdSchema = idSchema.optional();
+
+/** Server-authoritative tenant binding: one tenant per authenticated user. */
+function callerTenant(ctx: { user: { id: string } }): string {
+  return `tenant:${ctx.user.id}`;
+}
 const idempotencyKeySchema = z.string().min(1).max(128).optional();
 
 /**
@@ -188,10 +199,10 @@ export const gfePpdrRouter = router({
       insuranceBilled: z.boolean(),
       idempotencyKey: idempotencyKeySchema,
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       try {
         return await getFsmCaseStore().createCase<PpdrDispute>({
-          tenantId: input.tenantId,
+          tenantId: callerTenant(ctx),
           caseType: CASE_TYPE,
           caseId: input.disputeId,
           create: () =>
@@ -213,8 +224,8 @@ export const gfePpdrRouter = router({
   /** Load the server-authoritative PPDR dispute (null when not found). */
   getDispute: protectedProcedure
     .input(z.object({ tenantId: tenantIdSchema, disputeId: idSchema }))
-    .query(async ({ input }) => {
-      return getFsmCaseStore().getCase<PpdrDispute>(input.tenantId, CASE_TYPE, input.disputeId);
+    .query(async ({ input, ctx }) => {
+      return getFsmCaseStore().getCase<PpdrDispute>(callerTenant(ctx), CASE_TYPE, input.disputeId);
     }),
 
   /**
@@ -238,10 +249,10 @@ export const gfePpdrRouter = router({
       determination: ppdrDeterminationSchema.omit({ binding: true }).optional(),
       idempotencyKey: idempotencyKeySchema,
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       try {
         return await getFsmCaseStore().transitionCase<PpdrDispute>(
-          input.tenantId,
+          callerTenant(ctx),
           CASE_TYPE,
           input.disputeId,
           {
@@ -264,10 +275,10 @@ export const gfePpdrRouter = router({
   /** Append-only hash-chained event log + tamper-evident chain verification. */
   getEvents: protectedProcedure
     .input(z.object({ tenantId: tenantIdSchema, disputeId: idSchema }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const store = getFsmCaseStore();
-      const events = await store.getEventLog(input.tenantId, CASE_TYPE, input.disputeId);
-      const verification = await store.verifyEventChain(input.tenantId, CASE_TYPE, input.disputeId);
+      const events = await store.getEventLog(callerTenant(ctx), CASE_TYPE, input.disputeId);
+      const verification = await store.verifyEventChain(callerTenant(ctx), CASE_TYPE, input.disputeId);
       return { events, verification };
     }),
 });
