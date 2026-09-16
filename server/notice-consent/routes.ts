@@ -76,7 +76,18 @@ const ncStateSchema = z.enum([
 ]);
 
 const idSchema = z.string().min(1).max(128);
-const tenantIdSchema = idSchema.default("default");
+/**
+ * BACKWARD COMPAT ONLY: clients may still send tenantId, but it is IGNORED.
+ * The tenant is always derived server-side from the authenticated caller
+ * (X1: tenant binding) so a client can never read or mutate another
+ * tenant's cases/disputes.
+ */
+const tenantIdSchema = idSchema.optional();
+
+/** Server-authoritative tenant binding: one tenant per authenticated user. */
+function callerTenant(ctx: { user: { id: string } }): string {
+  return `tenant:${ctx.user.id}`;
+}
 const idempotencyKeySchema = z.string().min(1).max(128).optional();
 
 /**
@@ -161,10 +172,10 @@ export const noticeConsentRouter = router({
       noticeElements: z.array(z.string().max(128)).max(64),
       idempotencyKey: idempotencyKeySchema,
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       try {
         return await getFsmCaseStore().createCase<NoticeConsentCase>({
-          tenantId: input.tenantId,
+          tenantId: callerTenant(ctx),
           caseType: CASE_TYPE,
           caseId: input.caseId,
           create: () =>
@@ -185,9 +196,9 @@ export const noticeConsentRouter = router({
   /** Load the server-authoritative case (null when not found). */
   getCase: protectedProcedure
     .input(z.object({ tenantId: tenantIdSchema, caseId: idSchema }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       return getFsmCaseStore().getCase<NoticeConsentCase>(
-        input.tenantId,
+        callerTenant(ctx),
         CASE_TYPE,
         input.caseId
       );
@@ -209,10 +220,10 @@ export const noticeConsentRouter = router({
       now: z.coerce.date().optional(),
       idempotencyKey: idempotencyKeySchema,
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       try {
         return await getFsmCaseStore().transitionCase<NoticeConsentCase>(
-          input.tenantId,
+          callerTenant(ctx),
           CASE_TYPE,
           input.caseId,
           {
@@ -230,10 +241,10 @@ export const noticeConsentRouter = router({
   /** Append-only hash-chained event log + tamper-evident chain verification. */
   getEvents: protectedProcedure
     .input(z.object({ tenantId: tenantIdSchema, caseId: idSchema }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const store = getFsmCaseStore();
-      const events = await store.getEventLog(input.tenantId, CASE_TYPE, input.caseId);
-      const verification = await store.verifyEventChain(input.tenantId, CASE_TYPE, input.caseId);
+      const events = await store.getEventLog(callerTenant(ctx), CASE_TYPE, input.caseId);
+      const verification = await store.verifyEventChain(callerTenant(ctx), CASE_TYPE, input.caseId);
       return { events, verification };
     }),
 });

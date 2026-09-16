@@ -32,8 +32,19 @@ const CASE_TYPE = "priorauth";
 const TERMINAL_STATES: readonly PaState[] = ["CLOSED", "CANCELLED"];
 
 const idSchema = z.string().min(1).max(128);
-const tenantIdSchema = idSchema.default("default");
+/**
+ * BACKWARD COMPAT ONLY: clients may still send tenantId, but it is IGNORED.
+ * The tenant is always derived server-side from the authenticated caller
+ * (X1: tenant binding) so a client can never read or mutate another
+ * tenant's PA requests.
+ */
+const tenantIdSchema = idSchema.optional();
 const idempotencyKeySchema = z.string().min(1).max(128).optional();
+
+/** Server-authoritative tenant binding: one tenant per authenticated user. */
+function callerTenant(ctx: { user: { id: string } }): string {
+  return `tenant:${ctx.user.id}`;
+}
 
 /**
  * Revive Date fields after loading a request from the fsm-store (JSONB
@@ -134,10 +145,10 @@ export const priorAuthRouter = router({
       urgency: urgencySchema,
       idempotencyKey: idempotencyKeySchema,
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       try {
         return await getFsmCaseStore().createCase<PaRequest>({
-          tenantId: input.tenantId,
+          tenantId: callerTenant(ctx),
           caseType: CASE_TYPE,
           caseId: input.requestId,
           create: () =>
@@ -157,8 +168,8 @@ export const priorAuthRouter = router({
   /** Load the server-authoritative PA request (null when not found). */
   getRequest: protectedProcedure
     .input(z.object({ tenantId: tenantIdSchema, requestId: idSchema }))
-    .query(async ({ input }) => {
-      return getFsmCaseStore().getCase<PaRequest>(input.tenantId, CASE_TYPE, input.requestId);
+    .query(async ({ input, ctx }) => {
+      return getFsmCaseStore().getCase<PaRequest>(callerTenant(ctx), CASE_TYPE, input.requestId);
     }),
 
   /**
@@ -179,10 +190,10 @@ export const priorAuthRouter = router({
       enforcementDiscretion: z.boolean().optional(),
       idempotencyKey: idempotencyKeySchema,
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       try {
         return await getFsmCaseStore().transitionCase<PaRequest>(
-          input.tenantId,
+          callerTenant(ctx),
           CASE_TYPE,
           input.requestId,
           {
@@ -205,10 +216,10 @@ export const priorAuthRouter = router({
   /** Append-only hash-chained event log + tamper-evident chain verification. */
   getEvents: protectedProcedure
     .input(z.object({ tenantId: tenantIdSchema, requestId: idSchema }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const store = getFsmCaseStore();
-      const events = await store.getEventLog(input.tenantId, CASE_TYPE, input.requestId);
-      const verification = await store.verifyEventChain(input.tenantId, CASE_TYPE, input.requestId);
+      const events = await store.getEventLog(callerTenant(ctx), CASE_TYPE, input.requestId);
+      const verification = await store.verifyEventChain(callerTenant(ctx), CASE_TYPE, input.requestId);
       return { events, verification };
     }),
 
