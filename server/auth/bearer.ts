@@ -237,6 +237,14 @@ export async function authenticateBearerRequest(req: Request): Promise<User> {
   }
   if (!user) throw new BearerAuthError("user provisioning failed");
 
+  // X2: enforce administrative suspension for Bearer clients too.
+  {
+    const now = Date.now();
+    if (user.suspendedAt && (!user.suspendedUntil || new Date(user.suspendedUntil).getTime() > now)) {
+      throw new BearerAuthError("account_suspended");
+    }
+  }
+
   await db.upsertUser({ id: user.id, lastSignedIn: new Date() });
   return user;
 }
@@ -264,7 +272,12 @@ export function requireApiAuth() {
       const user = await authenticateApiRequest(req);
       (req as unknown as { user: User }).user = user;
       next();
-    } catch {
+    } catch (err) {
+      // X2: a suspended account is authenticated but forbidden (403), not 401.
+      if (err instanceof BearerAuthError && err.reason === "account_suspended") {
+        res.status(403).json({ error: "account_suspended" });
+        return;
+      }
       res.status(401).json({ error: "Authentication required" });
     }
   };
@@ -284,7 +297,12 @@ export function requireApiAdmin() {
       }
       (req as unknown as { user: User }).user = user;
       next();
-    } catch {
+    } catch (err) {
+      // X2: a suspended account is authenticated but forbidden (403), not 401.
+      if (err instanceof BearerAuthError && err.reason === "account_suspended") {
+        res.status(403).json({ error: "account_suspended" });
+        return;
+      }
       res.status(401).json({ error: "Authentication required" });
     }
   };
