@@ -29,7 +29,29 @@ import {
   type RunInput,
   type RunResult,
 } from "./driver";
-import { InMemoryCheckpointQueue } from "./checkpoint-queue";
+import { InMemoryCheckpointQueue, type CheckpointEntry } from "./checkpoint-queue";
+import {
+  recordRunOwner,
+  getRunOwner,
+  recordCheckpointOwner,
+  getCheckpointOwner,
+} from "./run-owners";
+
+/** X4: only the run's owner (or an admin) may read/act on a run. */
+function assertRunAccess(ctx: { user: { id: string; role: string } }, runId: string): void {
+  if (ctx.user.role === "admin") return;
+  const owner = getRunOwner(runId);
+  // Fail closed: unknown owner (e.g. pre-fix run) denies non-admin callers.
+  if (!owner || owner !== ctx.user.id) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "You do not own this portal run" });
+  }
+}
+
+function entryVisibleTo(ctx: { user: { id: string; role: string } }, entry: CheckpointEntry): boolean {
+  if (ctx.user.role === "admin") return true;
+  const owner = getCheckpointOwner(entry.checkpointId) ?? getRunOwner(entry.runId);
+  return owner === ctx.user.id;
+}
 
 /** Local admin procedure (same pattern as sibling route files; cannot import
  * the one in routers.ts due to circularity). */
@@ -104,22 +126,28 @@ export const portalRpaRouter = router({
       const driver = await getDriver();
       const runInput: RunInput = { ...input, actorId: ctx.user.id };
       const result = await driver.runPortalSubmission(runInput);
+      // X4: bind the run (and any parked checkpoint) to the calling user.
+      recordRunOwner(result.runId, ctx.user.id);
       if (result.status === "CHECKPOINT_REQUIRED") {
-        await checkpointQueue.enqueue(result);
+        const entry = await checkpointQueue.enqueue(result);
+        recordCheckpointOwner(entry.checkpointId, ctx.user.id);
       }
       return publicRun(result);
     }),
 
   getRun: protectedProcedure
     .input(z.object({ runId: z.string().min(1) }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const record = await runStore.get(input.runId);
       if (!record) throw new TRPCError({ code: "NOT_FOUND", message: "Run not found" });
+      assertRunAccess(ctx, input.runId);
       return publicRun(record);
     }),
 
-  listCheckpoints: protectedProcedure.query(async () => {
-    return checkpointQueue.list();
+  listCheckpoints: protectedProcedure.query(async ({ ctx }) => {
+    // X4: callers only see checkpoints for their own runs; admins see all.
+    const entries = await checkpointQueue.list();
+    return entries.filter((e) => entryVisibleTo(ctx, e));
   }),
 
   /** Resolve a checkpoint (supply MFA code / human-completed flag) and
@@ -133,6 +161,12 @@ export const portalRpaRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const { checkpointId, mfaCode, humanCompleted, ...runInputRaw } = input;
+      // X4: the checkpoint must belong to one of the caller's runs.
+      const pending = await checkpointQueue.list({ includeResolved: true });
+      const target = pending.find((e) => e.checkpointId === checkpointId);
+      if (target && !entryVisibleTo(ctx, target)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "You do not own this checkpoint" });
+      }
       const entry = await checkpointQueue.resolve(checkpointId, { mfaCode, humanCompleted }).catch((err) => {
         throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : String(err) });
       });
@@ -143,7 +177,9 @@ export const portalRpaRouter = router({
         { mfaCode }
       );
       if (result.status === "CHECKPOINT_REQUIRED") {
-        await checkpointQueue.enqueue(result); // re-parked (e.g. CAPTCHA still present)
+        recordRunOwner(result.runId, ctx.user.id);
+        const parked = await checkpointQueue.enqueue(result); // re-parked (e.g. CAPTCHA still present)
+        recordCheckpointOwner(parked.checkpointId, ctx.user.id);
       }
       return publicRun(result);
     }),
@@ -158,8 +194,10 @@ export const portalRpaRouter = router({
       const driver = await getDriver();
       try {
         const result = await driver.resumeRun(resumeToken, { ...runInputRaw, actorId: ctx.user.id }, { mfaCode });
+        recordRunOwner(result.runId, ctx.user.id);
         if (result.status === "CHECKPOINT_REQUIRED") {
-          await checkpointQueue.enqueue(result);
+          const parked = await checkpointQueue.enqueue(result);
+          recordCheckpointOwner(parked.checkpointId, ctx.user.id);
         }
         return publicRun(result);
       } catch (err) {
