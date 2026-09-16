@@ -232,6 +232,13 @@
       "when": 1787544000000,
       "tag": "0032_push_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1787547600000,
+      "tag": "0033_initial_payment_date",
+      "breakpoints": true
     }
   ]
 }
