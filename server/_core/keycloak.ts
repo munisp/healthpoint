@@ -143,8 +143,23 @@ export async function authenticateRequest(req: Request): Promise<User> {
 
   if (!user) throw ForbiddenError("User not found");
 
+  assertNotSuspended(user);
+
   await db.upsertUser({ id: user.id, lastSignedIn: new Date() });
   return user;
+}
+
+/**
+ * X2: enforce administrative suspension on every authenticated request.
+ * A user with suspendedAt set is rejected while the suspension is active —
+ * either indefinitely (no suspendedUntil) or until suspendedUntil passes.
+ */
+export function assertNotSuspended(user: User): void {
+  if (!user.suspendedAt) return;
+  const now = Date.now();
+  if (!user.suspendedUntil || new Date(user.suspendedUntil).getTime() > now) {
+    throw ForbiddenError("account_suspended");
+  }
 }
 
 // ─── Express route registration ───────────────────────────────────────────────
