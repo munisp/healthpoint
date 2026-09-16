@@ -40,6 +40,7 @@ import {
   emrConnections,
   notifications,
   webhooks,
+  webhookDeliveries,
   payerContacts,
   smartTokens,
   bulkFhirExportJobs,
@@ -191,6 +192,20 @@ function nestedOwnerCheck(
     const row = await findById<Record<string, unknown>>(table, idColumn, id, resource);
     if (!row) return;
     assertOwnerOrAdmin(ctx, row[ownerColumn] as string | null, resource);
+  };
+}
+
+/**
+ * Require a well-formed authenticated caller. Used for procedures whose
+ * object-level scoping is enforced in-procedure via ctx.user-derived tenant
+ * binding (X1/X4/X8) — the registry entry makes coverage explicit and fails
+ * closed on a missing/empty caller id.
+ */
+function authenticatedCallerCheck(): AuthzChecker {
+  return async (ctx) => {
+    if (!ctx.user || typeof ctx.user.id !== "string" || ctx.user.id.length === 0) {
+      throw forbidden("Authenticated caller required");
+    }
   };
 }
 
@@ -357,6 +372,61 @@ export const authzCheckers: Record<string, AuthzChecker> = {
   "webhooks.update": nestedOwnerCheck(webhooks, webhooks.id, "id", "userId", "webhook"),
   "webhooks.delete": nestedOwnerCheck(webhooks, webhooks.id, "id", "userId", "webhook"),
   "webhooks.test": nestedOwnerCheck(webhooks, webhooks.id, "id", "userId", "webhook"),
+
+  // ── Webhook replay (X3: deliveries scoped to the caller's webhooks) ──────
+  "webhookReplay.replay": async (ctx, raw) => {
+    const id = strField(raw, "id");
+    if (!id) return;
+    if (isAdmin(ctx)) return;
+    const db = await getDb();
+    if (!db) throw forbidden("Cannot verify webhook delivery access: authorization store unavailable");
+    const rows = await db
+      .select({ userId: webhooks.userId })
+      .from(webhookDeliveries)
+      .innerJoin(webhooks, eq(webhookDeliveries.webhookId, webhooks.id))
+      .where(eq(webhookDeliveries.id, id))
+      .limit(1);
+    if (!rows.length) return; // non-existent → procedure NOT_FOUNDs
+    assertOwnerOrAdmin(ctx, rows[0].userId, "webhook delivery");
+  },
+  // list/replayAll are scoped to the caller's webhooks IN-PROCEDURE (join
+  // webhookDeliveries → webhooks.userId); no input resource id exists to
+  // check here, so the checker is a documented pass-through.
+  "webhookReplay.list": async () => {},
+  "webhookReplay.replayAll": async () => {},
+
+  // ── FSM case routers (X1: tenant derived from ctx.user in-procedure) ─────
+  // tenantId input is accepted-but-ignored in these routers; every procedure
+  // binds to `tenant:${ctx.user.id}` server-side. These entries make the
+  // binding explicit in the registry and fail closed if the caller has no id.
+  "priorAuth.*": authenticatedCallerCheck(),
+  "noticeConsent.*": authenticatedCallerCheck(),
+  "gfePpdr.*": authenticatedCallerCheck(),
+  "submissionAutomation.*": authenticatedCallerCheck(),
+
+  // ── Portal RPA (X4: runs/checkpoints bound to their creator) ─────────────
+  "portalRpa.getRun": async (ctx, raw) => {
+    const runId = strField(raw, "runId");
+    if (!runId) return;
+    if (isAdmin(ctx)) return;
+    const { getRunOwner } = await import("./idr/portal-rpa/run-owners");
+    // Fail closed when no owner is recorded (pre-fix runs).
+    assertOwnerOrAdmin(ctx, getRunOwner(runId) ?? null, "portal run");
+  },
+  "portalRpa.resolveCheckpoint": async (ctx, raw) => {
+    const checkpointId = strField(raw, "checkpointId");
+    if (!checkpointId) return;
+    if (isAdmin(ctx)) return;
+    const { getCheckpointOwner } = await import("./idr/portal-rpa/run-owners");
+    const owner = getCheckpointOwner(checkpointId);
+    // Unknown checkpoint → the procedure's queue lookup rejects it; nothing leaks.
+    if (owner === undefined) return;
+    assertOwnerOrAdmin(ctx, owner, "portal run checkpoint");
+  },
+  // startRun binds ownership in-procedure; listCheckpoints is filtered
+  // in-procedure. Documented pass-through entries.
+  "portalRpa.startRun": authenticatedCallerCheck(),
+  "portalRpa.listCheckpoints": async () => {},
 
   // ── Tenant-wide exports (PHI + financials) ────────────────────────────────
   // reports.exportCSV/exportPDF read the FULL disputes table with no tenant
