@@ -32,6 +32,16 @@ import {
   OutcomeTelemetry,
 } from "./feedback";
 import { isValidCmsDisputeReference } from "./validators";
+import { assertDisputeAccess } from "../../authz";
+
+/**
+ * X8/X1: the tenant is ALWAYS derived server-side from the authenticated
+ * caller. Any client-supplied tenantId is accepted for backward compatibility
+ * but ignored, so submissions can never be read or mutated cross-tenant.
+ */
+function callerTenant(ctx: { user: { id: string } }): string {
+  return `tenant:${ctx.user.id}`;
+}
 
 /** Local admin procedure (same pattern as routers.ts; cannot import it from there due to circularity). */
 const adminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
@@ -174,13 +184,13 @@ export const submissionAutomationRouter = router({
   create: protectedProcedure
     .input(z.object({
       disputeId: idSchema,
-      tenantId: idSchema,
+      tenantId: idSchema.optional(), // accepted for backward compat; IGNORED (server-derived)
       idempotencyKey: idempotencyKeySchema,
       now: z.coerce.date().optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       try {
-        return await getSubmissionStore().createSubmission(input);
+        return await getSubmissionStore().createSubmission({ ...input, tenantId: callerTenant(ctx) });
       } catch (err) {
         mapStoreError(err);
       }
@@ -195,7 +205,7 @@ export const submissionAutomationRouter = router({
    */
   transition: protectedProcedure
     .input(z.object({
-      tenantId: idSchema,
+      tenantId: idSchema.optional(), // accepted for backward compat; IGNORED (server-derived)
       disputeId: idSchema,
       to: submissionStateSchema,
       idempotencyKey: idempotencyKeySchema,
@@ -215,7 +225,7 @@ export const submissionAutomationRouter = router({
         }
       }
       try {
-        return await getSubmissionStore().transitionSubmission(input.tenantId, input.disputeId, {
+        return await getSubmissionStore().transitionSubmission(callerTenant(ctx), input.disputeId, {
           to: input.to,
           actorId: ctx.user.id,
           now: input.now,
@@ -235,11 +245,11 @@ export const submissionAutomationRouter = router({
 
   /** Append-only, hash-chained event log with chain verification result. */
   eventLog: protectedProcedure
-    .input(z.object({ tenantId: idSchema, disputeId: idSchema }))
-    .query(async ({ input }) => {
+    .input(z.object({ tenantId: idSchema.optional(), disputeId: idSchema }))
+    .query(async ({ input, ctx }) => {
       const store = getSubmissionStore();
-      const events = await store.getEventLog(input.tenantId, input.disputeId);
-      const verification = await store.verifyEventChain(input.tenantId, input.disputeId);
+      const events = await store.getEventLog(callerTenant(ctx), input.disputeId);
+      const verification = await store.verifyEventChain(callerTenant(ctx), input.disputeId);
       return { events, verification };
     }),
 
@@ -252,16 +262,21 @@ export const submissionAutomationRouter = router({
    */
   recordDetermination: protectedProcedure
     .input(z.object({
-      tenantId: idSchema,
+      tenantId: idSchema.optional(), // accepted for backward compat; IGNORED (server-derived)
       disputeId: idSchema,
       determination: determinationInputSchema,
       idempotencyKey: idempotencyKeySchema,
       now: z.coerce.date().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      // X8: recording a certified IDRE determination is restricted to platform
+      // admins or users holding the dispute "admin" permission.
+      if (ctx.user.role !== "admin") {
+        await assertDisputeAccess(ctx.user.id, "user", input.disputeId, "admin");
+      }
       try {
         return await recordDeterminationWithStore(
-          input.tenantId,
+          callerTenant(ctx),
           input.disputeId,
           input.determination,
           getSubmissionStore(),
