@@ -6,6 +6,9 @@
 -- (asDbAccountType) for this enum label.
 ALTER TYPE "ledger_account_type" ADD VALUE IF NOT EXISTS 'overpayment_credit';
 --> statement-breakpoint
+-- M7: dead_letter terminal status for the outbox event log.
+ALTER TYPE "event_status" ADD VALUE IF NOT EXISTS 'dead_letter';
+--> statement-breakpoint
 -- M7: outbox dead-letter columns. Accessed exclusively via raw SQL in
 -- server/outbox.ts + server/events/bus.ts (schema.ts unchanged).
 ALTER TABLE "event_log" ADD COLUMN IF NOT EXISTS "deadLetterAt" timestamp;
