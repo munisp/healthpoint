@@ -18,14 +18,19 @@
  */
 
 import {
+  airAmbulanceRegionKey,
+  classifyAirAmbulanceCode,
   computeMedianContractedRate,
+  computeNewServiceCodeStatus,
   loadCpiFactorsFromEnv,
   resolveCpiFactor,
   QPA_BASELINE_DATE,
   QPA_CITATIONS,
+  type AirAmbulanceCodeKind,
   type CpiFactorTable,
   type ContractedRateRow,
   type InsuranceMarket,
+  type NewServiceCodeStatus,
 } from "./methodology";
 import type { IngestionProvenance } from "./ingestion";
 
@@ -35,6 +40,13 @@ export interface QpaComputeInput {
   region: string;
   /** Date the item or service was furnished; selects the CPI target year. */
   asOfDate: Date | string;
+  /**
+   * W1-F6: for air ambulance services, the point-of-pickup geography key.
+   * When set (or when the service code is an air ambulance code), the QPA
+   * region dimension is the point-of-pickup region
+   * (45 CFR 149.140(a)(7)(iii)) and supersedes `region`.
+   */
+  pointOfPickup?: string;
 }
 
 export interface QpaComputeDeps {
@@ -45,6 +57,11 @@ export interface QpaComputeDeps {
   env?: NodeJS.ProcessEnv;
   /** Provenance summary of the ingested batches contributing rates. */
   provenance?: IngestionProvenance[];
+  /**
+   * W1-F8: ingestion-tracked first-seen dates by service code (ISO days),
+   * making the 90-day new-service-code window computable.
+   */
+  serviceCodeFirstSeen?: Record<string, string>;
 }
 
 export interface QpaComputeResult {
@@ -59,6 +76,19 @@ export interface QpaComputeResult {
   serviceYear: number;
   reason?: string;
   fallback?: "ELIGIBLE_DATABASE_REQUIRED";
+  /** W1-F8: structured detail when the code lacks a 2019 baseline. */
+  newServiceCode?: NewServiceCodeStatus;
+  /**
+   * W1-F6: air ambulance detail. Present when the service code is an air
+   * ambulance code — mileage-rated services are flagged and computed only
+   * against mileage-code rates (never median-mixed with base rates).
+   */
+  airAmbulance?: {
+    codeKind: AirAmbulanceCodeKind;
+    mileageRated: boolean;
+    regionBasis: "POINT_OF_PICKUP";
+    region: string;
+  };
   citations: string[];
   provenanceSummary: {
     batchCount: number;
@@ -93,11 +123,42 @@ export function computeQPA(input: QpaComputeInput, deps: QpaComputeDeps): QpaCom
     medianContractedRateCents: null, reason, fallback, ...extra,
   });
 
+  // W1-F6: air ambulance branch — point-of-pickup geography key; mileage
+  // codes are flagged and remain a distinct median dimension from base rates.
+  const aaKind = classifyAirAmbulanceCode(input.serviceCode);
+  let region = input.region;
+  let airAmbulance: QpaComputeResult["airAmbulance"];
+  if (aaKind) {
+    region = input.pointOfPickup
+      ? airAmbulanceRegionKey(input.pointOfPickup)
+      : (input.region.startsWith("AA_POP:") ? input.region : airAmbulanceRegionKey(input.region));
+    airAmbulance = {
+      codeKind: aaKind,
+      mileageRated: aaKind === "MILEAGE",
+      regionBasis: "POINT_OF_PICKUP",
+      region,
+    };
+  }
+
+  // W1-F8 (149.140(c)(3)): explicit per-code new-service-code recognition.
+  const code = input.serviceCode.trim().toUpperCase();
+  const newCode = computeNewServiceCodeStatus(deps.rates ?? [], code, {
+    firstSeenDate: deps.serviceCodeFirstSeen?.[code] ?? null,
+    asOfDate: input.asOfDate,
+  });
+  if (newCode.isNewServiceCode) {
+    return fail(newCode.reason, "ELIGIBLE_DATABASE_REQUIRED", {
+      newServiceCode: newCode,
+      ...(airAmbulance ? { airAmbulance } : {}),
+    });
+  }
+
   if (!deps.rates || deps.rates.length === 0) {
     return fail(
       "No ingested contracted rates available. The engine computes only from validated ingested data " +
       "(ingestContractedRates); it returns no illustrative or default benchmark value.",
-      "ELIGIBLE_DATABASE_REQUIRED"
+      "ELIGIBLE_DATABASE_REQUIRED",
+      { newServiceCode: newCode, ...(airAmbulance ? { airAmbulance } : {}) }
     );
   }
 
@@ -105,7 +166,7 @@ export function computeQPA(input: QpaComputeInput, deps: QpaComputeDeps): QpaCom
   const med = computeMedianContractedRate(deps.rates, {
     serviceCode: input.serviceCode,
     market: input.market,
-    region: input.region,
+    region,
     asOfDate: QPA_BASELINE_DATE,
   });
   if (!med.computable) {
@@ -113,6 +174,8 @@ export function computeQPA(input: QpaComputeInput, deps: QpaComputeDeps): QpaCom
       ...base, qpaCents: null, computable: false, ratesUsed: med.ratesUsed,
       cpiFactor: null, medianContractedRateCents: null,
       reason: med.reason!, fallback: med.fallback,
+      newServiceCode: newCode,
+      ...(airAmbulance ? { airAmbulance } : {}),
     };
   }
 
@@ -132,5 +195,14 @@ export function computeQPA(input: QpaComputeInput, deps: QpaComputeDeps): QpaCom
     ratesUsed: med.ratesUsed,
     cpiFactor: cpi.factor!,
     medianContractedRateCents: med.medianCents,
+    newServiceCode: newCode,
+    ...(airAmbulance ? { airAmbulance } : {}),
+    ...(airAmbulance?.mileageRated
+      ? {
+          reason:
+            "Mileage-rated air ambulance service: the median is computed over mileage-code contracted rates " +
+            "only and is never median-mixed with base rates (45 CFR 149.140(a)(7)(iii) point-of-pickup geography).",
+        }
+      : {}),
   };
 }
