@@ -298,6 +298,17 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    id: "personas",
+    label: "Personas",
+    icon: Users,
+    defaultOpen: false,
+    items: [
+      { icon: Building2, label: "Payer Cases", path: "/payer/cases" },
+      { icon: Scale, label: "IDRE Queue", path: "/idre/queue" },
+      { icon: Users, label: "Organizations", path: "/orgs" },
+    ],
+  },
+  {
     id: "account",
     label: "Account",
     icon: Settings,
