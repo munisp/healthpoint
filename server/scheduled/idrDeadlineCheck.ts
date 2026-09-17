@@ -19,9 +19,9 @@
 
 import { Request, Response } from "express";
 import crypto from "crypto";
-import { and, eq, sql, inArray } from "drizzle-orm";
+import { and, eq, sql, inArray, isNotNull, lt } from "drizzle-orm";
 import { getDb } from "../db";
-import { disputes, notifications } from "../../drizzle/schema";
+import { disputes, eventLog, notifications, users } from "../../drizzle/schema";
 import { idrDeadlineEvents } from "../../drizzle/schema-idr-compliance";
 import { planDeadlineTracking, type DeadlineAlert } from "../idr/deadline-tracking";
 import { getDeadlinePolicy } from "../idr/deadlines";
@@ -169,10 +169,17 @@ export async function idrDeadlineCheckHandler(req: Request, res: Response) {
       alertsEmitted++;
     }
 
+    const dunning = await runPaymentDunning(db, now).catch((e: unknown) => {
+      console.error("[idr-deadline-check] Payment dunning failed:", e);
+      return { noticesSent: 0, escalationsWritten: 0 };
+    });
+
     return res.json({
       ok: true,
       disputesScanned: openDisputes.length,
       deadlineRowsUpserted: upserted,
+      paymentDunningNoticesSent: dunning.noticesSent,
+      paymentDunningEscalationsWritten: dunning.escalationsWritten,
       alertsEmitted,
       alertsDeduped,
       skipped: plan.skipped.length,
@@ -183,4 +190,111 @@ export async function idrDeadlineCheckHandler(req: Request, res: Response) {
     console.error("[idr-deadline-check] Error:", message);
     return res.status(500).json({ error: message, timestamp: new Date().toISOString() });
   }
+}
+
+/**
+ * M4: payment dunning.
+ *
+ * For disputes past their paymentDeadline with an unpaid determined balance:
+ *   +1/+7/+14 calendar days — escalating notifications to the dispute owner
+ *     and all admins;
+ *   +30 — a late_payment_reportable escalation event is written (audit/outbox)
+ *     in addition to the final notice.
+ * Idempotent per dispute+level: each sent level is persisted as an event_log
+ * row keyed `payment-dunning:<disputeId>:<level>` (metadata.dunningLevel), so
+ * repeated runs never re-send a level.
+ */
+export async function runPaymentDunning(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  now: Date,
+): Promise<{ noticesSent: number; escalationsWritten: number }> {
+  const DUNNING_LEVELS = [1, 7, 14, 30] as const;
+  let noticesSent = 0;
+  let escalationsWritten = 0;
+
+  const overdue = await db
+    .select({
+      id: disputes.id,
+      createdBy: disputes.createdBy,
+      paymentDeadline: disputes.paymentDeadline,
+      determinationAmount: disputes.determinationAmount,
+      paidAmount: disputes.paidAmount,
+    })
+    .from(disputes)
+    .where(
+      and(
+        isNotNull(disputes.paymentDeadline),
+        lt(disputes.paymentDeadline, now),
+        isNotNull(disputes.determinationAmount),
+      )
+    );
+  const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
+
+  for (const dispute of overdue) {
+    if (!dispute.paymentDeadline || !dispute.determinationAmount) continue;
+    const determinationCents = Math.round(Number(dispute.determinationAmount) * 100);
+    const paidCents = dispute.paidAmount ? Math.round(Number(dispute.paidAmount) * 100) : 0;
+    if (determinationCents - paidCents <= 0) continue; // fully paid — no dunning
+    const daysLate = Math.floor((now.getTime() - dispute.paymentDeadline.getTime()) / (24 * 60 * 60 * 1000));
+
+    for (const level of DUNNING_LEVELS) {
+      if (daysLate < level) continue;
+      const levelKey = `payment-dunning:${dispute.id}:${level}`;
+      const alreadySent = await db.select({ id: eventLog.id }).from(eventLog)
+        .where(eq(eventLog.idempotencyKey, levelKey)).limit(1);
+      if (alreadySent[0]) continue; // idempotent per dispute+level
+      const reportable = level >= 30;
+      const recipients = [...new Set([dispute.createdBy, ...admins.map(a => a.id)])].filter((id): id is string => Boolean(id));
+      for (const userId of recipients) {
+        await db.insert(notifications).values({
+          id: crypto.randomUUID(),
+          disputeId: dispute.id,
+          userId,
+          notificationType: reportable ? "late_payment_reportable" : "payment_dunning",
+          title: reportable
+            ? `Late payment reportable — ${daysLate} days past payment deadline`
+            : `Payment overdue — day ${daysLate} past deadline (notice ${level}/30)`,
+          message: reportable
+            ? `The payment deadline passed ${daysLate} days ago and the determined amount remains unpaid. ` +
+              `This late payment is now reportable. Escalation level ${level}.`
+            : `The determined payment for this dispute is ${daysLate} day(s) past its deadline. ` +
+              `Escalating notice at +${level} day(s). The remaining balance must be paid to avoid a reportable escalation at +30 days.`,
+          dueDate: dispute.paymentDeadline,
+          isRead: false,
+          createdAt: now,
+        });
+        noticesSent++;
+      }
+      // Persist the sent level (idempotency + audit trail). The +30 level is
+      // the late_payment_reportable escalation marker.
+      await db.insert(eventLog).values({
+        id: crypto.randomUUID(),
+        topic: "idr.payments",
+        eventType: reportable ? "late_payment_reportable" : "payment.dunning",
+        aggregateId: dispute.id,
+        aggregateType: "dispute",
+        payload: {
+          type: reportable ? "late_payment_reportable" : "payment_dunning",
+          dunningLevel: level,
+          daysLate,
+          remainingCents: determinationCents - paidCents,
+          notifiedUserIds: recipients,
+        },
+        metadata: {
+          dunningLevel: level,
+          daysLate,
+          sentLevels: DUNNING_LEVELS.filter(l => l <= level),
+          source: "payment_dunning",
+          timestamp: now.toISOString(),
+        },
+        idempotencyKey: levelKey,
+        status: "pending",
+        retryCount: 0,
+        nextAttemptAt: now,
+        createdAt: now,
+      }).onConflictDoNothing();
+      if (reportable) escalationsWritten++;
+    }
+  }
+  return { noticesSent, escalationsWritten };
 }
