@@ -201,6 +201,11 @@ export const j03: Journey = {
         const entityName = (ctx as unknown as { _en: string })._en;
         const updated = await ctx.provider.disputes.selectArbitrator({
           disputeId, idrEntityId: entityId, idrEntityName: entityName,
+          // S5 (wave F-A): conflict-of-interest screen is mandatory.
+          conflictCheck: {
+            attestedBy: "journey-provider",
+            checks: { noFinancialInterest: true, noPriorEngagement: true, noPartyAffiliation: true },
+          },
         });
         ctx.assertEqual(updated.currentStep, "STEP_07_IDR_ENTITY_SELECTED", "entity selected step");
         const full = await ctx.provider.disputes.getById({ id: disputeId });
