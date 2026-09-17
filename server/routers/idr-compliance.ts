@@ -399,6 +399,11 @@ export const idrComplianceRouter = router({
       status: z.enum(["invoiced", "paid", "waived", "refunded", "void"]),
       paymentReference: z.string().max(128).optional(),
       reason: z.string().max(2000).optional(),
+      // W1-F5: hardship waiver of the administrative fee is an admin-only
+      // procedure requiring documented hardship evidence and an identified
+      // approving admin (45 CFR § 149.510(d)(1) fee-waiver guidance).
+      hardshipEvidence: z.string().min(20).max(4000).optional(),
+      approvedBy: z.string().min(1).max(128).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
@@ -406,6 +411,20 @@ export const idrComplianceRouter = router({
       if (!rows.length) throw new TRPCError({ code: "NOT_FOUND", message: "Fee assessment not found" });
       const current = rows[0];
       await assertDisputeAccess(ctx.user.id, ctx.user.role, current.disputeId, "write");
+      if (input.status === "waived") {
+        if (ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Hardship fee waivers are an admin-only procedure" });
+        }
+        if (!input.hardshipEvidence || input.hardshipEvidence.trim().length < 20) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "hardshipEvidence (min 20 characters) is required to waive a fee on hardship grounds",
+          });
+        }
+        if (!input.approvedBy || input.approvedBy.trim().length === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "approvedBy (approving admin) is required for a hardship waiver" });
+        }
+      }
       try {
         // feeType-aware: the administrative fee is non-refundable (45 CFR § 149.510(d)(1)).
         assertFeeStatusTransition(current.status as never, input.status as never, current.feeType as never);
@@ -418,7 +437,10 @@ export const idrComplianceRouter = router({
         paidAt: input.status === "paid" ? now : current.paidAt,
         invoicedAt: input.status === "invoiced" ? now : current.invoicedAt,
         paymentReference: input.paymentReference ?? current.paymentReference,
-        statusReason: input.reason ?? current.statusReason,
+        statusReason:
+          input.status === "waived"
+            ? `Hardship waiver approved by ${input.approvedBy}: ${input.hardshipEvidence}`
+            : input.reason ?? current.statusReason,
         updatedAt: now,
       }).where(eq(idrFeeAssessments.id, input.assessmentId));
       await emitComplianceEvent({
@@ -429,6 +451,25 @@ export const idrComplianceRouter = router({
         payload: { assessmentId: input.assessmentId, from: current.status, to: input.status, reason: input.reason ?? null },
         userId: ctx.user.id,
       });
+      // W1-F5: dedicated audit entry for hardship waivers.
+      if (input.status === "waived") {
+        await emitComplianceEvent({
+          eventType: "fee.hardship_waiver",
+          aggregateId: current.disputeId,
+          aggregateType: "fee_assessment",
+          topic: "idr.payments",
+          payload: {
+            assessmentId: input.assessmentId,
+            feeType: current.feeType,
+            partyRole: current.partyRole,
+            amountCents: current.amountCents,
+            hardshipEvidence: input.hardshipEvidence,
+            approvedBy: input.approvedBy,
+            cfrReference: "45 CFR § 149.510(d)(1)",
+          },
+          userId: ctx.user.id,
+        });
+      }
       return { ok: true as const, from: current.status, to: input.status };
     }),
 

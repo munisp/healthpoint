@@ -53,6 +53,7 @@ export const IDR_STEP = [
   "STEP_17_DISPUTE_CLOSED",
   "STEP_18_APPEAL_FILED",
   "STEP_19_APPEAL_RESOLVED",
+  "STEP_20_DISPUTE_WITHDRAWN",
 ] as const;
 export type IDRStep = (typeof IDR_STEP)[number];
 
@@ -68,6 +69,7 @@ export const DISPUTE_STATUS = [
   "closed",
   "appealed",
   "ineligible",
+  "withdrawn",
 ] as const;
 export type DisputeStatus = (typeof DISPUTE_STATUS)[number];
 

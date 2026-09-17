@@ -170,6 +170,22 @@ export interface ContractedRateStore {
   findBatchByContentHash(contentHash: string): Promise<string | null>;
   /** Persist batch + rows (must dedupe rows by rowHash within the store). */
   persistBatch(batch: IngestionBatch): Promise<void>;
+  /**
+   * W1-F8 (149.140(c)(3)): first-seen tracking per service code, so the
+   * 90-day new-service-code window is computable. Optional — when absent,
+   * firstSeen dates are derived from row effectiveDates only.
+   */
+  getFirstSeenDate?(serviceCode: string): Promise<string | null>;
+  /** Record (or keep the earliest) first-seen ISO day for a service code. */
+  recordFirstSeenDate?(serviceCode: string, firstSeenDate: string, batchId: string): Promise<void>;
+}
+
+/** W1-F8: per-code first-seen outcome for one ingestion batch. */
+export interface ServiceCodeFirstSeen {
+  serviceCode: string;
+  firstSeenDate: string;
+  /** True when this batch is the first time the code was observed. */
+  isNew: boolean;
 }
 
 /**
@@ -183,7 +199,7 @@ export async function ingestContractedRates(
   rows: unknown[],
   provenance: IngestionProvenance,
   store?: ContractedRateStore
-): Promise<IngestionBatch & { idempotentReplay: boolean }> {
+): Promise<IngestionBatch & { idempotentReplay: boolean; firstSeen?: ServiceCodeFirstSeen[] }> {
   const provErrs = validateProvenance(provenance);
   if (provErrs.length) throw new Error(`invalid provenance: ${provErrs.join("; ")}`);
 
@@ -229,25 +245,51 @@ export async function ingestContractedRates(
     rejected,
   };
   if (store) await store.persistBatch(batch);
-  return { ...batch, idempotentReplay: false };
+
+  // W1-F8 (149.140(c)(3)): per-code first-seen tracking. The first-seen day
+  // is the EARLIEST of (tracked store value, this import day) so replays and
+  // out-of-order imports never move a code's window later.
+  const importDay = toIsoDay(provenance.importedAt)!;
+  const codes = [...new Set(deduped.map(r => r.serviceCode))];
+  const firstSeen: ServiceCodeFirstSeen[] = [];
+  for (const serviceCode of codes) {
+    const tracked = store?.getFirstSeenDate ? await store.getFirstSeenDate(serviceCode) : null;
+    const earliest = tracked && tracked < importDay ? tracked : importDay;
+    const isNew = tracked === null;
+    if (store?.recordFirstSeenDate && (isNew || earliest !== tracked)) {
+      await store.recordFirstSeenDate(serviceCode, earliest, batch.batchId);
+    }
+    firstSeen.push({ serviceCode, firstSeenDate: earliest, isNew });
+  }
+  return { ...batch, idempotentReplay: false, firstSeen };
 }
 
 /** In-memory store for tests and for deployments pending migration 0031. */
 export function createInMemoryStore(): ContractedRateStore & {
   batches: Map<string, IngestionBatch>;
   byHash: Map<string, string>;
+  firstSeenByCode: Map<string, string>;
 } {
   const batches = new Map<string, IngestionBatch>();
   const byHash = new Map<string, string>();
+  const firstSeenByCode = new Map<string, string>();
   return {
     batches,
     byHash,
+    firstSeenByCode,
     async findBatchByContentHash(contentHash) {
       return byHash.get(contentHash) ?? null;
     },
     async persistBatch(batch) {
       batches.set(batch.batchId, batch);
       byHash.set(batch.contentHash, batch.batchId);
+    },
+    async getFirstSeenDate(serviceCode) {
+      return firstSeenByCode.get(serviceCode) ?? null;
+    },
+    async recordFirstSeenDate(serviceCode, firstSeenDate) {
+      const cur = firstSeenByCode.get(serviceCode);
+      if (!cur || firstSeenDate < cur) firstSeenByCode.set(serviceCode, firstSeenDate);
     },
   };
 }

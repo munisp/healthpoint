@@ -23,6 +23,7 @@ export type ComplianceEventType =
   | "deadline.overdue"
   | "fee.assessed"
   | "fee.payment_status_changed"
+  | "fee.hardship_waiver"
   | "attestation.recorded"
   | "attestation.superseded";
 

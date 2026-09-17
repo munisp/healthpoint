@@ -416,7 +416,7 @@ export async function getDashboardStats(userId: string | undefined) {
     db.select({ count: count() }).from(disputes).where(inArray(disputes.status, ["idr_initiated", "idr_entity_selection", "eligibility_review", "offer_submission", "under_arbitration"])),
     db.select({ count: count() }).from(disputes).where(and(eq(disputes.status, "closed"), sql`${disputes.closedAt} >= ${thirtyDaysAgo}`)),
     db.select({ count: count() }).from(disputes).where(and(
-      sql`${disputes.status} NOT IN ('closed', 'ineligible')`,
+      sql`${disputes.status} NOT IN ('closed', 'ineligible', 'withdrawn')`,
       or(
         and(sql`${disputes.openNegotiationDeadline} IS NOT NULL`, sql`${disputes.openNegotiationDeadline} < ${now}`),
         and(sql`${disputes.offerSubmissionDeadline} IS NOT NULL`, sql`${disputes.offerSubmissionDeadline} < ${now}`),
@@ -425,7 +425,7 @@ export async function getDashboardStats(userId: string | undefined) {
     )),
     // Due within 5 business days (not yet overdue)
     db.select({ count: count() }).from(disputes).where(and(
-      sql`${disputes.status} NOT IN ('closed', 'ineligible')`,
+      sql`${disputes.status} NOT IN ('closed', 'ineligible', 'withdrawn')`,
       or(
         and(
           sql`${disputes.openNegotiationDeadline} IS NOT NULL`,
@@ -883,7 +883,7 @@ export async function getIDREntityCaseload(entityId: string): Promise<IDREntityC
   }).from(disputes).where(
     and(
       eq(disputes.idrEntityId, entityId),
-      sql`${disputes.status} NOT IN ('closed', 'ineligible', 'appealed')`
+      sql`${disputes.status} NOT IN ('closed', 'ineligible', 'appealed', 'withdrawn')`
     )
   ).orderBy(disputes.createdAt);
 

@@ -403,6 +403,7 @@ export default function DisputeDetail() {
                   closed: "Closed",
                   appealed: "Appealed",
                   ineligible: "Ineligible",
+                  withdrawn: "Withdrawn",
                 }[dispute.status] ?? dispute.status?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
               </span>
             </div>

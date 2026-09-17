@@ -46,11 +46,13 @@ export type ServiceCategory =
   | 'ANCILLARY'
   | 'DIAGNOSTIC'
   | 'UNFORESEEN_URGENT'
-  | 'NON_EMERGENCY';
+  | 'NON_EMERGENCY'
+  | 'AIR_AMBULANCE';
 
 export type WaiverEligibility =
   | 'WAIVABLE'
   | 'NON_WAIVABLE_EMERGENCY'
+  | 'NON_WAIVABLE_AIR_AMBULANCE_EMERGENCY'
   | 'NON_WAIVABLE_ANCILLARY'
   | 'NON_WAIVABLE_DIAGNOSTIC'
   | 'NON_WAIVABLE_UNFORESEEN'
@@ -69,6 +71,13 @@ export interface WaiverEligibilityInput {
   noInNetworkProviderAvailable?: boolean;
   /** True when the rendering provider is in-network (exception never applies). */
   providerInNetwork?: boolean;
+  /**
+   * W1-F6: set true when an AIR_AMBULANCE service is furnished on an
+   * emergency basis — emergency air ambulance is NEVER waivable. When the
+   * category is AIR_AMBULANCE and this flag is undefined, the engine fails
+   * closed to NON_WAIVABLE (emergency status unresolved).
+   */
+  emergencyAirAmbulance?: boolean;
 }
 
 export interface WaiverEligibilityResult {
@@ -90,6 +99,22 @@ export function evaluateWaiverEligibility(input: WaiverEligibilityInput): Waiver
       reason:
         'Rendering provider is in-network; the notice-and-consent exception ' +
         'applies only to out-of-network providers at in-network facilities.',
+    };
+  }
+  // W1-F6: emergency air ambulance transport can NEVER be waived. Air
+  // ambulance services furnished on an emergency basis are emergency services
+  // for balance-billing purposes (PHSA § 2799A-1(b); 45 CFR 149.410(b)) and
+  // the notice-and-consent exception does not exist for them.
+  if (input.serviceCategory === 'AIR_AMBULANCE' && input.emergencyAirAmbulance !== false) {
+    return {
+      eligibility: 'NON_WAIVABLE_AIR_AMBULANCE_EMERGENCY',
+      waivable: false,
+      reason:
+        (input.emergencyAirAmbulance === true
+          ? 'Emergency air ambulance services are never subject to notice-and-consent '
+          : 'Air ambulance emergency status unresolved; failing closed to non-waivable. Emergency air ambulance services are never subject to notice-and-consent ') +
+        '(PHSA § 2799A-1(b); 45 CFR 149.410(b)); balance billing for emergency air ' +
+        'ambulance transport is prohibited outright.',
     };
   }
   if (input.serviceCategory === 'EMERGENCY') {

@@ -59,6 +59,17 @@ export interface StateProgramEntry {
   authorityUrl: string | null;
   verificationStatus: VerificationStatus;
   notes: string;
+  /**
+   * W1-F7: CMS all-payer model agreement representation. States with an
+   * all-payer model agreement under SSA § 1115A (e.g. hospital global
+   * budgets) may be exempt from parts of the federal methodology for covered
+   * services — represented as a type tag plus a free-form note; no fabricated
+   * legal detail.
+   */
+  allPayerModelAgreement?: {
+    type: 'NONE' | 'IN_EFFECT' | 'FORMER' | 'UNKNOWN';
+    note: string;
+  };
 }
 
 /** Registry-level metadata, derived from verified aggregate facts. */
@@ -73,7 +84,15 @@ export interface RegistryMetadata {
 }
 
 /** Jurisdiction resolution inputs. */
-export type PlanType = 'FULLY_INSURED' | 'SELF_FUNDED';
+export type PlanType =
+  | 'FULLY_INSURED'
+  | 'SELF_FUNDED'
+  /**
+   * W1-F7: Federal Employees Health Benefits (FEHB) plans. FEHB carriers are
+   * subject to the FEDERAL NSA IDR process regardless of state law (5 U.S.C.
+   * § 8902(p); OPM carrier letter guidance), so FEHB always resolves FEDERAL.
+   */
+  | 'FEHB';
 export type ServiceCategory =
   | 'EMERGENCY'
   | 'NON_EMERGENCY'

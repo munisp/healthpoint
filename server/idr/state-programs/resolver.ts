@@ -28,7 +28,7 @@ import type {
 const STATE_CODE_RE = /^[A-Z]{2}$/;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-const PLAN_TYPES: readonly PlanType[] = ['FULLY_INSURED', 'SELF_FUNDED'];
+const PLAN_TYPES: readonly PlanType[] = ['FULLY_INSURED', 'SELF_FUNDED', 'FEHB'];
 const SERVICE_CATEGORIES: readonly ServiceCategory[] = [
   'EMERGENCY',
   'NON_EMERGENCY',
@@ -107,6 +107,24 @@ export function resolveJurisdiction(input: JurisdictionInput): JurisdictionResul
     warnings.push(
       `State program ${input.stateCode} is registered but UNVERIFIED; treat the resolution as provisional pending legal research.`,
     );
+  }
+
+  // (a0) W1-F7: FEHB plans always resolve FEDERAL (5 U.S.C. § 8902(p); OPM
+  // carrier guidance) — state surprise-billing laws do not displace the
+  // federal NSA process for FEHB coverage.
+  if (input.planType === 'FEHB') {
+    if (input.optedIn !== undefined) {
+      warnings.push('optedIn flag is not meaningful for FEHB plans and was ignored; FEHB always resolves FEDERAL.');
+    }
+    return {
+      regime: 'FEDERAL',
+      rationale:
+        `FEHB plan (state of service ${input.stateCode}): Federal Employees Health Benefits coverage is governed by the ` +
+        `federal NSA IDR process (5 U.S.C. § 8902(p); OPM carrier guidance), regardless of any registered state program. ` +
+        FEDERAL_FLOOR,
+      verificationStatus: 'VERIFIED',
+      warnings,
+    };
   }
 
   // (a) Self-funded

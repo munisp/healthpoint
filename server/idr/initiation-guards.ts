@@ -18,7 +18,7 @@
  * reject (HTTP 400) or record an admin-override compliance note.
  */
 
-import { and, eq, isNotNull, or, inArray } from "drizzle-orm";
+import { and, eq, isNotNull, or, inArray, ne } from "drizzle-orm";
 import { disputes, disputeEvents } from "../../drizzle/schema";
 import { computeIDRDeadlines, addBusinessDays, isBusinessDay } from "./deadlines";
 import { computeCoolingOff, type DisputeType } from "./cooling-off/cooling-off";
@@ -154,7 +154,10 @@ export async function checkCoolingOffForNewDispute(
         or(
           isNotNull(disputes.determinationAmount),
           inArray(disputes.status, ["determination_issued", "payment_pending", "closed", "appealed"])
-        )
+        ),
+        // W1-F1: withdrawn disputes never reached a determination and are
+        // excluded from cooling-off keys.
+        ne(disputes.status, "withdrawn")
       )
     );
 

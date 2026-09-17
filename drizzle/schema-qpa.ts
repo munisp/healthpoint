@@ -87,6 +87,25 @@ export const qpaIngestionBatches = pgTable(
   (t) => [uniqueIndex("qpa_batches_content_hash_idx").on(t.contentHash)]
 );
 
+/**
+ * W1-F8 (45 CFR 149.140(c)(3)): first-seen date per service code. The QPA
+ * engine recognizes codes without a 2019 baseline (new service codes) and
+ * returns ELIGIBLE_DATABASE_REQUIRED with a structured reason; this table
+ * anchors the 90-day new-code window computation. Applied by migration
+ * 0037_wave_w1.sql.
+ */
+export const qpaServiceCodeFirstSeen = pgTable(
+  "qpa_service_code_first_seen",
+  {
+    serviceCode: varchar("serviceCode", { length: 16 }).primaryKey(),
+    /** ISO day (YYYY-MM-DD) the code was first observed in any ingestion batch. */
+    firstSeenDate: varchar("firstSeenDate", { length: 10 }).notNull(),
+    /** Ingestion batch in which the code was first observed. */
+    batchId: varchar("batchId", { length: 64 }).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  }
+);
+
 export const qpaCpiFactors = pgTable(
   "qpa_cpi_factors",
   {

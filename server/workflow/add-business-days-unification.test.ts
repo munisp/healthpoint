@@ -43,7 +43,9 @@ describe("workflow step statutory definitions", () => {
   });
 
   it("STEP_16 administrative fee is paid by each party (45 CFR § 149.510(d)(1))", () => {
-    expect(IDR_WORKFLOW_STEPS.STEP_16_ADMINISTRATIVE_FEE_PAID.nsaReference).toBe("45 CFR § 149.510(d)(1)");
-    expect(IDR_WORKFLOW_STEPS.STEP_16_ADMINISTRATIVE_FEE_PAID.description).toMatch(/each party/i);
+    // W1-F4: STEP_16 is now a reconciliation checkpoint — the fee is due at
+    // IDR initiation (assessed at STEP_04), not freshly payable here.
+    expect(IDR_WORKFLOW_STEPS.STEP_16_ADMINISTRATIVE_FEE_PAID.nsaReference).toContain("45 CFR § 149.510(d)(1)");
+    expect(IDR_WORKFLOW_STEPS.STEP_16_ADMINISTRATIVE_FEE_PAID.description).toMatch(/both parties/i);
   });
 });

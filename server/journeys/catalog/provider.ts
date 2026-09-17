@@ -93,7 +93,8 @@ export const j01: Journey = {
           ctx, ctx.reviewer.disputes.getById({ id: disputeId }), "FORBIDDEN", "IDOR read denied"
         );
         const timeline = await ctx.provider.disputes.getTimeline({ disputeId });
-        ctx.assert(timeline.timeline.length === 19, "timeline covers 19 workflow steps");
+        // W1-F1: FSM gained the terminal STEP_20_DISPUTE_WITHDRAWN step → 20 steps.
+        ctx.assert(timeline.timeline.length === 20, "timeline covers 20 workflow steps");
         return { evidence: { currentStep: full.currentStep, timelineSteps: timeline.timeline.length } };
       },
     },

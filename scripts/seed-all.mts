@@ -1011,6 +1011,15 @@ async function main() {
     console.log(`${table_name.padEnd(42)} +${String(ins).padStart(6)}  total=${c}`);
   }
   console.log(`${"TOTAL".padEnd(42)} +${totalInserted}  total=${totalRows}`);
+
+  // W1-F7: jurisdiction registry bootstrap — idempotent in-process seed of
+  // documented state IDR programs (TX/CA/FL/GA + documented federal-path
+  // states). Resolution logic never reads this seed directly; it only sees
+  // registered entries.
+  const { seedStateRegistry } = await import("../server/idr/state-programs/seed");
+  const reg = seedStateRegistry();
+  console.log(`State registry seeded (idempotent): ${reg.seeded.join(", ")}`);
+
   await sql.end();
 }
 
