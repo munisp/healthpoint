@@ -44,8 +44,8 @@ import { eventBus } from "./events/bus";
 import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, getStatusForStep, addBusinessDays, daysUntilDeadline, validateWorkflowTransition, getStepNumber, isDeadlinePassed } from "./workflow/idr-workflow";
 import { addBusinessDays as addIdrBusinessDays, businessDaysBetween } from "./idr/deadlines";
 import { checkIdrInitiationWindow, checkCoolingOffForNewDispute, validateConflictCheck } from "./idr/initiation-guards";
-import { idrAttestations, disputeEvents } from "../drizzle/schema";
-import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
+import { idrAttestations, disputeEvents, settlementTransfers } from "../drizzle/schema";
+import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, recordUnverifiedPaymentReport, hasApprovedSettlementEvidence, confirmPaymentReport, dollarsToCents, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
 import { dispatchOutboxBatch } from "./outbox";
 import { createSettlementTransfer, decideSettlementTransfer, getSettlementTransfer, listSettlementTransfers, markSettlementTransferSubmitted } from "./settlement-lifecycle";
 import { listSettlementBalanceProofs, listSettlementExceptionReviews, reviewSettlementException } from "./settlement-proof";
@@ -400,6 +400,14 @@ export const appRouter = router({
         initializeDisputeLedger(dispute.id).catch((e) =>
           console.warn("[Ledger] Failed to initialize ledger for dispute", dispute.id, e)
         );
+        // M1: record the billed amount on the ledger at creation so
+        // getDisputeFinancialSummary reflects a non-zero billed balance.
+        const billedCents = dollarsToCents(input.billedAmount);
+        if (billedCents > 0) {
+          recordBilledAmount(dispute.id, billedCents, dispute.id).catch((e) =>
+            console.warn("[Ledger] Failed to record billed amount for dispute", dispute.id, e)
+          );
+        }
         // Sync to OpenSearch
         indexDocument("dispute", dispute.id, dispute as unknown as Record<string, unknown>).catch(() => {});
         // Create deadline notification
@@ -503,6 +511,18 @@ export const appRouter = router({
             determinationWinner: additionalData.determinationWinner ?? undefined,
           }
         ));
+        // M1: record the IDR determination on the ledger when the dispute
+        // reaches the determination step. Delta-based (see recordDetermination):
+        // re-issue of the same amount is a no-op; a reduced determination books
+        // a reversal and any resulting overpayment credit (M3).
+        if (newStep === "STEP_13_DETERMINATION_ISSUED" && dispute.determinationAmount) {
+          const determinationCents = dollarsToCents(dispute.determinationAmount);
+          if (determinationCents > 0) {
+            recordDetermination(dispute.id, determinationCents, dispute.id).catch((e) =>
+              console.warn("[Ledger] Failed to record determination for dispute", dispute.id, e)
+            );
+          }
+        }
         // Create step-specific notifications
         if (newStep === "STEP_04_IDR_INITIATED") {
           await createNotification({
@@ -549,6 +569,16 @@ export const appRouter = router({
           supportingDocIds: null,
           submittedBy: ctx.user.id,
         });
+        // M1: payer-side offers (QPA / responding-party counter) establish the
+        // allowed amount on the ledger.
+        if (input.offerType === "qpa" || input.offerType === "responding_party") {
+          const allowedCents = dollarsToCents(input.amount);
+          if (allowedCents > 0) {
+            recordAllowedAmount(input.disputeId, allowedCents, offerId).catch((e) =>
+              console.warn("[Ledger] Failed to record allowed amount for dispute", input.disputeId, e)
+            );
+          }
+        }
         return { offerId };
       }),
 
@@ -565,6 +595,16 @@ export const appRouter = router({
           ctx.user.id,
           ctx.user.name ?? "Unknown"
         );
+        // M1: an accepted offer resolves the dispute — record the
+        // determination amount on the ledger (delta-based, idempotent).
+        if (dispute.determinationAmount) {
+          const determinationCents = dollarsToCents(dispute.determinationAmount);
+          if (determinationCents > 0) {
+            recordDetermination(dispute.id, determinationCents, input.offerId).catch((e) =>
+              console.warn("[Ledger] Failed to record determination for dispute", dispute.id, e)
+            );
+          }
+        }
         await createNotification({
           disputeId: input.disputeId,
           userId: ctx.user.id,
@@ -949,11 +989,20 @@ export const appRouter = router({
         return { success: true, newDisputeId: newDispute.id, referenceNumber: newDispute.referenceNumber };
       }),
 
+    // M8: merge hardening. A clean merge requires the same responding party
+    // (payer), no money recorded on EITHER dispute (paidAmount = 0), and no
+    // approved (or further-along) settlement transfers on either dispute.
+    // An admin may override with { force: true, reason }; the override is
+    // recorded in the audit event. Everything happens in ONE transaction:
+    // offers/documents move to the primary, the secondary's ledger entries
+    // are voided with reversal entries, and the secondary is closed WITH a
+    // workflow/audit event listing the moved/voided artifacts.
     merge: protectedProcedure
       .input(z.object({
         primaryDisputeId: z.string(),
         secondaryDisputeId: z.string(),
         reason: z.string().max(1000).optional(),
+        force: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         if (input.primaryDisputeId === input.secondaryDisputeId) {
@@ -961,29 +1010,140 @@ export const appRouter = router({
         }
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { eq } = await import("drizzle-orm");
+        const { eq, and, sql: dsql } = await import("drizzle-orm");
         const primary = await getDisputeById(input.primaryDisputeId);
         const secondary = await getDisputeById(input.secondaryDisputeId);
         if (!primary || !secondary) throw new TRPCError({ code: "NOT_FOUND", message: "One or both disputes not found" });
-        // Mark secondary as merged/closed
-        await db.update(disputesTable).set({
-          status: "closed" as any,
-          notes: `[Merged into ${primary.referenceNumber}] ${secondary.notes ?? ""}`.trim(),
-          updatedAt: new Date(),
-        }).where(eq(disputesTable.id, input.secondaryDisputeId));
-        // Record merge event on primary
+
+        const isAdmin = ctx.user.role === "admin";
+        const forced = input.force === true;
+        if (forced && !isAdmin) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin may force a dispute merge" });
+        }
+        if (forced && !input.reason?.trim()) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "A forced merge requires a reason" });
+        }
+        if (!forced) {
+          const blockers: string[] = [];
+          if ((primary.respondingPartyName ?? null) !== (secondary.respondingPartyName ?? null)) {
+            blockers.push("the disputes name different responding parties (payers)");
+          }
+          const paidNonZero = (v: string | null) => v !== null && Number(v) !== 0;
+          if (paidNonZero(primary.paidAmount) || paidNonZero(secondary.paidAmount)) {
+            blockers.push("one or both disputes already have recorded payments (paidAmount ≠ 0)");
+          }
+          const approvedTransfers = await db.select({ id: settlementTransfers.id, disputeId: settlementTransfers.disputeId })
+            .from(settlementTransfers)
+            .where(and(
+              dsql`${settlementTransfers.disputeId} IN (${input.primaryDisputeId}, ${input.secondaryDisputeId})`,
+              dsql`${settlementTransfers.status} IN ('authorized','submitted','accepted','settled','reconciled','hold_unknown')`,
+            )).limit(1);
+          if (approvedTransfers[0]) {
+            blockers.push("one or both disputes have approved (or further-along) settlement transfers");
+          }
+          if (blockers.length) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Merge refused: ${blockers.join("; ")}. An admin may override with force:true and a reason.`,
+            });
+          }
+        }
+
+        const mergeResult = await db.transaction(async (tx) => {
+          // Serialize both disputes for the duration of the merge.
+          await tx.execute(dsql`SELECT pg_advisory_xact_lock(hashtext(${input.primaryDisputeId}), hashtext(${input.secondaryDisputeId}))`);
+          const { disputeOffers, disputeDocuments, disputeEvents: disputeEventsTable, ledgerAccounts: la, ledgerEntries: le } = await import("../drizzle/schema");
+          const now = new Date();
+
+          // 1. Move offers and documents to the primary.
+          const movedOffers = await tx.update(disputeOffers)
+            .set({ disputeId: input.primaryDisputeId })
+            .where(eq(disputeOffers.disputeId, input.secondaryDisputeId))
+            .returning({ id: disputeOffers.id });
+          const movedDocuments = await tx.update(disputeDocuments)
+            .set({ disputeId: input.primaryDisputeId })
+            .where(eq(disputeDocuments.disputeId, input.secondaryDisputeId))
+            .returning({ id: disputeDocuments.id });
+
+          // 2. Void the secondary's ledger entries with reversal entries.
+          const secondaryAccounts = await tx.select().from(la).where(eq(la.disputeId, input.secondaryDisputeId));
+          const secondaryEntries = await tx.select().from(le).where(eq(le.disputeId, input.secondaryDisputeId));
+          const accountTypeById = new Map(secondaryAccounts.map(a => [a.id, a.accountType]));
+          const voidedEntryIds: string[] = [];
+          for (const entry of secondaryEntries) {
+            if (entry.entryType === "reversal") continue; // don't reverse reversals
+            const alreadyReversed = secondaryEntries.some(r =>
+              r.entryType === "reversal" && r.idempotencyKey === `merge-void:${entry.id}`);
+            if (alreadyReversed) continue;
+            const reversalId = crypto.randomUUID();
+            await tx.insert(le).values({
+              id: reversalId,
+              disputeId: input.secondaryDisputeId,
+              // Inverse direction of the original entry (see recordEntry convention).
+              debitAccountId: entry.creditAccountId,
+              creditAccountId: entry.debitAccountId,
+              amountCents: entry.amountCents,
+              currency: entry.currency,
+              entryType: "reversal",
+              description: `Merge void: reversal of entry ${entry.id} (${entry.description}) — dispute merged into ${primary.referenceNumber}`,
+              referenceId: entry.referenceId,
+              referenceType: "merge_void",
+              idempotencyKey: `merge-void:${entry.id}`,
+              metadata: { mergeVoid: true, voidedEntryId: entry.id, primaryDisputeId: input.primaryDisputeId },
+              createdAt: now,
+            });
+            // Balance effect: debit (+) the original credit account, credit (−)
+            // the original debit account — exactly undoing the original movement.
+            await tx.update(la).set({ balanceCents: dsql`${la.balanceCents} + ${entry.amountCents}`, updatedAt: now }).where(eq(la.id, entry.creditAccountId));
+            await tx.update(la).set({ balanceCents: dsql`${la.balanceCents} - ${entry.amountCents}`, updatedAt: now }).where(eq(la.id, entry.debitAccountId));
+            voidedEntryIds.push(entry.id);
+          }
+
+          // 3. Close the secondary with an audit trail.
+          await tx.update(disputesTable).set({
+            status: "closed" as any,
+            closedAt: now,
+            notes: `[Merged into ${primary.referenceNumber}] ${secondary.notes ?? ""}`.trim(),
+            updatedAt: now,
+          }).where(eq(disputesTable.id, input.secondaryDisputeId));
+          const artifacts = {
+            movedOfferIds: movedOffers.map(o => o.id),
+            movedDocumentIds: movedDocuments.map(d => d.id),
+            voidedLedgerEntryIds: voidedEntryIds,
+            forced,
+            forceReason: forced ? input.reason : null,
+          };
+          await tx.insert(disputeEventsTable).values({
+            id: crypto.randomUUID(),
+            disputeId: input.secondaryDisputeId,
+            step: secondary.currentStep,
+            eventType: "dispute_merged_closed",
+            description:
+              `Dispute merged into ${primary.referenceNumber} and closed. ` +
+              `Moved ${artifacts.movedOfferIds.length} offer(s), ${artifacts.movedDocumentIds.length} document(s); ` +
+              `voided ${artifacts.voidedLedgerEntryIds.length} ledger entrie(s) with reversal entries.` +
+              (input.reason ? ` Reason: ${input.reason}` : ""),
+            performedBy: ctx.user.id,
+            performedByName: ctx.user.name ?? "Unknown",
+            metadata: { primaryDisputeId: input.primaryDisputeId, primaryRef: primary.referenceNumber, ...artifacts },
+            createdAt: now,
+          });
+          return artifacts;
+        });
+
+        // Record merge event on primary (after the transaction commits).
         const { disputeEvents: disputeEventsTable } = await import("../drizzle/schema");
         await db.insert(disputeEventsTable).values({
           id: crypto.randomUUID(),
           disputeId: input.primaryDisputeId,
           step: primary.currentStep,
           eventType: "dispute_merged",
-          description: `Merged with ${secondary.referenceNumber}${input.reason ? `: ${input.reason}` : ""}`,
+          description: `Merged with ${secondary.referenceNumber}${input.reason ? `: ${input.reason}` : ""}${forced ? " (ADMIN FORCED)" : ""}`,
           performedBy: ctx.user.id,
           performedByName: ctx.user.name ?? "Unknown",
-          metadata: { mergedDisputeId: input.secondaryDisputeId, mergedRef: secondary.referenceNumber, reason: input.reason ?? null },
+          metadata: { ...mergeResult, mergedDisputeId: input.secondaryDisputeId, mergedRef: secondary.referenceNumber, reason: input.reason ?? null },
         });
-        return { success: true, primaryDisputeId: input.primaryDisputeId };
+        return { ...mergeResult, success: true, primaryDisputeId: input.primaryDisputeId };
       }),
   }),
 
@@ -1168,31 +1328,36 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database unavailable");
         const { documentVersions } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
-        // Mark all previous versions as not latest
-        await db.update(documentVersions)
-          .set({ isLatest: false })
-          .where(eq(documentVersions.documentId, input.documentId));
-        // Get current max version number
-        const { max } = await import("drizzle-orm");
-        const [{ maxVer }] = await db.select({ maxVer: max(documentVersions.versionNumber) })
-          .from(documentVersions)
-          .where(eq(documentVersions.documentId, input.documentId));
-        const nextVersion = (maxVer ?? 0) + 1;
-        const [version] = await db.insert(documentVersions).values({
-          id: crypto.randomUUID(),
-          documentId: input.documentId,
-          disputeId: input.disputeId,
-          versionNumber: nextVersion,
-          s3Key: input.storageKey,
-          fileName: input.fileName,
-          fileSize: input.fileSize,
-          mimeType: input.fileType,
-          uploadedBy: ctx.user.id,
-          changeNote: input.changeNote ?? null,
-          isLatest: true,
-        }).returning();
-        return version;
+        const { eq, max, sql: dsql } = await import("drizzle-orm");
+        // M10: the isLatest-flip + max(version)+insert sequence raced under
+        // concurrent uploads (two writers could compute the same next version
+        // and leave two isLatest rows). Serialize per document with a pg
+        // advisory xact lock (same pattern as server/settlement-lifecycle.ts)
+        // and run the flip+read+insert in ONE transaction.
+        return db.transaction(async (tx) => {
+          await tx.execute(dsql`SELECT pg_advisory_xact_lock(hashtext(${input.documentId}))`);
+          await tx.update(documentVersions)
+            .set({ isLatest: false })
+            .where(eq(documentVersions.documentId, input.documentId));
+          const [{ maxVer }] = await tx.select({ maxVer: max(documentVersions.versionNumber) })
+            .from(documentVersions)
+            .where(eq(documentVersions.documentId, input.documentId));
+          const nextVersion = (maxVer ?? 0) + 1;
+          const [version] = await tx.insert(documentVersions).values({
+            id: crypto.randomUUID(),
+            documentId: input.documentId,
+            disputeId: input.disputeId,
+            versionNumber: nextVersion,
+            s3Key: input.storageKey,
+            fileName: input.fileName,
+            fileSize: input.fileSize,
+            mimeType: input.fileType,
+            uploadedBy: ctx.user.id,
+            changeNote: input.changeNote ?? null,
+            isLatest: true,
+          }).returning();
+          return version;
+        });
       }),
   }),
 
@@ -2942,6 +3107,11 @@ Based on NSA IDR historical data and legal precedent, provide:
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
         return getDisputeFinancialSummary(input.disputeId);
       }),
+    // M2: VERIFIED payment evidence may only be posted by an admin or with
+    // settlement-linked evidence (referenceId matching an approved settlement
+    // transfer). Any other dispute writer posts an UNVERIFIED payment report
+    // (payment.reported, paymentEvidence:false) which moves no money until an
+    // admin confirms it via ledger.confirmPayment.
     recordPayment: protectedProcedure
       .input(z.object({
         disputeId: z.string(),
@@ -2951,13 +3121,35 @@ Based on NSA IDR historical data and legal precedent, provide:
       }))
       .mutation(async ({ ctx, input }) => {
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
-        const amountCents = Math.round(input.amountDollars * 100);
+        const amountCents = dollarsToCents(input.amountDollars);
         if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Payment amount must resolve to positive whole cents" });
         }
+        if (ctx.user.role !== "admin") {
+          const settlementLinked = await hasApprovedSettlementEvidence(input.disputeId, input.referenceId);
+          if (!settlementLinked) {
+            const report = await recordUnverifiedPaymentReport(
+              input.disputeId, amountCents, input.referenceId, input.idempotencyKey, ctx.user.id,
+            );
+            await dispatchOutboxBatch(1);
+            return { ...report, verified: false as const };
+          }
+        }
         const entry = await recordPayment(input.disputeId, amountCents, input.referenceId, input.idempotencyKey, ctx.user.id);
         await dispatchOutboxBatch(1);
-        return entry;
+        return { verified: true as const, entry };
+      }),
+    // M2: admin confirmation of an unverified payment report — posts the
+    // verified double-entry and marks the report verified (see ledger.ts).
+    confirmPayment: adminProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        referenceId: z.string().trim().min(3).max(64),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const result = await confirmPaymentReport(input.disputeId, input.referenceId, ctx.user.id);
+        await dispatchOutboxBatch(1);
+        return result;
       }),
   }),
 
