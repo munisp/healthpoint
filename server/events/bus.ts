@@ -194,7 +194,19 @@ class IDREventBus extends EventEmitter {
 
     // 2. Forward to Kafka for downstream services. Kafka failure leaves the
     // outbox event pending/failed for a later retry instead of being ignored.
+    // M7: when Kafka is CONFIGURED (KAFKA_BROKERS set) but the producer is
+    // unavailable, we must NOT silently mark the event delivered — throw so
+    // the outbox worker keeps it pending/failed (and eventually dead-letters
+    // it with an operator alert). When Kafka is not configured at all the
+    // in-process bus is the intended delivery mechanism (dev/test), so
+    // delivery may proceed.
     const producer = await getKafkaProducer();
+    if (!producer && process.env.KAFKA_BROKERS) {
+      throw new Error(
+        `[EventBus] Kafka is configured (KAFKA_BROKERS) but the producer is unavailable; ` +
+        `event ${event.id} (${event.eventType}) was NOT delivered and remains pending for retry`,
+      );
+    }
     if (producer) {
       await producer.send({
         topic: event.topic,
