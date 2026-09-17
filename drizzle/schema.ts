@@ -131,6 +131,10 @@ export const disputes = pgTable(
     idrEntityId: varchar("idrEntityId", { length: 64 }),
     idrEntityName: varchar("idrEntityName", { length: 255 }),
     // Deadlines
+    // Date of the initial payment (or notice of denial) for the claim — the
+    // statutory anchor for the 30-business-day open negotiation window
+    // (45 CFR § 149.510(b)(1)). Nullable; defaults to createdAt at creation.
+    initialPaymentDate: timestamp("initialPaymentDate"),
     openNegotiationDeadline: timestamp("openNegotiationDeadline"),
     idrInitiationDeadline: timestamp("idrInitiationDeadline"),
     entitySelectionDeadline: timestamp("entitySelectionDeadline"),
