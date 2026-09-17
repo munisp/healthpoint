@@ -55,6 +55,9 @@ const rateRowSchema = z.object({
   underlyingFeeScheduleCents: z.number().int().positive().optional(),
   derivedAmountCents: z.number().int().positive().optional(),
   claimsSharePercent: z.number().min(0).max(100).optional(),
+  // One rate per contract (149.140(b)(1)) — passed through when the source
+  // MRF/payer file carries a contract identifier.
+  contractId: z.string().min(1).max(128).optional(),
 });
 
 /** Postgres-backed ContractedRateStore over drizzle/schema-qpa.ts tables. */
@@ -104,6 +107,7 @@ export function createPostgresStore(db: any): ContractedRateStore & {
               underlyingFeeScheduleCents: r.underlyingFeeScheduleCents ?? null,
               derivedAmountCents: r.derivedAmountCents ?? null,
               claimsSharePercent: r.claimsSharePercent != null ? String(r.claimsSharePercent) : null,
+              contractId: r.contractId ?? null,
               rowHash: r.rowHash,
               provenance: batch.provenance,
             }))
@@ -126,6 +130,7 @@ export function createPostgresStore(db: any): ContractedRateStore & {
         ...(r.underlyingFeeScheduleCents != null ? { underlyingFeeScheduleCents: r.underlyingFeeScheduleCents } : {}),
         ...(r.derivedAmountCents != null ? { derivedAmountCents: r.derivedAmountCents } : {}),
         ...(r.claimsSharePercent != null ? { claimsSharePercent: Number(r.claimsSharePercent) } : {}),
+        ...(r.contractId != null ? { contractId: r.contractId } : {}),
       }));
     },
     async loadCpiFactors() {
