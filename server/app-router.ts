@@ -1,4 +1,6 @@
 /**
+ * server/app-router.ts
+ *
  * Root tRPC router barrel.
  *
  * server/routers.ts is owned by another workstream on this branch (and too
@@ -17,12 +19,18 @@
 import { appRouter } from "./routers";
 import { idrComplianceRouter } from "./routers/idr-compliance";
 import { pushSubscriptionsRouter } from "./routers/push-subscriptions";
+import { payerRouter, idreRouter, orgsRouter } from "./routers/personas";
+import { patientPortalRouter } from "./routers/patient-portal";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
   appRouter,
   router({ idrCompliance: idrComplianceRouter }),
-  router({ pushSubscriptions: pushSubscriptionsRouter })
+  router({ pushSubscriptions: pushSubscriptionsRouter }),
+  router({ payer: payerRouter }),
+  router({ patientPortal: patientPortalRouter }),
+  router({ idre: idreRouter }),
+  router({ orgs: orgsRouter })
 );
 
 export type RootRouter = typeof rootRouter;
