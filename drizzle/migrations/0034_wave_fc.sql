@@ -6,6 +6,9 @@
 -- (asDbAccountType) for this enum label.
 ALTER TYPE "ledger_account_type" ADD VALUE IF NOT EXISTS 'overpayment_credit';
 --> statement-breakpoint
+-- M5c: hold_unknown conservative transfer status (settle blocked until reconciled).
+ALTER TYPE "settlement_transfer_status" ADD VALUE IF NOT EXISTS 'hold_unknown';
+--> statement-breakpoint
 -- M7: dead_letter terminal status for the outbox event log.
 ALTER TYPE "event_status" ADD VALUE IF NOT EXISTS 'dead_letter';
 --> statement-breakpoint
