@@ -494,7 +494,7 @@ export async function acceptOffer(disputeId: string, offerId: string, performedB
     // Fall back: find the latest responding party offer for this dispute
     offer = await db.select().from(disputeOffers)
       .where(and(eq(disputeOffers.disputeId, disputeId), eq(disputeOffers.offerType, "responding_party")))
-      .orderBy(desc(disputeOffers.submittedAt))
+      .orderBy(disputeOffers.submittedAt)
       .limit(1);
   }
   const now = new Date();
@@ -1206,7 +1206,7 @@ export async function updateDisputeTemplate(id: string, updates: Partial<InsertD
 
 export async function deleteDisputeTemplate(id: string): Promise<void> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) throw new Error("Database not available");
   await db.delete(disputeTemplates).where(eq(disputeTemplates.id, id));
 }
 
