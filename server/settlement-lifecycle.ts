@@ -11,7 +11,8 @@ import {
 } from "../drizzle/schema";
 import type { SettlementTransfer } from "../drizzle/schema";
 import { getDb } from "./db";
-import { LedgerIntegrityError, recordPaymentInTransaction, reversePaymentInTransaction } from "./ledger";
+import { disputes } from "../drizzle/schema";
+import { assertPaymentAcceptable, dollarsToCents, LedgerIntegrityError, recordPaymentInTransaction, reversePaymentInTransaction } from "./ledger";
 import {
   commitSettlementTransfer,
   postPendingSettlementHold,
@@ -24,8 +25,21 @@ import { dispatchOutboxBatch } from "./outbox";
 
 export const settlementTransferStatusSchema = z.enum([
   "requested", "authorized", "submitted", "accepted", "settled", "failed", "reversed", "reconciled",
+  // M5c: the TigerBeetle hold outcome was unknown after timeout while
+  // TB_LEDGER_REQUIRED=false. Conservative: settlement is blocked until an
+  // operator explicitly reconciles the hold out-of-band.
+  "hold_unknown",
 ]);
 export type SettlementTransferStatus = z.infer<typeof settlementTransferStatusSchema>;
+
+/**
+ * drizzle/schema.ts is owned by another wave, so its pgEnum lacks the
+ * hold_unknown label added by migration 0034_wave_fc.sql. This cast keeps the
+ * drizzle enum typing satisfied while the runtime value is the real DB label.
+ */
+type DbTransferStatus = typeof settlementTransfers.$inferInsert.status;
+const asDbTransferStatus = (s: SettlementTransferStatus): DbTransferStatus =>
+  s as unknown as DbTransferStatus;
 
 export const providerSettlementReportSchema = z.object({
   provider: z.string().trim().min(2).max(64),
@@ -41,13 +55,16 @@ export type ProviderSettlementReportInput = z.infer<typeof providerSettlementRep
 
 const transitionMap: Record<SettlementTransferStatus, SettlementTransferStatus[]> = {
   requested: ["authorized", "failed"],
-  authorized: ["submitted", "failed"],
+  authorized: ["submitted", "failed", "hold_unknown"],
   submitted: ["accepted", "settled", "failed"],
   accepted: ["settled", "failed"],
   settled: ["reversed", "reconciled"],
   failed: [],
   reversed: ["reconciled"],
   reconciled: ["reversed"],
+  // M5c: no automatic transitions — an operator must explicitly reconcile a
+  // hold_unknown transfer (see markSettlementTransferSubmitted).
+  hold_unknown: [],
 };
 
 export function canTransitionSettlementTransfer(from: SettlementTransferStatus, to: SettlementTransferStatus): boolean {
@@ -130,6 +147,29 @@ export async function createSettlementTransfer(input: {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.disputeId}))`);
     const duplicate = await tx.select().from(settlementTransfers).where(eq(settlementTransfers.idempotencyKey, input.idempotencyKey)).limit(1);
     if (duplicate[0]) return duplicate[0];
+    // M5a: cap cumulative settlement requests at the determination amount.
+    // requested+authorized+submitted+accepted+settled+reconciled transfers all
+    // count against the cap; failed/reversed transfers released their claim.
+    const disputeRows = await tx.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
+    const dispute = disputeRows[0];
+    if (!dispute) throw new LedgerIntegrityError("Dispute not found");
+    if (!dispute.determinationAmount) {
+      throw new LedgerIntegrityError("A payment determination is required before settlement transfers can be requested");
+    }
+    const determinationCents = dollarsToCents(dispute.determinationAmount);
+    const committed = await tx.select({ total: sql<number>`COALESCE(SUM(${settlementTransfers.amountCents}), 0)::int` })
+      .from(settlementTransfers)
+      .where(and(
+        eq(settlementTransfers.disputeId, input.disputeId),
+        sql`${settlementTransfers.status} IN ('requested','authorized','submitted','accepted','settled','reconciled','hold_unknown')`,
+      ));
+    const committedCents = Number(committed[0]?.total ?? 0);
+    if (committedCents + input.amountCents > determinationCents) {
+      throw new LedgerIntegrityError(
+        `Settlement transfers for this dispute would exceed the determination amount: ` +
+        `${committedCents + input.amountCents} cents requested+approved vs ${determinationCents} cents determined`,
+      );
+    }
     const now = new Date();
     const transfer: typeof settlementTransfers.$inferInsert = {
       id: crypto.randomUUID(),
@@ -209,6 +249,7 @@ export async function markSettlementTransferSubmitted(input: { transferId: strin
   // transfers.
   const prior = await getSettlementTransfer(input.transferId);
   let tbPendingHoldId: string | null = null;
+  let holdUnknownReason: string | null = null;
   if (prior && prior.status === "authorized") {
     const hold = await withTigerBeetleLedger(
       () => submitPendingSettlementHold({
@@ -219,6 +260,39 @@ export async function markSettlementTransferSubmitted(input: { transferId: strin
       { aggregateId: prior.id, aggregateType: "settlement_transfer", action: "transfer.hold" },
     );
     if (hold.mode === "applied" && hold.result) tbPendingHoldId = hold.result.pendingTransferId;
+    // M5c: the ledger is enabled but its response is unknown (timeout/outage)
+    // and TB_LEDGER_REQUIRED=false. The hold MAY exist in TigerBeetle, so we
+    // must not record the transfer as submitted (a later settle could
+    // double-move funds, or funds could be held with no PG record). Mark the
+    // transfer hold_unknown and block settlement until an operator explicitly
+    // reconciles the hold out-of-band.
+    if (hold.mode === "degraded") holdUnknownReason = hold.reason;
+  }
+  if (prior && holdUnknownReason) {
+    const now = new Date();
+    const result = await db.transaction(async tx => {
+      const rows = await tx.select().from(settlementTransfers).where(eq(settlementTransfers.id, input.transferId)).limit(1);
+      const transfer = rows[0];
+      if (!transfer) throw new LedgerIntegrityError("Settlement transfer not found");
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${transfer.disputeId}))`);
+      if (transfer.status !== "authorized") throw new LedgerIntegrityError("Only an authorized transfer may be marked submitted");
+      const metadata = {
+        ...((transfer.metadata as Record<string, unknown> | null) ?? {}),
+        holdUnknownReason: holdUnknownReason.slice(0, 1000),
+        providerTransferIdAttempted: input.providerTransferId,
+      };
+      const updatedRows = await tx.update(settlementTransfers).set({
+        status: asDbTransferStatus("hold_unknown"),
+        metadata,
+        updatedAt: now,
+      }).where(eq(settlementTransfers.id, transfer.id)).returning();
+      const updated = updatedRows[0];
+      if (!updated) throw new LedgerIntegrityError("Settlement hold_unknown state was not persisted");
+      await enqueueLifecycleEvent(tx, updated, "transfer.hold_unknown", { reason: holdUnknownReason.slice(0, 500) }, input.actorId);
+      return updated;
+    });
+    await dispatchOutboxBatch(1);
+    return result;
   }
   const result = await db.transaction(async tx => {
     const rows = await tx.select().from(settlementTransfers).where(eq(settlementTransfers.id, input.transferId)).limit(1);
@@ -255,6 +329,16 @@ export async function reconcileProviderSettlementReport(input: ProviderSettlemen
   // double-posts. The transaction below re-validates authoritatively under
   // the dispute advisory lock; this read only plans the saga step.
   const prior = await getSettlementTransfer(input.transferId);
+  // M5b: run the PG-side business-rule pre-check BEFORE any TigerBeetle
+  // post/commit. TigerBeetle must never move funds for a settlement that
+  // Postgres would reject (no determination, nothing remaining, amount above
+  // the remaining determined amount). The transaction below re-validates
+  // authoritatively under the advisory lock via recordPaymentInTransaction.
+  if (prior && input.status === "settled"
+      && canTransitionSettlementTransfer(prior.status as SettlementTransferStatus, "settled")) {
+    const disputeRows = await db.select().from(disputes).where(eq(disputes.id, prior.disputeId)).limit(1);
+    if (disputeRows[0]) assertPaymentAcceptable(disputeRows[0], prior.amountCents);
+  }
   let tbSettledTransferId: string | null = null;
   let tbVoidTransferId: string | null = null;
   let tbReversalTransferId: string | null = null;
