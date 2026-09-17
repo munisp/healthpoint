@@ -239,6 +239,20 @@ export const j14: Journey = {
       async run(ctx) {
         const d = await createJourneyDispute(ctx, "j14", { billedAmount: "5000.00" });
         (ctx as unknown as { _d: string })._d = d.id;
+        // Settlement transfers are capped at (and require) a payment
+        // determination. Issue one via the real offer/accept path first.
+        await ctx.provider.disputes.submitOffer({
+          disputeId: d.id, offerType: "qpa", amount: "2600.00", rationale: "QPA disclosure",
+        });
+        await ctx.provider.disputes.advance({
+          disputeId: d.id, newStep: "STEP_02_OPEN_NEGOTIATION_PERIOD", newStatus: "open_negotiation",
+          description: "Open negotiation started",
+        });
+        const counter = await ctx.provider.disputes.submitOffer({
+          disputeId: d.id, offerType: "responding_party", amount: "2600.00", rationale: "Payer counter at QPA",
+        });
+        const accepted = await ctx.provider.disputes.acceptOffer({ disputeId: d.id, offerId: counter.offerId });
+        ctx.assertEqual(String(accepted.dispute.determinationAmount), "2600.00", "determination = accepted offer");
         const transfer = await ctx.provider.settlementTransfers.request({
           disputeId: d.id,
           provider: "mojaloop-dfsp-journey",
