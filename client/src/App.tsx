@@ -133,6 +133,10 @@ const SettlementInbox = lazy(() => import("./pages/SettlementInbox"));
 // on the same /disputes/:id/negotiate path (server-persisted offer thread).
 const OfferThreadLive = lazy(() => import("./pages/OfferThreadLive"));
 const OutcomeSimulatorShell = lazy(() => import("./pages/OutcomeSimulatorShell"));
+const PayerCases = lazy(() => import("./pages/personas/PayerCases"));
+const PatientPortal = lazy(() => import("./pages/personas/PatientPortal"));
+const IdreQueue = lazy(() => import("./pages/personas/IdreQueue"));
+const OrgsPage = lazy(() => import("./pages/personas/Orgs"));
 
 /** Helper: wraps a component in ProtectedRoute */
 function P({ component: C, admin }: { component: ComponentType; admin?: boolean }) {
@@ -266,6 +270,10 @@ function Router() {
       <Route path="/compliance-center" component={() => <PL component={ComplianceCenter} />} />
       <Route path="/state-path" component={() => <PL component={StatePathResolver} />} />
       <Route path="/outcome-simulator" component={() => <PL component={OutcomeSimulatorShell} />} />
+      <Route path="/payer/cases" component={() => <PL component={PayerCases} />} />
+      <Route path="/patient/:token" component={PatientPortal} />
+      <Route path="/idre/queue" component={() => <PL component={IdreQueue} />} />
+      <Route path="/orgs" component={() => <PL component={OrgsPage} />} />
 
       {/* Admin-only routes */}
       <Route path="/admin/settlements" component={() => <PL component={SettlementInbox} admin />} />
