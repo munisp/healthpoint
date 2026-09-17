@@ -524,6 +524,11 @@ export async function extractRatesFromMrf(
       contractedRateCents: r.negotiatedRateCents,
       arrangementType: r.negotiatedArrangement === "bundle" ? "NON_FFS_BUNDLED" : "FEE_FOR_SERVICE",
       effectiveDate: opts.effectiveDate,
+      // One rate per contract (149.140(b)(1)): the dedupe key identifies the
+      // distinct contract-rate observation within this MRF; downstream the
+      // median engine collapses rows sharing a contractId to the contract
+      // median before computing the overall median.
+      contractId: key,
     });
   }
   stats.sourceRef = "";
