@@ -3,8 +3,9 @@
  *
  * Unit tests for the transactional-outbox dispatcher (server/outbox.ts):
  *   - exponential backoff schedule with a 1-hour cap (nextOutboxAttempt)
- *   - retry cap: at MAX_RETRIES (8) the event becomes terminal — status "failed",
- *     nextAttemptAt NULL (dead-letter state) — and is never re-claimed
+ *   - retry cap: at MAX_RETRIES (8) the event becomes terminal — status
+ *     "dead_letter" with deadLetterAt/deadLetterReason (M7) — and is never
+ *     re-claimed
  *   - stale "processing" leases are recovered and re-driven
  *   - successful delivery marks the event delivered exactly once
  *
@@ -110,6 +111,38 @@ function createOutboxDb() {
   }
 
   return {
+    // M7: raw-SQL dead-letter write (server/outbox.ts markOutboxDeadLetter).
+    async execute(query: unknown) {
+      // drizzle sql`` objects expose bound params as Param chunks — reuse the
+      // same walk as extractId to collect them in order.
+      const params: unknown[] = [];
+      const walk = (n: unknown): void => {
+        if (n === null || n === undefined) return;
+        const o = n as Record<string, unknown>;
+        if (typeof n !== "object") return;
+        if (Array.isArray(o.queryChunks)) {
+          for (const c of o.queryChunks) {
+            // drizzle inlines primitive params as raw chunks; SQL text arrives
+            // as StringChunk objects, Param wrappers carry .value.
+            if (c !== null && typeof c === "object" && (c as object).constructor?.name === "StringChunk") continue;
+            if (c !== null && typeof c === "object" && (c as Record<string, unknown>).value !== undefined && (c as object).constructor?.name === "Param") { params.push((c as Record<string, unknown>).value); continue; }
+            if (typeof c === "string" || typeof c === "number") params.push(c);
+          }
+          return;
+        }
+        if ((n as object).constructor?.name === "Param") { params.push(o.value); return; }
+      };
+      walk(query);
+      const id = String(params[params.length - 1]);
+      const reason = String(params[0] ?? "");
+      const row = state.rows.find(r => r.id === id);
+      if (row) {
+        row.status = "dead_letter";
+        (row as unknown as Record<string, unknown>).deadLetterAt = new Date();
+        (row as unknown as Record<string, unknown>).deadLetterReason = reason;
+      }
+      return [];
+    },
     update() {
       return {
         set(vals: Record<string, unknown>) {
@@ -227,22 +260,26 @@ describe("dispatchOutboxBatch", () => {
     expect(delay).toBeLessThan(480_000 + 30_000);
   });
 
-  it("dead-letters an event at the retry cap: terminal failure with nextAttemptAt NULL", async () => {
+  it("dead-letters an event at the retry cap: terminal dead_letter status with deadLetterAt", async () => {
     deliverMock.mockRejectedValue(new Error("permanent downstream outage"));
     state.rows = [makeRow({ id: "e-dlq", retryCount: MAX_RETRIES - 1 })];
     const result = await dispatchOutboxBatch(25);
     expect(result).toEqual({ claimed: 1, delivered: 0, failed: 1 });
     const row = state.rows[0];
-    expect(row.status).toBe("failed");
+    // M7: terminal state is an explicit dead_letter status (raw SQL write),
+    // not just "failed with NULL nextAttemptAt".
+    expect(row.status).toBe("dead_letter");
     expect(row.retryCount).toBe(MAX_RETRIES);
     expect(row.nextAttemptAt).toBeNull(); // terminal — never eligible again
     expect(row.failureReason).toBe("permanent downstream outage");
+    expect((row as unknown as Record<string, unknown>).deadLetterAt).toBeInstanceOf(Date);
+    expect((row as unknown as Record<string, unknown>).deadLetterReason).toBe("permanent downstream outage");
   });
 
   it("never re-claims an exhausted (dead-lettered) event on later batches", async () => {
     deliverMock.mockRejectedValue(new Error("still down"));
     state.rows = [
-      makeRow({ id: "e-terminal", retryCount: MAX_RETRIES, status: "failed", nextAttemptAt: null }),
+      makeRow({ id: "e-terminal", retryCount: MAX_RETRIES, status: "dead_letter", nextAttemptAt: null }),
     ];
     const result = await dispatchOutboxBatch(25);
     expect(result).toEqual({ claimed: 0, delivered: 0, failed: 0 });
