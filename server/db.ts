@@ -200,8 +200,9 @@ export async function countUsers(): Promise<number> {
 // policy overrides (extra closures, holiday opt-out) via IDR_* env vars.
 // Re-exported here so existing callers (seed-demo, routers, etc.) keep their
 // import paths while sharing one implementation.
-import { addBusinessDays } from "./idr/deadlines";
+import { addBusinessDays, addCalendarDays, computeIDRDeadlines, type DisputeDeadlineAnchors } from "./idr/deadlines";
 export { addBusinessDays, isBusinessDay, businessDaysBetween, usFederalHolidays } from "./idr/deadlines";
+export { addCalendarDays, computeIDRDeadlines } from "./idr/deadlines";
 
 export function generateReferenceNumber(): string {
   const year = new Date().getFullYear();
@@ -217,14 +218,21 @@ export async function createDispute(data: InsertDispute): Promise<Dispute> {
   const now = new Date();
   const id = crypto.randomUUID();
   const referenceNumber = generateReferenceNumber();
-  // Calculate NSA-mandated deadlines
-  const openNegotiationDeadline = addBusinessDays(now, 30);
+  // S2/S3: the 30-business-day open negotiation window anchors on the date of
+  // the initial payment (or notice of denial) — initialPaymentDate — not on
+  // the row creation time. Default to the creation date when not supplied.
+  const initialPaymentDate = data.initialPaymentDate ?? now;
+  // Canonical engine: 45 CFR § 149.510(b)(1) — 30 business days from the
+  // open negotiation initiation anchor (initialPaymentDate).
+  const { openNegotiationEnd } = computeIDRDeadlines({ openNegotiationInitiatedAt: initialPaymentDate, idrInitiatedAt: null, idreSelectedAt: null });
+  const openNegotiationDeadline = openNegotiationEnd ?? addBusinessDays(initialPaymentDate, 30);
   const insertData: InsertDispute = {
     ...data,
     id,
     referenceNumber,
     currentStep: "STEP_01_OPEN_NEGOTIATION_INITIATED",
     status: "open_negotiation",
+    initialPaymentDate,
     openNegotiationDeadline,
     createdAt: now,
     updatedAt: now,
@@ -319,24 +327,49 @@ export async function advanceDisputeStep(
   const existing = await db.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
   if (existing.length === 0) throw new Error("Dispute not found");
   const now = new Date();
-  // Calculate step-specific deadlines
+  // ── Deadline unification (S1b) ──────────────────────────────────────────
+  // All statutory deadline arithmetic is delegated to the canonical engine in
+  // server/idr/deadlines.ts (computeIDRDeadlines semantics). This function
+  // previously kept private math (e.g. payment deadline as `now + 30×24h`
+  // regardless of calendar-day end-of-day semantics); that competing math is
+  // removed. Backward-compatible columns stay populated, sourced from the
+  // canonical engine.
   const deadlineUpdates: Partial<InsertDispute> = {};
+  const dispute = existing[0];
   if (newStep === "STEP_04_IDR_INITIATED") {
-    // 45 CFR § 149.510(b)(2)(i) — IDR initiation window: 4 business days.
-    deadlineUpdates.idrInitiationDeadline = addBusinessDays(now, 4);
+    // 45 CFR § 149.510(b)(2)(i) — the 4-business-day initiation window is
+    // anchored on the END of the 30-BD open negotiation period (itself
+    // anchored on initialPaymentDate), not on "now + 4 BD".
+    const anchors: DisputeDeadlineAnchors = {
+      openNegotiationInitiatedAt: dispute.initialPaymentDate ?? dispute.createdAt ?? now,
+      idrInitiatedAt: now,
+      idreSelectedAt: null,
+    };
+    const computed = computeIDRDeadlines(anchors);
+    deadlineUpdates.idrInitiationDeadline = computed.idrInitiationDeadline ?? addBusinessDays(now, 4);
+    // 45 CFR § 149.510(c)(1) — joint IDRE selection: 3 BD after initiation.
+    deadlineUpdates.entitySelectionDeadline = computed.idreSelectionDeadline ?? addBusinessDays(now, 3);
   } else if (newStep === "STEP_06_IDR_ENTITY_SELECTION") {
-    // 45 CFR § 149.510(c)(1) — joint certified IDR entity selection:
-    // 3 business days after IDR initiation (not 4).
-    deadlineUpdates.entitySelectionDeadline = addBusinessDays(now, 3);
+    // 45 CFR § 149.510(c)(1) — 3 business days after IDR initiation.
+    const computed = computeIDRDeadlines({ openNegotiationInitiatedAt: null, idrInitiatedAt: now, idreSelectedAt: null });
+    deadlineUpdates.entitySelectionDeadline = computed.idreSelectionDeadline ?? addBusinessDays(now, 3);
   } else if (newStep === "STEP_08_ELIGIBILITY_REVIEW") {
     deadlineUpdates.eligibilityDeadline = addBusinessDays(now, 3);
   } else if (newStep === "STEP_09_OFFER_SUBMISSION") {
-    deadlineUpdates.offerSubmissionDeadline = addBusinessDays(now, 10);
-    deadlineUpdates.determinationDeadline = addBusinessDays(now, 30);
+    // 45 CFR § 149.510(c)(3)(i)/(c)(4)(ii) — 10 BD offers / 30 BD
+    // determination, both anchored on IDRE selection.
+    const computed = computeIDRDeadlines({ openNegotiationInitiatedAt: null, idrInitiatedAt: null, idreSelectedAt: now });
+    deadlineUpdates.offerSubmissionDeadline = computed.offerSubmissionDeadline ?? addBusinessDays(now, 10);
+    deadlineUpdates.determinationDeadline = computed.determinationDeadline ?? addBusinessDays(now, 30);
   } else if (newStep === "STEP_11_ADDITIONAL_INFORMATION") {
     deadlineUpdates.additionalInfoDeadline = addBusinessDays(now, 5);
   } else if (newStep === "STEP_14_PAYMENT_DETERMINATION") {
-    deadlineUpdates.paymentDeadline = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    // PHSA § 2799A-1(c)(6) — 30 CALENDAR days end-of-day from determination.
+    const computed = computeIDRDeadlines({ openNegotiationInitiatedAt: null, idrInitiatedAt: null, idreSelectedAt: null, determinationIssuedAt: now });
+    const raw = computed.paymentDeadline ?? addCalendarDays(now, 30);
+    const eod = new Date(raw.getTime());
+    eod.setUTCHours(23, 59, 59, 999);
+    deadlineUpdates.paymentDeadline = eod;
   } else if (newStep === "STEP_17_DISPUTE_CLOSED") {
     deadlineUpdates.closedAt = now;
   }
@@ -461,7 +494,7 @@ export async function acceptOffer(disputeId: string, offerId: string, performedB
     // Fall back: find the latest responding party offer for this dispute
     offer = await db.select().from(disputeOffers)
       .where(and(eq(disputeOffers.disputeId, disputeId), eq(disputeOffers.offerType, "responding_party")))
-      .orderBy(disputeOffers.submittedAt)
+      .orderBy(desc(disputeOffers.submittedAt))
       .limit(1);
   }
   const now = new Date();
@@ -1173,7 +1206,7 @@ export async function updateDisputeTemplate(id: string, updates: Partial<InsertD
 
 export async function deleteDisputeTemplate(id: string): Promise<void> {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!db) return;
   await db.delete(disputeTemplates).where(eq(disputeTemplates.id, id));
 }
 
