@@ -1,14 +1,69 @@
-import { and, asc, eq, inArray, isNull, lt, lte, or } from "drizzle-orm";
-import { eventLog } from "../drizzle/schema";
+import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { eventLog, notifications, users } from "../drizzle/schema";
 import { getDb } from "./db";
 import { eventBus, type IDREvent, type IDREventType, type IDRTopic } from "./events/bus";
 
-const MAX_RETRIES = 8;
+export const MAX_RETRIES = 8;
 const STALE_PROCESSING_MS = 5 * 60 * 1000;
 
 export function nextOutboxAttempt(retryCount: number, now = new Date()): Date {
   const delayMs = Math.min(60_000 * 2 ** Math.min(retryCount, 8), 60 * 60 * 1000);
   return new Date(now.getTime() + delayMs);
+}
+
+/**
+ * M7: mark an exhausted outbox event as a terminal dead letter (raw SQL —
+ * the deadLetterAt/deadLetterReason columns and the dead_letter enum label
+ * come from migration 0034_wave_fc.sql and are deliberately absent from
+ * drizzle/schema.ts, which another wave owns).
+ */
+export async function markOutboxDeadLetter(eventId: string, reason: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`
+    UPDATE event_log
+    SET status = 'dead_letter',
+        "deadLetterAt" = now(),
+        "deadLetterReason" = ${reason.slice(0, 2000)}
+    WHERE id = ${eventId}
+  `);
+}
+
+/**
+ * M7: operator alert for a dead-lettered event — an in-app notification to
+ * every admin so the poisoned event is triaged (replayed or discarded)
+ * instead of silently vanishing after the retry budget is spent.
+ */
+async function alertOperatorsOfDeadLetter(
+  row: typeof eventLog.$inferSelect,
+  reason: string,
+): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
+    const now = new Date();
+    for (const admin of admins) {
+      await db.insert(notifications).values({
+        id: crypto.randomUUID(),
+        // notifications.disputeId is NOT NULL — carry the aggregate id either way.
+        disputeId: row.aggregateId,
+        userId: admin.id,
+        notificationType: "system_alert",
+        title: `Outbox dead letter: ${row.eventType}`,
+        message:
+          `Event ${row.id} (${row.eventType}, aggregate ${row.aggregateType}/${row.aggregateId}) exhausted ` +
+          `${MAX_RETRIES} delivery attempts and was dead-lettered. Last error: ${reason.slice(0, 500)}. ` +
+          `Operator action required: replay or discard the event_log row.`,
+        dueDate: null,
+        isRead: false,
+        createdAt: now,
+      });
+    }
+  } catch (alertError) {
+    // Alerting must never crash the outbox worker.
+    console.warn("[Outbox] failed to raise dead-letter operator alert:", alertError);
+  }
 }
 
 function asEvent(row: typeof eventLog.$inferSelect): IDREvent {
@@ -80,16 +135,28 @@ export async function dispatchOutboxBatch(limit = 25): Promise<{ claimed: number
       delivered++;
     } catch (error) {
       const retryCount = row.retryCount + 1;
-      // On exhaustion the event becomes terminal: nextAttemptAt is cleared and
-      // the retry-count guard in the claim query above permanently excludes it.
-      await db.update(eventLog)
-        .set({
-          status: "failed",
-          retryCount,
-          failureReason: error instanceof Error ? error.message.slice(0, 2000) : "outbox delivery failed",
-          nextAttemptAt: retryCount >= MAX_RETRIES ? null : nextOutboxAttempt(retryCount),
-        })
-        .where(eq(eventLog.id, row.id));
+      const failureReason = error instanceof Error ? error.message.slice(0, 2000) : "outbox delivery failed";
+      if (retryCount >= MAX_RETRIES) {
+        // M7: terminal dead-letter. The event is no longer retried; the
+        // dead_letter status/columns are written with raw SQL because
+        // drizzle/schema.ts is owned by another wave (columns and the enum
+        // value are added by migration 0034_wave_fc.sql). An operator alert is
+        // raised so a human replays or discards the poisoned event.
+        await db.update(eventLog)
+          .set({ status: "failed", retryCount, failureReason, nextAttemptAt: null })
+          .where(eq(eventLog.id, row.id));
+        await markOutboxDeadLetter(row.id, failureReason);
+        await alertOperatorsOfDeadLetter(row, failureReason);
+      } else {
+        await db.update(eventLog)
+          .set({
+            status: "failed",
+            retryCount,
+            failureReason,
+            nextAttemptAt: nextOutboxAttempt(retryCount),
+          })
+          .where(eq(eventLog.id, row.id));
+      }
       failed++;
     }
   }
