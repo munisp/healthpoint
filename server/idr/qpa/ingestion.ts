@@ -109,6 +109,8 @@ export function validateRow(raw: unknown, rowIndex: number): RowValidationError[
     if (typeof v !== "number" || v < 0 || v > 100)
       err("claimsSharePercent", "when present must be 0–100 (149.140(a)(15)(ii)(B) / ghost-rate documentation)");
   }
+  if (r.contractId != null && (typeof r.contractId !== "string" || r.contractId.trim().length === 0))
+    err("contractId", "when present must be a non-empty string (one rate per contract, 149.140(b)(1))");
   return errs;
 }
 
@@ -128,6 +130,7 @@ export function canonicalizeRow(raw: unknown, rowIndex: number): ValidatedRate {
     ...(r.underlyingFeeScheduleCents != null ? { underlyingFeeScheduleCents: r.underlyingFeeScheduleCents as number } : {}),
     ...(r.derivedAmountCents != null ? { derivedAmountCents: r.derivedAmountCents as number } : {}),
     ...(r.claimsSharePercent != null ? { claimsSharePercent: r.claimsSharePercent as number } : {}),
+    ...(r.contractId != null ? { contractId: String(r.contractId).trim() } : {}),
     rowHash: "",
   };
   out.rowHash = sha256(canonicalRowString(out));
@@ -139,6 +142,7 @@ function canonicalRowString(r: ValidatedRate): string {
     r.payerId, r.serviceCode, r.market, r.region, r.contractedRateCents,
     r.arrangementType, r.effectiveDate,
     r.underlyingFeeScheduleCents ?? "", r.derivedAmountCents ?? "", r.claimsSharePercent ?? "",
+    r.contractId ?? "",
   ].join("|");
 }
 
@@ -195,9 +199,14 @@ export async function ingestContractedRates(
   const seen = new Set<string>();
   const deduped = accepted.filter(r => (seen.has(r.rowHash) ? false : (seen.add(r.rowHash), true)));
 
+  // Content-addressed idempotency (S9): the hash covers CONTENT ONLY —
+  // sorted rowHashes + provenance sourceType/sourceRef. The import DATE is
+  // deliberately excluded: re-importing identical content on a different day
+  // must dedupe to the same batch (otherwise re-runs of the same MRF would
+  // duplicate rows by day).
   const contentHash = sha256(
     deduped.map(r => r.rowHash).sort().join(",") +
-    `#${provenance.sourceType}|${provenance.sourceRef}|${toIsoDay(provenance.importedAt)}`
+    `#${provenance.sourceType}|${provenance.sourceRef}`
   );
 
   if (store) {
