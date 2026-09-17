@@ -396,7 +396,8 @@ export async function recordDetermination(
       description: "IDR determination reduced (reversal of prior determination)",
       referenceId,
       referenceType: "determination",
-      idempotencyKey: `determination-reduction:${disputeId}:${determinationCents}`,
+      // ledger_entries.idempotencyKey is varchar(64): keep the key short.
+      idempotencyKey: `det-reduction:${disputeId}:${determinationCents}`,
     });
   }
   // M3: if the determination was REDUCED below the amount already paid (e.g.
@@ -726,7 +727,7 @@ export async function hasApprovedSettlementEvidence(disputeId: string, reference
  * (immutability of the original report is preserved — its payload keeps
  * paymentEvidence:false, only metadata gains verifiedBy/verifiedAt). The
  * verified financial movement is posted as a SEPARATE verified ledger entry
- * via recordPaymentInTransaction, keyed `payment-confirmed:<reportKey>`, so
+ * via recordPaymentInTransaction, keyed `confirmed:<reportId>`, so
  * confirmation is itself idempotent and fully auditable.
  */
 export async function confirmPaymentReport(
@@ -752,8 +753,10 @@ export async function confirmPaymentReport(
     }
     const reportKey = report.idempotencyKey ?? report.id;
     const alreadyConfirmed = Boolean((report.metadata as Record<string, unknown> | null)?.verifiedAt);
+    // ledger_entries.idempotencyKey is varchar(64); recordPaymentInTransaction
+    // prefixes `payment-recorded:` (17 chars), so key on the report row id.
     const entry = await recordPaymentInTransaction(
-      tx, disputeId, amountCents, referenceId, `payment-confirmed:${reportKey}`,
+      tx, disputeId, amountCents, referenceId, `confirmed:${report.id}`,
     );
     const now = new Date();
     await tx.update(eventLog).set({
