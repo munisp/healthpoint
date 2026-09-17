@@ -40,6 +40,12 @@ const mocks = vi.hoisted(() => ({
     amountCents,
     disputeId,
   })),
+  recordUnverifiedPaymentReport: vi.fn(async () => ({
+    reportId: "report-contract-1",
+    verified: false as const,
+    duplicate: false,
+  })),
+  hasApprovedSettlementEvidence: vi.fn(async () => false),
   initializeDisputeLedger: vi.fn(async () => undefined),
   dispatchOutboxBatch: vi.fn(async () => ({ claimed: 0, delivered: 0, failed: 0 })),
   createSettlementTransfer: vi.fn(async (input: Record<string, unknown>) => ({
@@ -69,6 +75,8 @@ vi.mock("../ledger", async importOriginal => {
   return {
     ...mod,
     recordPayment: mocks.recordPayment,
+    recordUnverifiedPaymentReport: mocks.recordUnverifiedPaymentReport,
+    hasApprovedSettlementEvidence: mocks.hasApprovedSettlementEvidence,
     initializeDisputeLedger: mocks.initializeDisputeLedger,
   };
 });
@@ -168,15 +176,36 @@ describe("ledger.recordPayment contract", () => {
     expect(mocks.recordPayment).not.toHaveBeenCalled();
   });
 
-  it("accepts a valid payment and converts dollars to integer cents exactly once", async () => {
+  it("admin posts a verified payment and converts dollars to integer cents exactly once", async () => {
     mocks.recordPayment.mockClear();
-    const result = await userCaller().ledger.recordPayment(valid);
+    const result = await adminCaller().ledger.recordPayment(valid);
     expect(mocks.recordPayment).toHaveBeenCalledTimes(1);
     expect(mocks.recordPayment).toHaveBeenCalledWith(
+      valid.disputeId, 12345, valid.referenceId, valid.idempotencyKey, "user-contract-admin"
+    );
+    expect(result).toMatchObject({ verified: true, entry: { id: "entry-contract-1", amountCents: 12345 } });
+    expect(mocks.dispatchOutboxBatch).toHaveBeenCalled();
+  });
+
+  it("non-admin without settlement evidence posts an unverified payment report (no money moves)", async () => {
+    mocks.recordPayment.mockClear();
+    mocks.recordUnverifiedPaymentReport.mockClear();
+    const result = await userCaller().ledger.recordPayment(valid);
+    expect(mocks.recordPayment).not.toHaveBeenCalled();
+    expect(mocks.recordUnverifiedPaymentReport).toHaveBeenCalledTimes(1);
+    expect(mocks.recordUnverifiedPaymentReport).toHaveBeenCalledWith(
       valid.disputeId, 12345, valid.referenceId, valid.idempotencyKey, "user-contract-user"
     );
-    expect(result).toMatchObject({ id: "entry-contract-1", amountCents: 12345 });
+    expect(result).toMatchObject({ verified: false, reportId: "report-contract-1" });
     expect(mocks.dispatchOutboxBatch).toHaveBeenCalled();
+  });
+
+  it("non-admin with approved settlement evidence posts a verified payment", async () => {
+    mocks.recordPayment.mockClear();
+    mocks.hasApprovedSettlementEvidence.mockResolvedValueOnce(true);
+    const result = await userCaller().ledger.recordPayment(valid);
+    expect(mocks.recordPayment).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ verified: true, entry: { id: "entry-contract-1" } });
   });
 
   it("requires authentication", async () => {
