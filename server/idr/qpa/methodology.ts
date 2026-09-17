@@ -95,6 +95,120 @@ export const QPA_CITATIONS = [
 /** Statutory baseline date for the standard median (149.140(c)(1)(i)). */
 export const QPA_BASELINE_DATE = "2019-01-31";
 
+// ── Air ambulance (W1-F6) ────────────────────────────────────────────────────
+// Air ambulance QPA methodology is keyed to the POINT OF PICKUP geography
+// (45 CFR 149.140(a)(7)(iii) / 149.130(b)(4): the geographic region for air
+// ambulance is the region of the point of pick-up). Base-rate codes and
+// mileage codes are separate service-code dimensions: mileage-rated services
+// are flagged and are NEVER median-mixed with base rates.
+/** Air ambulance base-rate HCPCS codes (fixed/rotary wing base rates). */
+export const AIR_AMBULANCE_BASE_CODES = ["A0428", "A0430"] as const;
+/** Air ambulance mileage HCPCS codes (per-statute-mile rates). */
+export const AIR_AMBULANCE_MILEAGE_CODES = ["A0435", "A0436"] as const;
+
+export type AirAmbulanceCodeKind = "BASE_RATE" | "MILEAGE";
+
+/** Classify an air ambulance service code; null when not an air ambulance code. */
+export function classifyAirAmbulanceCode(serviceCode: string): AirAmbulanceCodeKind | null {
+  const code = serviceCode.trim().toUpperCase();
+  if ((AIR_AMBULANCE_BASE_CODES as readonly string[]).includes(code)) return "BASE_RATE";
+  if ((AIR_AMBULANCE_MILEAGE_CODES as readonly string[]).includes(code)) return "MILEAGE";
+  return null;
+}
+
+export function isAirAmbulanceCode(serviceCode: string): boolean {
+  return classifyAirAmbulanceCode(serviceCode) !== null;
+}
+
+/**
+ * Region key for air ambulance computations: the point-of-pickup geography
+ * key, namespaced so it can never silently collide with facility-region keys.
+ */
+export function airAmbulanceRegionKey(pointOfPickup: string): string {
+  const pop = pointOfPickup.trim();
+  if (!pop) throw new Error("pointOfPickup geography key is required for air ambulance QPA");
+  return `AA_POP:${pop}`;
+}
+
+// ── New service codes (W1-F8, 45 CFR 149.140(c)(3)) ─────────────────────────
+/**
+ * New service codes (items/services without a 2019 baseline because the code
+ * did not exist / was not covered in 2019) use an eligible database under
+ * 149.140(c)(3); for 2025+ guidance a new service code uses the eligible
+ * database path during an initial window. The window length is published
+ * policy, injected here as a constant for review.
+ */
+export const NEW_SERVICE_CODE_WINDOW_DAYS = 90;
+
+export interface NewServiceCodeStatus {
+  isNewServiceCode: boolean;
+  serviceCode: string;
+  /** ISO day the code was first observed in ingestion (when tracked). */
+  firstSeenDate: string | null;
+  daysSinceFirstSeen: number | null;
+  /** ISO day the new-code window closes (firstSeenDate + window days). */
+  windowEndDate: string | null;
+  withinWindow: boolean | null;
+  windowDays: number;
+  reason: string;
+}
+
+/**
+ * Recognize a service code with NO contracted rates effective on or before
+ * the 2019 baseline (149.140(c)(1)(i) cannot run without a 2019 median).
+ * `firstSeenDate` is the ingestion-tracked first-observation day, when the
+ * deployment tracks it (see ingestion.ts); otherwise the earliest ingested
+ * effectiveDate for the code is used as a lower bound proxy.
+ */
+export function computeNewServiceCodeStatus(
+  rows: ContractedRateRow[],
+  serviceCode: string,
+  opts: { firstSeenDate?: string | null; asOfDate?: Date | string } = {}
+): NewServiceCodeStatus {
+  const code = serviceCode.trim().toUpperCase();
+  const codeRows = rows.filter(r => r.serviceCode.trim().toUpperCase() === code);
+  const baselineRows = codeRows.filter(r => isoDay(r.effectiveDate) <= QPA_BASELINE_DATE);
+  const isNew = codeRows.length === 0 || baselineRows.length === 0;
+
+  const firstSeen =
+    opts.firstSeenDate ??
+    (codeRows.length
+      ? codeRows.map(r => isoDay(r.effectiveDate)).sort()[0]
+      : null);
+
+  let daysSince: number | null = null;
+  let windowEndDate: string | null = null;
+  let withinWindow: boolean | null = null;
+  if (firstSeen) {
+    const asOf = opts.asOfDate ? new Date(isoDay(opts.asOfDate) + "T00:00:00Z") : new Date();
+    const seen = new Date(firstSeen + "T00:00:00Z");
+    daysSince = Math.floor((asOf.getTime() - seen.getTime()) / 86_400_000);
+    windowEndDate = new Date(seen.getTime() + NEW_SERVICE_CODE_WINDOW_DAYS * 86_400_000)
+      .toISOString().slice(0, 10);
+    withinWindow = daysSince <= NEW_SERVICE_CODE_WINDOW_DAYS;
+  }
+
+  return {
+    isNewServiceCode: isNew,
+    serviceCode: code,
+    firstSeenDate: firstSeen,
+    daysSinceFirstSeen: daysSince,
+    windowEndDate,
+    withinWindow,
+    windowDays: NEW_SERVICE_CODE_WINDOW_DAYS,
+    reason: isNew
+      ? `NEW_SERVICE_CODE: service code ${code} has ${baselineRows.length} contracted rate(s) effective ` +
+        `on or before the ${QPA_BASELINE_DATE} baseline${codeRows.length === 0 ? " (no ingested rates at all)" : ""}; ` +
+        `no 2019 median exists, so the QPA is not computable under 45 CFR 149.140(c)(1)(i). Per ` +
+        `149.140(c)(3) the plan/issuer must use an eligible database for this code. ` +
+        (firstSeen
+          ? `First seen ${firstSeen}; the ${NEW_SERVICE_CODE_WINDOW_DAYS}-day new-code window ` +
+            `${withinWindow ? "remains open" : "closed"} (ends ${windowEndDate}).`
+          : "No first-seen date is tracked for this code.")
+      : `Service code ${code} has a 2019 baseline; not a new service code.`,
+  };
+}
+
 /**
  * Minimum contracted rates for "sufficient information" per
  * 149.140(a)(15)(i) / (a)(15)(ii)(A). Fail-closed below this.
