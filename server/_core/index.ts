@@ -24,6 +24,9 @@ import { idrDeadlineCheckHandler } from "../scheduled/idrDeadlineCheck";
 import { weeklyDigestHandler } from "../scheduled/weeklyDigest";
 import { settlementBalanceProofHandler } from "../scheduled/settlementBalanceProof";
 import { ledgerReconciliationHandler } from "../scheduled/ledgerReconciliation";
+import { webhookRetryWorkerHandler } from "../scheduled/webhookRetryWorker";
+import { notificationRetryWorkerHandler } from "../scheduled/notificationRetryWorker";
+import { bulkFhirWorkerHandler } from "../scheduled/bulkFhirWorker";
 import { ENV } from "./env";
 import {
   SETTLEMENT_EVENT_ID_HEADER,
@@ -481,6 +484,21 @@ async function startServer() {
         res.status(404).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "not-found", diagnostics: `Claim/${req.params.id} not found` }] });
         return;
       }
+      // PHI read audit (fire-and-forget — never blocks the response)
+      {
+        const { createAuditEntry } = await import("../db");
+        const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? req.ip ?? null;
+        createAuditEntry({
+          userId: user.id,
+          action: "phi.read",
+          entityType: "fhir.Claim",
+          entityId: req.params.id,
+          oldValue: null,
+          newValue: null,
+          ipAddress: ip,
+          userAgent: (req.headers["user-agent"] as string | undefined) ?? null,
+        }).catch(err => console.warn("[audit] phi.read write failed:", err instanceof Error ? err.message : err));
+      }
       const d = rows[0];
       const claim = {
         resourceType: "Claim",
@@ -532,6 +550,9 @@ async function startServer() {
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
   app.post("/api/scheduled/settlement-balance-proof", scheduledAuth, settlementBalanceProofHandler);
   app.post("/api/scheduled/ledger-reconciliation", scheduledAuth, ledgerReconciliationHandler);
+  app.post("/api/scheduled/webhook-retry", scheduledAuth, webhookRetryWorkerHandler);
+  app.post("/api/scheduled/notification-retry", scheduledAuth, notificationRetryWorkerHandler);
+  app.post("/api/scheduled/bulk-fhir-worker", scheduledAuth, bulkFhirWorkerHandler);
 
   // Durable settlement and payment-evidence events are reconciled after their
   // transaction commits. The worker is single-flight in each process; database
