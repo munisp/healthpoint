@@ -19,6 +19,7 @@
 
 import type { Express, Request, Response } from "express";
 import * as client from "openid-client";
+import { discoverCached } from "./discovery-cache";
 import { COOKIE_NAME, ONE_YEAR_MS, SESSION_DURATION_MS } from "@shared/const";
 import * as db from "../db";
 import { ENV } from "./env";
@@ -89,8 +90,36 @@ function getSessionSecret(): Uint8Array {
 
 // ─── Session JWT (internal, not Keycloak token) ───────────────────────────────
 
-export async function createSessionToken(userId: string, name: string, email: string): Promise<string> {
-  const expiresAt = Math.floor((Date.now() + SESSION_DURATION_MS) / 1000);
+export const MFA_PENDING_DURATION_MS = 1000 * 60 * 5; // 5 minutes
+
+/**
+ * Per-user session duration: orgSettings.sessionTimeoutMinutes overrides the
+ * global SESSION_DURATION_MS when set (clamped to [5, 720] minutes). Missing
+ * settings row / DB errors fall back to the global default (fail-safe for
+ * login availability; the global default is the hardened 8h value).
+ */
+export async function getSessionDurationMsForUser(userId: string): Promise<number> {
+  try {
+    const { getDb } = await import("../db");
+    const { orgSettings } = await import("../../drizzle/schema");
+    const { eq } = await import("drizzle-orm");
+    const db = await getDb();
+    if (!db) return SESSION_DURATION_MS;
+    const rows = await db.select({ m: orgSettings.sessionTimeoutMinutes }).from(orgSettings).where(eq(orgSettings.userId, userId)).limit(1);
+    const minutes = rows[0]?.m;
+    if (typeof minutes === "number" && Number.isFinite(minutes)) {
+      const clamped = Math.min(720, Math.max(5, minutes));
+      return clamped * 60 * 1000;
+    }
+  } catch (err) {
+    console.warn("[Keycloak] sessionTimeoutMinutes lookup failed, using default:", err instanceof Error ? err.message : err);
+  }
+  return SESSION_DURATION_MS;
+}
+
+export async function createSessionToken(userId: string, name: string, email: string, durationMs?: number): Promise<string> {
+  const ttl = durationMs ?? SESSION_DURATION_MS;
+  const expiresAt = Math.floor((Date.now() + ttl) / 1000);
   const jti = crypto.randomUUID();
   return new SignJWT({ sub: userId, name, email, type: "session", jti })
     .setProtectedHeader({ alg: "HS256" })
@@ -99,10 +128,34 @@ export async function createSessionToken(userId: string, name: string, email: st
     .sign(getSessionSecret());
 }
 
-export async function verifySessionToken(token: string): Promise<{ sub: string; name: string; email: string; jti?: string } | null> {
+/**
+ * Short-lived (5 min) pre-MFA token. Scope: mfa-only — it may call the
+ * TOTP login/setup procedures and nothing else (enforced in tRPC context:
+ * protectedProcedure rejects mfa-pending sessions with 403 except an
+ * explicit allow-list).
+ */
+export async function createMfaPendingToken(userId: string, name: string, email: string): Promise<string> {
+  const expiresAt = Math.floor((Date.now() + MFA_PENDING_DURATION_MS) / 1000);
+  const jti = crypto.randomUUID();
+  return new SignJWT({ sub: userId, name, email, type: "mfa-pending", jti })
+    .setProtectedHeader({ alg: "HS256" })
+    .setExpirationTime(expiresAt)
+    .setJti(jti)
+    .sign(getSessionSecret());
+}
+
+/** Thrown by authenticateRequest when the session is a pre-MFA token. */
+export class MfaPendingError extends Error {
+  constructor() {
+    super("mfa_required");
+    this.name = "MfaPendingError";
+  }
+}
+
+export async function verifySessionToken(token: string): Promise<{ sub: string; name: string; email: string; jti?: string; type?: string } | null> {
   try {
     const { payload } = await jwtVerify(token, getSessionSecret(), { algorithms: ["HS256"] });
-    const { sub, name, email, jti } = payload as Record<string, unknown>;
+    const { sub, name, email, jti, type } = payload as Record<string, unknown>;
     if (typeof sub !== "string" || !sub) return null;
     // Check Redis token revocation list (fails closed in production — see
     // server/redis.ts isTokenRevoked; do not regress).
@@ -111,7 +164,18 @@ export async function verifySessionToken(token: string): Promise<{ sub: string; 
       const revoked = await isTokenRevoked(jti).catch(() => false);
       if (revoked) return null;
     }
-    return { sub, name: String(name || ""), email: String(email || ""), jti: typeof jti === "string" ? jti : undefined };
+    return { sub, name: String(name || ""), email: String(email || ""), jti: typeof jti === "string" ? jti : undefined, type: typeof type === "string" ? type : "session" };
+  } catch {
+    return null;
+  }
+}
+
+/** Decode (unverified — caller must verify first) the exp claim, seconds. */
+export function decodeSessionExp(token: string): number | null {
+  try {
+    const parts = token.split(".");
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    return typeof payload.exp === "number" ? payload.exp : null;
   } catch {
     return null;
   }
@@ -119,7 +183,12 @@ export async function verifySessionToken(token: string): Promise<{ sub: string; 
 
 // ─── Authenticate incoming request (used by tRPC context) ────────────────────
 
-export async function authenticateRequest(req: Request): Promise<User> {
+/**
+ * Resolve the session cookie to a user plus the token type. "mfa-pending"
+ * sessions resolve the user normally — the caller (tRPC context) is
+ * responsible for restricting what an mfa-pending principal may do.
+ */
+export async function resolveSession(req: Request): Promise<{ user: User; type: string }> {
   const cookies = parseCookieHeader(req.headers.cookie || "");
   const sessionCookie = cookies[COOKIE_NAME];
   const session = await verifySessionToken(sessionCookie);
@@ -146,6 +215,16 @@ export async function authenticateRequest(req: Request): Promise<User> {
   assertNotSuspended(user);
 
   await db.upsertUser({ id: user.id, lastSignedIn: new Date() });
+  return { user, type: session.type ?? "session" };
+}
+
+export async function authenticateRequest(req: Request): Promise<User> {
+  const { user, type } = await resolveSession(req);
+  if (type === "mfa-pending") {
+    // Full API access is denied to pre-MFA sessions. The tRPC context uses
+    // resolveSession directly to expose a restricted principal instead.
+    throw new MfaPendingError();
+  }
   return user;
 }
 
@@ -172,7 +251,7 @@ export function registerKeycloakRoutes(app: Express) {
     try {
       const redirectTo = (req.query.redirectTo as string) || "/";
       const issuerUrl = new URL(getIssuerUrl());
-      const config = await client.discovery(issuerUrl, kc.clientId, kc.clientSecret);
+      const config = await discoverCached(issuerUrl, kc.clientId, kc.clientSecret);
 
       const codeVerifier = client.randomPKCECodeVerifier();
       const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
@@ -203,7 +282,7 @@ export function registerKeycloakRoutes(app: Express) {
       const redirectTo = (req.query.redirectTo as string) || "/";
       const role = (req.query.role as string) || "";
       const issuerUrl = new URL(getIssuerUrl());
-      const config = await client.discovery(issuerUrl, kc.clientId, kc.clientSecret);
+      const config = await discoverCached(issuerUrl, kc.clientId, kc.clientSecret);
 
       const codeVerifier = client.randomPKCECodeVerifier();
       const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
@@ -246,7 +325,7 @@ export function registerKeycloakRoutes(app: Express) {
 
     try {
       const issuerUrl = new URL(getIssuerUrl());
-      const config = await client.discovery(issuerUrl, kc.clientId, kc.clientSecret);
+      const config = await discoverCached(issuerUrl, kc.clientId, kc.clientSecret);
       const callbackUrl = getCallbackUrl(req);
       const currentUrl = new URL(`${callbackUrl.replace("/api/auth/callback", "")}${req.url}`);
 
@@ -278,15 +357,37 @@ export function registerKeycloakRoutes(app: Express) {
         lastSignedIn: new Date(),
       });
 
-      // Create internal session cookie
-      const sessionToken = await createSessionToken(userId, name, email);
       const isSecure = req.get("x-forwarded-proto") === "https" || req.protocol === "https";
+
+      // Two-stage login: TOTP-enabled users (or orgs with requireMFA who have
+      // not enrolled yet) get a short-lived mfa-pending token instead of a
+      // full session. They must complete auth.verifyLoginTotp (or TOTP
+      // enrollment) before any other protected procedure will run.
+      const { getMfaRequirement } = await import("../auth/mfa");
+      const mfaRequirement = isNewUser ? "none" : await getMfaRequirement(userId);
+      if (mfaRequirement !== "none") {
+        const mfaToken = await createMfaPendingToken(userId, name, email);
+        res.cookie(COOKIE_NAME, mfaToken, {
+          httpOnly: true,
+          sameSite: "lax",
+          secure: isSecure,
+          maxAge: MFA_PENDING_DURATION_MS,
+          path: "/",
+        });
+        res.redirect(302, mfaRequirement === "verify" ? "/mfa?mode=verify" : "/mfa?mode=enroll");
+        return;
+      }
+
+      // Create internal session cookie (per-user orgSettings.sessionTimeoutMinutes
+      // overrides the global default when configured)
+      const durationMs = await getSessionDurationMsForUser(userId);
+      const sessionToken = await createSessionToken(userId, name, email, durationMs);
 
       res.cookie(COOKIE_NAME, sessionToken, {
         httpOnly: true,
         sameSite: "lax",
         secure: isSecure,
-        maxAge: SESSION_DURATION_MS,
+        maxAge: durationMs,
         path: "/",
       });
 
@@ -307,11 +408,30 @@ export function registerKeycloakRoutes(app: Express) {
 
   // GET /api/auth/logout — clear session, redirect to Keycloak end-session
   app.get("/api/auth/logout", async (req: Request, res: Response) => {
+    // Revoke the session token server-side (Redis blocklist) so a captured
+    // cookie cannot be replayed after logout. Non-prod fails open when Redis
+    // is unavailable (revocation is a no-op, documented in server/redis.ts);
+    // production treats Redis loss as fail-closed at verify time.
+    try {
+      const cookies = parseCookieHeader(req.headers.cookie || "");
+      const sessionCookie = cookies[COOKIE_NAME];
+      if (sessionCookie) {
+        const session = await verifySessionToken(sessionCookie).catch(() => null);
+        if (session?.jti) {
+          const exp = decodeSessionExp(sessionCookie);
+          const ttl = exp ? Math.max(1, exp - Math.floor(Date.now() / 1000)) : Math.floor(SESSION_DURATION_MS / 1000);
+          const { revokeToken } = await import("../redis");
+          await revokeToken(session.jti, ttl);
+        }
+      }
+    } catch (err) {
+      console.warn("[Keycloak] logout token revocation failed:", err instanceof Error ? err.message : err);
+    }
     res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: "lax", path: "/" });
 
     try {
       const issuerUrl = new URL(getIssuerUrl());
-      const config = await client.discovery(issuerUrl, kc.clientId, kc.clientSecret);
+      const config = await discoverCached(issuerUrl, kc.clientId, kc.clientSecret);
       const proto = req.get("x-forwarded-proto") || req.protocol;
       const host = req.get("x-forwarded-host") || req.get("host");
       const postLogoutUri = `${proto}://${host}/`;
@@ -372,24 +492,40 @@ export function registerKeycloakRoutes(app: Express) {
       res.status(401).json({ refreshed: false, reason: "invalid_session" });
       return;
     }
-    // Re-issue a fresh 8-hour JWT — no Keycloak round-trip needed for internal sessions
+    if (session.type === "mfa-pending") {
+      // Pre-MFA tokens are never upgraded by refresh — only by verifyLoginTotp.
+      res.status(401).json({ refreshed: false, reason: "mfa_required" });
+      return;
+    }
+    // Re-issue a fresh JWT (honoring per-user sessionTimeoutMinutes) — no
+    // Keycloak round-trip needed for internal sessions
     const user = await db.getUser(session.sub).catch(() => null);
     const name = user?.name || session.name || "";
     const email = user?.email || session.email || "";
-    const newToken = await createSessionToken(session.sub, name, email);
+    const durationMs = await getSessionDurationMsForUser(session.sub);
+    const newToken = await createSessionToken(session.sub, name, email, durationMs);
+    // Rotation: revoke the OLD token's jti so the previous cookie is dead the
+    // moment the new one is issued (reuse of the old cookie = 401).
+    if (session.jti) {
+      const oldExp = decodeSessionExp(sessionCookie);
+      const ttl = oldExp ? Math.max(1, oldExp - Math.floor(Date.now() / 1000)) : Math.floor(durationMs / 1000);
+      const { revokeToken } = await import("../redis");
+      await revokeToken(session.jti, ttl).catch(err =>
+        console.warn("[Keycloak] refresh revocation failed:", err instanceof Error ? err.message : err));
+    }
     const isSecure = req.get("x-forwarded-proto") === "https" || req.protocol === "https";
     res.cookie(COOKIE_NAME, newToken, {
       httpOnly: true,
       sameSite: "lax",
       secure: isSecure,
-      maxAge: SESSION_DURATION_MS,
+      maxAge: durationMs,
       path: "/",
     });
-    const exp = Math.floor((Date.now() + SESSION_DURATION_MS) / 1000);
+    const exp = Math.floor((Date.now() + durationMs) / 1000);
     res.json({
       refreshed: true,
       expiresAt: exp * 1000,
-      remainingMs: SESSION_DURATION_MS,
+      remainingMs: durationMs,
     });
   });
 
