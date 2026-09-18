@@ -115,6 +115,7 @@ import OnboardingTour from "./OnboardingTour";
 import MobileNavFab from "./MobileNavFab";
 import { useRecentDisputes } from "../hooks/useRecentDisputes";
 import { usePinnedDisputes } from "../hooks/usePinnedDisputes";
+import { useMyBranding } from "../hooks/useBranding";
 import { getCurrentSubscription, isPushSupported, subscribeToPush, unsubscribeFromPush } from "../lib/push";
 import { toast } from "sonner";
 
@@ -487,6 +488,11 @@ function DashboardLayoutContent({
   const isAdmin = user?.role === "admin";
   const { recent: recentDisputes } = useRecentDisputes();
   const { pins: pinnedDisputes } = usePinnedDisputes();
+  // W7-4 white-label: org brand name/logo/primary color override the
+  // platform defaults when the caller's org has branding configured.
+  const { branding } = useMyBranding();
+  const headerTitle = branding?.brandName || APP_TITLE;
+  const headerLogo = branding?.logoUrl || APP_LOGO;
 
   return (
     <>
@@ -503,12 +509,12 @@ function DashboardLayoutContent({
             <div className="flex items-center justify-between px-2 group-data-[collapsible=icon]:px-0">
               <div className="flex items-center gap-3 min-w-0">
                 <img
-                  src={APP_LOGO}
+                  src={headerLogo}
                   className="h-9 w-9 rounded-lg object-cover ring-1 ring-border shrink-0 group-data-[collapsible=icon]:hidden"
-                  alt="Logo"
+                  alt={`${headerTitle} logo`}
                 />
                 <span className="font-semibold tracking-tight truncate group-data-[collapsible=icon]:hidden">
-                  {APP_TITLE}
+                  {headerTitle}
                 </span>
               </div>
               <SidebarToggleButton />
