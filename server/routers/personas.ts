@@ -19,7 +19,8 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, or } from "drizzle-orm";
-import { router, protectedProcedure } from "../_core/trpc";
+import { router, protectedProcedure, publicProcedure } from "../_core/trpc";
+import { sql } from "drizzle-orm";
 import {
   acceptOffer as acceptOfferDb,
   advanceDisputeStep,
@@ -635,5 +636,80 @@ export const orgsRouter = router({
           inArray(disputes.initiatingPartyId, memberIds),
         ))
         .limit(input.limit);
+    }),
+
+  // ── W7-4: org white-label branding ──────────────────────────────────────────
+  // Branding columns (brandName/logoUrl/primaryColor) were added to the
+  // organizations table by migration 0043_wave_w7.sql and are accessed via
+  // raw SQL because drizzle/schema.ts is wave-owned.
+
+  /**
+   * Public, low-sensitivity branding lookup used by the login page
+   * (/login?org=<id>) and the app header. Never returns member data.
+   */
+  getBranding: publicProcedure
+    .input(z.object({ orgId: z.string().min(1).max(64) }))
+    .query(async ({ input }) => {
+      const db = await requireDb();
+      const rows = await db.execute(sql`
+        SELECT id, name, "brandName", "logoUrl", "primaryColor"
+        FROM organizations WHERE id = ${input.orgId} LIMIT 1
+      `);
+      const org = (((rows as any).rows ?? rows) as any[])[0];
+      if (!org) throw new TRPCError({ code: "NOT_FOUND", message: "Organization not found" });
+      return {
+        orgId: org.id as string,
+        orgName: org.name as string,
+        brandName: (org.brandName ?? null) as string | null,
+        logoUrl: (org.logoUrl ?? null) as string | null,
+        primaryColor: (org.primaryColor ?? null) as string | null,
+      };
+    }),
+
+  /** Branding of the caller's first membership org (for the app header). */
+  myBranding: protectedProcedure.query(async ({ ctx }) => {
+    const db = await requireDb();
+    const rows = await db.execute(sql`
+      SELECT o.id, o.name, o."brandName", o."logoUrl", o."primaryColor"
+      FROM org_memberships m JOIN organizations o ON o.id = m."orgId"
+      WHERE m."userId" = ${ctx.user.id}
+      ORDER BY m."createdAt" ASC LIMIT 1
+    `);
+    const org = (((rows as any).rows ?? rows) as any[])[0];
+    if (!org) return null;
+    return {
+      orgId: org.id as string,
+      orgName: org.name as string,
+      brandName: (org.brandName ?? null) as string | null,
+      logoUrl: (org.logoUrl ?? null) as string | null,
+      primaryColor: (org.primaryColor ?? null) as string | null,
+    };
+  }),
+
+  /** Owner/admin-only branding update. null/"" clears a field (platform default). */
+  updateBranding: protectedProcedure
+    .input(z.object({
+      orgId: z.string().min(1).max(64),
+      brandName: z.string().max(255).nullable().optional(),
+      logoUrl: z.string().url().max(2000).nullable().optional(),
+      primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, "primaryColor must be a #rrggbb hex color").nullable().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { db, membership } = await assertMembership(ctx.user.id, input.orgId);
+      if (membership.role !== "owner" && ctx.user.role !== "admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only org owners may edit branding" });
+      }
+      const norm = (v: string | null | undefined) => (v === undefined ? undefined : (v === null || v.trim() === "" ? null : v.trim()));
+      const brandName = norm(input.brandName);
+      const logoUrl = norm(input.logoUrl);
+      const primaryColor = norm(input.primaryColor);
+      await db.execute(sql`
+        UPDATE organizations SET
+          "brandName" = COALESCE(${brandName === undefined ? sql`"brandName"` : brandName}::varchar, NULL),
+          "logoUrl" = COALESCE(${logoUrl === undefined ? sql`"logoUrl"` : logoUrl}::text, NULL),
+          "primaryColor" = COALESCE(${primaryColor === undefined ? sql`"primaryColor"` : primaryColor}::varchar, NULL)
+        WHERE id = ${input.orgId}
+      `);
+      return { ok: true as const };
     }),
 });

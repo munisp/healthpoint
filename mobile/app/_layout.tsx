@@ -58,6 +58,7 @@ function RootStack() {
       <Stack.Screen name="login" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="dispute/[id]" options={{ title: "Dispute" }} />
+      <Stack.Screen name="dispute/new" options={{ title: "New dispute", presentation: "modal" }} />
     </Stack>
   );
 }

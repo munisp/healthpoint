@@ -288,6 +288,13 @@
       "when": 1787796000000,
       "tag": "0042_wave_w6",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1787882400000,
+      "tag": "0043_wave_w7",
+      "breakpoints": true
     }
   ]
 }

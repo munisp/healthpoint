@@ -25,6 +25,7 @@ import { idreDirectoryRouter } from "./routers/idre-directory";
 import { feeSchedulesRouter } from "./routers/fee-schedules";
 import { featureFlagsRouter } from "./feature-flags";
 import { impersonationRouter } from "./impersonation";
+import { unsubscribeRouter } from "./routers/unsubscribe";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -39,7 +40,9 @@ export const rootRouter = mergeRouters(
   router({ idreDirectory: idreDirectoryRouter }),
   router({ feeSchedules: feeSchedulesRouter }),
   router({ featureFlags: featureFlagsRouter }),
-  router({ impersonation: impersonationRouter })
+  router({ impersonation: impersonationRouter }),
+  // wave-w7 additions
+  router({ unsubscribe: unsubscribeRouter })
 );
 
 export type RootRouter = typeof rootRouter;

@@ -24,10 +24,12 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import * as DocumentPicker from "expo-document-picker";
 import {
   useAdvanceDispute,
   useDisputeTimeline,
   useSubmitOffer,
+  useUploadDocument,
   useWorkflowProgress,
 } from "../../src/api/hooks";
 import { StatusBadge } from "../../src/components/StatusBadge";
@@ -485,6 +487,8 @@ export default function DisputeDetailScreen() {
         <Text style={[styles.cardHeader, { color: c.textFaint }]}>
           Documents{documents.length > 0 ? ` (${documents.length})` : ""}
         </Text>
+        {/* W7-1: document upload (expo-document-picker). */}
+        <DocumentUploadButton disputeId={dispute.id} c={c} onUploaded={refetch} />
         {documents.length === 0 ? (
           <Text style={[styles.emptyText, { color: c.textFaint }]}>
             No documents attached yet.
@@ -518,8 +522,107 @@ export default function DisputeDetailScreen() {
   );
 }
 
+/**
+ * W7-1: attach a document picked from the device via expo-document-picker.
+ *
+ * Storage model parity note (verified against server/routers.ts
+ * documents.upload + client/src/pages/BatchEvidenceUpload.tsx): the server
+ * persists document METADATA (fileName/mime/size/storageKey/storageUrl);
+ * there is no object-storage upload endpoint, and the web batch uploader
+ * stores the bytes inline as a data: URL. Mobile cannot build data: URLs
+ * without an additional file-system dependency, so we attach metadata with
+ * the device's content URI as storageUrl (a valid WHATWG URL, satisfying
+ * the z.string().url() check). Byte upload from mobile is a reported
+ * server gap, not hidden here.
+ */
+function DocumentUploadButton({
+  disputeId,
+  c,
+  onUploaded,
+}: {
+  disputeId: string;
+  c: ReturnType<typeof useColors>;
+  onUploaded: () => void;
+}) {
+  const upload = useUploadDocument();
+  const [error, setError] = useState<string | null>(null);
+
+  async function pickAndUpload(): Promise<void> {
+    setError(null);
+    const result = await DocumentPicker.getDocumentAsync({
+      type: ["application/pdf", "image/*"],
+      copyToCacheDirectory: true,
+      multiple: false,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    const storageKey = `disputes/${disputeId}/${Date.now()}-${asset.name}`;
+    upload.mutate(
+      {
+        disputeId,
+        fileName: asset.name,
+        fileType: asset.mimeType ?? "application/octet-stream",
+        documentType: "other",
+        fileSize: Math.max(1, asset.size ?? 1),
+        storageKey,
+        storageUrl: asset.uri,
+      },
+      {
+        onSuccess: () => {
+          hapticSuccess();
+          onUploaded();
+        },
+        onError: (e) => {
+          hapticError();
+          setError(e instanceof Error ? e.message : "Upload failed.");
+        },
+      }
+    );
+  }
+
+  return (
+    <View>
+      <Pressable
+        onPress={() => {
+          void pickAndUpload();
+        }}
+        disabled={upload.isPending}
+        style={[
+          styles.uploadButton,
+          { borderColor: c.primary, opacity: upload.isPending ? 0.6 : 1 },
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel="Attach a document from your device"
+      >
+        <Ionicons name="cloud-upload-outline" size={18} color={c.primary} />
+        <Text style={[styles.uploadButtonText, { color: c.primary }]}>
+          {upload.isPending ? "Attaching…" : "Attach document"}
+        </Text>
+      </Pressable>
+      {error && (
+        <Text style={[styles.uploadError, { color: c.danger }]} accessibilityRole="alert">
+          {error}
+        </Text>
+      )}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  uploadButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderRadius: 10,
+    minHeight: MIN_TOUCH_TARGET,
+    marginBottom: spacing.sm,
+  },
+  uploadButtonText: { fontSize: fontSize.body, fontWeight: "600" },
+  uploadError: { marginBottom: spacing.sm, fontSize: fontSize.small },
   headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
