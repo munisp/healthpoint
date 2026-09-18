@@ -76,7 +76,7 @@ const checkpointQueue = new InMemoryCheckpointQueue({
 let cachedDriver: PortalRpaDriver | null = null;
 async function getDriver(): Promise<PortalRpaDriver> {
   if (cachedDriver) return cachedDriver;
-  const portalMap = loadPortalMap(process.env); // throws (fail-closed) on mismatch
+  const portalMap = loadPortalMap(process.env as Parameters<typeof loadPortalMap>[0]); // throws (fail-closed) on mismatch
   const credentialResolver = await createEnvCredentialResolver();
   cachedDriver = new PortalRpaDriver({
     portalMap,
@@ -208,7 +208,7 @@ export const portalRpaRouter = router({
   /** Portal map metadata for operators: version + verification status. */
   portalMapInfo: adminProcedure.query(() => {
     try {
-      const map = loadPortalMap(process.env);
+      const map = loadPortalMap(process.env as Parameters<typeof loadPortalMap>[0]);
       return {
         loaded: true as const,
         version: PORTAL_MAP_VERSION,
