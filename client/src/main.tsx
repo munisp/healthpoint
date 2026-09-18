@@ -43,8 +43,16 @@ const trpcClient = trpc.createClient({
       url: "/api/trpc",
       transformer: superjson,
       fetch(input, init) {
+        // Wave W5-6: attach the impersonation token (when an admin is
+        // impersonating) so the server can audit every request.
+        const headers = new Headers(init?.headers ?? {});
+        try {
+          const imp = sessionStorage.getItem("hp_impersonation_token");
+          if (imp) headers.set("x-impersonation-token", imp);
+        } catch { /* sessionStorage unavailable */ }
         return globalThis.fetch(input, {
           ...(init ?? {}),
+          headers,
           credentials: "include",
         });
       },

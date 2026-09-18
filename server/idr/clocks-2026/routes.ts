@@ -8,6 +8,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../../_core/trpc";
 import { getEffectiveIDRParameters } from "./params-2026";
+import { getAdminFeeFromDb } from "../../fee-schedule";
 
 const asOfSchema = z.object({ asOf: z.coerce.date() });
 
@@ -37,7 +38,7 @@ export const feeScheduleRouter = router({
    */
   adminFeeAt: protectedProcedure
     .input(asOfSchema)
-    .query(({ input }) => {
+    .query(async ({ input }) => {
       let params;
       try {
         params = getEffectiveIDRParameters(input.asOf);
@@ -46,6 +47,17 @@ export const feeScheduleRouter = router({
           code: "BAD_REQUEST",
           message: err instanceof Error ? err.message : "Invalid asOf date",
         });
+      }
+      // DB-first (wave W5-4): the admin-editable fee_schedules table overrides
+      // the hardcoded tiers; params remain the fallback when no row matches.
+      const dbRow = await getAdminFeeFromDb("single", input.asOf);
+      if (dbRow) {
+        return {
+          feeUsd: Number(dbRow.amountUsd),
+          tier: `fee_schedules (${dbRow.effectiveFrom}${dbRow.effectiveTo ? ` – ${dbRow.effectiveTo}` : "+"})`,
+          citation: dbRow.citation ?? "45 CFR 149.510(d)(2)(ii)(B)",
+          source: "db" as const,
+        };
       }
       return {
         feeUsd: params.adminFeeUsd,
@@ -56,6 +68,7 @@ export const feeScheduleRouter = router({
               ? "December 2023 fee notice (2024-01-22 through 2026-06-10)"
               : "Pre-2024-01-22 tier",
         citation: "45 CFR 149.510(d)(2)(ii)(B)",
+        source: "params" as const,
       };
     }),
 });

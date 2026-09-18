@@ -21,6 +21,10 @@ import { idrComplianceRouter } from "./routers/idr-compliance";
 import { pushSubscriptionsRouter } from "./routers/push-subscriptions";
 import { payerRouter, idreRouter, orgsRouter } from "./routers/personas";
 import { patientPortalRouter } from "./routers/patient-portal";
+import { idreDirectoryRouter } from "./routers/idre-directory";
+import { feeSchedulesRouter } from "./routers/fee-schedules";
+import { featureFlagsRouter } from "./feature-flags";
+import { impersonationRouter } from "./impersonation";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -30,7 +34,12 @@ export const rootRouter = mergeRouters(
   router({ payer: payerRouter }),
   router({ patientPortal: patientPortalRouter }),
   router({ idre: idreRouter }),
-  router({ orgs: orgsRouter })
+  router({ orgs: orgsRouter }),
+  // wave-w5 additions
+  router({ idreDirectory: idreDirectoryRouter }),
+  router({ feeSchedules: feeSchedulesRouter }),
+  router({ featureFlags: featureFlagsRouter }),
+  router({ impersonation: impersonationRouter })
 );
 
 export type RootRouter = typeof rootRouter;
