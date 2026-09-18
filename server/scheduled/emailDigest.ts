@@ -15,8 +15,10 @@
  *   before sending and stamped after a successful/queued send. The marker
  *   columns and the per-user selection are injectable for tests.
  */
+import crypto from "node:crypto";
 import { sql, eq } from "drizzle-orm";
 import { getDb } from "../db";
+import { ENV } from "../_core/env";
 import { users, disputes, emailDigestPreferences } from "../../drizzle/schema";
 import { dispatchNotification } from "../notifications";
 
@@ -54,6 +56,7 @@ export function composeUserDigest(args: {
   activeDisputes: { referenceNumber: string; status: string; nextDeadline: Date | null }[];
   notifyOnDeadlineApproach: boolean;
   notifyOnStatusChange: boolean;
+  unsubscribeUrl?: string | null;
 }): { title: string; message: string } {
   const freqLabel = args.frequency === "daily" ? "Daily" : "Weekly";
   const lines: string[] = [`${freqLabel} IDR digest for ${args.userName ?? "you"}.`, ""];
@@ -74,7 +77,39 @@ export function composeUserDigest(args: {
     }
   }
   lines.push("", "Manage your email preferences at /email-prefs.");
+  if (args.unsubscribeUrl) {
+    // W7-5: one-click unsubscribe (public /unsubscribe/:token page; sets
+    // digestFrequency='never' which this scheduler already honors).
+    lines.push(`Unsubscribe from these digests: ${args.unsubscribeUrl}`);
+  }
   return { title: `${freqLabel} IDR dispute digest`, message: lines.join("\n") };
+}
+
+/**
+ * W7-5: ensure the preference row has an unguessable one-click unsubscribe
+ * token and return the absolute unsubscribe URL. Tokens are generated lazily
+ * on first digest send and persisted (raw SQL — column added by migration
+ * 0043_wave_w7.sql). Never logged.
+ */
+export async function ensureUnsubscribeUrl(db: any, prefId: string): Promise<string | null> {
+  try {
+    const rows = await db.execute(sql`
+      SELECT "unsubscribeToken" FROM email_digest_preferences WHERE id = ${prefId} LIMIT 1
+    `);
+    const row = (((rows as any).rows ?? rows) as any[])[0];
+    let token: string | null = row?.unsubscribeToken ?? null;
+    if (!token) {
+      token = crypto.randomBytes(32).toString("hex");
+      await db.execute(sql`
+        UPDATE email_digest_preferences SET "unsubscribeToken" = ${token} WHERE id = ${prefId}
+      `);
+    }
+    const base = (ENV.appUrl || "").replace(/\/+$/, "");
+    return base ? `${base}/unsubscribe/${token}` : null;
+  } catch {
+    // Unsubscribe link must never break digest delivery.
+    return null;
+  }
 }
 
 type SendFn = (opts: {
@@ -165,12 +200,14 @@ export async function runEmailDigest(
         return { referenceNumber: d.referenceNumber, status: d.status, nextDeadline: deadlines[0] ?? null };
       });
 
+    const unsubscribeUrl = await ensureUnsubscribeUrl(db, pref.id);
     const { title, message } = composeUserDigest({
       userName: user.name,
       frequency,
       activeDisputes: active,
       notifyOnDeadlineApproach: pref.notifyOnDeadlineApproach,
       notifyOnStatusChange: pref.notifyOnStatusChange,
+      unsubscribeUrl,
     });
 
     try {
