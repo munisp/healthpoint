@@ -178,7 +178,7 @@ export const j23: Journey = {
       async run(ctx) {
         const d = await createJourneyDispute(ctx, "j23");
         (ctx as unknown as { _d: string })._d = d.id;
-        await ctx.admin.arbitrators.seedDemoEntities();
+        await ctx.admin.arbitrators.seedDemoEntities({ demo: true });
         const entities = await ctx.provider.arbitrators.list({});
         ctx.assert(entities.length >= 1, "demo IDR entities seeded");
         (ctx as unknown as { _e: string })._e = entities[0].id;
