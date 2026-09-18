@@ -141,6 +141,7 @@ const IdreQueue = lazy(() => import("./pages/personas/IdreQueue"));
 const OrgsPage = lazy(() => import("./pages/personas/Orgs"));
 const IdreDirectoryAdmin = lazy(() => import("./pages/admin/IdreDirectory"));
 const FeeSchedulesAdmin = lazy(() => import("./pages/admin/FeeSchedules"));
+const Unsubscribe = lazy(() => import("./pages/Unsubscribe"));
 
 /** Helper: wraps a component in ProtectedRoute */
 function P({ component: C, admin }: { component: ComponentType; admin?: boolean }) {
@@ -171,6 +172,7 @@ function Router() {
       <Route path={"/404"} component={NotFound} />
       <Route path={"/changelog"} component={Changelog} />
       <Route path={"/help"} component={HelpCenter} />
+      <Route path={"/unsubscribe/:token"} component={Unsubscribe} />
       <Route path="/state-laws" component={StateBalanceBilling} />
 
       {/* Auth-required routes */}
