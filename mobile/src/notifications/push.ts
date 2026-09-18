@@ -1,15 +1,15 @@
 /**
  * Push-notification registration + tap handling.
  *
- * IMPORTANT — server gap (verified against server/routers.ts): there is NO
- * endpoint that stores device push tokens today. Registration therefore:
+ * W7-1 update: the server now exposes
+ * pushSubscriptions.registerExpoToken (server/routers/push-subscriptions.ts,
+ * migration 0043 expo_push_tokens table). Registration therefore:
  *   1. requests OS permission,
  *   2. creates the Android channel,
  *   3. obtains the Expo push token locally,
- *   4. persists it to AsyncStorage (hp.pushToken.v1) for later reconcilation,
- *   5. SKIPS the network POST until PUSH_TOKEN_ENDPOINT is set to a real
- *      route (do not invent one — add the server route first, then set the
- *      constant). The rest of the flow is wired and tested from that point.
+ *   4. persists it to AsyncStorage (hp.pushToken.v1) as an offline fallback,
+ *   5. registers it with the server over the authenticated tRPC client
+ *      (best effort — failures leave the local copy for next launch).
  *
  * Notification taps deep-link into the app: payloads carrying
  * `data.disputeId` route to /dispute/[id] (see app/_layout.tsx).
@@ -19,15 +19,12 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
-
-/**
- * TODO(server): set to `${API_URL}/api/<route>` once the server exposes a
- * push-token registration endpoint, e.g. `${API_URL}/api/push-tokens`.
- */
-const PUSH_TOKEN_ENDPOINT: string | null = null;
+import { trpc } from "../api/trpc";
 
 /** AsyncStorage key holding the last obtained Expo push token. */
 const PUSH_TOKEN_STORAGE_KEY = "hp.pushToken.v1";
+/** AsyncStorage key recording which token the server has (avoid re-POSTs). */
+const PUSH_TOKEN_SYNCED_KEY = "hp.pushToken.synced.v1";
 
 let handlerConfigured = false;
 
@@ -90,29 +87,23 @@ export async function registerForPushNotifications(
       // ignore quota errors
     }
 
-    if (PUSH_TOKEN_ENDPOINT) {
-      const accessToken = await getAccessToken();
-      if (accessToken) {
-        await fetch(PUSH_TOKEN_ENDPOINT, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({
+    // W7-1: register with the server via tRPC (authenticated by the token
+    // provider registered in trpc.ts). Skipped when we already synced this
+    // exact token; failures are non-fatal and retried on next launch.
+    const accessToken = await getAccessToken();
+    if (accessToken) {
+      try {
+        const synced = await AsyncStorage.getItem(PUSH_TOKEN_SYNCED_KEY);
+        if (synced !== token.data) {
+          await trpc.pushSubscriptions.registerExpoToken.mutate({
             token: token.data,
-            platform: Platform.OS,
-          }),
-        });
+            platform: Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : "web",
+          });
+          await AsyncStorage.setItem(PUSH_TOKEN_SYNCED_KEY, token.data);
+        }
+      } catch {
+        // Offline or server unreachable — local copy remains for next launch.
       }
-    } else {
-      // TODO(server): server/routers.ts has no push-token registration
-      // mutation (verified 2026-09-08). The token is stored locally under
-      // hp.pushToken.v1; wire the POST once the endpoint exists.
-      console.info(
-        "[push] Expo push token obtained and stored locally " +
-          "(no server endpoint yet — see TODO in src/notifications/push.ts)"
-      );
     }
     return token.data;
   } catch {
