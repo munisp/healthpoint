@@ -27,11 +27,30 @@ const invalidateSearchOnMutation = t.middleware(async opts => {
   return result;
 });
 
+/**
+ * Procedures a pre-MFA ("mfa-pending") session may call: the login-upgrade
+ * endpoint plus the TOTP enrollment procs (forced-enrollment flow when
+ * orgSettings.requireMFA=true). Everything else gets 403 mfa_required.
+ */
+export const MFA_PENDING_ALLOWED_PATHS = new Set([
+  "auth.verifyLoginTotp",
+  "auth.me",
+  "totp.status",
+  "totp.generateSecret",
+  "totp.setup",
+  "totp.verify",
+  "totp.getBackupCodes",
+]);
+
 const requireUser = t.middleware(async opts => {
   const { ctx, next } = opts;
 
   if (!ctx.user) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+
+  if (ctx.mfaPending && !MFA_PENDING_ALLOWED_PATHS.has(opts.path)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "mfa_required" });
   }
 
   return next({
@@ -40,6 +59,41 @@ const requireUser = t.middleware(async opts => {
       user: ctx.user,
     },
   });
+});
+
+/**
+ * orgSettings.auditAllActions — when enabled for the calling user, every
+ * successful mutation is recorded in audit_log. Fire-and-forget: audit
+ * failures never fail the request (warn-logged).
+ */
+const auditAllActionsOnMutation = t.middleware(async opts => {
+  const result = await opts.next();
+  if (opts.type === "mutation" && result.ok && opts.ctx.user) {
+    const user = opts.ctx.user;
+    const path = opts.path;
+    void (async () => {
+      const { getDb, createAuditEntry } = await import("../db");
+      const { orgSettings } = await import("../../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) return;
+      const rows = await db.select({ a: orgSettings.auditAllActions }).from(orgSettings).where(eq(orgSettings.userId, user.id)).limit(1);
+      if (rows[0]?.a !== true) return;
+      const headers = (opts.ctx.req?.headers ?? {}) as Record<string, unknown>;
+      const ip = (headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? opts.ctx.req?.ip ?? null;
+      await createAuditEntry({
+        userId: user.id,
+        action: "mutation",
+        entityType: "trpc",
+        entityId: path,
+        oldValue: null,
+        newValue: null,
+        ipAddress: ip,
+        userAgent: (headers["user-agent"] as string | undefined) ?? null,
+      });
+    })().catch(err => console.warn("[audit] auditAllActions write failed:", err instanceof Error ? err.message : err));
+  }
+  return result;
 });
 
 /**
@@ -73,4 +127,5 @@ const enforceObjectLevelAuthz = t.middleware(async opts => {
 export const protectedProcedure = t.procedure
   .use(requireUser)
   .use(enforceObjectLevelAuthz)
-  .use(invalidateSearchOnMutation);
+  .use(invalidateSearchOnMutation)
+  .use(auditAllActionsOnMutation);
