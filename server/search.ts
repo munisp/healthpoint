@@ -505,18 +505,57 @@ async function buildIndex(): Promise<IndexCache> {
       }));
     } catch (err) { console.warn("[Search] disputes:", err); }
 
-    // Documents
+    // Documents — W6: full-text v1. Extracted text is joined from
+    // documentAnalyses.ocrText (doc-intelligence results, matched by
+    // disputeId+fileName) and smartFormExtractions content, so searches match
+    // document text, not just file names. Hits keep documentId+disputeId
+    // linkage; visibility scoping (uploadedBy / parent-dispute access) is
+    // unchanged (filterVisibleHits).
     try {
       const rows = await db.select().from(disputeDocuments).orderBy(desc(disputeDocuments.uploadedAt)).limit(5000);
+      // Extracted-text lookup from document analyses (OCR/doc-intelligence).
+      const textByDocKey = new Map<string, string>();
+      try {
+        const { documentAnalyses } = await import("../drizzle/schema");
+        const analyses = await db.select().from(documentAnalyses).orderBy(desc(documentAnalyses.createdAt)).limit(10000);
+        for (const a of analyses) {
+          if (!a.ocrText) continue;
+          const key = `${a.disputeId ?? ""}|${a.fileName ?? ""}`;
+          if (!textByDocKey.has(key)) textByDocKey.set(key, a.ocrText.slice(0, 20_000));
+        }
+      } catch (err) { console.warn("[Search] document_analyses text:", err); }
       documentData = rows.map(d => ({
         id:           d.id,
         disputeId:    d.disputeId ?? "",
         fileName:     d.fileName ?? "",
         documentType: d.documentType ?? "",
-        extractedText: "",
+        extractedText: textByDocKey.get(`${d.disputeId ?? ""}|${d.fileName ?? ""}`) ?? "",
         // ownership field for object-level visibility filtering (not a search key)
         uploadedBy:   d.uploadedBy ?? "",
       }));
+      // Smart-form extractions with dispute linkage are indexed as documents
+      // so their extracted content is searchable and linked back.
+      try {
+        const { smartFormExtractions } = await import("../drizzle/schema");
+        const extractions = await db.select().from(smartFormExtractions).orderBy(desc(smartFormExtractions.createdAt)).limit(5000);
+        for (const e of extractions) {
+          if (!e.disputeId || e.status !== "complete") continue;
+          const fieldText = Object.values(e.extractedFields ?? {})
+            .map(f => (f as { value?: string | number | null })?.value)
+            .filter(v => v !== null && v !== undefined)
+            .join(" ");
+          const text = [e.inputPreview ?? "", fieldText].join(" ").trim();
+          if (!text) continue;
+          documentData.push({
+            id:           `sfe:${e.id}`,
+            disputeId:    e.disputeId,
+            fileName:     e.documentName ?? `smart-form-extraction-${e.id}`,
+            documentType: "smart_form_extraction",
+            extractedText: text.slice(0, 20_000),
+            uploadedBy:   e.userId ?? "",
+          });
+        }
+      } catch (err) { console.warn("[Search] smart_form_extractions text:", err); }
     } catch (err) { console.warn("[Search] documents:", err); }
 
     // Audit log
