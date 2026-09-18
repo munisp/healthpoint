@@ -210,6 +210,76 @@ function extractBearerToken(req: Request): string | null {
   return match ? match[1] : null;
 }
 
+/** Public variant used by the tRPC context to route hp_ API keys. */
+export function extractBearerTokenRaw(req: Request): string | null {
+  return extractBearerToken(req);
+}
+
+// ── API-key authentication (hp_<key>) ────────────────────────────────────────
+
+/** API keys minted by apiKeys.create are `hp_` + 64 hex chars. */
+export function isApiKeyToken(token: string): boolean {
+  return /^hp_[0-9a-f]{64}$/.test(token);
+}
+
+export interface ApiKeyAuthResult {
+  user: User;
+  /** Effective scopes — "admin" is stripped unless the key owner is admin. */
+  scopes: string[];
+}
+
+/**
+ * Authenticate `Authorization: Bearer hp_<key>` against api_keys.keyHash
+ * (SHA-256). Enforces revocation and expiry, maps scopes to a synthetic user
+ * context (role "admin" only when the key carries the admin scope AND the
+ * owner is a DB admin — non-admin owners can never mint an effective admin
+ * key, and apiKeys.create additionally refuses to store one), and touches
+ * lastUsedAt (fire-and-forget).
+ */
+export async function authenticateApiKey(token: string): Promise<ApiKeyAuthResult> {
+  const { createHash } = await import("crypto");
+  const keyHash = createHash("sha256").update(token).digest("hex");
+
+  const db = await import("../db");
+  const drizzle = await db.getDb();
+  if (!drizzle) throw new BearerAuthError("database_unavailable");
+  const { apiKeys } = await import("../../drizzle/schema");
+  const { eq } = await import("drizzle-orm");
+
+  const rows = await drizzle.select().from(apiKeys).where(eq(apiKeys.keyHash, keyHash)).limit(1);
+  const key = rows[0];
+  if (!key) throw new BearerAuthError("unknown_api_key");
+  if (key.revokedAt) throw new BearerAuthError("api_key_revoked");
+  if (key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now()) {
+    throw new BearerAuthError("api_key_expired");
+  }
+
+  const user = await db.getUser(key.userId);
+  if (!user) throw new BearerAuthError("api_key_owner_missing");
+
+  const now = Date.now();
+  if (user.suspendedAt && (!user.suspendedUntil || new Date(user.suspendedUntil).getTime() > now)) {
+    throw new BearerAuthError("account_suspended");
+  }
+
+  const requestedScopes = (key.scopes ?? "read").split(",").map(s => s.trim()).filter(Boolean);
+  // Admin scope is only effective when the key owner is an admin — defense in
+  // depth alongside the creation-time filter in apiKeys.create.
+  const scopes = user.role === "admin" ? requestedScopes : requestedScopes.filter(s => s !== "admin");
+
+  // Touch lastUsedAt without blocking the request.
+  drizzle.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, key.id))
+    .then(() => {}, err => console.warn("[Auth] apiKeys lastUsedAt update failed:", err instanceof Error ? err.message : err));
+
+  return { user, scopes };
+}
+
+export async function authenticateApiKeyRequest(req: Request): Promise<ApiKeyAuthResult> {
+  const token = extractBearerToken(req);
+  if (!token || !isApiKeyToken(token)) throw new BearerAuthError("missing or malformed API key");
+  return authenticateApiKey(token);
+}
+
 /**
  * Authenticate a request carrying a Keycloak Bearer access token and resolve
  * it to the same `User` row the session path returns. Unknown users are
@@ -242,6 +312,18 @@ export async function authenticateBearerRequest(req: Request): Promise<User> {
     const now = Date.now();
     if (user.suspendedAt && (!user.suspendedUntil || new Date(user.suspendedUntil).getTime() > now)) {
       throw new BearerAuthError("account_suspended");
+    }
+  }
+
+  // MFA at login: Keycloak access tokens alone are not a second factor. Users
+  // with TOTP enabled (or org-mandated MFA without enrollment) cannot use a
+  // bare Keycloak bearer token for full API access — they must complete the
+  // web two-stage login (mfa-pending → auth.verifyLoginTotp) or use an hp_
+  // API key minted from an authenticated session.
+  {
+    const { getMfaRequirement } = await import("./mfa");
+    if ((await getMfaRequirement(user.id)) !== "none") {
+      throw new BearerAuthError("mfa_required");
     }
   }
 

@@ -1,7 +1,7 @@
 /**
  * Notification Retry Worker
  * Route: POST /api/scheduled/notification-retry
- * Schedule: every 5 minutes
+ * Schedule: every 5 minutes (*‍/5 * * * *)
  *
  * Drains the notification_attempts outbox: failed email/SMS deliveries
  * (statutory deadline alerts must not be silently lost) are re-attempted
