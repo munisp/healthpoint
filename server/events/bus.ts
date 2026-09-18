@@ -82,7 +82,10 @@ export type IDREventType =
   | "webhook.triggered"
   | "audit.logged"
   | "user.login"
-  | "user.logout";
+  | "user.logout"
+  | "consent.signed"
+  | "consent.revoked"
+  | "consent.expired";
 
 export type IDRTopic =
   | "idr.disputes.state_changes"
@@ -91,7 +94,8 @@ export type IDRTopic =
   | "idr.payments"
   | "idr.notifications"
   | "idr.audit"
-  | "idr.users";
+  | "idr.users"
+  | "idr.consent";
 
 const EVENT_TOPIC_MAP: Record<IDREventType, IDRTopic> = {
   "dispute.created": "idr.disputes.state_changes",
@@ -112,6 +116,9 @@ const EVENT_TOPIC_MAP: Record<IDREventType, IDRTopic> = {
   "audit.logged": "idr.audit",
   "user.login": "idr.users",
   "user.logout": "idr.users",
+  "consent.signed": "idr.consent",
+  "consent.revoked": "idr.consent",
+  "consent.expired": "idr.consent",
 };
 
 export interface IDREvent<T = Record<string, unknown>> {
