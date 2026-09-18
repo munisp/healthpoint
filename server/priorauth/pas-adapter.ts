@@ -121,7 +121,8 @@ export type SubmitResult =
  * Submit a PA request via the PAS API. STATIC-ONLY: returns BLOCKED unless
  * the 2027 API feature flag is enabled AND a payer endpoint is configured.
  * Even when enabled+configured, this function performs no network I/O — it
- * returns the prepared bundle for the wired transport (submitViaPasHttp).
+ * returns the prepared bundle for a future wired transport to send. Actual
+ * transport remains unimplemented until payer endpoints exist.
  */
 export function submitViaPas(
   request: Pick<PaRequest, 'id' | 'urgency'>,
@@ -145,7 +146,7 @@ export function submitViaPas(
         'without explicit endpoint configuration.',
     };
   }
-  // STATIC-ONLY: prepare the payload; submitViaPasHttp performs the transport.
+  // STATIC-ONLY: prepare the payload; transport is intentionally not wired.
   return { status: 'READY', bundle: buildPasBundle(request) };
 }
 
@@ -207,7 +208,9 @@ async function buildMtlsDispatcher(config: PasConfig): Promise<unknown> {
   if (!config.mtlsCertPath || !config.mtlsKeyPath) return undefined;
   const { readFileSync } = await import('node:fs');
   // undici (Node's fetch implementation) accepts a `dispatcher` option.
-  const { Agent } = await import('undici');
+  // Specifier cast: undici ships with Node at runtime but has no bundled
+  // type declarations in this repo.
+  const { Agent } = (await import('undici' as any)) as any;
   return new Agent({
     connect: {
       cert: readFileSync(config.mtlsCertPath),
