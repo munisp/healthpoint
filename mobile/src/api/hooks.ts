@@ -195,6 +195,73 @@ export function useSubmitOffer() {
   });
 }
 
+/**
+ * W7-1: disputes.create — payload mirrors createDisputeSchema in
+ * server/routers.ts (verified 2026-09: PARTY_TYPE / SERVICE_TYPE enums in
+ * drizzle/schema.ts). billedAmount is a decimal-dollar string.
+ */
+export interface CreateDisputeInput {
+  initiatingPartyType: "provider" | "facility" | "payer" | "aggregator";
+  initiatingPartyName: string;
+  initiatingPartyNpi?: string;
+  respondingPartyType?: "provider" | "facility" | "payer" | "aggregator";
+  respondingPartyName?: string;
+  respondingPartyNpi?: string;
+  serviceType:
+    | "emergency_medicine" | "anesthesiology" | "pathology" | "radiology"
+    | "neonatology" | "assistant_surgeon" | "hospitalist" | "intensivist"
+    | "air_ambulance" | "ground_ambulance" | "other";
+  /** ISO-8601 datetime string. */
+  serviceDate: string;
+  /** Two-letter state codes. */
+  patientState: string;
+  facilityState: string;
+  cptCodes: string[];
+  billedAmount: string;
+  notes?: string;
+}
+
+export function useCreateDispute() {
+  return useMutation({
+    mutationFn: (input: CreateDisputeInput) =>
+      trpc.disputes.create.mutate(input) as Promise<{ id?: string; disputeId?: string }>,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["disputes"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
+/** W7-1: documents.upload — attaches document metadata to a dispute. */
+export interface UploadDocumentInput {
+  disputeId: string;
+  fileName: string;
+  fileType: string;
+  documentType:
+    | "qpa_documentation" | "eob" | "contract" | "medical_records"
+    | "cost_sharing_info" | "prior_authorization" | "other";
+  fileSize: number;
+  storageKey: string;
+  storageUrl: string;
+  description?: string;
+}
+
+export function useUploadDocument() {
+  return useMutation({
+    mutationFn: (input: UploadDocumentInput) =>
+      trpc.documents.upload.mutate(input),
+    onSuccess: (_data, vars) => invalidateDispute(vars.disputeId),
+  });
+}
+
+/** W7-1: pushSubscriptions.registerExpoToken — persist the Expo push token. */
+export async function registerExpoTokenServerSide(
+  token: string,
+  platform: "ios" | "android" | "web"
+): Promise<void> {
+  await trpc.pushSubscriptions.registerExpoToken.mutate({ token, platform });
+}
+
 /** auth.logout — best-effort server-side session teardown. */
 export async function logoutServerSide(): Promise<void> {
   await trpc.auth.logout.mutate();

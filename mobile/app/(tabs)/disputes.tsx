@@ -97,6 +97,17 @@ export default function DisputesScreen() {
           </Pressable>
         )}
       </View>
+      {/* W7-1: mobile dispute creation entry point */}
+      <Link href="/dispute/new" asChild>
+        <Pressable
+          style={[styles.newButton, { backgroundColor: c.primary }]}
+          accessibilityRole="button"
+          accessibilityLabel="Create new dispute"
+        >
+          <Ionicons name="add" size={18} color="#ffffff" />
+          <Text style={styles.newButtonText}>New dispute</Text>
+        </Pressable>
+      </Link>
       <View style={styles.chipsWrap}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           {STATUS_FILTERS.map((s) => {
@@ -224,6 +235,17 @@ const styles = StyleSheet.create({
     minHeight: MIN_TOUCH_TARGET,
     fontSize: fontSize.body,
   },
+  newButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.xs,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    borderRadius: 10,
+    minHeight: MIN_TOUCH_TARGET,
+  },
+  newButtonText: { color: "#ffffff", fontSize: fontSize.body, fontWeight: "600" },
   chipsWrap: { paddingLeft: spacing.md, marginBottom: spacing.xs },
   chip: {
     paddingHorizontal: spacing.md,
