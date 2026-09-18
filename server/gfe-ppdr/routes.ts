@@ -16,10 +16,13 @@ import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../_core/trpc";
 import {
   computeGfeDeadline,
+  computeGfeTotalExpectedCharges,
   isGfeLate,
   validateGfeContent,
   validateRecurringGfeWindow,
+  validateUpdatedGfeRule,
 } from "./gfe-clock";
+import { composeGfeDocument } from "../../shared/i18n/notices";
 import {
   evaluatePpdrEligibility,
   createPpdrDispute,
@@ -87,6 +90,13 @@ const holidaySetSchema = z
   .max(400)
   .transform((arr) => new Set(arr));
 
+/** W4-F5: co-provider / co-facility estimate entry (45 CFR 149.610(b)(2)). */
+const coProviderSchema = z.object({
+  name: z.string().min(1).max(255),
+  npi: z.string().regex(/^\d{10}$/).optional(),
+  expectedChargesUsd: z.number().nonnegative(),
+});
+
 const ppdrStateSchema = z.enum([
   "DRAFT",
   "INITIATED",
@@ -145,10 +155,102 @@ export const gfePpdrRouter = router({
       }
     }),
 
-  /** GFE content completeness against REQUIRED_GFE_ELEMENTS (149.610(b)). */
+  /**
+   * GFE content completeness against REQUIRED_GFE_ELEMENTS (149.610(b)).
+   * W4-F1: optional `language`; W4-F5: optional `coProviders` — when supplied
+   * the co-provider disclaimer is mandatory and every entry is validated.
+   */
   validateContent: protectedProcedure
-    .input(z.object({ elementsProvided: z.array(z.string().max(128)).max(64) }))
-    .query(({ input }) => validateGfeContent(input.elementsProvided)),
+    .input(z.object({
+      elementsProvided: z.array(z.string().max(128)).max(64),
+      language: z.string().max(16).optional(),
+      coProviders: z.array(coProviderSchema).max(64).optional(),
+    }))
+    .query(({ input }) =>
+      validateGfeContent(input.elementsProvided, {
+        language: input.language,
+        coProviders: input.coProviders,
+      }),
+    ),
+
+  /**
+   * W4-F5: aggregation rule — total = convening + Σ co-providers. Returns the
+   * computed total; callers must NOT supply their own total.
+   */
+  computeTotalExpectedCharges: protectedProcedure
+    .input(z.object({
+      conveningChargesUsd: z.number().nonnegative(),
+      coProviders: z.array(coProviderSchema).max(64).default([]),
+    }))
+    .query(({ input }) => {
+      try {
+        return {
+          totalExpectedChargesUsd: computeGfeTotalExpectedCharges(
+            input.conveningChargesUsd,
+            input.coProviders,
+          ),
+          rule: "total = convening + Σ co-providers (45 CFR 149.610(b))",
+        };
+      } catch (err) {
+        toTrpcError(err);
+      }
+    }),
+
+  /**
+   * W4-F5: updated-GFE rule — when expected charges change, an updated GFE
+   * must be delivered >= 1 business day before service (45 CFR 149.610(a)(2)).
+   */
+  validateUpdatedGfe: protectedProcedure
+    .input(z.object({
+      expectedChargesChanged: z.boolean(),
+      updatedGfeDeliveredAt: z.coerce.date().optional(),
+      serviceAt: z.coerce.date(),
+      holidays: holidaySetSchema.optional(),
+    }))
+    .query(({ input }) => {
+      try {
+        return validateUpdatedGfeRule(input);
+      } catch (err) {
+        toTrpcError(err);
+      }
+    }),
+
+  /**
+   * W4-F1/F5: compose the GFE document text (en/es). The printed total is
+   * ALWAYS computed by the aggregation rule, never caller-supplied.
+   */
+  renderGfeDocument: protectedProcedure
+    .input(z.object({
+      caseId: idSchema,
+      providerName: z.string().min(1).max(255),
+      conveningChargesUsd: z.number().nonnegative(),
+      coProviders: z.array(coProviderSchema).max(64).optional(),
+      itemsAndServices: z.array(z.string().max(512)).max(128).optional(),
+      language: z.string().max(16).optional(),
+    }))
+    .query(({ input }) => {
+      try {
+        const document = composeGfeDocument({
+          providerName: input.providerName,
+          caseId: input.caseId,
+          conveningChargesUsd: input.conveningChargesUsd,
+          coProviders: input.coProviders,
+          itemsAndServices: input.itemsAndServices,
+          language: input.language,
+        });
+        return {
+          caseId: input.caseId,
+          language: input.language ?? "en",
+          document,
+          totalExpectedChargesUsd: computeGfeTotalExpectedCharges(
+            input.conveningChargesUsd,
+            input.coProviders ?? [],
+          ),
+        };
+      } catch (err) {
+        toTrpcError(err);
+      }
+    }),
 
   /** Recurring-services GFE 12-month window check (149.610(a)(2)(iii)). */
   validateRecurringWindow: protectedProcedure
