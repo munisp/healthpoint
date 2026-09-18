@@ -10,7 +10,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Users, Search, Shield, UserCheck, UserX, RefreshCw, Crown, Ban, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Users, Search, Shield, UserCheck, UserX, RefreshCw, Crown, Ban, CheckCircle2, AlertTriangle, Eye } from "lucide-react";
+import { setImpersonationSession } from "@/components/ImpersonationBanner";
 import EmptyState from "@/components/EmptyState";
 
 type ActionType = "role" | "suspend" | "unsuspend";
@@ -61,6 +62,19 @@ export default function AdminUserManagement() {
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Wave W5-6: audited impersonation (15-min token; every request audited).
+  const [impersonateUser, setImpersonateUser] = useState<any>(null);
+  const [impersonateReason, setImpersonateReason] = useState("");
+  const impersonateMut = trpc.impersonation.start.useMutation({
+    onSuccess: r => {
+      setImpersonationSession(r.token, r.target.name ?? r.target.id);
+      toast.success(`Impersonation started for ${r.target.name ?? r.target.id} (15 minutes, fully audited)`);
+      window.location.reload();
+    },
+    onError: e => toast.error(e.message),
+  });
+  const openImpersonate = (u: any) => { setImpersonateUser(u); setImpersonateReason(""); };
 
   const openAction = (u: any, type: ActionType) => {
     setSelectedUser(u);
@@ -246,6 +260,15 @@ export default function AdminUserManagement() {
                                 <Shield className="h-3 w-3 mr-1" />
                                 {u.role === "admin" ? "Demote" : "Promote"}
                               </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openImpersonate(u)}
+                                className="text-xs text-amber-700 border-amber-200 hover:bg-amber-50"
+                                title="Start an audited 15-minute impersonation session"
+                              >
+                                <Eye className="h-3 w-3 mr-1" />Impersonate
+                              </Button>
                               {isSuspended ? (
                                 <Button
                                   variant="outline"
@@ -351,6 +374,30 @@ export default function AdminUserManagement() {
               disabled={isPending}
             >
               {isPending ? "Processing..." : actionType === "role" ? "Confirm" : actionType === "suspend" ? "Suspend User" : "Restore Access"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Wave W5-6: impersonation start dialog */}
+      <Dialog open={!!impersonateUser} onOpenChange={() => setImpersonateUser(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Impersonate {impersonateUser?.name ?? impersonateUser?.email}</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Issues a 15-minute impersonation session. Every request made under it is written to the audit log
+            (action <code>impersonate.access</code>). Admin mutations are blocked while impersonating another admin.
+          </p>
+          <div className="space-y-1 mt-2">
+            <Label>Reason (min 20 characters, recorded in the audit log)</Label>
+            <Textarea value={impersonateReason} onChange={e => setImpersonateReason(e.target.value)} rows={3} />
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" onClick={() => setImpersonateUser(null)}>Cancel</Button>
+            <Button
+              disabled={impersonateReason.trim().length < 20 || impersonateMut.isPending}
+              onClick={() => impersonateUser && impersonateMut.mutate({ userId: impersonateUser.id, reason: impersonateReason.trim() })}
+            >
+              Start impersonation
             </Button>
           </div>
         </DialogContent>
