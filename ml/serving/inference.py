@@ -279,27 +279,51 @@ MODEL_CLASSES = {"fraudnet": FraudNet, "creditnet": CreditNet,
                  "outcomenet": OutcomeNet, "disputegnn": DisputeGNN}
 
 _bundles: Dict[str, Dict[str, torch.nn.Module]] = {"champion": {}, "challenger": {}}
+# Per-model load status for /health detail: model -> variant -> status dict.
+_model_status: Dict[str, Dict[str, Dict[str, str]]] = {}
 _ab = ABRouter(float(os.environ.get("AB_CHALLENGER_FRACTION", "0.10")))
 _drift_monitors: Dict[str, DriftMonitor] = {}
 _rate_limiter = RateLimiter(RATE_LIMIT_PER_MIN)
 
 
+def _record_load(name: str, variant: str, status: str, detail: str) -> None:
+    _model_status.setdefault(name, {})[variant] = {"status": status, "detail": detail}
+
+
 def _load_variant(variant: str) -> None:
+    """Load one champion/challenger variant.
+
+    Every per-model load is isolated in try/except: a corrupt or missing
+    weight file degrades THAT model to 503 (its scoring endpoint raises
+    RuntimeError -> HTTP 503) and is reported in /health — it must never
+    kill service startup or take down the other models.
+    """
     for name, cls in MODEL_CLASSES.items():
-        candidates = sorted(WEIGHTS_DIR.glob(f"{name}_v*.json"))
-        primary = WEIGHTS_DIR / f"{name}.json"
-        path = primary if primary.exists() else (candidates[-1] if candidates else None)
-        if path is None:
-            log.warning("No weights found for %s; endpoint will 503", name)
-            continue
-        if variant == "challenger" and len(candidates) >= 2:
-            path = candidates[-2]  # previous version as challenger
-        model = cls()
-        with open(path) as f:
-            load_weights_json(model, json.load(f))
-        model.eval()
-        _bundles[variant][name] = model
-        log.info("Loaded %s (%s) from %s", name, variant, path)
+        try:
+            candidates = sorted(WEIGHTS_DIR.glob(f"{name}_v*.json"))
+            primary = WEIGHTS_DIR / f"{name}.json"
+            path = primary if primary.exists() else (candidates[-1] if candidates else None)
+            if path is None:
+                log.warning("No weights found for %s; endpoint will 503", name)
+                _record_load(name, variant, "missing", "no weight file found")
+                continue
+            if variant == "challenger" and len(candidates) >= 2:
+                path = candidates[-2]  # previous version as challenger
+            model = cls()
+            with open(path) as f:
+                load_weights_json(model, json.load(f))
+            model.eval()
+            _bundles[variant][name] = model
+            _record_load(name, variant, "loaded", str(path))
+            log.info("Loaded %s (%s) from %s", name, variant, path)
+        except Exception as exc:
+            # Corrupt weights (bad JSON, shape mismatch, ...) degrade only
+            # this model — startup continues.
+            log.error("Failed to load %s (%s): %s: %s — model will 503",
+                      name, variant, type(exc).__name__, exc)
+            _record_load(name, variant, "error",
+                         f"{type(exc).__name__}: {exc}")
+            _bundles[variant].pop(name, None)
 
 
 def startup() -> None:
@@ -399,7 +423,8 @@ def create_app():
                 "drift_baselines": sorted(
                     n for n, m in _drift_monitors.items()
                     if m.baseline is not None),
-                "models": {v: sorted(m.keys()) for v, m in _bundles.items()}}
+                "models": {v: sorted(m.keys()) for v, m in _bundles.items()},
+                "model_detail": _model_status}
 
     def _tab(name: str):
         def handler(req: TabularRequest, _caller: str = Depends(require_api_key)):
