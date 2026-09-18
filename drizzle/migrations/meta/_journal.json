@@ -267,6 +267,27 @@
       "when": 1787626800000,
       "tag": "0039_wave_w3",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1787709600000,
+      "tag": "0040_wave_w4",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1787640000000,
+      "tag": "0041_wave_w5",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1787796000000,
+      "tag": "0042_wave_w6",
+      "breakpoints": true
     }
   ]
 }
