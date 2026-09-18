@@ -1022,7 +1022,7 @@ export interface DisputeMonthBucket {
   ineligible: number;
 }
 
-export async function getDisputesByMonth(months = 12): Promise<DisputeMonthBucket[]> {
+export async function getDisputesByMonth(months = 12, userId?: string): Promise<DisputeMonthBucket[]> {
   const db = await getDb();
   if (!db) return [];
 
@@ -1030,13 +1030,17 @@ export async function getDisputesByMonth(months = 12): Promise<DisputeMonthBucke
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - months);
 
+  // Cross-tenant fix (W2): non-admin callers only see their own disputes,
+  // matching listDisputes scoping (undefined userId = admin/unscoped).
   const rows = await db
     .select({
       createdAt: disputes.createdAt,
       status: disputes.status,
     })
     .from(disputes)
-    .where(sql`${disputes.createdAt} >= ${cutoff}`)
+    .where(userId
+      ? and(sql`${disputes.createdAt} >= ${cutoff}`, eq(disputes.initiatingPartyId, userId))
+      : sql`${disputes.createdAt} >= ${cutoff}`)
     .orderBy(disputes.createdAt);
 
   // Group in JS — avoids DB-specific date_trunc syntax differences
@@ -1371,21 +1375,37 @@ export async function deleteWebhook(id: string, userId?: string): Promise<void> 
 export async function upsertOutcomePrediction(pred: Omit<InsertOutcomePrediction, "id"> & { disputeId: string }): Promise<OutcomePrediction> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // Delete existing prediction for this dispute
-  await db.delete(outcomePredictions).where(eq(outcomePredictions.disputeId, pred.disputeId));
+  // Transactional delete+insert so a regenerated prediction never leaves the
+  // dispute momentarily prediction-less (previously two separate statements).
   const id = `pred_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-  await db.insert(outcomePredictions).values({ ...pred, id });
+  await db.transaction(async (tx) => {
+    await tx.delete(outcomePredictions).where(eq(outcomePredictions.disputeId, pred.disputeId));
+    await tx.insert(outcomePredictions).values({ ...pred, id });
+  });
+  // Fresh prediction is by definition not stale (isStale column from
+  // migration 0039_wave_w3.sql, default false).
   const rows = await db.select().from(outcomePredictions).where(eq(outcomePredictions.id, id)).limit(1);
   return rows[0];
 }
-export async function getOutcomePrediction(disputeId: string): Promise<OutcomePrediction | undefined> {
+export async function getOutcomePrediction(disputeId: string): Promise<(OutcomePrediction & { stale: boolean }) | undefined> {
   const db = await getDb();
   if (!db) return undefined;
   const rows = await db.select().from(outcomePredictions)
     .where(eq(outcomePredictions.disputeId, disputeId))
     .orderBy(desc(outcomePredictions.createdAt))
     .limit(1);
-  return rows[0];
+  const row = rows[0];
+  if (!row) return undefined;
+  // isStale comes from migration 0039_wave_w3.sql (raw SQL — schema.ts is
+  // owned by another wave). Fail-open to stale:false if the column is absent.
+  let stale = false;
+  try {
+    const { sql } = await import("drizzle-orm");
+    const r: any = await db.execute(sql`SELECT "isStale" FROM outcome_predictions WHERE id = ${row.id} LIMIT 1`);
+    const first = Array.isArray(r) ? r[0] : r?.rows?.[0];
+    stale = Boolean(first?.isStale);
+  } catch { /* column not yet migrated */ }
+  return { ...row, stale };
 }
 
 // ─── Document Analysis Helpers ────────────────────────────────────────────────

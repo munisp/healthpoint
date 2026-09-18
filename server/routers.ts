@@ -39,7 +39,7 @@ import {
 import { sendNewLeadNotification } from "./email";
 import { invokeLLM } from "./_core/llm";
 import { withDisputeLock } from "./redis";
-import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDisputeAccess, listDisputeAccess } from "./authz";
+import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDisputeAccess, listDisputeAccess, reconcileDisputeAccess } from "./authz";
 import { eventBus } from "./events/bus";
 import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, getStatusForStep, addBusinessDays, daysUntilDeadline, validateWorkflowTransition, getStepNumber, isDeadlinePassed } from "./workflow/idr-workflow";
 import { addBusinessDays as addIdrBusinessDays, businessDaysBetween } from "./idr/deadlines";
@@ -159,6 +159,30 @@ function decryptTotpSecret(stored: string): string {
   return creds.s;
 }
 
+// ── PHI read auditing ─────────────────────────────────────────────────────────
+// Fire-and-forget audit_log entries for reads of PHI-bearing resources
+// (45 CFR 164.312(b) audit controls). Never blocks or fails the request.
+function auditPhiRead(
+  ctx: { user: { id: string } | null; req: { headers?: Record<string, unknown>; ip?: string } },
+  resourceType: string,
+  resourceId: string | null | undefined
+): void {
+  const userId = ctx.user?.id;
+  if (!userId) return;
+  const headers = ctx.req?.headers ?? {};
+  const ip = (headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? ctx.req?.ip ?? null;
+  createAuditEntry({
+    userId,
+    action: "phi.read",
+    entityType: resourceType,
+    entityId: resourceId ?? null,
+    oldValue: null,
+    newValue: null,
+    ipAddress: ip,
+    userAgent: (headers["user-agent"] as string | undefined) ?? null,
+  }).catch(err => console.warn("[audit] phi.read write failed:", err instanceof Error ? err.message : err));
+}
+
 export const appRouter = router({
   system: router({
     health: publicProcedure
@@ -209,6 +233,34 @@ export const appRouter = router({
       // Return logoutUrl so the frontend can redirect to Keycloak end-session
       return { success: true, logoutUrl: "/api/auth/logout" } as const;
     }),
+    /**
+     * Second stage of two-stage login: exchange a valid TOTP proof (or a
+     * single-use backup code) for a full session. Requires an mfa-pending
+     * session (see server/auth/mfa.ts); wrong code → 401.
+     */
+    verifyLoginTotp: protectedProcedure
+      .input(z.object({ code: z.string().min(6).max(16) }))
+      .mutation(async ({ ctx, input }) => {
+        if (!ctx.mfaPending) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "No MFA-pending login session" });
+        }
+        const { verifyLoginCode } = await import("./auth/mfa");
+        const ok = await verifyLoginCode(ctx.user.id, input.code).catch(() => false);
+        if (!ok) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid TOTP or backup code" });
+        }
+        const { createSessionToken, getSessionDurationMsForUser } = await import("./_core/keycloak");
+        const durationMs = await getSessionDurationMsForUser(ctx.user.id);
+        const token = await createSessionToken(ctx.user.id, ctx.user.name ?? "", ctx.user.email ?? "", durationMs);
+        ctx.res.cookie(COOKIE_NAME, token, {
+          httpOnly: true,
+          sameSite: "lax",
+          secure: ENV.isProduction,
+          maxAge: durationMs,
+          path: "/",
+        });
+        return { success: true } as const;
+      }),
   }),
 
   // --- Dashboard --------------------------------------------------------------
@@ -220,16 +272,19 @@ export const appRouter = router({
     }),
     disputesByMonth: protectedProcedure
       .input(z.object({ months: z.number().int().min(3).max(24).default(12) }))
-      .query(async ({ input }) => {
-        return getDisputesByMonth(input.months);
+      .query(async ({ ctx, input }) => {
+        // Cross-tenant fix (W2): scope aggregates to the caller unless admin.
+        return getDisputesByMonth(input.months, ctx.user.role === "admin" ? undefined : ctx.user.id);
       }),
 
     // Real 7-day daily dispute counts for sparklines (no Math.random)
     dailyStats: protectedProcedure
       .input(z.object({ days: z.number().int().min(1).max(30).default(7) }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const db = await (await import("./db")).getDb();
         if (!db) return [];
+        // Cross-tenant fix (W2): scope to the caller unless admin.
+        const scopeUserId = ctx.user.role === "admin" ? null : ctx.user.id;
         const result: { date: string; total: number; opened: number; closed: number }[] = [];
         const now = new Date();
         for (let i = input.days - 1; i >= 0; i--) {
@@ -238,12 +293,15 @@ export const appRouter = router({
           dayStart.setHours(0, 0, 0, 0);
           const dayEnd = new Date(dayStart);
           dayEnd.setHours(23, 59, 59, 999);
-          const { sql, and, between } = await import("drizzle-orm");
+          const { sql, and, between, eq } = await import("drizzle-orm");
           const { disputes: disputesTable } = await import("../drizzle/schema");
+          const openedConds = [between(disputesTable.createdAt, dayStart, dayEnd)];
+          const closedConds = [between(disputesTable.closedAt!, dayStart, dayEnd)];
+          if (scopeUserId) { openedConds.push(eq(disputesTable.initiatingPartyId, scopeUserId)); closedConds.push(eq(disputesTable.initiatingPartyId, scopeUserId)); }
           const [openedRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(disputesTable)
-            .where(between(disputesTable.createdAt, dayStart, dayEnd));
+            .where(and(...openedConds));
           const [closedRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(disputesTable)
-            .where(and(between(disputesTable.closedAt!, dayStart, dayEnd)));
+            .where(and(...closedConds));
           result.push({
             date: dayStart.toISOString().slice(0, 10),
             total: Number(openedRow?.count ?? 0) + Number(closedRow?.count ?? 0),
@@ -253,13 +311,27 @@ export const appRouter = router({
         }
         return result;
       }),
-    outcomeAnalytics: protectedProcedure.query(async () => {
+    outcomeAnalytics: protectedProcedure.query(async ({ ctx }) => {
       const db = await (await import("./db")).getDb();
       if (!db) return { overallWinRate: null, byServiceType: [] };
+      // Cross-tenant fix (W2): scope to the caller unless admin.
+      const scopeUserId = ctx.user.role === "admin" ? null : ctx.user.id;
       // Use determinationWinner field for accurate provider win rate
       // 'initiating_party' = provider won; 'responding_party' = payer won
-      const rows = await db.execute(
-        `SELECT serviceType,
+      const rows = scopeUserId
+        ? await db.execute(
+          sql`SELECT serviceType,
+                COUNT(*) AS total,
+                SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
+                AVG(COALESCE("determinationAmount", 0)) AS "avgDeterminationAmount",
+                AVG(COALESCE("billedAmount", 0)) AS "avgBilledAmount"
+         FROM disputes
+         WHERE status IN ('closed', 'determination_issued') AND "determinationWinner" IS NOT NULL
+           AND "initiatingPartyId" = ${scopeUserId}
+         GROUP BY "serviceType"`
+        ) as unknown as { rows: { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[] }
+        : await db.execute(
+          sql`SELECT serviceType,
                 COUNT(*) AS total,
                 SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
                 AVG(COALESCE("determinationAmount", 0)) AS "avgDeterminationAmount",
@@ -267,7 +339,7 @@ export const appRouter = router({
          FROM disputes
          WHERE status IN ('closed', 'determination_issued') AND "determinationWinner" IS NOT NULL
          GROUP BY "serviceType"`
-      ) as unknown as { rows: { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[] };
+        ) as unknown as { rows: { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[] };
       const byServiceType = (rows.rows ?? []).map(r => ({
         serviceType: r.serviceType,
         total: Number(r.total),
@@ -356,6 +428,7 @@ export const appRouter = router({
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.id, "read");
         const dispute = await getDisputeById(input.id);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        auditPhiRead(ctx, "dispute", input.id);
         return dispute;
       }),
 
@@ -750,6 +823,7 @@ export const appRouter = router({
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
         const dispute = await getDisputeById(input.disputeId);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        auditPhiRead(ctx, "dispute.export.pdf", input.disputeId);
         const pdfBuffer = await generateDisputePDF(dispute as any);
         // Return as base64 so it can be decoded client-side and downloaded
         return {
@@ -768,6 +842,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         // Fetch up to 10,000 rows for export
         const { items } = await listDisputes({ userId: ctx.user.id, ...input, limit: 10000, offset: 0 });
+        auditPhiRead(ctx, "dispute.export.csv", null);
         const headers = [
           "Reference #", "Status", "Current Step", "Service Type", "Service Date",
           "Initiating Party", "Initiating Party Type", "Responding Party", "Responding Party Type",
@@ -1292,11 +1367,12 @@ export const appRouter = router({
       }),
     list: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const db = await (await import("./db")).getDb();
         if (!db) return [];
         const { disputeDocuments } = await import("../drizzle/schema");
         const { eq, desc } = await import("drizzle-orm");
+        auditPhiRead(ctx, "document.list", input.disputeId);
         return db.select().from(disputeDocuments)
           .where(eq(disputeDocuments.disputeId, input.disputeId))
           .orderBy(desc(disputeDocuments.uploadedAt));
@@ -2614,15 +2690,21 @@ export const appRouter = router({
         newValue: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        // Forgeability fix: arbitrary action/oldValue/newValue would let any
+        // user fabricate audit history (e.g. a fake "admin.approve" row).
+        // Admins may log real actions; non-admins are coerced to a clearly
+        // marked, self-attributed note.
+        const isAdmin = ctx.user.role === "admin";
+        const ip = (ctx.req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? ctx.req.ip ?? null;
         return createAuditEntry({
           userId: ctx.user.id,
-          action: input.action,
+          action: isAdmin ? input.action : "user.note",
           entityType: input.entityType,
           entityId: input.entityId ?? null,
-          oldValue: input.oldValue ?? null,
-          newValue: input.newValue ?? null,
-          ipAddress: null,
-          userAgent: null,
+          oldValue: isAdmin ? (input.oldValue ?? null) : null,
+          newValue: isAdmin ? (input.newValue ?? null) : (input.newValue ?? input.action).slice(0, 2000),
+          ipAddress: ip,
+          userAgent: (ctx.req.headers["user-agent"] as string | undefined) ?? null,
         });
       }),
   }),
@@ -2779,6 +2861,7 @@ Based on NSA IDR historical data and legal precedent, provide:
       }))
       .mutation(async ({ ctx, input }) => {
         const startTime = Date.now();
+        auditPhiRead(ctx, "document.analyze", input.disputeId ?? null);
         // Create a pending analysis record
         const analysis = await createDocumentAnalysis({
           disputeId: input.disputeId ?? null,
@@ -2912,9 +2995,10 @@ Based on NSA IDR historical data and legal precedent, provide:
 
     getDownloadUrl: protectedProcedure
       .input(z.object({ id: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const analysis = await getDocumentAnalysis(input.id);
         if (!analysis?.s3Key) throw new TRPCError({ code: 'NOT_FOUND', message: 'No file stored' });
+        auditPhiRead(ctx, "document.download", input.id);
         const { url } = await storageGet(analysis.s3Key, 300);
         return { url };
       }),
@@ -3180,6 +3264,14 @@ Based on NSA IDR historical data and legal precedent, provide:
         // documents, audit) are excluded for non-admins.
         return suggest(input.prefix, input.limit, ctx.user.id, ctx.user.role);
       }),
+    // Admin-only: rebuild the OpenSearch index from Postgres in bounded
+    // batches (500) and drain the indexing-failure retry set. Reads fall back
+    // to Fuse.js while OpenSearch is down (see server/search.ts).
+    reindexAll: adminProcedure
+      .mutation(async () => {
+        const { reindexAllFromPostgres } = await import("./search");
+        return reindexAllFromPostgres();
+      }),
   }),
   // ── Mojaloop payment status ───────────────────────────────────────────────────────────
   mojaloop: router({
@@ -3427,6 +3519,14 @@ Based on NSA IDR historical data and legal precedent, provide:
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
         return listDisputeAccess(input.disputeId);
       }),
+    // Admin: diff Postgres dispute_access grants vs Permify tuples and repair
+    // (bounded to ≤500 grants per call; see server/authz.ts).
+    reconcileDisputeAccess: protectedProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(500).default(500) }).optional())
+      .mutation(async ({ ctx, input }) => {
+        assertAdminAccess(ctx.user.role, 'reconcile dispute access grants');
+        return reconcileDisputeAccess(input?.limit ?? 500);
+      }),
   }),
 
   // ── Lakehouse Export ───────────────────────────────────────────────────────
@@ -3651,12 +3751,19 @@ Based on NSA IDR historical data and legal precedent, provide:
         const rawKey = `hp_${randomBytes(32).toString("hex")}`;
         const keyHash = createHash("sha256").update(rawKey).digest("hex");
         const keyPrefix = rawKey.substring(0, 8);
+        // Privilege-escalation fix: only admins may mint the "admin" scope.
+        // Non-admin requests are silently downgraded (the auth path also
+        // strips admin for non-admin owners — defense in depth).
+        const effectiveScopes = ctx.user.role === "admin" ? input.scopes : input.scopes.filter(s => s !== "admin");
+        if (effectiveScopes.length === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "No permitted scopes requested (admin scope requires an admin account)" });
+        }
         await db.insert(apiKeys).values({
           userId: ctx.user.id,
           name: input.name,
           keyHash,
           keyPrefix,
-          scopes: input.scopes.join(","),
+          scopes: effectiveScopes.join(","),
           expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
         });
         return { key: rawKey, prefix: keyPrefix }; // raw key returned only once
@@ -4392,13 +4499,57 @@ Based on NSA IDR historical data and legal precedent, provide:
       .query(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) return [];
-        return db.select().from(smartTokens).where(and(eq(smartTokens.emrConnectionId, input.emrConnectionId), eq(smartTokens.userId, ctx.user.id)) as ReturnType<typeof and>);
+        const rows = await db.select().from(smartTokens).where(and(eq(smartTokens.emrConnectionId, input.emrConnectionId), eq(smartTokens.userId, ctx.user.id)) as ReturnType<typeof and>);
+        // Tokens are encrypted at rest (AES-256-GCM envelope, see
+        // credential-crypto.ts); decrypt on read with plaintext fallback for
+        // legacy rows. If the encryption key is unavailable, never leak the
+        // raw envelope — mask the token instead.
+        const { decryptToken } = await import("./credential-crypto");
+        return rows.map(t => {
+          try {
+            return { ...t, accessToken: decryptToken(t.accessToken), refreshToken: t.refreshToken ? decryptToken(t.refreshToken) : t.refreshToken };
+          } catch {
+            return { ...t, accessToken: "[unavailable]", refreshToken: t.refreshToken ? "[unavailable]" : t.refreshToken };
+          }
+        });
       }),
     revokeToken: protectedProcedure
       .input(z.object({ tokenId: z.string() }))
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // Read the token first so we can best-effort revoke it at the EMR
+        // (RFC 7009) before deleting our copy.
+        const [token] = await db.select().from(smartTokens).where(eq(smartTokens.id, input.tokenId)).limit(1);
+        if (token) {
+          try {
+            const { decryptToken, decryptCredentials } = await import("./credential-crypto");
+            const [conn] = await db.select().from(emrConnections).where(eq(emrConnections.id, token.emrConnectionId)).limit(1);
+            let revocationEndpoint: string | undefined;
+            if (conn?.credentialsEncrypted) {
+              try {
+                const creds = decryptCredentials(conn.credentialsEncrypted);
+                revocationEndpoint = creds.revocationEndpoint || creds.revocation_endpoint;
+              } catch { /* endpoint unknown */ }
+            }
+            if (revocationEndpoint) {
+              const accessToken = decryptToken(token.accessToken);
+              // Fail-open: a revocation failure never blocks local revocation.
+              await fetch(revocationEndpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({ token: accessToken, token_type_hint: "access_token" }).toString(),
+                signal: AbortSignal.timeout(5_000),
+              }).then(r => {
+                if (!r.ok) console.warn(`[smartAuth] RFC7009 revocation returned HTTP ${r.status} for token ${token.id}`);
+              }).catch(err => {
+                console.warn(`[smartAuth] RFC7009 revocation POST failed (fail-open) for token ${token.id}:`, err?.message ?? err);
+              });
+            }
+          } catch (err: any) {
+            console.warn(`[smartAuth] best-effort EMR revocation failed (fail-open) for token ${token.id}:`, err?.message ?? err);
+          }
+        }
         await db.delete(smartTokens).where(eq(smartTokens.id, input.tokenId));
         return { success: true };
       }),
@@ -4443,7 +4594,14 @@ Based on NSA IDR historical data and legal precedent, provide:
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        await db.update(bulkFhirExportJobs).set({ status: "cancelled" }).where(eq(bulkFhirExportJobs.id, input.jobId));
+        // Cancel is only valid for non-terminal states; completed/failed/
+        // cancelled jobs are immutable.
+        const [job] = await db.select().from(bulkFhirExportJobs).where(eq(bulkFhirExportJobs.id, input.jobId)).limit(1);
+        if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Export job not found" });
+        if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `Cannot cancel a job in terminal state '${job.status}'` });
+        }
+        await db.update(bulkFhirExportJobs).set({ status: "cancelled", completedAt: new Date() }).where(eq(bulkFhirExportJobs.id, input.jobId));
         return { success: true };
       }),
   }),
