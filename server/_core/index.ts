@@ -26,6 +26,8 @@ import { settlementBalanceProofHandler } from "../scheduled/settlementBalancePro
 import { ledgerReconciliationHandler } from "../scheduled/ledgerReconciliation";
 import { webhookRetryWorkerHandler } from "../scheduled/webhookRetryWorker";
 import { notificationRetryWorkerHandler } from "../scheduled/notificationRetryWorker";
+import { dailyDigestHandler } from "../scheduled/dailyDigest";
+import { regulatoryFeedPollHandler } from "../scheduled/regulatoryFeedPoll";
 import { bulkFhirWorkerHandler } from "../scheduled/bulkFhirWorker";
 import { ENV } from "./env";
 import {
@@ -529,6 +531,16 @@ async function startServer() {
     }
   });
 
+  // ── CDS Hooks discovery — GET /cds-services ───────────────────────────────
+  // CDS Hooks spec discovery document listing registered ACTIVE hooks:
+  //   { services: [{ hook, id, title, description }] }
+  // Auth: when CDS_JWT_REQUIRED=true, requires a Bearer JWT signed with the
+  // HS256 shared secret CDS_JWT_SECRET (per the CDS Hooks mutual-auth
+  // deployment pattern). Otherwise the endpoint is OPEN (documented) — hook
+  // metadata is non-PHI and EHRs commonly fetch discovery pre-authorization.
+  const { registerCdsDiscovery } = await import("./cds-discovery");
+  registerCdsDiscovery(app);
+
   // ── Keycloak OIDC routes ──────────────────────────────────────────────────────
   registerKeycloakRoutes(app);
 
@@ -552,6 +564,8 @@ async function startServer() {
   app.post("/api/scheduled/ledger-reconciliation", scheduledAuth, ledgerReconciliationHandler);
   app.post("/api/scheduled/webhook-retry", scheduledAuth, webhookRetryWorkerHandler);
   app.post("/api/scheduled/notification-retry", scheduledAuth, notificationRetryWorkerHandler);
+  app.post("/api/scheduled/daily-digest", scheduledAuth, dailyDigestHandler);
+  app.post("/api/scheduled/regulatory-feed-poll", scheduledAuth, regulatoryFeedPollHandler);
   app.post("/api/scheduled/bulk-fhir-worker", scheduledAuth, bulkFhirWorkerHandler);
 
   // Durable settlement and payment-evidence events are reconciled after their
