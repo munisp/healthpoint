@@ -6,6 +6,8 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import RouteSkeleton from "./components/RouteSkeleton";
 import OfflineBanner from "./components/OfflineBanner";
+import ImpersonationBanner from "./components/ImpersonationBanner";
+import { FlagGate } from "./components/FlagGate";
 import InstallPrompt from "./components/InstallPrompt";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
@@ -137,6 +139,8 @@ const PayerCases = lazy(() => import("./pages/personas/PayerCases"));
 const PatientPortal = lazy(() => import("./pages/personas/PatientPortal"));
 const IdreQueue = lazy(() => import("./pages/personas/IdreQueue"));
 const OrgsPage = lazy(() => import("./pages/personas/Orgs"));
+const IdreDirectoryAdmin = lazy(() => import("./pages/admin/IdreDirectory"));
+const FeeSchedulesAdmin = lazy(() => import("./pages/admin/FeeSchedules"));
 
 /** Helper: wraps a component in ProtectedRoute */
 function P({ component: C, admin }: { component: ComponentType; admin?: boolean }) {
@@ -270,12 +274,15 @@ function Router() {
       <Route path="/compliance-center" component={() => <PL component={ComplianceCenter} />} />
       <Route path="/state-path" component={() => <PL component={StatePathResolver} />} />
       <Route path="/outcome-simulator" component={() => <PL component={OutcomeSimulatorShell} />} />
-      <Route path="/payer/cases" component={() => <PL component={PayerCases} />} />
+      {/* Persona routes gated by feature flags (wave W5-7; default-ON) */}
+      <Route path="/payer/cases" component={() => <FlagGate flag="personas.payerCases"><PL component={PayerCases} /></FlagGate>} />
       <Route path="/patient/:token" component={PatientPortal} />
-      <Route path="/idre/queue" component={() => <PL component={IdreQueue} />} />
-      <Route path="/orgs" component={() => <PL component={OrgsPage} />} />
+      <Route path="/idre/queue" component={() => <FlagGate flag="personas.idreQueue"><PL component={IdreQueue} /></FlagGate>} />
+      <Route path="/orgs" component={() => <FlagGate flag="personas.orgs"><PL component={OrgsPage} /></FlagGate>} />
 
       {/* Admin-only routes */}
+      <Route path="/admin/idre-directory" component={() => <PL component={IdreDirectoryAdmin} admin />} />
+      <Route path="/admin/fee-schedules" component={() => <PL component={FeeSchedulesAdmin} admin />} />
       <Route path="/admin/settlements" component={() => <PL component={SettlementInbox} admin />} />
       <Route path="/admin/leads" component={() => <PL component={LeadsManager} admin />} />
       <Route path="/admin/heartbeat" component={() => <PL component={HeartbeatOperations} admin />} />
@@ -298,6 +305,7 @@ function AppInner() {
   return (
     <>
       <OfflineBanner />
+      <ImpersonationBanner />
       <Suspense fallback={
         <div className="min-h-[60vh] w-full bg-background p-6">
           <RouteSkeleton />
