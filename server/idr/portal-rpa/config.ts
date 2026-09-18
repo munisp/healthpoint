@@ -358,7 +358,7 @@ export interface PortalMapEnv {
  * JSON when it starts with "{", otherwise as a path. Any failure throws
  * PortalMapError — the caller must not fall back silently.
  */
-export function loadPortalMap(env: PortalMapEnv = process.env): PortalMap {
+export function loadPortalMap(env: PortalMapEnv = process.env as PortalMapEnv): PortalMap {
   const override = env.PORTAL_MAP_JSON?.trim();
   if (!override) return validatePortalMap(defaultPortalMap);
   let rawText: string;
