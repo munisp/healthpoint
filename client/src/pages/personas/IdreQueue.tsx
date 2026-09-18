@@ -12,6 +12,14 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import PersonaTour from "@/components/PersonaTour";
+
+/** W7-3 first-run hints (dismissal persisted in localStorage). */
+const TOUR_STEPS = [
+  { title: "Your assignment queue", body: "Arbitration assignments addressed to you appear here with both parties' offers and the QPA." },
+  { title: "COI attestation", body: "Before accepting an assignment you must attest to all three conflict-of-interest statements — this is enforced server-side." },
+  { title: "Write the determination", body: "Once accepted, enter an amount (in cents) and a rationale of at least 100 characters. Prohibited bases (UCR, billed charges, Medicare/Medicaid rates) are screened automatically." },
+];
 
 export default function IdreQueue() {
   const utils = trpc.useUtils();
@@ -37,6 +45,7 @@ export default function IdreQueue() {
 
   return (
     <DashboardLayout>
+      <PersonaTour tourId="idre-queue" steps={TOUR_STEPS} />
       <div className="p-6 space-y-4">
         <h1 className="text-2xl font-semibold">IDRE Assignment Queue</h1>
         {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -92,6 +101,7 @@ export default function IdreQueue() {
                       >Accept with COI attestation</Button>
                       <Input
                         className="w-64" placeholder="Decline reason"
+                        aria-label={`Decline reason for ${a.referenceNumber ?? a.disputeId}`}
                         value={reason[a.assignmentId] ?? ""}
                         onChange={e => setReason(s => ({ ...s, [a.assignmentId]: e.target.value }))}
                       />
@@ -110,12 +120,15 @@ export default function IdreQueue() {
                     <div className="flex gap-2 items-center">
                       <Input
                         className="w-40" placeholder="Amount in cents"
+                        aria-label={`Determination amount in cents for ${a.referenceNumber ?? a.disputeId}`}
+                        inputMode="numeric"
                         value={amount[a.assignmentId] ?? ""}
                         onChange={e => setAmount(s => ({ ...s, [a.assignmentId]: e.target.value }))}
                       />
                       <span className="text-muted-foreground">e.g. 260000 = $2,600.00</span>
                     </div>
                     <Textarea
+                      aria-label={`Determination rationale for ${a.referenceNumber ?? a.disputeId}`}
                       placeholder="Determination rationale (min 100 characters)…"
                       value={rationale[a.assignmentId] ?? ""}
                       onChange={e => setRationale(s => ({ ...s, [a.assignmentId]: e.target.value }))}

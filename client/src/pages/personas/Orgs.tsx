@@ -9,6 +9,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import PersonaTour from "@/components/PersonaTour";
+
+/** W7-3 first-run hints (dismissal persisted in localStorage). */
+const TOUR_STEPS = [
+  { title: "Organizations", body: "Create an organization to collaborate on disputes as a provider group, biller, payer, or IDRE." },
+  { title: "Members & context", body: "Open Manage to add teammates by user id, and use Switch context to scope your work to that org." },
+  { title: "White-label branding", body: "Owners can set a brand name, logo URL, and primary color — applied to the app header and the /login?org=<id> page." },
+];
 
 export default function Orgs() {
   const utils = trpc.useUtils();
@@ -40,16 +48,27 @@ export default function Orgs() {
     onError: e => toast.error(e.message),
   });
 
+  // W7-4 white-label branding editor state (per selected org)
+  const branding = trpc.orgs.getBranding.useQuery({ orgId: selectedOrg! }, { enabled: !!selectedOrg });
+  const [brandName, setBrandName] = useState<string | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [primaryColor, setPrimaryColor] = useState<string | null>(null);
+  const updateBranding = trpc.orgs.updateBranding.useMutation({
+    onSuccess: () => { toast.success("Branding saved — applied to header and login page"); branding.refetch(); utils.orgs.myBranding.invalidate(); },
+    onError: e => toast.error(e.message),
+  });
+
   return (
     <DashboardLayout>
+      <PersonaTour tourId="orgs" steps={TOUR_STEPS} />
       <div className="p-6 space-y-4">
         <h1 className="text-2xl font-semibold">Organizations</h1>
 
         <Card>
           <CardHeader><CardTitle className="text-base">Create organization</CardTitle></CardHeader>
           <CardContent className="flex flex-wrap gap-2 items-center">
-            <Input className="w-64" placeholder="Organization name" value={name} onChange={e => setName(e.target.value)} />
-            <select className="border rounded px-2 py-1 text-sm bg-background" value={type} onChange={e => setType(e.target.value as typeof type)}>
+            <Input className="w-64" aria-label="Organization name" placeholder="Organization name" value={name} onChange={e => setName(e.target.value)} />
+            <select aria-label="Organization type" className="border rounded px-2 py-1 text-sm bg-background" value={type} onChange={e => setType(e.target.value as typeof type)}>
               {["provider", "biller", "payer", "idre"].map(t => <option key={t} value={t}>{t}</option>)}
             </select>
             <Button size="sm" disabled={create.isPending || !name.trim()} onClick={() => create.mutate({ name, type })}>Create</Button>
@@ -79,10 +98,61 @@ export default function Orgs() {
                       {members.data?.map(m => <li key={m.id}>{m.userId} — <Badge variant="outline">{m.role}</Badge></li>)}
                     </ul>
                     <div className="flex gap-2 mt-2">
-                      <Input className="w-64" placeholder="user id to add" value={memberUserId} onChange={e => setMemberUserId(e.target.value)} />
+                      <Input className="w-64" aria-label="User id to add as member" placeholder="user id to add" value={memberUserId} onChange={e => setMemberUserId(e.target.value)} />
                       <Button size="sm" disabled={addMember.isPending || !memberUserId.trim()}
                         onClick={() => addMember.mutate({ orgId: o.orgId, userId: memberUserId, role: "staff" })}>Add member</Button>
                     </div>
+                  </div>
+                  {/* W7-4: white-label branding (owners/admins; server enforces) */}
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium mb-1">Branding (white-label)</p>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <label className="text-xs text-muted-foreground w-full sm:w-auto">
+                        Brand name
+                        <Input
+                          className="w-56 mt-1"
+                          aria-label="Brand name"
+                          placeholder={branding.data?.orgName ?? "Brand name"}
+                          value={brandName ?? branding.data?.brandName ?? ""}
+                          onChange={e => setBrandName(e.target.value)}
+                        />
+                      </label>
+                      <label className="text-xs text-muted-foreground w-full sm:w-auto">
+                        Logo URL
+                        <Input
+                          className="w-64 mt-1"
+                          aria-label="Logo URL"
+                          placeholder="https://example.com/logo.png"
+                          value={logoUrl ?? branding.data?.logoUrl ?? ""}
+                          onChange={e => setLogoUrl(e.target.value)}
+                        />
+                      </label>
+                      <label className="text-xs text-muted-foreground">
+                        Primary color
+                        <Input
+                          className="w-28 mt-1"
+                          aria-label="Primary color as hex, for example #0e6e5d"
+                          placeholder="#0e6e5d"
+                          value={primaryColor ?? branding.data?.primaryColor ?? ""}
+                          onChange={e => setPrimaryColor(e.target.value)}
+                        />
+                      </label>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="self-end"
+                        disabled={updateBranding.isPending}
+                        onClick={() => updateBranding.mutate({
+                          orgId: o.orgId,
+                          brandName: (brandName ?? branding.data?.brandName ?? "") || null,
+                          logoUrl: (logoUrl ?? branding.data?.logoUrl ?? "") || null,
+                          primaryColor: (primaryColor ?? branding.data?.primaryColor ?? "") || null,
+                        })}
+                      >Save branding</Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Applied to the app header and to <code>/login?org={o.orgId}</code>. Leave a field empty to use the platform default.
+                    </p>
                   </div>
                   <div>
                     <p className="text-sm font-medium mb-1">Org disputes</p>

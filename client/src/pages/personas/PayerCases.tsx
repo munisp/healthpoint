@@ -12,6 +12,15 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import PersonaTour from "@/components/PersonaTour";
+
+/** W7-3 first-run hints (dismissal persisted in localStorage). */
+const TOUR_STEPS = [
+  { title: "Your payer queue", body: "Every dispute linked to your payer account lands here with its current workflow step and status." },
+  { title: "Respond to open negotiation", body: "Use the response box to reply to an open-negotiation notice — your response is written to the dispute timeline." },
+  { title: "Counter-offer or accept", body: "Enter a dollar amount with a rationale to submit a counter-offer, or accept the current offer to issue a determination." },
+  { title: "Record payment intent", body: "After a determination, record a payment intent to create a settlement transfer draft." },
+];
 
 export default function PayerCases() {
   const utils = trpc.useUtils();
@@ -40,6 +49,7 @@ export default function PayerCases() {
 
   return (
     <DashboardLayout>
+      <PersonaTour tourId="payer-cases" steps={TOUR_STEPS} />
       <div className="p-6 space-y-4">
         <h1 className="text-2xl font-semibold">Payer Cases</h1>
         {data?.account && (
@@ -68,6 +78,7 @@ export default function PayerCases() {
                 <div>Determination: <b>{c.determinationAmount ? `$${c.determinationAmount}` : "—"}</b></div>
               </div>
               <Textarea
+                aria-label={`Response to open-negotiation notice for ${c.referenceNumber}`}
                 placeholder="Response to open-negotiation notice…"
                 value={response[c.disputeId] ?? ""}
                 onChange={e => setResponse(s => ({ ...s, [c.disputeId]: e.target.value }))}
@@ -82,12 +93,15 @@ export default function PayerCases() {
                 </Button>
                 <Input
                   className="w-32"
+                  aria-label={`Counter-offer amount in dollars for ${c.referenceNumber}`}
+                  inputMode="decimal"
                   placeholder="2100.00"
                   value={offer[c.disputeId] ?? ""}
                   onChange={e => setOffer(s => ({ ...s, [c.disputeId]: e.target.value }))}
                 />
                 <Input
                   className="w-64"
+                  aria-label={`Counter-offer rationale for ${c.referenceNumber}`}
                   placeholder="Counter-offer rationale"
                   value={offerRationale[c.disputeId] ?? ""}
                   onChange={e => setOfferRationale(s => ({ ...s, [c.disputeId]: e.target.value }))}
