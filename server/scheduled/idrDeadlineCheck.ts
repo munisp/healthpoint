@@ -26,6 +26,7 @@ import { idrDeadlineEvents } from "../../drizzle/schema-idr-compliance";
 import { planDeadlineTracking, type DeadlineAlert } from "../idr/deadline-tracking";
 import { getDeadlinePolicy } from "../idr/deadlines";
 import { emitComplianceEvent } from "../idr/compliance-events";
+import { runNoticeConsentExpirySweep } from "../notice-consent/expiry";
 
 const TIER_COLUMN = {
   t_minus_5: "tMinus5SentAt",
@@ -174,12 +175,19 @@ export async function idrDeadlineCheckHandler(req: Request, res: Response) {
       return { noticesSent: 0, escalationsWritten: 0 };
     });
 
+    // W4-F3: flip expired notice-consent cases to NOTICE_EXPIRED (idempotent).
+    const ncExpiry = await runNoticeConsentExpirySweep(now).catch((e: unknown) => {
+      console.error("[idr-deadline-check] notice-consent expiry sweep failed:", e);
+      return { scanned: 0, expired: 0, errors: 0 };
+    });
+
     return res.json({
       ok: true,
       disputesScanned: openDisputes.length,
       deadlineRowsUpserted: upserted,
       paymentDunningNoticesSent: dunning.noticesSent,
       paymentDunningEscalationsWritten: dunning.escalationsWritten,
+      noticeConsentExpiry: ncExpiry,
       alertsEmitted,
       alertsDeduped,
       skipped: plan.skipped.length,
