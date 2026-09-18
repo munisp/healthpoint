@@ -89,11 +89,15 @@ export interface JourneyContext {
   assertionCount: number;
 }
 
-export function makeCtxForUser(user: User): TrpcContext {
+export function makeCtxForUser(user: User, extras?: Partial<TrpcContext>): TrpcContext {
   return {
     user,
     req: { headers: {} } as unknown as TrpcContext["req"],
-    res: { clearCookie: () => undefined } as unknown as TrpcContext["res"],
+    res: { clearCookie: () => undefined, cookie: () => undefined } as unknown as TrpcContext["res"],
+    mfaPending: false,
+    viaApiKey: false,
+    apiKeyScopes: [],
+    ...extras,
   };
 }
 
