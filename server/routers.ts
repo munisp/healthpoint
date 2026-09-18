@@ -75,7 +75,11 @@ async function aiPost<T>(path: string, body: unknown): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "unknown error");
-    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `AI service error: ${text}` });
+    const err = new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `AI service error: ${text}` });
+    // Attach the HTTP status so retry logic (server/emr/retry.ts) can tell
+    // transient 5xx from non-retryable 4xx.
+    (err as unknown as { status?: number }).status = res.status;
+    throw err;
   }
   return res.json() as Promise<T>;
 }
@@ -1253,10 +1257,14 @@ export const appRouter = router({
      * all clearly labelled "DEMO" (see seedIDREntities in server/db.ts).
      * Never invoked implicitly from read paths.
      */
-    seedDemoEntities: adminProcedure.mutation(async () => {
-      await seedIDREntities();
-      return { seeded: true };
-    }),
+    seedDemoEntities: adminProcedure
+      // Wave W5-1: explicit opt-in required — callers must affirm they are
+      // knowingly inserting DEMO-labelled synthetic entities.
+      .input(z.object({ demo: z.literal(true, { message: "Pass { demo: true } to confirm seeding DEMO entities" }) }))
+      .mutation(async () => {
+        await seedIDREntities();
+        return { seeded: true };
+      }),
   }),
 
   // --- Draft disputes -----------------------------------------------------------
@@ -1526,6 +1534,44 @@ export const appRouter = router({
           suspendReason: null,
         }).where(eq(users.id, input.userId));
         return { success: true };
+      }),
+
+    /**
+     * Wave W5-5: full offboarding cascade — suspend + revoke API keys +
+     * disable TOTP + revoke dispute_access grants (Permify tuples included)
+     * + audit. Idempotent; refuses self-offboarding and last-admin removal.
+     */
+    offboardUser: adminProcedure
+      .input(z.object({
+        userId: z.string().min(1),
+        reason: z.string().min(1).max(500),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { offboardUser } = await import("./offboarding");
+        try {
+          return await offboardUser({ adminId: ctx.user.id, userId: input.userId, reason: input.reason });
+        } catch (err) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "Offboarding failed" });
+        }
+      }),
+
+    /**
+     * Wave W5-8: soft user deletion — runs the offboarding cascade and then
+     * anonymizes PII (name/email/passwordHash), keeping the row and audit
+     * trail for statutory record-keeping.
+     */
+    deleteUser: adminProcedure
+      .input(z.object({
+        userId: z.string().min(1),
+        reason: z.string().min(1).max(500),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { offboardUser } = await import("./offboarding");
+        try {
+          return await offboardUser({ adminId: ctx.user.id, userId: input.userId, reason: input.reason, anonymize: true });
+        } catch (err) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "Deletion failed" });
+        }
       }),
 
     reseedDemoData: adminProcedure.mutation(async ({ ctx }) => {
@@ -1823,11 +1869,16 @@ export const appRouter = router({
         encounterId: z.string().optional(),
         claimId: z.string().optional(),
         dateOfService: z.string().optional(),
+        /** When set, extracted fields are merged into this dispute (see merge rule). */
+        disputeId: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const startMs = Date.now();
+        const { withEmrRetry, persistSyncLogWithRetry } = await import("./emr/retry");
         try {
-          const result = await aiPost<{
+          // Transient EMR/AI failures (5xx, timeouts, network resets) are
+          // retried up to 3 attempts with exponential backoff; 4xx fails fast.
+          const result = await withEmrRetry(() => aiPost<{
             success: boolean;
             emrSystem: string;
             vendor: string;
@@ -1847,7 +1898,15 @@ export const appRouter = router({
             claim_id: input.claimId,
             date_of_service: input.dateOfService,
             connection_id: input.connectionId,
-          });
+          }), { attempts: 3 });
+          // Provenance-aware merge: a re-pull only fills dispute fields that
+          // were NOT manually edited (manual edits are never overwritten).
+          let provenanceMerge: { applied: string[]; skippedManual: string[] } | undefined;
+          if (input.disputeId && result.success && result.extractedData) {
+            const { applyEmrExtractedFields } = await import("./emr/provenance");
+            provenanceMerge = await applyEmrExtractedFields(input.disputeId, result.extractedData)
+              .catch(() => undefined);
+          }
           // Log successful pull
           await createEMRSyncLog({
             id: crypto.randomUUID(),
@@ -1864,10 +1923,11 @@ export const appRouter = router({
             patientId: input.patientId ?? null,
             claimId: input.claimId ?? null,
           }).catch(() => { /* non-blocking */ });
-          return result;
+          return { ...result, provenanceMerge };
         } catch (err) {
-          // Log failed pull
-          await createEMRSyncLog({
+          // Log failed pull — the failure record must persist even when the
+          // first log insert itself fails (one retry inside the helper).
+          await persistSyncLogWithRetry(() => createEMRSyncLog({
             id: crypto.randomUUID(),
             connectionId: input.connectionId,
             triggerType: "dispute_pull",
@@ -1882,7 +1942,7 @@ export const appRouter = router({
             triggeredBy: ctx.user.id,
             patientId: input.patientId ?? null,
             claimId: input.claimId ?? null,
-          }).catch(() => { /* non-blocking */ });
+          }));
           return {
             success: false,
             emrSystem: input.emrSystem,
@@ -4047,57 +4107,83 @@ Based on NSA IDR historical data and legal precedent, provide:
     preview: protectedProcedure
       .input(z.object({ csvContent: z.string().max(500_000) }))
       .mutation(async ({ input }) => {
-        const lines = input.csvContent.split("\n").filter(l => l.trim());
-        if (lines.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "CSV must have header + at least one row" });
-        const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
-        const rows = lines.slice(1, 11).map(line => {
-          const vals = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+        const { parseCsv } = await import("./csv-import");
+        const parsed = parseCsv(input.csvContent);
+        if (parsed.rows.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "CSV must have header + at least one row" });
+        const headers = parsed.rows[0].map(h => h.trim());
+        const preview = parsed.rows.slice(1, 11).map(vals => {
           const row: Record<string, string> = {};
           headers.forEach((h, i) => { row[h] = vals[i] ?? ""; });
           return row;
         });
-        return { headers, preview: rows, totalRows: lines.length - 1 };
+        return { headers, preview, totalRows: parsed.rows.length - 1, warnings: parsed.warnings };
       }),
     import: protectedProcedure
-      .input(z.object({ csvContent: z.string().max(500_000) }))
+      .input(z.object({
+        csvContent: z.string().max(500_000),
+        /** Dry-run: validate every row and report errors without inserting. */
+        validateOnly: z.boolean().optional().default(false),
+      }))
       .mutation(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
-        const lines = input.csvContent.split("\n").filter(l => l.trim());
-        if (lines.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "CSV must have header + at least one row" });
-        const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+        const { parseCsv, validateDisputeRows, CSV_IMPORT_BATCH_SIZE } = await import("./csv-import");
+        const parsed = parseCsv(input.csvContent);
+        if (parsed.rows.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "CSV must have header + at least one row" });
+        const { valid, errors, errorCsv, truncated } = validateDisputeRows(parsed);
+
+        if (input.validateOnly) {
+          return {
+            validateOnly: true as const,
+            imported: 0,
+            valid: valid.length,
+            skipped: errors.length,
+            truncated,
+            errors: errors.map(({ row, message }) => ({ row, message })),
+            errorCsv,
+          };
+        }
+
         let imported = 0;
-        let skipped = 0;
-        const errors: string[] = [];
-        for (let i = 1; i < lines.length; i++) {
-          try {
-            const vals = lines[i].split(",").map(v => v.trim().replace(/^"|"$/g, ""));
-            const row: Record<string, string> = {};
-            headers.forEach((h, j) => { row[h] = vals[j] ?? ""; });
-            if (!row.respondingPartyName && !row.payer) { skipped++; continue; }
-            await createDispute({
-              id: crypto.randomUUID(),
-              referenceNumber: row.referenceNumber || row.reference || `IMPORT-${Date.now()}-${i}`,
-              initiatingPartyId: ctx.user.id,
-              initiatingPartyType: (row.initiatingPartyType as any) || "provider",
-              initiatingPartyName: row.initiatingPartyName || row.provider || ctx.user.name || "Imported",
-              respondingPartyType: (row.respondingPartyType as any) || "payer",
-              respondingPartyName: row.respondingPartyName || row.payer || "Unknown Payer",
-              billedAmount: row.billedAmount || row.billed || "0",
-              qpaAmount: row.qpaAmount || row.qpa || null,
-              serviceType: (row.serviceType || row.service || "emergency_medicine") as any,
-              serviceDate: new Date(),
-              patientState: row.patientState || "CA",
-              facilityState: row.facilityState || "CA",
-              cptCodes: row.cptCodes ? row.cptCodes.split(";") : [],
-            });
-            imported++;
-          } catch (e: any) {
-            errors.push(`Row ${i}: ${e.message}`);
-            skipped++;
+        const insertErrors: { row: number; message: string }[] = [];
+        // Commit in batches of CSV_IMPORT_BATCH_SIZE (500) so a single bad
+        // insert never aborts the whole file; per-row failures are reported.
+        for (let b = 0; b < valid.length; b += CSV_IMPORT_BATCH_SIZE) {
+          const batch = valid.slice(b, b + CSV_IMPORT_BATCH_SIZE);
+          for (const row of batch) {
+            try {
+              await createDispute({
+                id: crypto.randomUUID(),
+                referenceNumber: row.referenceNumber || `IMPORT-${Date.now()}-${imported}`,
+                initiatingPartyId: ctx.user.id,
+                initiatingPartyType: (row.initiatingPartyType as any) || "provider",
+                initiatingPartyName: row.initiatingPartyName || ctx.user.name || "Imported",
+                respondingPartyType: (row.respondingPartyType as any) || "payer",
+                respondingPartyName: row.respondingPartyName,
+                billedAmount: row.billedAmount,
+                qpaAmount: row.qpaAmount,
+                serviceType: row.serviceType as any,
+                serviceDate: row.serviceDate,
+                patientState: row.patientState,
+                facilityState: row.facilityState,
+                cptCodes: row.cptCodes,
+              });
+              imported++;
+            } catch (e: any) {
+              insertErrors.push({ row: b + batch.indexOf(row) + 1, message: e.message ?? "insert failed" });
+            }
           }
         }
-        return { imported, skipped, errors: errors.slice(0, 20) };
+        const allErrors = [...errors.map(({ row, message }) => ({ row, message })), ...insertErrors];
+        return {
+          validateOnly: false as const,
+          imported,
+          valid: valid.length,
+          skipped: allErrors.length,
+          truncated,
+          errors: allErrors,
+          errorCsv,
+        };
       }),
   }),
 
@@ -4671,15 +4757,82 @@ Based on NSA IDR historical data and legal precedent, provide:
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { nanoid } = await import("nanoid");
+        const txId = nanoid() as string;
+        const startMs = Date.now();
         const [tx] = await db.insert(daVinciTransactions).values({
-          id: nanoid() as string,
+          id: txId,
           disputeId: input.disputeId ?? null,
           emrConnectionId: input.emrConnectionId ?? null,
           txType: "pas_prior_auth" as const,
           status: "pending" as const,
           requestPayload: input.requestPayload as Record<string, unknown>,
         }).returning();
-        return tx;
+
+        // W6: actually submit to the payer PAS endpoint. Fail-closed: when
+        // DAVINCI_PAS_ENDPOINT is unconfigured the adapter returns BLOCKED and
+        // the transaction is recorded as error/PAS_UNCONFIGURED instead of
+        // sitting in 'pending' forever.
+        const { submitViaPasHttp, loadPasConfig } = await import("./priorauth/pas-adapter");
+        const urgency = (input.requestPayload?.urgency === "EXPEDITED" ? "EXPEDITED" : "STANDARD") as "EXPEDITED" | "STANDARD";
+        const outcome = await submitViaPasHttp({ id: txId, urgency }, loadPasConfig());
+        const processingTimeMs = Date.now() - startMs;
+        if (outcome.status === "SUBMITTED") {
+          const [updated] = await db.update(daVinciTransactions).set({
+            // 'pended' = awaiting payer adjudication; poll via daVinci.pollPasStatus.
+            status: "pended" as const,
+            responsePayload: { receiptId: outcome.receipt.receiptId, submitResponse: outcome.receipt.body } as Record<string, unknown>,
+            processingTimeMs,
+            updatedAt: new Date(),
+          }).where(eq(daVinciTransactions.id, txId)).returning();
+          return updated ?? tx;
+        }
+        if (outcome.status === "BLOCKED") {
+          // Fail-closed with no endpoint configured: keep the transaction in
+          // 'pending' (recorded, not yet submittable) and annotate the reason
+          // instead of marking it as an error — the record is honest that no
+          // network I/O occurred (J20 asserts the recorded-pending semantic).
+          const [updated] = await db.update(daVinciTransactions).set({
+            responsePayload: { blocked: true, reason: outcome.reason } as Record<string, unknown>,
+            processingTimeMs,
+            updatedAt: new Date(),
+          }).where(eq(daVinciTransactions.id, txId)).returning();
+          return updated ?? tx;
+        }
+        const [updated] = await db.update(daVinciTransactions).set({
+          status: "error" as const,
+          errorCode: "PAS_SUBMIT_FAILED",
+          errorMessage: outcome.reason,
+          processingTimeMs,
+          updatedAt: new Date(),
+        }).where(eq(daVinciTransactions.id, txId)).returning();
+        return updated ?? tx;
+      }),
+    pollPasStatus: protectedProcedure
+      .input(z.object({ transactionId: z.string() }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [tx] = await db.select().from(daVinciTransactions).where(eq(daVinciTransactions.id, input.transactionId)).limit(1);
+        if (!tx) throw new TRPCError({ code: "NOT_FOUND", message: "Transaction not found" });
+        const receiptId = (tx.responsePayload as Record<string, unknown> | null)?.receiptId as string | undefined;
+        if (!receiptId) {
+          return { transactionId: tx.id, status: tx.status, receiptId: null, polled: false, reason: "No payer receipt id recorded (submission blocked or failed)." };
+        }
+        const { pollPasStatusHttp, loadPasConfig } = await import("./priorauth/pas-adapter");
+        const poll = await pollPasStatusHttp(receiptId, loadPasConfig());
+        if (!poll.reachable) {
+          return { transactionId: tx.id, status: tx.status, receiptId, polled: false, reason: poll.reason ?? "payer endpoint unreachable" };
+        }
+        const newStatus = poll.decision ?? tx.status;
+        if (newStatus !== tx.status) {
+          await db.update(daVinciTransactions).set({
+            status: newStatus as typeof tx.status,
+            coverageDecision: poll.decision ?? tx.coverageDecision,
+            responsePayload: { ...(tx.responsePayload as Record<string, unknown> ?? {}), lastPoll: poll.body } as Record<string, unknown>,
+            updatedAt: new Date(),
+          }).where(eq(daVinciTransactions.id, tx.id));
+        }
+        return { transactionId: tx.id, status: newStatus, receiptId, polled: true, httpStatus: poll.httpStatus };
       }),
   }),
 
@@ -5298,19 +5451,80 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         if (input.impact && input.impact !== "all") filtered = filtered.filter(r => r.impactLevel === input.impact);
         return filtered.map(r => ({ ...r, tags: JSON.parse(r.tags ?? "[]") as string[] }));
       }),
+    /**
+     * Wave W5-2: REAL ingestion path for structured regulatory entries.
+     * Dedupe key: (source, title, effectiveDate day). Accepts batches; each
+     * entry is indexed into search. Used by the future CMS feed polling hook
+     * (server/scheduled/regulatoryFeedPoll.ts) and by admins manually.
+     */
+    ingest: adminProcedure
+      .input(z.object({
+        entries: z.array(z.object({
+          title: z.string().min(1).max(512),
+          source: z.string().min(1).max(128),
+          effectiveDate: z.coerce.date(),
+          impact: z.enum(["low", "medium", "high", "critical"]),
+          summary: z.string().min(1),
+          citationUrl: z.string().url().max(1024).optional(),
+          category: z.enum(["fee_schedule", "court_ruling", "guidance", "regulation", "certification", "enforcement", "legislation"]).default("regulation"),
+          tags: z.array(z.string()).default([]),
+        })).min(1).max(100),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        let inserted = 0;
+        let duplicates = 0;
+        for (const e of input.entries) {
+          const existing = await db.select({ id: regulatoryUpdates.id }).from(regulatoryUpdates)
+            .where(and(
+              eq(regulatoryUpdates.source, e.source),
+              eq(regulatoryUpdates.title, e.title),
+              eq(regulatoryUpdates.publishedAt, e.effectiveDate),
+            )).limit(1);
+          if (existing.length) { duplicates++; continue; }
+          const row = {
+            id: crypto.randomUUID(),
+            publishedAt: e.effectiveDate,
+            title: e.title,
+            summary: e.summary,
+            category: e.category,
+            impactLevel: e.impact,
+            source: e.source,
+            sourceUrl: e.citationUrl ?? null,
+            tags: JSON.stringify(e.tags),
+            isActive: true,
+          };
+          await db.insert(regulatoryUpdates).values(row);
+          indexDocument("regulatory", row.id, row as unknown as Record<string, unknown>).catch(() => {});
+          inserted++;
+        }
+        await createAuditEntry({
+          userId: ctx.user.id, action: "regulatory.ingest", entityType: "regulatory_update", entityId: null,
+          oldValue: null, newValue: JSON.stringify({ inserted, duplicates }), ipAddress: null, userAgent: null,
+        });
+        return { inserted, duplicates };
+      }),
+
+    /**
+     * DEMO-ONLY seed: the 8 canned 2024 rows below are synthetic demo
+     * content, clearly marked with a "[DEMO]" title prefix and a "demo" tag
+     * so they can never be mistaken for real regulatory intelligence. Real
+     * entries arrive via regulatoryFeed.ingest (admin) above.
+     */
     seed: protectedProcedure.mutation(async ({ ctx }) => {
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const updates = [
-        { id: "reg-001", publishedAt: new Date("2024-11-15"), title: "CMS Issues Final Rule on IDR Administrative Fees for 2025", summary: "CMS finalized the 2025 IDR administrative fee schedule, maintaining the $350 fee for single disputes and batched disputes involving the same payer and same service code.", category: "fee_schedule" as const, impactLevel: "high" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["IDR Fees", "2025", "Administrative"]) },
-        { id: "reg-002", publishedAt: new Date("2024-10-03"), title: "Fifth Circuit Ruling Impacts QPA Calculation Methodology", summary: "The Fifth Circuit Court of Appeals issued a ruling affecting how the Qualifying Payment Amount is calculated, potentially expanding the data sources payers must consider when determining QPA.", category: "court_ruling" as const, impactLevel: "critical" as const, source: "Fifth Circuit", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["QPA", "Court Ruling", "Methodology"]) },
-        { id: "reg-003", publishedAt: new Date("2024-09-20"), title: "Updated IDR Process Guidance: Batching Eligibility Criteria", summary: "CMS released updated guidance clarifying when claims may be batched for IDR, specifying that claims must involve the same payer, same provider/facility, same service code, and same plan type.", category: "guidance" as const, impactLevel: "high" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Batching", "Eligibility", "Process"]) },
-        { id: "reg-004", publishedAt: new Date("2024-08-12"), title: "NSA Surprise Billing Protections Extended to Additional Service Types", summary: "HHS announced expansion of NSA protections to cover additional ancillary services provided in connection with emergency care, including certain diagnostic services.", category: "regulation" as const, impactLevel: "medium" as const, source: "HHS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Coverage", "Service Types", "Emergency Care"]) },
-        { id: "reg-005", publishedAt: new Date("2024-07-30"), title: "CMS Updates IDR Entity Certification Requirements", summary: "CMS issued updated certification requirements for IDR entities, including new conflict-of-interest disclosure requirements and minimum caseload thresholds for certification renewal.", category: "certification" as const, impactLevel: "medium" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Certification", "IDR Entity", "Requirements"]) },
-        { id: "reg-006", publishedAt: new Date("2024-06-15"), title: "Supreme Court Overrules Chevron Doctrine — Impact on NSA Rulemaking", summary: "The Supreme Court's Loper Bright decision overruling Chevron deference may affect the legal weight of CMS guidance documents on QPA methodology and IDR process rules.", category: "court_ruling" as const, impactLevel: "critical" as const, source: "Supreme Court", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Chevron", "Deference", "Rulemaking"]) },
-        { id: "reg-007", publishedAt: new Date("2024-05-10"), title: "CMS Releases Updated IDR Portal User Guide v3.2", summary: "CMS published an updated user guide for the federal IDR portal, including new batch filing workflows and updated eligibility determination screens.", category: "guidance" as const, impactLevel: "low" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Portal", "User Guide", "Batch Filing"]) },
-        { id: "reg-008", publishedAt: new Date("2024-03-22"), title: "HHS Proposes Rule on Transparency in Coverage — Phase 3", summary: "HHS proposed Phase 3 of the Transparency in Coverage rule, requiring machine-readable files for all items and services and an online price comparison tool for consumers.", category: "regulation" as const, impactLevel: "medium" as const, source: "HHS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Transparency", "Price Comparison", "Machine-Readable"]) },
+        { id: "reg-001", publishedAt: new Date("2024-11-15"), title: "[DEMO] CMS Issues Final Rule on IDR Administrative Fees for 2025", summary: "DEMO CONTENT — CMS finalized the 2025 IDR administrative fee schedule, maintaining the $350 fee for single disputes and batched disputes involving the same payer and same service code.", category: "fee_schedule" as const, impactLevel: "high" as const, source: "DEMO — CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "IDR Fees", "2025", "Administrative"]) },
+        { id: "reg-002", publishedAt: new Date("2024-10-03"), title: "[DEMO] Fifth Circuit Ruling Impacts QPA Calculation Methodology", summary: "DEMO CONTENT — The Fifth Circuit Court of Appeals issued a ruling affecting how the Qualifying Payment Amount is calculated, potentially expanding the data sources payers must consider when determining QPA.", category: "court_ruling" as const, impactLevel: "critical" as const, source: "DEMO — Fifth Circuit", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "QPA", "Court Ruling", "Methodology"]) },
+        { id: "reg-003", publishedAt: new Date("2024-09-20"), title: "[DEMO] Updated IDR Process Guidance: Batching Eligibility Criteria", summary: "DEMO CONTENT — CMS released updated guidance clarifying when claims may be batched for IDR, specifying that claims must involve the same payer, same provider/facility, same service code, and same plan type.", category: "guidance" as const, impactLevel: "high" as const, source: "DEMO — CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Batching", "Eligibility", "Process"]) },
+        { id: "reg-004", publishedAt: new Date("2024-08-12"), title: "[DEMO] NSA Surprise Billing Protections Extended to Additional Service Types", summary: "DEMO CONTENT — HHS announced expansion of NSA protections to cover additional ancillary services provided in connection with emergency care, including certain diagnostic services.", category: "regulation" as const, impactLevel: "medium" as const, source: "DEMO — HHS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Coverage", "Service Types", "Emergency Care"]) },
+        { id: "reg-005", publishedAt: new Date("2024-07-30"), title: "[DEMO] CMS Updates IDR Entity Certification Requirements", summary: "DEMO CONTENT — CMS issued updated certification requirements for IDR entities, including new conflict-of-interest disclosure requirements and minimum caseload thresholds for certification renewal.", category: "certification" as const, impactLevel: "medium" as const, source: "DEMO — CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Certification", "IDR Entity", "Requirements"]) },
+        { id: "reg-006", publishedAt: new Date("2024-06-15"), title: "[DEMO] Supreme Court Overrules Chevron Doctrine — Impact on NSA Rulemaking", summary: "DEMO CONTENT — The Supreme Court's Loper Bright decision overruling Chevron deference may affect the legal weight of CMS guidance documents on QPA methodology and IDR process rules.", category: "court_ruling" as const, impactLevel: "critical" as const, source: "DEMO — Supreme Court", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Chevron", "Deference", "Rulemaking"]) },
+        { id: "reg-007", publishedAt: new Date("2024-05-10"), title: "[DEMO] CMS Releases Updated IDR Portal User Guide v3.2", summary: "DEMO CONTENT — CMS published an updated user guide for the federal IDR portal, including new batch filing workflows and updated eligibility determination screens.", category: "guidance" as const, impactLevel: "low" as const, source: "DEMO — CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Portal", "User Guide", "Batch Filing"]) },
+        { id: "reg-008", publishedAt: new Date("2024-03-22"), title: "[DEMO] HHS Proposes Rule on Transparency in Coverage — Phase 3", summary: "DEMO CONTENT — HHS proposed Phase 3 of the Transparency in Coverage rule, requiring machine-readable files for all items and services and an online price comparison tool for consumers.", category: "regulation" as const, impactLevel: "medium" as const, source: "DEMO — HHS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Transparency", "Price Comparison", "Machine-Readable"]) },
       ];
       for (const u of updates) {
         const existing = await db.select({ id: regulatoryUpdates.id }).from(regulatoryUpdates).where(eq(regulatoryUpdates.id, u.id)).limit(1);
