@@ -124,6 +124,16 @@ export default function ConsentCenter() {
     onSuccess: () => toast.success("Case transition applied"),
     onError: (e) => toast.error(e.message),
   });
+  // W4-F4: patient e-signature link (scope consent_sign, single-use, 14-day TTL).
+  const [sigPatientName, setSigPatientName] = useState("");
+  const [sigLink, setSigLink] = useState<string | null>(null);
+  const issueSignatureLinkMutation = trpc.noticeConsent.issueSignatureLink.useMutation({
+    onSuccess: (r) => {
+      setSigLink(r.path);
+      toast.success("Signature link issued — share it with the patient (single-use, 14-day expiry)");
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   // GFE / PPDR queries
   const ppdrEligibilityQuery = trpc.gfePpdr.evaluateEligibility.useQuery(
@@ -374,6 +384,26 @@ export default function ConsentCenter() {
                       {`-> ${s.replace(/_/g, " ")}`}
                     </Button>
                   ))}
+                </div>
+                {/* W4-F4: patient e-signature link */}
+                <div className="border-t border-border pt-3 mt-1 space-y-2">
+                  <Label className="text-xs flex items-center gap-1.5">
+                    <FileSignature size={12} /> Patient e-signature (public portal link)
+                  </Label>
+                  <div className="flex gap-2">
+                    <Input value={sigPatientName} onChange={e => setSigPatientName(e.target.value)}
+                      placeholder="Patient full name" className="h-8 text-sm" />
+                    <Button size="sm" variant="secondary"
+                      disabled={!caseId || !sigPatientName || issueSignatureLinkMutation.isPending}
+                      onClick={() => issueSignatureLinkMutation.mutate({ caseId, patientName: sigPatientName })}>
+                      Send signature link
+                    </Button>
+                  </div>
+                  {sigLink && (
+                    <p className="text-xs text-muted-foreground break-all">
+                      Link (single-use, 14-day expiry): <span className="font-mono">{sigLink}</span>
+                    </p>
+                  )}
                 </div>
                 {recent.length > 0 && (
                   <div>
