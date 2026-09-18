@@ -327,22 +327,37 @@ eventBus.on("*", async (event: IDREvent) => {
 });
 
 /**
- * Outcome prediction trigger — regenerates predictions when dispute state changes.
+ * Outcome prediction staleness — any lifecycle event that materially changes
+ * the dispute (state advance, offers, determination, payment) marks the
+ * stored prediction stale. predictions.get surfaces { stale: true } so the
+ * UI can badge it. The isStale column comes from migration 0039_wave_w3.sql
+ * (raw SQL — drizzle/schema.ts is owned by another wave).
  */
-eventBus.on("dispute.advanced", async (event: IDREvent) => {
-  // Trigger async prediction regeneration (fire-and-forget)
-  setTimeout(async () => {
-    try {
-      const db = await getDb();
-      if (!db) return;
-      // Mark existing prediction as stale so it gets regenerated on next view
-      const { outcomePredictions } = await import("../../drizzle/schema");
-      const { eq } = await import("drizzle-orm");
-      await db.update(outcomePredictions)
-        .set({ updatedAt: new Date() })
-        .where(eq(outcomePredictions.disputeId, event.aggregateId));
-    } catch {
-      // Non-fatal
-    }
-  }, 100);
-});
+async function markPredictionStale(disputeId: string): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`
+      UPDATE outcome_predictions SET "isStale" = true, "updatedAt" = NOW()
+      WHERE "disputeId" = ${disputeId}
+    `);
+  } catch {
+    // Non-fatal
+  }
+}
+
+for (const staleEvent of [
+  "dispute.advanced",
+  "dispute.offer_submitted",
+  "offer.accepted",
+  "offer.rejected",
+  "determination.issued",
+  "payment.recorded",
+  "payment.settled",
+] as const) {
+  eventBus.on(staleEvent, (event: IDREvent) => {
+    // Fire-and-forget; never block event handling.
+    setTimeout(() => { void markPredictionStale(event.aggregateId); }, 100);
+  });
+}
