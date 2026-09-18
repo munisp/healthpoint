@@ -184,7 +184,7 @@ export const j03: Journey = {
     {
       name: "seed-and-list-certified-idres",
       async run(ctx) {
-        await ctx.admin.arbitrators.seedDemoEntities();
+        await ctx.admin.arbitrators.seedDemoEntities({ demo: true });
         const entities = await ctx.provider.arbitrators.list({});
         ctx.assert(entities.length >= 5, "certified IDR entities seeded", { count: entities.length });
         const withFee = entities.filter(e => e.name && e.name.length > 0);
