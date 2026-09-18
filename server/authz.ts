@@ -80,6 +80,124 @@ export async function registerDisputeOwner(disputeId: string, ownerId: string): 
   await writePermifyRelationship("dispute", disputeId, "owner", ownerId);
 }
 
+async function deletePermifyRelationship(
+  entity: string, entityId: string, relation: string, subjectId: string
+): Promise<void> {
+  if (!PERMIFY_URL) return;
+  try {
+    await fetch(`${PERMIFY_URL}/v1/tenants/${PERMIFY_TENANT}/relationships/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        metadata: { schema_version: "" },
+        tuple_filter: { entity: { type: entity, ids: [entityId] }, relation },
+        subject_filter: { type: "user", ids: [subjectId] },
+      }),
+      signal: AbortSignal.timeout(3000),
+    });
+  } catch (err) {
+    console.warn("[authz] Permify delete error:", err);
+  }
+}
+
+/** Read Permify tuples for a dispute (best-effort; empty when Permify is off). */
+async function readPermifyRelationships(
+  entity: string, entityId: string
+): Promise<Array<{ relation: string; subjectId: string }>> {
+  if (!PERMIFY_URL) return [];
+  try {
+    const res = await fetch(`${PERMIFY_URL}/v1/tenants/${PERMIFY_TENANT}/relationships/read`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        metadata: { snap_token: "" },
+        filter: { entity: { type: entity, ids: [entityId] }, relation: "" },
+      }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { tuples?: Array<{ entity: { type: string; id: string }; relation: string; subject: { type: string; id: string } }> };
+    return (data.tuples ?? []).map(t => ({ relation: t.relation, subjectId: t.subject.id }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Canonical relation mapping for dispute_access grants (W2 reconciliation fix).
+ * The canonical schema (infra/permify/schema.perm, mirrored in PERMIFY_SCHEMA
+ * below) defines relations owner/reviewer/arbitrator/org_admin — the previous
+ * mapping wrote viewer/editor/admin, which do NOT exist, so Permify checks
+ * against granted access always failed closed.
+ *
+ * Mapping (least privilege available in the schema):
+ *   read  → reviewer   (schema has no read-only relation; reviewer is the
+ *                       least-privileged relation that includes read. NOTE:
+ *                       reviewer also includes write — documented over-grant;
+ *                       PostgreSQL remains the precise enforcement layer.)
+ *   write → reviewer
+ *   admin → arbitrator (org_admin targets organization#admin, not a user)
+ */
+export function canonicalRelationForPermission(permission: AuthzPermission): string {
+  if (permission === "admin") return "arbitrator";
+  return "reviewer"; // read and write
+}
+
+/**
+ * Diff PostgreSQL dispute_access grants against Permify tuples and repair
+ * missing Permify relationships (PG is the source of truth for grants).
+ * Bounded to `limit` grants per call. Returns counts for observability.
+ * Best-effort: Permify write failures are logged and counted, never thrown.
+ */
+export async function reconcileDisputeAccess(limit = 500): Promise<{ scanned: number; repaired: number; failed: number }> {
+  const db = await getDb();
+  if (!db) return { scanned: 0, repaired: 0, failed: 0 };
+  let grants: Array<{ disputeId: string; userId: string; permission: string }> = [];
+  try {
+    grants = await db
+      .select({ disputeId: disputeAccess.disputeId, userId: disputeAccess.userId, permission: disputeAccess.permission })
+      .from(disputeAccess)
+      .limit(Math.min(Math.max(limit, 1), 500)) as Array<{ disputeId: string; userId: string; permission: string }>;
+  } catch (err) {
+    console.warn("[authz] reconcileDisputeAccess: grant scan failed:", err);
+    return { scanned: 0, repaired: 0, failed: 0 };
+  }
+
+  let repaired = 0;
+  let failed = 0;
+  // Group by dispute to avoid re-reading tuples per grant.
+  const byDispute = new Map<string, typeof grants>();
+  for (const g of grants) {
+    const list = byDispute.get(g.disputeId) ?? [];
+    list.push(g);
+    byDispute.set(g.disputeId, list);
+  }
+  for (const [disputeId, disputeGrants] of byDispute) {
+    let tuples: Array<{ relation: string; subjectId: string }> = [];
+    try {
+      tuples = await readPermifyRelationships("dispute", disputeId);
+    } catch {
+      tuples = [];
+    }
+    for (const g of disputeGrants) {
+      const relation = canonicalRelationForPermission((g.permission as AuthzPermission) ?? "read");
+      const exists = tuples.some(t => t.relation === relation && t.subjectId === g.userId);
+      if (exists) continue;
+      try {
+        await writePermifyRelationship("dispute", disputeId, relation, g.userId);
+        repaired++;
+      } catch (err) {
+        failed++;
+        console.warn(`[authz] reconcileDisputeAccess: repair failed for dispute=${disputeId} user=${g.userId}:`, err);
+      }
+    }
+  }
+  if (repaired || failed) {
+    console.info(`[authz] reconcileDisputeAccess: scanned=${grants.length} repaired=${repaired} failed=${failed}`);
+  }
+  return { scanned: grants.length, repaired, failed };
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type AuthzPermission = "read" | "write" | "admin";
@@ -192,8 +310,9 @@ export async function grantDisputeAccess(
   const db = await getDb();
   if (!db) return;
 
-  // Write to Permify
-  const relation = permission === "read" ? "viewer" : permission === "write" ? "editor" : "admin";
+  // Write to Permify (canonical relations — see canonicalRelationForPermission;
+  // previously wrote viewer/editor/admin which do not exist in the schema).
+  const relation = canonicalRelationForPermission(permission);
   await writePermifyRelationship("dispute", disputeId, relation, userId);
 
   // Write to PostgreSQL fallback
@@ -223,6 +342,21 @@ export async function revokeDisputeAccess(
   const db = await getDb();
   if (!db) return;
 
+  // Write-then-delete in BOTH stores: capture the granted permission first so
+  // the matching Permify tuple can be deleted. When the PG row is already
+  // gone, delete every candidate relation best-effort (reconciliation-safe).
+  let grantedPermission: AuthzPermission | null = null;
+  try {
+    const rows = await db
+      .select({ permission: disputeAccess.permission })
+      .from(disputeAccess)
+      .where(and(eq(disputeAccess.disputeId, disputeId), eq(disputeAccess.userId, userId)))
+      .limit(1);
+    grantedPermission = (rows[0]?.permission as AuthzPermission) ?? null;
+  } catch {
+    grantedPermission = null;
+  }
+
   try {
     await db.delete(disputeAccess)
       .where(
@@ -233,6 +367,21 @@ export async function revokeDisputeAccess(
       );
   } catch (err) {
     console.warn("[Authz] revokeDisputeAccess error:", err);
+  }
+
+  // Delete the Permify tuple(s) — best-effort with error log. If this fails,
+  // reconcileDisputeAccess() (admin-callable) converges the stores; PG remains
+  // the enforcement source of truth when Permify is unreachable.
+  try {
+    if (grantedPermission) {
+      await deletePermifyRelationship("dispute", disputeId, canonicalRelationForPermission(grantedPermission), userId);
+    } else {
+      for (const relation of ["reviewer", "arbitrator"]) {
+        await deletePermifyRelationship("dispute", disputeId, relation, userId);
+      }
+    }
+  } catch (err) {
+    console.warn(`[Authz] revokeDisputeAccess: Permify tuple delete failed (reconcileDisputeAccess will repair): dispute=${disputeId} user=${userId}:`, err);
   }
 }
 
