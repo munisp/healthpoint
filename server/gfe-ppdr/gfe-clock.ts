@@ -35,6 +35,11 @@ export const RECURRING_GFE_MAX_MONTHS = 12;
 export type HorizonBand = 'LONG' | 'SHORT' | 'IMMEDIATE';
 
 import {
+  availableGfeElements,
+  isNoticeLanguage,
+  DEFAULT_NOTICE_LANGUAGE,
+} from '../../shared/i18n/notices';
+import {
   addBusinessDays as idrAddBusinessDays,
   businessDaysBetween as idrBusinessDaysBetween,
   isBusinessDay as idrIsBusinessDay,
@@ -164,21 +169,178 @@ export type RequiredGfeElement = (typeof REQUIRED_GFE_ELEMENTS)[number];
 
 export function validateGfeContent(
   elementsProvided: readonly string[],
-): { complete: boolean; missing: RequiredGfeElement[] } {
+  options: { language?: string; coProviders?: readonly CoProviderEstimate[] } = {},
+): { complete: boolean; missing: RequiredGfeElement[]; language: string; coProviderErrors: string[] } {
   const provided = new Set(elementsProvided.map((e) => e.trim().toUpperCase()));
-  const missing = REQUIRED_GFE_ELEMENTS.filter((e) => !provided.has(e));
-  return { complete: missing.length === 0, missing };
+  const available = new Set(availableGfeElements(options.language));
+  const effectiveLanguage = isNoticeLanguage(options.language) ? options.language : DEFAULT_NOTICE_LANGUAGE;
+  const missing =
+    options.language !== undefined && !isNoticeLanguage(options.language)
+      ? [...REQUIRED_GFE_ELEMENTS] // unsupported language: fail closed
+      : REQUIRED_GFE_ELEMENTS.filter((e) => !provided.has(e) || !available.has(e));
+  const coProviderErrors = options.coProviders ? validateCoProviderEstimates(options.coProviders) : [];
+  // W4-F5: when co-providers are supplied the disclaimer must be present AND
+  // every co-provider entry valid; either failure makes content incomplete.
+  if (options.coProviders && options.coProviders.length > 0 && !provided.has('COPROVIDER_DISCLAIMER')) {
+    if (!missing.includes('COPROVIDER_DISCLAIMER')) missing.push('COPROVIDER_DISCLAIMER');
+  }
+  return {
+    complete: missing.length === 0 && coProviderErrors.length === 0,
+    missing,
+    language: effectiveLanguage,
+    coProviderErrors,
+  };
 }
 
-/** Validates the <=12-month window for recurring-services GFEs (149.610(a)(2)(iii)). */
+/* ── W4-F5: co-provider / co-facility estimates (149.610(b)(2)) ──────────── */
+
+/**
+ * Co-provider/co-facility estimate entry. 45 CFR 149.610(b)(1)(iii),
+ * (b)(2): the convening provider must include (or separately transmit)
+ * expected charges from co-providers/co-facilities reasonably expected to
+ * furnish items/services in connection with the primary service.
+ */
+export interface CoProviderEstimate {
+  name: string;
+  npi?: string;
+  expectedChargesUsd: number;
+}
+
+/** Per-entry validation; returns human-readable errors (empty when valid). */
+export function validateCoProviderEstimates(coProviders: readonly CoProviderEstimate[]): string[] {
+  const errors: string[] = [];
+  coProviders.forEach((c, i) => {
+    if (!c || typeof c.name !== 'string' || c.name.trim().length === 0) {
+      errors.push(`coProviders[${i}].name is required`);
+    }
+    if (c && c.npi !== undefined && !/^\d{10}$/.test(c.npi)) {
+      errors.push(`coProviders[${i}].npi must be 10 digits when supplied`);
+    }
+    if (!c || !Number.isFinite(c.expectedChargesUsd) || c.expectedChargesUsd < 0) {
+      errors.push(`coProviders[${i}].expectedChargesUsd must be a finite number >= 0`);
+    }
+  });
+  return errors;
+}
+
+/**
+ * Aggregation rule (149.610(b)): the GFE total equals the convening
+ * provider's/facility's expected charges PLUS the sum of all co-provider /
+ * co-facility expected charges (total = convening + Σ co-providers).
+ */
+export function computeGfeTotalExpectedCharges(
+  conveningChargesUsd: number,
+  coProviders: readonly CoProviderEstimate[] = [],
+): number {
+  if (!Number.isFinite(conveningChargesUsd) || conveningChargesUsd < 0) {
+    throw new Error('conveningChargesUsd must be a finite number >= 0');
+  }
+  const errors = validateCoProviderEstimates(coProviders);
+  if (errors.length > 0) throw new Error('Invalid co-provider estimates: ' + errors.join('; '));
+  return conveningChargesUsd + coProviders.reduce((s, c) => s + c.expectedChargesUsd, 0);
+}
+
+/**
+ * Updated-GFE rule (45 CFR 149.610(a)(2)(iv) / HHS GFE guidance): if the
+ * expected charges or items/services change, an UPDATED GFE must be
+ * delivered no later than 1 business day before the service is furnished.
+ * Fail closed: when charges changed and no delivery timestamp is supplied,
+ * the validation is non-compliant.
+ */
+export function validateUpdatedGfeRule(input: {
+  /** True when expected charges/items changed after the initial GFE. */
+  expectedChargesChanged: boolean;
+  /** When the updated GFE was (or will be) delivered. */
+  updatedGfeDeliveredAt?: Date;
+  serviceAt: Date;
+  holidays?: ReadonlySet<string>;
+}): { compliant: boolean; required: boolean; deadline: Date | null; violations: string[] } {
+  const violations: string[] = [];
+  if (!input.expectedChargesChanged) {
+    return { compliant: true, required: false, deadline: null, violations };
+  }
+  // Deadline: end of the business day immediately preceding the service day.
+  // Compute by walking back to the previous business day of serviceAt.
+  const serviceDay = new Date(serviceAtUtcMidnight(input.serviceAt));
+  let cursor = new Date(serviceDay.getTime() - 24 * 60 * 60 * 1000);
+  while (!isBusinessDay(cursor, input.holidays)) {
+    cursor = new Date(cursor.getTime() - 24 * 60 * 60 * 1000);
+  }
+  const deadline = new Date(cursor);
+  deadline.setUTCHours(23, 59, 59, 999);
+  if (!input.updatedGfeDeliveredAt) {
+    violations.push(
+      'Expected charges changed: an updated GFE is required no later than 1 ' +
+        'business day before the service (45 CFR 149.610(a)(2)); no delivery ' +
+        'timestamp supplied — failing closed.',
+    );
+    return { compliant: false, required: true, deadline, violations };
+  }
+  if (input.updatedGfeDeliveredAt.getTime() > deadline.getTime()) {
+    violations.push(
+      `Updated GFE delivered ${input.updatedGfeDeliveredAt.toISOString()}, after ` +
+        `the deadline ${deadline.toISOString()} (1 business day before service, ` +
+        '45 CFR 149.610(a)(2)).',
+    );
+  }
+  return { compliant: violations.length === 0, required: true, deadline, violations };
+}
+
+function serviceAtUtcMidnight(d: Date): number {
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/**
+ * Validates the recurring-services GFE window (45 CFR 149.610(a)(2)(iii)):
+ * a single GFE may cover recurring items/services whose expected scope
+ * spans "no more than 12 months".
+ *
+ * W4-F6 FIX (statute-faithful, day-level precision): "12 months" is computed
+ * as CALENDAR months — the span is valid iff lastServiceAt is on or before
+ * the 12-calendar-month anniversary of firstServiceAt (same day-of-month,
+ * clamped to the month end when the target month is shorter, e.g.
+ * Jan 31 → Jan 31 next year). This is strict day-level precision and handles
+ * leap years correctly (a 12-calendar-month span may be 365 or 366 days; the
+ * statute's bound is the calendar-month anniversary, NOT a day count).
+ * The previous month-arithmetic implementation accepted e.g.
+ * 2026-01-01 → 2027-01-30 (spanning 12 months 29 days) — a bug.
+ */
 export function validateRecurringGfeWindow(firstServiceAt: Date, lastServiceAt: Date): {
   valid: boolean;
   months: number;
+  /** Exclusive upper bound: the 12-calendar-month anniversary date. */
+  maxLastServiceAt: Date;
+  days: number;
 } {
+  if (!(firstServiceAt instanceof Date) || Number.isNaN(firstServiceAt.getTime())) {
+    throw new Error('firstServiceAt must be a valid Date');
+  }
+  if (!(lastServiceAt instanceof Date) || Number.isNaN(lastServiceAt.getTime())) {
+    throw new Error('lastServiceAt must be a valid Date');
+  }
   if (lastServiceAt < firstServiceAt) throw new Error('lastServiceAt must be on/after firstServiceAt');
+
+  const max = addCalendarMonthsUtc(firstServiceAt, RECURRING_GFE_MAX_MONTHS);
+  const days = Math.floor(
+    (Date.UTC(lastServiceAt.getUTCFullYear(), lastServiceAt.getUTCMonth(), lastServiceAt.getUTCDate()) -
+      Date.UTC(firstServiceAt.getUTCFullYear(), firstServiceAt.getUTCMonth(), firstServiceAt.getUTCDate())) /
+      (24 * 60 * 60 * 1000),
+  );
+  // Whole elapsed calendar months (informational).
   const months =
     (lastServiceAt.getUTCFullYear() - firstServiceAt.getUTCFullYear()) * 12 +
     (lastServiceAt.getUTCMonth() - firstServiceAt.getUTCMonth()) +
     (lastServiceAt.getUTCDate() < firstServiceAt.getUTCDate() ? -1 : 0);
-  return { valid: months <= RECURRING_GFE_MAX_MONTHS, months };
+  return { valid: lastServiceAt.getTime() <= max.getTime(), months, maxLastServiceAt: max, days };
+}
+
+/** Add n calendar months in UTC, clamping the day-of-month to month length. */
+export function addCalendarMonthsUtc(d: Date, n: number): Date {
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth() + n;
+  const targetY = y + Math.floor(m / 12);
+  const targetM = ((m % 12) + 12) % 12;
+  const maxDay = new Date(Date.UTC(targetY, targetM + 1, 0)).getUTCDate();
+  const day = Math.min(d.getUTCDate(), maxDay);
+  return new Date(Date.UTC(targetY, targetM, day, d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds()));
 }
