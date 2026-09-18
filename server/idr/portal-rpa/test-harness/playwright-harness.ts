@@ -93,14 +93,15 @@ export async function createPlaywrightHarnessPage(
   close(): Promise<void>;
   submitClicks(): Promise<number>;
 }> {
-  const pw = await import("playwright");
+  // Specifier cast: optional runtime-only dep, no bundled type decls.
+  const pw = (await import("playwright" as any)) as any;
   const browser = await pw.chromium.launch({ headless: true });
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
 
   // Route every request to our synthetic pages; CAPTCHA iframe assets are
   // fulfilled so the <iframe> tag exists in the DOM for checkpoint detection.
-  await page.route("**/*", (route) => {
+  await page.route("**/*", (route: any) => {
     const url = route.request().url();
     const isCaptchaAsset = /recaptcha|hcaptcha/.test(url);
     if (isCaptchaAsset) {
@@ -132,7 +133,7 @@ export async function createPlaywrightHarnessPage(
     },
     textByLabel: async (l) => (await page.getByLabel(l).first().textContent().catch(() => null)),
     screenshot: () => page.screenshot({ fullPage: true }),
-    storageState: () => ctx.storageState().then((s) => JSON.stringify(s)),
+    storageState: () => ctx.storageState().then((s: unknown) => JSON.stringify(s)),
   };
   return {
     page: like,
