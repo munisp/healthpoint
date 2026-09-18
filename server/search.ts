@@ -187,9 +187,170 @@ export async function indexDocument(
       id,
       body: { ...payload, updatedAt: new Date().toISOString() },
     });
+    _indexFailureSet.delete(`${entityType}:${id}`);
   } catch (err) {
     console.warn(`[search] OpenSearch index error (${entityType}):`, err);
+    await recordIndexFailure(entityType, id, payload, err);
   }
+}
+
+// ── Indexing-failure retry set ────────────────────────────────────────────────
+// Failures are tracked in-memory (fast path) AND persisted to the
+// search_index_failures table (migration 0039_wave_w3.sql, raw SQL —
+// drizzle/schema.ts is owned by another wave) so they survive restarts and
+// are drained by the admin reindex job (search.reindexAll). While OpenSearch
+// is down, reads still fall back to the in-process Fuse.js index
+// (searchOpenSearch returns null on error → Fuse path in search()/suggest()).
+
+const _indexFailureSet = new Set<string>(); // `${entityType}:${id}`
+
+/** Test hook: inspect/clear the in-memory failure set. */
+export function _indexFailures(): Set<string> {
+  return _indexFailureSet;
+}
+
+async function recordIndexFailure(
+  entityType: SearchEntityType,
+  id: string,
+  payload: Record<string, unknown>,
+  err: unknown,
+): Promise<void> {
+  _indexFailureSet.add(`${entityType}:${id}`);
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const { sql } = await import("drizzle-orm");
+    const rowId = `sif_${entityType}_${id}`.slice(0, 64);
+    await db.execute(sql`
+      INSERT INTO search_index_failures (id, "entityType", "entityId", payload, "errorMessage", attempts, "createdAt")
+      VALUES (${rowId}, ${entityType}, ${id}, ${JSON.stringify(payload)}, ${String((err as Error)?.message ?? err).slice(0, 1000)}, 1, NOW())
+      ON CONFLICT ("entityType", "entityId") DO UPDATE
+      SET payload = EXCLUDED.payload,
+          "errorMessage" = EXCLUDED."errorMessage",
+          attempts = search_index_failures.attempts + 1
+    `);
+  } catch (persistErr) {
+    console.warn("[search] failed to persist index failure:", persistErr);
+  }
+}
+
+/** Retry all recorded indexing failures; returns the number drained. */
+export async function drainIndexFailures(): Promise<{ drained: number; remaining: number }> {
+  const db = await getDb();
+  if (!db) return { drained: 0, remaining: _indexFailureSet.size };
+  // Without an OpenSearch client there is nothing to index into — keep the
+  // failure rows for a later drain instead of silently discarding them.
+  if (!getOpenSearchClient()) {
+    const { sql } = await import("drizzle-orm");
+    const r: any = await db.execute(sql`SELECT COUNT(*)::int AS n FROM search_index_failures`).catch(() => null);
+    const rows = r ? (Array.isArray(r) ? r : (r?.rows ?? [])) : [];
+    return { drained: 0, remaining: Number(rows[0]?.n ?? _indexFailureSet.size) };
+  }
+  const { sql } = await import("drizzle-orm");
+  let rows: Array<Record<string, any>> = [];
+  try {
+    const r: any = await db.execute(sql`SELECT id, "entityType", "entityId", payload FROM search_index_failures LIMIT 1000`);
+    rows = Array.isArray(r) ? r : (r?.rows ?? []);
+  } catch { /* table not yet migrated */ }
+
+  let drained = 0;
+  for (const row of rows) {
+    let payload: Record<string, unknown> = {};
+    try { payload = JSON.parse(row.payload ?? "{}"); } catch { /* reindex below */ }
+    try {
+      await indexDocument(row.entityType as SearchEntityType, row.entityId, payload);
+      if (!_indexFailureSet.has(`${row.entityType}:${row.entityId}`)) {
+        // indexDocument succeeded (it clears the memory marker on success)
+        await db.execute(sql`DELETE FROM search_index_failures WHERE id = ${row.id}`);
+        drained += 1;
+      }
+    } catch {
+      // Still failing — leave the row for the next drain.
+    }
+  }
+  const remainingRaw: any = await db.execute(sql`SELECT COUNT(*)::int AS n FROM search_index_failures`).catch(() => null);
+  const remainingRows = remainingRaw ? (Array.isArray(remainingRaw) ? remainingRaw : (remainingRaw?.rows ?? [])) : [];
+  const remaining = Number(remainingRows[0]?.n ?? _indexFailureSet.size);
+  return { drained, remaining };
+}
+
+// ── Admin reindex ─────────────────────────────────────────────────────────────
+
+export interface ReindexReport {
+  indexed: Record<SearchEntityType, number>;
+  drainedFailures: number;
+  remainingFailures: number;
+  took: number; // ms
+}
+
+const REINDEX_BATCH = 500;
+
+/**
+ * Admin reindex: rebuild the OpenSearch index from Postgres in bounded
+ * batches of 500 per entity type, then drain the indexing-failure retry set,
+ * then invalidate the in-process Fuse.js fallback cache so it rebuilds from
+ * fresh data on next read. OpenSearch-down reads continue to fall back to
+ * Fuse throughout (see searchOpenSearch).
+ */
+export async function reindexAllFromPostgres(batchSize = REINDEX_BATCH): Promise<ReindexReport> {
+  const started = Date.now();
+  const db = await getDb();
+  const indexed: Record<SearchEntityType, number> = {
+    dispute: 0, document: 0, audit: 0, payer_contact: 0,
+    idr_entity: 0, expert: 0, regulatory: 0, qpa_benchmark: 0,
+  };
+  if (!db) return { indexed, drainedFailures: 0, remainingFailures: _indexFailureSet.size, took: Date.now() - started };
+
+  const { asc } = await import("drizzle-orm");
+
+  async function reindexEntity<TRow extends { id: string }>(
+    entityType: SearchEntityType,
+    table: any,
+    idColumn: any,
+    mapRow: (row: TRow) => Record<string, unknown>,
+  ): Promise<void> {
+    let offset = 0;
+    for (;;) {
+      const rows = (await db!.select().from(table).orderBy(asc(idColumn)).limit(batchSize).offset(offset)) as TRow[];
+      if (!rows.length) break;
+      for (const row of rows) {
+        await indexDocument(entityType, row.id, mapRow(row));
+        indexed[entityType] += 1;
+      }
+      offset += rows.length;
+      if (rows.length < batchSize) break;
+    }
+  }
+
+  await reindexEntity("dispute", disputes, disputes.id, (d: any) => ({
+    disputeId: d.id, referenceNumber: d.referenceNumber ?? "", payerName: d.respondingPartyName ?? "",
+    serviceType: d.serviceType ?? "", status: d.status ?? "",
+  }));
+  await reindexEntity("document", disputeDocuments, disputeDocuments.id, (d: any) => ({
+    disputeId: d.disputeId ?? "", fileName: d.fileName ?? "", documentType: d.documentType ?? "",
+  }));
+  await reindexEntity("audit", auditLog, auditLog.id, (a: any) => ({
+    action: a.action ?? "", entityType: a.entityType ?? "", entityId: a.entityId ?? "", userId: a.userId ?? "",
+  }));
+  await reindexEntity("payer_contact", payerContacts, payerContacts.id, (p: any) => ({
+    payerName: p.payerName ?? "", contactName: p.contactName ?? "", email: p.email ?? "",
+  }));
+  await reindexEntity("idr_entity", idrEntities, idrEntities.id, (e: any) => ({
+    name: e.name ?? "", certificationNumber: e.certificationNumber ?? "",
+  }));
+  await reindexEntity("expert", expertPanel, expertPanel.id, (e: any) => ({
+    name: e.name ?? "", specialty: e.specialty ?? "",
+  }));
+  await reindexEntity("regulatory", regulatoryUpdates, regulatoryUpdates.id, (r: any) => ({
+    title: r.title ?? "", summary: r.summary ?? "", category: r.category ?? "",
+  }));
+  await reindexEntity("qpa_benchmark", qpaBenchmarks, qpaBenchmarks.id, (q: any) => ({
+    serviceType: q.specialty ?? "", cptCode: q.cptCode ?? "", state: q.source ?? "",
+  }));
+
+  const { drained, remaining } = await drainIndexFailures();
+  invalidateSearchIndex();
+  return { indexed, drainedFailures: drained, remainingFailures: remaining, took: Date.now() - started };
 }
 
 /** Convenience wrapper for dispute indexing (backward compat) */
