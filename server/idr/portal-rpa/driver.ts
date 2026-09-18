@@ -61,7 +61,9 @@ export interface PageLike {
 
 /** Lazy Playwright adapter. Never imported at module load; production only. */
 export async function createPlaywrightPage(startUrl: string): Promise<{ page: PageLike; close(): Promise<void> }> {
-  const pw = (await import("playwright")) as typeof import("playwright");
+  // Specifier cast: playwright is an optional runtime-only dep (see
+  // @playwright/test) with no bundled type declarations in this repo.
+  const pw = (await import("playwright" as any)) as any;
   const browser = await pw.chromium.launch({ headless: true });
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
@@ -82,7 +84,7 @@ export async function createPlaywrightPage(startUrl: string): Promise<{ page: Pa
     },
     textByLabel: async (l) => (await page.getByLabel(l).first().textContent().catch(() => null)),
     screenshot: () => page.screenshot({ fullPage: true }),
-    storageState: () => ctx.storageState().then((s) => JSON.stringify(s)),
+    storageState: () => ctx.storageState().then((s: unknown) => JSON.stringify(s)),
   };
   await page.goto(startUrl);
   return { page: like, close: () => browser.close().then(() => undefined) };
