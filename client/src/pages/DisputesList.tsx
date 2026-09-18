@@ -110,7 +110,7 @@ function WinProbBadge({ disputeId }: { disputeId: string }) {
     { disputeId },
     { retry: false, staleTime: 5 * 60_000 }
   );
-  const pred = q.data as { winProbability?: number | null } | null | undefined;
+  const pred = q.data as { winProbability?: number | null; stale?: boolean } | null | undefined;
   if (q.isLoading || q.isError || !pred || pred.winProbability == null) return null;
   const p = Math.round(Number(pred.winProbability));
   const tone =
@@ -119,10 +119,12 @@ function WinProbBadge({ disputeId }: { disputeId: string }) {
     : "text-danger-foreground border-danger-foreground/40";
   return (
     <span
-      title={`Model win probability for the initiating party: ${p}%`}
-      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-transparent ${tone}`}
+      title={pred.stale
+        ? `Model win probability for the initiating party: ${p}% (stale — dispute changed since this prediction; regenerate for an updated estimate)`
+        : `Model win probability for the initiating party: ${p}%`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-transparent ${tone} ${pred.stale ? "opacity-60 border-dashed" : ""}`}
     >
-      Win {p}%
+      Win {p}%{pred.stale ? " (stale)" : ""}
     </span>
   );
 }
