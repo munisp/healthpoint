@@ -29,6 +29,12 @@
  * nothing is silently hardcoded inside conditionals.
  */
 
+import {
+  availableNoticeElements,
+  isNoticeLanguage,
+  DEFAULT_NOTICE_LANGUAGE,
+} from '../../shared/i18n/notices';
+
 /** Specialties/services that are categorically non-waivable (ancillary). */
 export const ANCILLARY_SPECIALTIES = [
   'ANESTHESIOLOGY',
@@ -47,7 +53,8 @@ export type ServiceCategory =
   | 'DIAGNOSTIC'
   | 'UNFORESEEN_URGENT'
   | 'NON_EMERGENCY'
-  | 'AIR_AMBULANCE';
+  | 'AIR_AMBULANCE'
+  | 'POST_STABILIZATION';
 
 export type WaiverEligibility =
   | 'WAIVABLE'
@@ -57,7 +64,8 @@ export type WaiverEligibility =
   | 'NON_WAIVABLE_DIAGNOSTIC'
   | 'NON_WAIVABLE_UNFORESEEN'
   | 'NON_WAIVABLE_NO_IN_NETWORK_AVAILABLE'
-  | 'NON_WAIVABLE_IN_NETWORK_PROVIDER';
+  | 'NON_WAIVABLE_IN_NETWORK_PROVIDER'
+  | 'NON_WAIVABLE_POST_STABILIZATION_CONDITIONS';
 
 export const NOTICE_HOURS_WHEN_SCHEDULED_EARLY = 72;
 export const CONSENT_MIN_HOURS_BEFORE_SERVICE = 3;
@@ -78,6 +86,21 @@ export interface WaiverEligibilityInput {
    * closed to NON_WAIVABLE (emergency status unresolved).
    */
   emergencyAirAmbulance?: boolean;
+  /**
+   * W4-F2: post-stabilization services (45 CFR 149.410(b)(2)(ii)). The
+   * notice-and-consent exception is available for post-stabilization services
+   * ONLY when ALL of the following strict conditions are explicitly true:
+   * the patient is stable, the patient can travel to a participating
+   * facility, a willing participating facility is reachable, and the patient
+   * (or authorized representative) gives informed consent. Fail closed: any
+   * missing/false condition makes the service NEVER waivable.
+   */
+  postStabilization?: {
+    patientStable?: boolean;
+    canTravelToParticipatingFacility?: boolean;
+    receivingFacilityReachable?: boolean;
+    informedConsentObtained?: boolean;
+  };
 }
 
 export interface WaiverEligibilityResult {
@@ -115,6 +138,41 @@ export function evaluateWaiverEligibility(input: WaiverEligibilityInput): Waiver
           : 'Air ambulance emergency status unresolved; failing closed to non-waivable. Emergency air ambulance services are never subject to notice-and-consent ') +
         '(PHSA § 2799A-1(b); 45 CFR 149.410(b)); balance billing for emergency air ' +
         'ambulance transport is prohibited outright.',
+    };
+  }
+  // W4-F2: post-stabilization services (45 CFR 149.410(b)(2)(ii)). Waivable
+  // ONLY when every statutory condition is explicitly satisfied; any absent or
+  // false condition flag fails closed to NEVER_WAIVABLE. Evaluated before the
+  // generic non-emergency fallthrough and after EMERGENCY/AIR_AMBULANCE.
+  if (input.serviceCategory === 'POST_STABILIZATION') {
+    const ps = input.postStabilization;
+    const conditions = [
+      ['patientStable', ps?.patientStable === true],
+      ['canTravelToParticipatingFacility', ps?.canTravelToParticipatingFacility === true],
+      ['receivingFacilityReachable', ps?.receivingFacilityReachable === true],
+      ['informedConsentObtained', ps?.informedConsentObtained === true],
+    ] as const;
+    const unmet = conditions.filter(([, ok]) => !ok).map(([name]) => name);
+    if (unmet.length > 0) {
+      return {
+        eligibility: 'NON_WAIVABLE_POST_STABILIZATION_CONDITIONS',
+        waivable: false,
+        reason:
+          'Post-stabilization services are waivable only when ALL conditions of ' +
+          '45 CFR 149.410(b)(2)(ii) are explicitly satisfied (patient stable; ' +
+          'patient can travel to a participating facility; receiving facility ' +
+          'reachable; patient/representative informed consent). Unmet or ' +
+          `unresolved condition(s): ${unmet.join(', ')} — failing closed to ` +
+          'non-waivable; balance billing is prohibited.',
+      };
+    }
+    return {
+      eligibility: 'WAIVABLE',
+      waivable: true,
+      reason:
+        'Post-stabilization service with all 45 CFR 149.410(b)(2)(ii) ' +
+        'conditions explicitly satisfied; the notice-and-consent exception may ' +
+        'apply if timing and content requirements are met (45 CFR 149.420).',
     };
   }
   if (input.serviceCategory === 'EMERGENCY') {
@@ -198,6 +256,15 @@ export interface NoticeTimingInput {
   serviceAt: Date;
   noticeDeliveredAt: Date;
   consentSignedAt?: Date;
+  /**
+   * W4-F7: IANA timezone used for the statutory "day of scheduling"
+   * comparison (149.420(d)). The previous implementation compared raw UTC
+   * calendar days, which mis-classified same-local-day pairs near midnight
+   * UTC. Supply the facility's local timezone (e.g. 'America/Chicago');
+   * defaults to 'UTC' and emits a warning because UTC is rarely the correct
+   * civil day for a US facility.
+   */
+  timeZone?: string;
 }
 
 export interface NoticeTimingResult {
@@ -205,10 +272,45 @@ export interface NoticeTimingResult {
   noticeHoursBeforeService: number;
   consentHoursBeforeService: number | null;
   violations: string[];
+  /** Non-fatal advisories (e.g. default timezone in use). */
+  warnings: string[];
+  /** Effective timezone used for the day-of-scheduling comparison. */
+  timeZone: string;
 }
 
 function hoursBetween(a: Date, b: Date): number {
   return (b.getTime() - a.getTime()) / (60 * 60 * 1000);
+}
+
+/** YYYY-MM-DD civil date of `d` in the given IANA timezone (en-CA locale). */
+export function civilDateKey(d: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+/** Resolve + validate an IANA timezone identifier; throws on garbage input. */
+export function resolveTimeZone(timeZone?: string): { timeZone: string; warning: string | null } {
+  if (timeZone === undefined || timeZone.trim() === '') {
+    return {
+      timeZone: 'UTC',
+      warning:
+        "No timeZone supplied; defaulting to 'UTC' for the day-of-scheduling " +
+        'comparison (45 CFR 149.420(d)). Supply the facility local IANA ' +
+        "timezone (e.g. 'America/Chicago') — UTC civil dates can straddle the " +
+        'local statutory day.',
+    };
+  }
+  const tz = timeZone.trim();
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: tz });
+  } catch {
+    throw new Error(`timeZone must be a valid IANA timezone identifier; got '${tz}'`);
+  }
+  return { timeZone: tz, warning: null };
 }
 
 /**
@@ -234,6 +336,10 @@ export function validateNoticeTiming(input: NoticeTimingInput): NoticeTimingResu
   }
 
   const violations: string[] = [];
+  const warnings: string[] = [];
+  // W4-F7: day-of-scheduling comparison in the caller-supplied civil timezone.
+  const { timeZone, warning } = resolveTimeZone(input.timeZone);
+  if (warning) warnings.push(warning);
   const schedulingHorizonHours = hoursBetween(scheduledAt, serviceAt);
   const noticeHours = hoursBetween(noticeDeliveredAt, serviceAt);
   let consentHours: number | null = null;
@@ -248,11 +354,10 @@ export function validateNoticeTiming(input: NoticeTimingInput): NoticeTimingResu
       );
     }
   } else {
-    // Scheduled within 72 hours: notice must be given on the day of scheduling.
+    // Scheduled within 72 hours: notice must be given on the day of scheduling
+    // (civil day in the effective timezone — NOT raw UTC getters).
     const sameDay =
-      noticeDeliveredAt.getUTCFullYear() === scheduledAt.getUTCFullYear() &&
-      noticeDeliveredAt.getUTCMonth() === scheduledAt.getUTCMonth() &&
-      noticeDeliveredAt.getUTCDate() === scheduledAt.getUTCDate();
+      civilDateKey(noticeDeliveredAt, timeZone) === civilDateKey(scheduledAt, timeZone);
     if (!sameDay) {
       violations.push(
         'Appointment scheduled within 72 hours of service: notice must be ' +
@@ -280,16 +385,102 @@ export function validateNoticeTiming(input: NoticeTimingInput): NoticeTimingResu
     noticeHoursBeforeService: noticeHours,
     consentHoursBeforeService: consentHours,
     violations,
+    warnings,
+    timeZone,
   };
 }
 
-/** Validates that the notice contains every required content element. */
+/**
+ * Validates that the notice contains every required content element.
+ *
+ * W4-F1: accepts an optional `language` (IANA code from shared/i18n/notices).
+ * The required set is the elements AVAILABLE in the matching language's
+ * dictionary — an element whose statutory text has no translation in the
+ * requested language is reported missing (fail closed), so a document can
+ * never be certified in a language whose text blocks are incomplete. An
+ * unsupported language yields every element missing (fail closed).
+ */
 export function validateNoticeContent(
   elementsProvided: readonly string[],
-): { complete: boolean; missing: RequiredNoticeElement[] } {
+  language?: string,
+): { complete: boolean; missing: RequiredNoticeElement[]; language: string } {
   const provided = new Set(elementsProvided.map((e) => e.trim().toUpperCase()));
-  const missing = REQUIRED_NOTICE_ELEMENTS.filter((e) => !provided.has(e));
-  return { complete: missing.length === 0, missing };
+  const available = new Set(availableNoticeElements(language));
+  const effectiveLanguage = isNoticeLanguage(language) ? language : DEFAULT_NOTICE_LANGUAGE;
+  const missing =
+    language !== undefined && !isNoticeLanguage(language)
+      ? [...REQUIRED_NOTICE_ELEMENTS] // unsupported language: fail closed
+      : REQUIRED_NOTICE_ELEMENTS.filter((e) => !provided.has(e) || !available.has(e));
+  return { complete: missing.length === 0, missing, language: effectiveLanguage };
+}
+
+/**
+ * W4-F3: consent expiry rule (documented; no fixed federal expiry exists).
+ * A signed consent EXPIRES — requiring re-execution — when EITHER:
+ *   1. The service is rescheduled beyond the noticed service window (the
+ *      consent is specific to the noticed items/services and appointment
+ *      date, 45 CFR 149.420(c)(2)(ii)); OR
+ *   2. CONSENT_MAX_VALIDITY_DAYS calendar days elapsed since the consent was
+ *      signed (documented conservative ceiling; tighten, never loosen).
+ */
+export const CONSENT_MAX_VALIDITY_DAYS = 90;
+
+export interface ConsentExpiryInput {
+  /** When the consent was signed (falls back to notice delivery when unsigned). */
+  consentSignedAt?: Date;
+  noticeDeliveredAt: Date;
+  /** Service date stated in the notice. */
+  noticedServiceAt: Date;
+  /** Currently scheduled service date (after any rescheduling). */
+  currentServiceAt?: Date;
+  /** Reference instant; defaults to now. */
+  asOf?: Date;
+}
+
+export interface ConsentExpiryResult {
+  expired: boolean;
+  reasons: string[];
+}
+
+function isValidDate(d: unknown): d is Date {
+  return d instanceof Date && !Number.isNaN(d.getTime());
+}
+
+/** Pure expiry predicate (fail closed on corrupt dates → expired). */
+export function evaluateConsentExpiry(input: ConsentExpiryInput): ConsentExpiryResult {
+  const asOf = input.asOf ?? new Date();
+  const reasons: string[] = [];
+
+  if (!isValidDate(input.noticeDeliveredAt) || !isValidDate(input.noticedServiceAt)) {
+    return { expired: true, reasons: ['Notice dates invalid; failing closed to expired.'] };
+  }
+
+  // Rule 1: rescheduled beyond the noticed service window.
+  if (input.currentServiceAt && isValidDate(input.currentServiceAt)) {
+    if (input.currentServiceAt.getTime() > input.noticedServiceAt.getTime()) {
+      reasons.push(
+        `Service rescheduled from ${input.noticedServiceAt.toISOString()} to ` +
+          `${input.currentServiceAt.toISOString()} — beyond the service window stated ` +
+          'in the notice; the notice and consent must be re-executed ' +
+          '(45 CFR 149.420(c)(2)(ii)).',
+      );
+    }
+  }
+
+  // Rule 2: N-day ceiling from signature (or delivery when unsigned).
+  const basis =
+    input.consentSignedAt && isValidDate(input.consentSignedAt)
+      ? input.consentSignedAt
+      : input.noticeDeliveredAt;
+  const ageDays = Math.floor((asOf.getTime() - basis.getTime()) / (24 * 60 * 60 * 1000));
+  if (ageDays > CONSENT_MAX_VALIDITY_DAYS) {
+    reasons.push(
+      `Consent basis date ${basis.toISOString()} is ${ageDays} days old; the ` +
+        `documented validity ceiling is ${CONSENT_MAX_VALIDITY_DAYS} days.`,
+    );
+  }
+
+  return { expired: reasons.length > 0, reasons };
 }
 
 /** Compute the end of the 7-year document-retention window. */
