@@ -121,11 +121,57 @@ const enforceObjectLevelAuthz = t.middleware(async opts => {
 });
 
 /**
+ * Impersonation audit (wave W5-6). Every authenticated request carrying a
+ * valid `x-impersonation-token` writes audit_log action='impersonate.access'
+ * and gets the claims on ctx.impersonation. Admin MUTATIONS are blocked
+ * while impersonating another admin. Dynamic imports avoid a module cycle
+ * (server/impersonation.ts builds procedures from this file).
+ */
+const auditImpersonatedRequest = t.middleware(async opts => {
+  const { ctx, next, path, type } = opts;
+  const headers = (ctx.req?.headers ?? {}) as Record<string, unknown>;
+  const raw = headers["x-impersonation-token"];
+  const token = Array.isArray(raw) ? raw[0] : (raw as string | undefined);
+  if (!token) return next();
+  const { verifyImpersonationToken } = await import("../impersonation");
+  const claims = await verifyImpersonationToken(token);
+  if (!claims) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "Impersonation token expired or invalid" });
+  }
+  const { getDb, createAuditEntry } = await import("../db");
+  await createAuditEntry({
+    userId: claims.impersonatorId,
+    action: "impersonate.access",
+    entityType: "trpc",
+    entityId: path,
+    oldValue: null,
+    newValue: JSON.stringify({ targetId: claims.targetId, type }),
+    ipAddress: null,
+    userAgent: null,
+  }).catch(err => console.warn("[impersonation] audit write failed:", err instanceof Error ? err.message : err));
+  if (type === "mutation" && path.startsWith("admin.") && claims.targetId !== claims.impersonatorId) {
+    const db = await getDb();
+    if (db) {
+      const { users } = await import("../../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const [target] = await db.select({ role: users.role }).from(users).where(eq(users.id, claims.targetId)).limit(1);
+      if (target?.role === "admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Admin mutations are blocked while impersonating another admin" });
+      }
+    }
+  }
+  // Attach claims without altering the inferred context type.
+  (ctx as { impersonation?: unknown }).impersonation = claims;
+  return next();
+});
+
+/**
  * Protected procedure — requires auth + object-level authz +
  * auto-invalidates search index on mutations.
  */
 export const protectedProcedure = t.procedure
   .use(requireUser)
+  .use(auditImpersonatedRequest)
   .use(enforceObjectLevelAuthz)
   .use(invalidateSearchOnMutation)
   .use(auditAllActionsOnMutation);
