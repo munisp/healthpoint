@@ -1,14 +1,18 @@
 /**
  * Hermes AI Agent Router
- * Provides 8 AI-powered capabilities for the HealthPoint IDR platform:
+ * AI-powered capabilities for the HealthPoint IDR platform:
  * 1. Narrative generation
  * 2. Outcome simulation
  * 3. FHIR/EMR enrichment
  * 4. Risk scoring
  * 5. Payer intelligence synthesis
- * 6. Regulatory change feed
+ * 6. Regulatory change feed generation
  * 7. Arbitrator scoring
- * 8. Chat (general agent)
+ * 8. Chat (general agent) + job history
+ *
+ * Phase 13 FB (O1.24-27): listRegulatoryEntries, markRegulatoryRead,
+ * getChatHistory and getDisputeInsights were REMOVED — zero callers and no
+ * corresponding UI surfaces (HermesAssistant has no history/insights panel).
  */
 
 import { router, protectedProcedure } from "../_core/trpc";
@@ -200,8 +204,8 @@ Service Type: ${dispute.serviceType}
 CPT Codes: ${(dispute.cptCodes as string[]).join(", ")}
 Billed: $${dispute.billedAmount}
 QPA: $${dispute.qpaAmount ?? "Unknown"}
-Provider Offer: $${dispute.initiatingPartyOffer ?? "Not submitted"}
-Payer Offer: $${dispute.respondingPartyOffer ?? "Not submitted"}
+Provider Offer: ${dispute.initiatingPartyOffer ?? "Not submitted"}
+Payer Offer: ${dispute.respondingPartyOffer ?? "Not submitted"}
 State: ${dispute.patientState}
 Step: ${dispute.currentStep}
 ${input.additionalContext ? `Additional context: ${input.additionalContext}` : ""}`,
@@ -304,7 +308,7 @@ Consider: deadline proximity, billed/QPA ratio, step progression, missing offers
             content: `Score risk for dispute ${dispute.referenceNumber}:
 Status: ${dispute.status} | Step: ${dispute.currentStep}
 Billed: $${dispute.billedAmount} | QPA: $${dispute.qpaAmount ?? "Unknown"}
-Provider offer: $${dispute.initiatingPartyOffer ?? "None"} | Payer offer: $${dispute.respondingPartyOffer ?? "None"}
+Provider offer: ${dispute.initiatingPartyOffer ?? "None"} | Payer offer: ${dispute.respondingPartyOffer ?? "None"}
 Nearest deadline in days: ${nearestDeadlineDays}
 Eligible: ${dispute.isEligible ?? "Unknown"}`,
           },
@@ -595,34 +599,6 @@ Current date context: ${new Date().toISOString().split("T")[0]}`,
       return { entries, latencyMs };
     }),
 
-  listRegulatoryEntries: protectedProcedure
-    .input(z.object({
-      limit: z.number().min(1).max(50).default(20),
-      unreadOnly: z.boolean().default(false),
-    }))
-    .query(async ({ input }) => {
-      const db = await getDb();
-      if (!db) return [];
-      const rows = await db
-        .select()
-        .from(hermesRegulatoryEntries)
-        .where(input.unreadOnly ? eq(hermesRegulatoryEntries.isRead, false) : undefined)
-        .orderBy(desc(hermesRegulatoryEntries.createdAt))
-        .limit(input.limit);
-      return rows;
-    }),
-
-  markRegulatoryRead: protectedProcedure
-    .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database unavailable");
-      await db.update(hermesRegulatoryEntries)
-        .set({ isRead: true })
-        .where(eq(hermesRegulatoryEntries.id, input.id));
-      return { success: true };
-    }),
-
   // ── 7. Arbitrator Scoring ───────────────────────────────────────────────────
   scoreArbitrator: protectedProcedure
     .input(z.object({
@@ -802,25 +778,6 @@ Be concise, accurate, and actionable. Cite regulatory references when relevant.$
       return { reply, messageId: assistantMsgId, latencyMs };
     }),
 
-  getChatHistory: protectedProcedure
-    .input(z.object({
-      sessionId: z.string(),
-      limit: z.number().min(1).max(100).default(50),
-    }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) return [];
-      return db
-        .select()
-        .from(hermesChatMessages)
-        .where(and(
-          eq(hermesChatMessages.sessionId, input.sessionId),
-          eq(hermesChatMessages.userId, ctx.user.id),
-        ))
-        .orderBy(hermesChatMessages.createdAt)
-        .limit(input.limit);
-    }),
-
   // ── Job history ─────────────────────────────────────────────────────────────
   listJobs: protectedProcedure
     .input(z.object({
@@ -840,20 +797,5 @@ Be concise, accurate, and actionable. Cite regulatory references when relevant.$
         .where(and(...conditions))
         .orderBy(desc(hermesJobs.createdAt))
         .limit(input.limit);
-    }),
-
-  // ── Insights for a dispute ───────────────────────────────────────────────────
-  getDisputeInsights: protectedProcedure
-    .input(z.object({ disputeId: z.string() }))
-    .query(async ({ ctx, input }) => {
-      // IDOR guard: insights embed narratives, scores, and dispute data.
-      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
-      const db = await getDb();
-      if (!db) return [];
-      return db
-        .select()
-        .from(hermesInsights)
-        .where(eq(hermesInsights.disputeId, input.disputeId))
-        .orderBy(desc(hermesInsights.generatedAt));
     }),
 });
