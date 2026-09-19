@@ -12,6 +12,9 @@
  * and the store loads the server-side case, applies the module's pure
  * guard/transition, and persists with optimistic locking + a hash-chained
  * event log. A client cannot forge CONSENT_SIGNED or inject event history.
+ *
+ * Phase 13 FB (O1.30): noticeConsent.rescheduleService was REMOVED (zero
+ * callers; rescheduling flows through `transition` with currentServiceAt).
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -349,44 +352,6 @@ export const noticeConsentRouter = router({
             });
         }
         return result;
-      } catch (err) {
-        toTrpcError(err);
-      }
-    }),
-
-  /**
-   * W4-F3: record a service reschedule. Updates the case's current
-   * timing.serviceAt; the noticed date (frozen at NOTICE_DELIVERED) is
-   * untouched, so a reschedule beyond the noticed window becomes detectable
-   * by the expiry sweep / NOTICE_EXPIRED guard.
-   */
-  rescheduleService: protectedProcedure
-    .input(z.object({
-      caseId: idSchema,
-      newServiceAt: z.coerce.date(),
-      idempotencyKey: idempotencyKeySchema,
-    }))
-    .mutation(async ({ input, ctx }) => {
-      try {
-        return await getFsmCaseStore().transitionCase<NoticeConsentCase>(
-          callerTenant(ctx),
-          CASE_TYPE,
-          input.caseId,
-          {
-            apply: (current) => {
-              const revived = reviveCase(current);
-              if (revived.state !== "NOTICE_DELIVERED" && revived.state !== "CONSENT_SIGNED") {
-                throw new Error(`Cannot reschedule from state ${revived.state}`);
-              }
-              return {
-                ...revived,
-                timing: { ...revived.timing, serviceAt: input.newServiceAt },
-              };
-            },
-            terminalStates: TERMINAL_STATES,
-            idempotencyKey: input.idempotencyKey,
-          }
-        );
       } catch (err) {
         toTrpcError(err);
       }
