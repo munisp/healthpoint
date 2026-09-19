@@ -30,6 +30,8 @@ import { ForbiddenError } from "@shared/_core/errors";
 
 // ─── PKCE state store backed by Redis (falls back to in-memory) ─────────────
 import { cacheGet, cacheSet, cacheDel } from "../redis";
+// Phase13-FC (G13): registration redirect sanitization (strips ?role=).
+import { sanitizeRegisterRedirect } from "../auth/register-redirect";
 
 const _memPkceStore = new Map<string, { codeVerifier: string; redirectTo: string }>();
 
@@ -279,8 +281,13 @@ export function registerKeycloakRoutes(app: Express) {
   // GET /api/auth/register — redirect to Keycloak registration page
   app.get("/api/auth/register", async (req: Request, res: Response) => {
     try {
-      const redirectTo = (req.query.redirectTo as string) || "/";
-      const role = (req.query.role as string) || "";
+      // Phase13-FC (G13): a client-supplied ?role= is self-asserted and
+      // tamperable — registration IGNORES it (sanitizeRegisterRedirect strips
+      // it). New users are provisioned with the lowest-privilege defaults
+      // (users.role="user", no stakeholderRole); privileged roles are
+      // assigned only by admin.updateUserRole or invite-accept flows
+      // (orgs.acceptInvite / payer invite activation).
+      const redirectTo = sanitizeRegisterRedirect((req.query.redirectTo as string) || "/");
       const issuerUrl = new URL(getIssuerUrl());
       const config = await discoverCached(issuerUrl, kc.clientId, kc.clientSecret);
 
@@ -288,7 +295,7 @@ export function registerKeycloakRoutes(app: Express) {
       const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
       const state = client.randomState();
 
-      await pkceSet(state, { codeVerifier, redirectTo: `${redirectTo}?role=${role}` });
+      await pkceSet(state, { codeVerifier, redirectTo });
 
       const callbackUrl = getCallbackUrl(req);
       // Keycloak supports ?kc_action=register to go directly to registration
@@ -307,6 +314,25 @@ export function registerKeycloakRoutes(app: Express) {
     } catch (error) {
       console.error("[Keycloak] Registration redirect failed:", error);
       res.redirect(302, "/?auth_error=register_failed");
+    }
+  });
+
+  // GET /api/auth/forgot-password — Phase13-FC (G14a): password reset is
+  // handed off ENTIRELY to Keycloak (the platform never sees or handles
+  // passwords). Redirects to the realm's reset-credentials flow ("Forgot
+  // password" from LoginPage). Platform TOTP (totp_secrets) is independent
+  // of the Keycloak credential and survives a password reset — users who
+  // also lost their TOTP device use single-use backup codes (self-service,
+  // wave W2) or the audit-logged admin reset (adminTotp.resetUserTotp).
+  app.get("/api/auth/forgot-password", (req: Request, res: Response) => {
+    try {
+      const issuer = getIssuerUrl().replace(/\/+$/, "");
+      const target = new URL(`${issuer}/login-actions/reset-credentials`);
+      target.searchParams.set("client_id", kc.clientId);
+      res.redirect(302, target.toString());
+    } catch (error) {
+      console.error("[Keycloak] forgot-password redirect failed:", error);
+      res.redirect(302, "/login?auth_error=login_failed");
     }
   });
 
@@ -348,7 +374,9 @@ export function registerKeycloakRoutes(app: Express) {
       const existingUser = await db.getUser(userId);
       const isNewUser = !existingUser;
 
-      // Upsert user in DB
+      // Upsert user in DB. NOTE (G13): no role is accepted from the request
+      // or URL — upsertUser never receives a role here, so new accounts get
+      // the schema default ("user", lowest privilege).
       await db.upsertUser({
         id: userId,
         name: name || null,
@@ -356,6 +384,21 @@ export function registerKeycloakRoutes(app: Express) {
         loginMethod: "keycloak",
         lastSignedIn: new Date(),
       });
+
+      // G13: audit-log registration (fire-and-forget — auditing must not
+      // break the login callback).
+      if (isNewUser) {
+        db.createAuditEntry({
+          userId,
+          action: "auth.register",
+          entityType: "user",
+          entityId: userId,
+          oldValue: null,
+          newValue: JSON.stringify({ loginMethod: "keycloak", roleAssigned: "user (default; client-supplied role ignored)" }),
+          ipAddress: (req.get("x-forwarded-for") ?? "").split(",")[0].trim() || req.ip || null,
+          userAgent: req.get("user-agent") ?? null,
+        }).catch(err => console.warn("[Keycloak] registration audit write failed:", err instanceof Error ? err.message : err));
+      }
 
       const isSecure = req.get("x-forwarded-proto") === "https" || req.protocol === "https";
 
@@ -394,12 +437,12 @@ export function registerKeycloakRoutes(app: Express) {
         path: "/",
       });
 
-      // First-time users go to onboarding; extract role from redirectTo if present
+      // First-time users go to onboarding. G13: the tamperable ?role= URL
+      // param is no longer propagated — the onboarding wizard's role picker
+      // is a cosmetic personalization default only; privileged roles come
+      // from admin grants or invite-accept flows.
       if (isNewUser) {
-        const redirectUrl = new URL(stored.redirectTo || "/", "http://localhost");
-        const role = redirectUrl.searchParams.get("role") || "";
-        const onboardingUrl = `/onboarding${role ? `?role=${encodeURIComponent(role)}` : ""}`;
-        res.redirect(302, onboardingUrl);
+        res.redirect(302, "/onboarding");
       } else {
         res.redirect(302, stored.redirectTo || "/");
       }
