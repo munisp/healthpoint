@@ -5,7 +5,6 @@ import { submissionAutomationRouter } from "./idr/submission-automation/routes";
 import { stateProgramsRouter } from "./idr/state-programs/routes";
 import { priorAuthRouter } from "./priorauth/routes";
 import { batchedDisputesRouter } from "./idr/batching/routes";
-import { feeScheduleRouter } from "./idr/clocks-2026/routes";
 import { noticeConsentRouter } from "./notice-consent/routes";
 import { gfePpdrRouter } from "./gfe-ppdr/routes";
 import { portalRpaRouter } from "./idr/portal-rpa/routes";
@@ -21,11 +20,11 @@ import {
   createNotification,
   upsertDisputeDraft, getDisputeDraft, deleteDisputeDraft,
   calculateQPA,
-  getIDREntityCaseload, listAllIDREntityCaseloads,
-  saveCMSDraft, getCMSDraftByDispute, listCMSDraftsByUser, updateCMSDraftStatus,
+  listAllIDREntityCaseloads,
+  saveCMSDraft, listCMSDraftsByUser, updateCMSDraftStatus,
   getDisputesByMonth, listAllCMSDrafts,
   createEMRConnection, listEMRConnections, getEMRConnection,
-  updateEMRConnectionStatus, deactivateEMRConnection, deleteEMRConnection,
+  deactivateEMRConnection, deleteEMRConnection,
   listEMRSyncLogs, createEMRSyncLog,
   createDisputeTemplate, listDisputeTemplates, getDisputeTemplateById,
   updateDisputeTemplate, deleteDisputeTemplate, incrementTemplateUsage,
@@ -34,7 +33,7 @@ import {
   createAuditEntry, listAuditEntries,
   createWebhook, listWebhooks, updateWebhook, deleteWebhook,
   upsertOutcomePrediction, getOutcomePrediction,
-  createDocumentAnalysis, updateDocumentAnalysis, getDocumentAnalysis, listDocumentAnalyses,
+  createDocumentAnalysis, updateDocumentAnalysis, getDocumentAnalysis,
 } from "./db";
 import { sendNewLeadNotification } from "./email";
 import { invokeLLM } from "./_core/llm";
@@ -52,7 +51,7 @@ import { listSettlementBalanceProofs, listSettlementExceptionReviews, reviewSett
 import { configureDailyBalanceProofSchedule } from "./settlement-proof";
 import { listHeartbeatJobs } from "./_core/heartbeat";
 import { parse as parseCookie } from "cookie";
-import { search, generateLakehouseExport, invalidateSearchIndex, suggest, indexDocument, deleteFromIndex } from "./search";
+import { search, generateLakehouseExport, suggest, indexDocument, deleteFromIndex } from "./search";
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { generateReportsPDF, generateReportsCSV } from "./reports-export";
@@ -62,7 +61,7 @@ import { eq, and, or, ilike, desc, asc, sql, type SQL } from "drizzle-orm";
 import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections, providerSandboxAcceptances } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
 import { decryptCredentials } from "./credential-crypto";
-import { describeTemporalFailure, getDisputeTemporalWorkflow, getTemporalClient, getTemporalConfiguration, isTemporalDispatchEnabled, listTemporalWorkflows, runControlledTemporalDispatchDrill, startDisputeTemporalWorkflow, summarizeTemporalConnectionFailures, type TemporalRecoveryDetails } from "./temporal";
+import { describeTemporalFailure, getTemporalClient, getTemporalConfiguration, isTemporalDispatchEnabled, listTemporalWorkflows, runControlledTemporalDispatchDrill, summarizeTemporalConnectionFailures, type TemporalRecoveryDetails } from "./temporal";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
 
@@ -496,6 +495,20 @@ export const appRouter = router({
           message: `You have 30 business days to complete open negotiation for dispute ${dispute.referenceNumber}. Deadline: ${dispute.openNegotiationDeadline?.toLocaleDateString()}.`,
           dueDate: dispute.openNegotiationDeadline ?? null,
         });
+        // O9: publish dispute.created so audit/webhook bus consumers see it.
+        eventBus.publish(
+          "dispute.created",
+          dispute.id,
+          "dispute",
+          {
+            referenceNumber: dispute.referenceNumber,
+            serviceType: input.serviceType,
+            billedAmount: input.billedAmount,
+            initiatingPartyName: input.initiatingPartyName,
+            respondingPartyName: input.respondingPartyName ?? null,
+          },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] dispute.created publish failed", e));
         return dispute;
       }),
 
@@ -628,9 +641,31 @@ export const appRouter = router({
             message: `The IDR entity has issued a payment determination. Payment is due within 30 days.`,
             dueDate: dispute.paymentDeadline ?? null,
           });
+          eventBus.publish(
+            "determination.issued",
+            disputeId,
+            "dispute",
+            {
+              determinationAmount: dispute.determinationAmount ?? null,
+              determinationWinner: dispute.determinationWinner ?? null,
+              paymentDeadline: dispute.paymentDeadline?.toISOString() ?? null,
+            },
+            { userId: ctx.user.id, timestamp: new Date().toISOString() },
+          ).catch((e) => console.warn("[EventBus] determination.issued publish failed", e));
         }
         // Sync updated dispute to OpenSearch
         indexDocument("dispute", dispute.id, dispute as unknown as Record<string, unknown>).catch(() => {});
+        // O9: terminal close transitions emit dispute.closed in addition to
+        // the dispute.advanced event already published by the workflow engine.
+        if (newStatus === "closed") {
+          eventBus.publish(
+            "dispute.closed",
+            disputeId,
+            "dispute",
+            { referenceNumber: dispute.referenceNumber, finalStep: newStep },
+            { userId: ctx.user.id, timestamp: new Date().toISOString() },
+          ).catch((e) => console.warn("[EventBus] dispute.closed publish failed", e));
+        }
         return dispute;
       }),
 
@@ -656,6 +691,13 @@ export const appRouter = router({
             );
           }
         }
+        eventBus.publish(
+          "dispute.offer_submitted",
+          input.disputeId,
+          "dispute",
+          { offerId, offerType: input.offerType, amount: input.amount },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] dispute.offer_submitted publish failed", e));
         return { offerId };
       }),
 
@@ -690,6 +732,13 @@ export const appRouter = router({
           message: `An offer has been accepted and the dispute has been resolved. Determination amount: $${Number(dispute.determinationAmount).toLocaleString()}.`,
           dueDate: null,
         });
+        eventBus.publish(
+          "offer.accepted",
+          input.disputeId,
+          "dispute",
+          { offerId: input.offerId, determinationAmount: dispute.determinationAmount ?? null },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] offer.accepted publish failed", e));
         return { success: true, dispute };
       }),
 
@@ -766,7 +815,7 @@ export const appRouter = router({
             message: error instanceof Error ? error.message : "Invalid workflow transition",
           });
         }
-        return withDisputeLock(input.disputeId, 10_000, () => advanceDisputeStep(
+        const selection = await withDisputeLock(input.disputeId, 10_000, () => advanceDisputeStep(
           input.disputeId,
           "STEP_07_IDR_ENTITY_SELECTED",
           getStatusForStep("STEP_07_IDR_ENTITY_SELECTED"),
@@ -775,30 +824,16 @@ export const appRouter = router({
           `IDR entity selected: ${input.idrEntityName}`,
           { idrEntityId: input.idrEntityId, idrEntityName: input.idrEntityName }
         ));
+        eventBus.publish(
+          "dispute.arbitrator_selected",
+          input.disputeId,
+          "dispute",
+          { idrEntityId: input.idrEntityId, idrEntityName: input.idrEntityName },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] dispute.arbitrator_selected publish failed", e));
+        return selection;
       }),
 
-    uploadDocument: protectedProcedure
-      .input(z.object({
-        disputeId: z.string(),
-        documentType: z.string(),
-        fileName: z.string(),
-        fileSize: z.number().optional(),
-        mimeType: z.string().optional(),
-        s3Key: z.string().optional(),
-        description: z.string().optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
-        const docId = await addDocument({
-          ...input,
-          fileSize: input.fileSize ?? null,
-          mimeType: input.mimeType ?? null,
-          s3Key: input.s3Key ?? null,
-          description: input.description ?? null,
-          uploadedBy: ctx.user.id,
-        });
-        return { docId };
-      }),
 
     getTimeline: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
@@ -992,6 +1027,13 @@ export const appRouter = router({
           message: input.reason ? `Offer was rejected: ${input.reason}` : "The offer has been rejected and an appeal has been filed.",
           dueDate: null,
         });
+        eventBus.publish(
+          "offer.rejected",
+          input.disputeId,
+          "dispute",
+          { reason: input.reason ?? null },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] offer.rejected publish failed", e));
         return { success: true };
       }),
 
@@ -1025,6 +1067,13 @@ export const appRouter = router({
           title: input.title,
           message: input.message,
         });
+        eventBus.publish(
+          "notification.sent",
+          input.disputeId,
+          "dispute",
+          { notificationType: input.notificationType, title: input.title, deliveryResults: results },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] notification.sent publish failed", e));
         return { success: true, deliveryResults: results };
       }),
 
@@ -1222,6 +1271,14 @@ export const appRouter = router({
           performedByName: ctx.user.name ?? "Unknown",
           metadata: { ...mergeResult, mergedDisputeId: input.secondaryDisputeId, mergedRef: secondary.referenceNumber, reason: input.reason ?? null },
         });
+        // O9: the merged secondary dispute is closed by the merge.
+        eventBus.publish(
+          "dispute.closed",
+          input.secondaryDisputeId,
+          "dispute",
+          { reason: "merged", primaryDisputeId: input.primaryDisputeId, primaryRef: primary.referenceNumber, mergeReason: input.reason ?? null },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] dispute.closed publish failed", e));
         return { ...mergeResult, success: true, primaryDisputeId: input.primaryDisputeId };
       }),
   }),
@@ -1239,13 +1296,6 @@ export const appRouter = router({
         return listIDREntities(input);
       }),
 
-    caseload: protectedProcedure
-      .input(z.object({ entityId: z.string() }))
-      .query(async ({ input }) => {
-        const result = await getIDREntityCaseload(input.entityId);
-        if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "IDR entity not found" });
-        return result;
-      }),
 
     allCaseloads: protectedProcedure
       .query(async () => {
@@ -1362,7 +1412,7 @@ export const appRouter = router({
         description: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        return addDocument({
+        const docId = await addDocument({
           disputeId: input.disputeId,
           uploadedBy: ctx.user.id,
           fileName: input.fileName,
@@ -1372,6 +1422,14 @@ export const appRouter = router({
           s3Key: input.storageKey,
           description: input.description ?? null,
         });
+        eventBus.publish(
+          "document.uploaded",
+          input.disputeId,
+          "dispute",
+          { documentId: docId, fileName: input.fileName, documentType: input.documentType },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] document.uploaded publish failed", e));
+        return docId;
       }),
     list: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
@@ -1730,11 +1788,6 @@ export const appRouter = router({
       }),
 
     // Get a single CMS draft by dispute ID
-    getCMSDraft: protectedProcedure
-      .input(z.object({ disputeId: z.string() }))
-      .query(async ({ input, ctx }) => {
-        return getCMSDraftByDispute(input.disputeId, ctx.user.id);
-      }),
 
     // Update the status of a CMS draft (draft → submitted → determined)
     updateDraftStatus: protectedProcedure
@@ -2042,16 +2095,6 @@ export const appRouter = router({
       return conns.map(({ credentialsEncrypted: _creds, ...rest }) => rest);
     }),
 
-    get: protectedProcedure
-      .input(z.object({ id: z.string() }))
-      .query(async ({ ctx, input }) => {
-        const conn = await getEMRConnection(input.id);
-        if (!conn) throw new TRPCError({ code: "NOT_FOUND" });
-        if (conn.createdBy !== ctx.user.id && ctx.user.role !== "admin")
-          throw new TRPCError({ code: "FORBIDDEN" });
-        const { credentialsEncrypted: _creds, ...rest } = conn;
-        return rest;
-      }),
 
     testById: protectedProcedure
       .input(z.object({ connectionId: z.string() }))
@@ -2228,38 +2271,6 @@ export const appRouter = router({
 
   // --- State Balance-Billing Laws -------------------------------------------
   stateLaws: router({
-    list: publicProcedure
-      .input(z.object({ state: z.string().optional(), hasProtection: z.boolean().optional() }))
-      .query(async ({ input }) => {
-        const stateFilter = input.state;
-        // Comprehensive 50-state balance billing law reference dataset
-        const STATE_LAWS = [
-          { state: "CA", name: "California", hasProtection: true, lawName: "SB 1021 / AB 72", effectiveDate: "2017-07-01", scope: "Emergency + Non-emergency out-of-network", idrProcess: "Independent Dispute Resolution", maxPenalty: "$25,000 per violation", notes: "Strongest state protections; applies to fully-insured plans" },
-          { state: "NY", name: "New York", hasProtection: true, lawName: "NY Surprise Bill Law", effectiveDate: "2015-03-31", scope: "Emergency + Non-emergency out-of-network", idrProcess: "Independent Dispute Resolution", maxPenalty: "$10,000 per violation", notes: "First state surprise billing law; model for federal NSA" },
-          { state: "TX", name: "Texas", hasProtection: true, lawName: "HB 1941", effectiveDate: "2020-01-01", scope: "Emergency services", idrProcess: "Mediation for amounts > $500", maxPenalty: "$5,000 per violation", notes: "Mediation-based resolution" },
-          { state: "FL", name: "Florida", hasProtection: true, lawName: "FS 627.64194", effectiveDate: "2016-07-01", scope: "Emergency services", idrProcess: "Negotiation required", maxPenalty: "License action", notes: "Applies to state-regulated plans only" },
-          { state: "IL", name: "Illinois", hasProtection: true, lawName: "SB 1584", effectiveDate: "2021-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$10,000 per violation", notes: "Mirrors federal NSA provisions" },
-          { state: "WA", name: "Washington", hasProtection: true, lawName: "SB 5526", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Broad consumer protections" },
-          { state: "CO", name: "Colorado", hasProtection: true, lawName: "HB 1174", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Applies to state-regulated plans" },
-          { state: "NJ", name: "New Jersey", hasProtection: true, lawName: "A1952", effectiveDate: "2018-08-01", scope: "Emergency + Non-emergency", idrProcess: "Arbitration", maxPenalty: "$10,000 per violation", notes: "Arbitration-based resolution" },
-          { state: "AZ", name: "Arizona", hasProtection: false, lawName: "No state law", effectiveDate: null, scope: "Federal NSA only", idrProcess: "Federal NSA IDR", maxPenalty: null, notes: "Relies on federal NSA protections" },
-          { state: "GA", name: "Georgia", hasProtection: false, lawName: "No state law", effectiveDate: null, scope: "Federal NSA only", idrProcess: "Federal NSA IDR", maxPenalty: null, notes: "Relies on federal NSA protections" },
-          { state: "OH", name: "Ohio", hasProtection: true, lawName: "HB 388", effectiveDate: "2022-04-07", scope: "Emergency services", idrProcess: "Negotiation", maxPenalty: "$1,000 per violation", notes: "Limited scope" },
-          { state: "PA", name: "Pennsylvania", hasProtection: true, lawName: "Act 77", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Comprehensive protections" },
-          { state: "MI", name: "Michigan", hasProtection: false, lawName: "No state law", effectiveDate: null, scope: "Federal NSA only", idrProcess: "Federal NSA IDR", maxPenalty: null, notes: "Relies on federal NSA protections" },
-          { state: "NC", name: "North Carolina", hasProtection: false, lawName: "No state law", effectiveDate: null, scope: "Federal NSA only", idrProcess: "Federal NSA IDR", maxPenalty: null, notes: "Relies on federal NSA protections" },
-          { state: "VA", name: "Virginia", hasProtection: true, lawName: "SB 172", effectiveDate: "2021-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Comprehensive state protections" },
-          { state: "MA", name: "Massachusetts", hasProtection: true, lawName: "Chapter 224", effectiveDate: "2012-11-01", scope: "Emergency services", idrProcess: "Negotiation", maxPenalty: "License action", notes: "Early adopter state" },
-          { state: "MN", name: "Minnesota", hasProtection: true, lawName: "HF 4", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Strong consumer protections" },
-          { state: "OR", name: "Oregon", hasProtection: true, lawName: "HB 2339", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Comprehensive protections" },
-          { state: "CT", name: "Connecticut", hasProtection: true, lawName: "PA 19-117", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Mirrors federal NSA" },
-          { state: "MD", name: "Maryland", hasProtection: true, lawName: "HB 1420", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Comprehensive protections" },
-        ];
-        let results = STATE_LAWS;
-        if (stateFilter) results = results.filter(l => l.state === stateFilter.toUpperCase());
-        if (input.hasProtection !== undefined) results = results.filter(l => l.hasProtection === input.hasProtection);
-        return { laws: results, total: results.length, withProtection: STATE_LAWS.filter(l => l.hasProtection).length, withoutProtection: STATE_LAWS.filter(l => !l.hasProtection).length };
-      }),
     checkCompliance: protectedProcedure
       .input(z.object({ disputeId: z.string(), state: z.string() }))
       .query(async ({ input }) => {
@@ -2365,14 +2376,6 @@ export const appRouter = router({
     list: protectedProcedure
       .query(async ({ ctx }) => {
         return listDisputeTemplates(ctx.user.id);
-      }),
-    getById: protectedProcedure
-      .input(z.object({ id: z.string() }))
-      .query(async ({ ctx, input }) => {
-        const template = await getDisputeTemplateById(input.id);
-        if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
-        if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
-        return template;
       }),
     create: protectedProcedure
       .input(z.object({
@@ -2546,12 +2549,43 @@ export const appRouter = router({
         onboardingCompleted: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const profile = await upsertUserProfile({
-          id: ctx.user.id,
-          ...input,
-          onboardingCompletedAt: input.onboardingCompleted ? new Date() : undefined,
-        });
-        return profile;
+        // G7: NPI is a provider identifier — guard against two provider
+        // profiles claiming the same NPI. Pre-check for a friendly 409
+        // (same pattern as payer.invite in routers/personas.ts); the
+        // current profile's own row is excluded so updates are idempotent.
+        if (input.npi) {
+          const existingProfile = await getUserProfile(ctx.user.id);
+          const effectiveRole = input.stakeholderRole ?? existingProfile?.stakeholderRole ?? "provider";
+          if (effectiveRole === "provider") {
+            const db = await getDb();
+            if (db) {
+              const { userProfiles } = await import("../drizzle/schema");
+              const dup = (await db.select().from(userProfiles).where(eq(userProfiles.npi, input.npi)).limit(1))[0];
+              if (dup && dup.id !== ctx.user.id) {
+                throw new TRPCError({
+                  code: "CONFLICT",
+                  message: "This NPI is already registered to another provider account. Contact an admin if you believe this is an error.",
+                });
+              }
+            }
+          }
+        }
+        try {
+          const profile = await upsertUserProfile({
+            id: ctx.user.id,
+            ...input,
+            onboardingCompletedAt: input.onboardingCompleted ? new Date() : undefined,
+          });
+          return profile;
+        } catch (err: any) {
+          if (String(err?.code) === "23505" || /duplicate key/i.test(String(err?.message))) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "This NPI is already registered to another provider account. Contact an admin if you believe this is an error.",
+            });
+          }
+          throw err;
+        }
       }),
     completeOnboarding: protectedProcedure.mutation(async ({ ctx }) => {
       await markOnboardingComplete(ctx.user.id);
@@ -3028,22 +3062,20 @@ Based on NSA IDR historical data and legal precedent, provide:
             s3Key,
           });
 
+          eventBus.publish(
+            "document.analyzed",
+            input.disputeId ?? analysis.id,
+            input.disputeId ? "dispute" : "document_analysis",
+            { analysisId: analysis.id, fileName: input.fileName, documentType: input.documentType, confidence: extracted.confidence ?? 80 },
+            { userId: ctx.user.id, timestamp: new Date().toISOString() },
+          ).catch((e) => console.warn("[EventBus] document.analyzed publish failed", e));
           return { ...analysis, status: 'completed' as const, extractedFields: extracted, ocrText: extracted.rawText ?? '', confidence: extracted.confidence ?? 80, processingTimeMs };
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+        } catch (err) {          const errorMessage = err instanceof Error ? err.message : 'Unknown error';
           await updateDocumentAnalysis(analysis.id, { status: 'failed', errorMessage });
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Document analysis failed: ${errorMessage}` });
         }
       }),
 
-    list: protectedProcedure
-      .input(z.object({
-        disputeId: z.string().optional(),
-        limit: z.number().int().min(1).max(100).default(20),
-      }))
-      .query(async ({ ctx, input }) => {
-        return listDocumentAnalyses({ userId: ctx.user.id, disputeId: input.disputeId, limit: input.limit });
-      }),
 
     get: protectedProcedure
       .input(z.object({ id: z.string() }))
@@ -3095,21 +3127,6 @@ Based on NSA IDR historical data and legal precedent, provide:
           daysUntilDeadline: daysUntilDeadline(deadline),
           deadline,
         };
-      }),
-    advance: protectedProcedure
-      .input(z.object({
-        disputeId: z.string(),
-        targetStep: z.string(),
-        notes: z.string().optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
-        return advanceWorkflow(
-          input.disputeId,
-          input.targetStep as Parameters<typeof advanceWorkflow>[1],
-          ctx.user.id,
-          input.notes
-        );
       }),
 
     // ── Step Notes ────────────────────────────────────────────────────────────
@@ -3281,6 +3298,13 @@ Based on NSA IDR historical data and legal precedent, provide:
         }
         const entry = await recordPayment(input.disputeId, amountCents, input.referenceId, input.idempotencyKey, ctx.user.id);
         await dispatchOutboxBatch(1);
+        eventBus.publish(
+          "payment.recorded",
+          input.disputeId,
+          "dispute",
+          { amountCents, referenceId: input.referenceId, ledgerEntryId: entry.id, verified: true },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] payment.recorded publish failed", e));
         return { verified: true as const, entry };
       }),
     // M2: admin confirmation of an unverified payment report — posts the
@@ -3293,6 +3317,13 @@ Based on NSA IDR historical data and legal precedent, provide:
       .mutation(async ({ ctx, input }) => {
         const result = await confirmPaymentReport(input.disputeId, input.referenceId, ctx.user.id);
         await dispatchOutboxBatch(1);
+        eventBus.publish(
+          "payment.recorded",
+          input.disputeId,
+          "dispute",
+          { referenceId: input.referenceId, verified: true, confirmedBy: ctx.user.id },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] payment.recorded publish failed", e));
         return result;
       }),
   }),
@@ -3335,20 +3366,6 @@ Based on NSA IDR historical data and legal precedent, provide:
   }),
   // ── Mojaloop payment status ───────────────────────────────────────────────────────────
   mojaloop: router({
-    transferStatus: protectedProcedure
-      .input(z.object({ transferId: z.string() }))
-      .query(async ({ input }) => {
-        const goServicesUrl = process.env.GO_SERVICES_URL || "http://localhost:8001";
-        try {
-          const res = await fetch(`${goServicesUrl}/mojaloop/transfers/${input.transferId}`, {
-            signal: AbortSignal.timeout(5_000),
-          });
-          if (!res.ok) return { status: "unknown", transferId: input.transferId };
-          return res.json() as Promise<{ status: string; transferId: string; amount?: number; currency?: string; completedAt?: string }>;
-        } catch {
-          return { status: "unavailable", transferId: input.transferId };
-        }
-      }),
     listByDispute: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
       .query(async ({ ctx, input }) => {
@@ -3491,20 +3508,6 @@ Based on NSA IDR historical data and legal precedent, provide:
         });
       }
     }),
-    workflowStatus: protectedProcedure
-      .input(z.object({ disputeId: z.string() }))
-      .query(async ({ ctx, input }) => {
-        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
-        try {
-          return [await getDisputeTemporalWorkflow(input.disputeId)];
-        } catch (error) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "Temporal workflow status is unavailable; strict TLS connectivity and a deployed workflow execution are required",
-            cause: error,
-          });
-        }
-      }),
     allWorkflows: protectedProcedure
       .input(z.object({
         status: z.enum(['RUNNING', 'COMPLETED', 'FAILED', 'CANCELED', 'TERMINATED']).optional(),
@@ -3518,35 +3521,6 @@ Based on NSA IDR historical data and legal precedent, provide:
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
             message: "Temporal workflow listing is unavailable; strict TLS connectivity is required",
-            cause: error,
-          });
-        }
-      }),
-    startDisputeWorkflow: adminProcedure
-      .input(z.object({ disputeId: z.string().min(1) }))
-      .mutation(async ({ ctx, input }) => {
-        if (process.env.PAYMENT_EXECUTION_MODE && process.env.PAYMENT_EXECUTION_MODE !== "disabled") {
-          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Temporal dispatch is restricted to the current non-payment execution mode" });
-        }
-        const dispute = await getDisputeById(input.disputeId);
-        if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
-        try {
-          const result = await startDisputeTemporalWorkflow(input.disputeId, ctx.user.id);
-          await createAuditEntry({
-            userId: ctx.user.id,
-            action: "temporal.workflow_dispatched",
-            entityType: "temporal_dispatch",
-            entityId: input.disputeId,
-            oldValue: null,
-            newValue: JSON.stringify(result),
-            ipAddress: null,
-            userAgent: null,
-          });
-          return result;
-        } catch (error) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: error instanceof Error ? error.message : "Temporal workflow dispatch is unavailable",
             cause: error,
           });
         }
@@ -4807,33 +4781,6 @@ Based on NSA IDR historical data and legal precedent, provide:
         }).where(eq(daVinciTransactions.id, txId)).returning();
         return updated ?? tx;
       }),
-    pollPasStatus: protectedProcedure
-      .input(z.object({ transactionId: z.string() }))
-      .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const [tx] = await db.select().from(daVinciTransactions).where(eq(daVinciTransactions.id, input.transactionId)).limit(1);
-        if (!tx) throw new TRPCError({ code: "NOT_FOUND", message: "Transaction not found" });
-        const receiptId = (tx.responsePayload as Record<string, unknown> | null)?.receiptId as string | undefined;
-        if (!receiptId) {
-          return { transactionId: tx.id, status: tx.status, receiptId: null, polled: false, reason: "No payer receipt id recorded (submission blocked or failed)." };
-        }
-        const { pollPasStatusHttp, loadPasConfig } = await import("./priorauth/pas-adapter");
-        const poll = await pollPasStatusHttp(receiptId, loadPasConfig());
-        if (!poll.reachable) {
-          return { transactionId: tx.id, status: tx.status, receiptId, polled: false, reason: poll.reason ?? "payer endpoint unreachable" };
-        }
-        const newStatus = poll.decision ?? tx.status;
-        if (newStatus !== tx.status) {
-          await db.update(daVinciTransactions).set({
-            status: newStatus as typeof tx.status,
-            coverageDecision: poll.decision ?? tx.coverageDecision,
-            responsePayload: { ...(tx.responsePayload as Record<string, unknown> ?? {}), lastPoll: poll.body } as Record<string, unknown>,
-            updatedAt: new Date(),
-          }).where(eq(daVinciTransactions.id, tx.id));
-        }
-        return { transactionId: tx.id, status: newStatus, receiptId, polled: true, httpStatus: poll.httpStatus };
-      }),
   }),
 
   // ─── USCDI Data Completeness ──────────────────────────────────────────────
@@ -5179,18 +5126,6 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
       }),
 
     /** Delete an extraction record */
-    delete: protectedProcedure
-      .input(z.object({ extractionId: z.string() }))
-      .mutation(async ({ ctx, input }) => {
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
-        await db.delete(smartFormExtractions)
-          .where(and(
-            eq(smartFormExtractions.id, input.extractionId),
-            eq(smartFormExtractions.userId, ctx.user.id)
-          ));
-        return { success: true };
-      }),
   }),
 
   hermes: hermesRouter,
@@ -5200,7 +5135,6 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
   statePrograms: stateProgramsRouter,
   priorAuth: priorAuthRouter,
   batchedDisputes: batchedDisputesRouter,
-  feeSchedule: feeScheduleRouter,
   noticeConsent: noticeConsentRouter,
   gfePpdr: gfePpdrRouter,
   portalRpa: portalRpaRouter,
@@ -5457,54 +5391,6 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
      * entry is indexed into search. Used by the future CMS feed polling hook
      * (server/scheduled/regulatoryFeedPoll.ts) and by admins manually.
      */
-    ingest: adminProcedure
-      .input(z.object({
-        entries: z.array(z.object({
-          title: z.string().min(1).max(512),
-          source: z.string().min(1).max(128),
-          effectiveDate: z.coerce.date(),
-          impact: z.enum(["low", "medium", "high", "critical"]),
-          summary: z.string().min(1),
-          citationUrl: z.string().url().max(1024).optional(),
-          category: z.enum(["fee_schedule", "court_ruling", "guidance", "regulation", "certification", "enforcement", "legislation"]).default("regulation"),
-          tags: z.array(z.string()).default([]),
-        })).min(1).max(100),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        let inserted = 0;
-        let duplicates = 0;
-        for (const e of input.entries) {
-          const existing = await db.select({ id: regulatoryUpdates.id }).from(regulatoryUpdates)
-            .where(and(
-              eq(regulatoryUpdates.source, e.source),
-              eq(regulatoryUpdates.title, e.title),
-              eq(regulatoryUpdates.publishedAt, e.effectiveDate),
-            )).limit(1);
-          if (existing.length) { duplicates++; continue; }
-          const row = {
-            id: crypto.randomUUID(),
-            publishedAt: e.effectiveDate,
-            title: e.title,
-            summary: e.summary,
-            category: e.category,
-            impactLevel: e.impact,
-            source: e.source,
-            sourceUrl: e.citationUrl ?? null,
-            tags: JSON.stringify(e.tags),
-            isActive: true,
-          };
-          await db.insert(regulatoryUpdates).values(row);
-          indexDocument("regulatory", row.id, row as unknown as Record<string, unknown>).catch(() => {});
-          inserted++;
-        }
-        await createAuditEntry({
-          userId: ctx.user.id, action: "regulatory.ingest", entityType: "regulatory_update", entityId: null,
-          oldValue: null, newValue: JSON.stringify({ inserted, duplicates }), ipAddress: null, userAgent: null,
-        });
-        return { inserted, duplicates };
-      }),
 
     /**
      * DEMO-ONLY seed: the 8 canned 2024 rows below are synthetic demo
@@ -5641,28 +5527,6 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         return db.select().from(changelogEntries).orderBy(desc(changelogEntries.releasedAt)).limit(input.limit);
       }),
-    seed: protectedProcedure.mutation(async ({ ctx }) => {
-      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const entries = [
-        { id: "cl-001", version: "2.4.0", releasedAt: new Date("2025-07-15"), title: "Left Sidebar Navigation", description: "Added persistent left sidebar navigation to all authenticated pages, providing consistent access to all features without page-level headers.", category: "feature" as const, isHighlight: true },
-        { id: "cl-002", version: "2.4.0", releasedAt: new Date("2025-07-15"), title: "Session Expiry Warning", description: "Implemented real-time session expiry countdown modal with 'Stay Signed In' refresh capability and 5-minute advance warning.", category: "feature" as const, isHighlight: true },
-        { id: "cl-003", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Step Advancement Confirmation Dialog", description: "Added confirmation dialog to all dispute step advancement CTAs to prevent accidental workflow progression.", category: "improvement" as const, isHighlight: false },
-        { id: "cl-004", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Workflow Progress Bar Fix", description: "Fixed progress bar showing 0% when a dispute was at Step 1. Progress now correctly includes the current active step.", category: "improvement" as const, isHighlight: false },
-        { id: "cl-005", version: "2.2.0", releasedAt: new Date("2025-07-01"), title: "IDR Entity Dashboard KPI Skeleton Loaders", description: "Added animated skeleton loaders to KPI cards on the IDR Entity Dashboard to eliminate flash-of-zeros on initial load.", category: "improvement" as const, isHighlight: false },
-        { id: "cl-006", version: "2.2.0", releasedAt: new Date("2025-07-01"), title: "Database-Backed Settings", description: "GlobalSettings, TwoFactorAuth, QPA Benchmarks, Regulatory Feed, Expert Panel, and Compliance Checklist are now fully persisted to PostgreSQL.", category: "feature" as const, isHighlight: true },
-        { id: "cl-007", version: "2.1.0", releasedAt: new Date("2025-06-20"), title: "Keycloak Forward Authentication", description: "Replaced Manus OAuth with Keycloak OIDC forward authentication, supporting PKCE, token refresh, and multi-realm configuration.", category: "security" as const, isHighlight: true },
-        { id: "cl-008", version: "2.0.0", releasedAt: new Date("2025-06-01"), title: "19-Step IDR Workflow Engine", description: "Complete implementation of the NSA Independent Dispute Resolution 19-step workflow with statutory deadlines, SLA monitoring, and automated notifications.", category: "feature" as const, isHighlight: true },
-      ];
-      for (const e of entries) {
-        const existing = await db.select({ id: changelogEntries.id }).from(changelogEntries).where(eq(changelogEntries.id, e.id)).limit(1);
-        if (!existing.length) {
-          await db.insert(changelogEntries).values(e);
-        }
-      }
-      return { seeded: entries.length };
-    }),
   }),
 
   // ─── Settlement Transfer Controls ───────────────────────────────────────────
