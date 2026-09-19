@@ -145,6 +145,19 @@ export default function LoginPage() {
                 <UserPlus className="h-4 w-4" />
                 Create Account
               </Button>
+
+              {/* Phase13-FC (G14a): password recovery is handled entirely by
+                  Keycloak's reset-credentials flow — the platform never
+                  handles passwords. Lost TOTP device? Use a backup code at
+                  sign-in, or ask an admin for an audit-logged TOTP reset. */}
+              <div className="text-center">
+                <a
+                  href="/api/auth/forgot-password"
+                  className="text-sm text-primary hover:underline"
+                >
+                  Forgot password?
+                </a>
+              </div>
             </CardContent>
           </Card>
 
