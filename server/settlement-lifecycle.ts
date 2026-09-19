@@ -481,6 +481,6 @@ export async function listSettlementTransfers(disputeId: string) {
 export async function getSettlementTransfer(transferId: string) {
   const db = await getDb();
   if (!db) return undefined;
-  const rows = await tx_select_placeholder; // placeholder removed
+  const rows = await db.select().from(settlementTransfers).where(eq(settlementTransfers.id, transferId)).limit(1);
   return rows[0];
 }
