@@ -22,6 +22,14 @@
  * wrong audience, expired token, unreachable JWKS) throws BearerAuthError and
  * the caller responds 401. There is NO fall-through to session-cookie auth
  * when a Bearer header is present.
+ *
+ * Machine principals (hp_ API keys) BYPASS MFA BY DESIGN: an API key is a
+ * long-lived credential minted from an already-MFA-verified session, and a
+ * non-interactive client cannot answer a TOTP challenge. Compensating
+ * controls: keys are scope-limited, revocable, expirable, owner-suspension
+ * checked on every call, and (Phase13-FC, G9) org-bound — a key-
+ * authenticated request that presents a different tenant/org id
+ * (`x-org-id` / `x-tenant-id` header) than the key's orgId is rejected.
  */
 
 import { createRemoteJWKSet, jwtVerify } from "jose";
@@ -226,6 +234,11 @@ export interface ApiKeyAuthResult {
   user: User;
   /** Effective scopes — "admin" is stripped unless the key owner is admin. */
   scopes: string[];
+  /**
+   * Phase13-FC (G9): org the key is bound to (null for legacy keys minted
+   * before the orgId column existed — see 0046_wave_fc.sql backfill note).
+   */
+  orgId: string | null;
 }
 
 /**
@@ -236,7 +249,7 @@ export interface ApiKeyAuthResult {
  * key, and apiKeys.create additionally refuses to store one), and touches
  * lastUsedAt (fire-and-forget).
  */
-export async function authenticateApiKey(token: string): Promise<ApiKeyAuthResult> {
+export async function authenticateApiKey(token: string, req?: Request): Promise<ApiKeyAuthResult> {
   const { createHash } = await import("crypto");
   const keyHash = createHash("sha256").update(token).digest("hex");
 
@@ -267,17 +280,31 @@ export async function authenticateApiKey(token: string): Promise<ApiKeyAuthResul
   // depth alongside the creation-time filter in apiKeys.create.
   const scopes = user.role === "admin" ? requestedScopes : requestedScopes.filter(s => s !== "admin");
 
+  // Phase13-FC (G9): tenant scoping. When the key is org-bound, a request
+  // that explicitly names a DIFFERENT org/tenant (x-org-id / x-tenant-id
+  // header) is rejected. Requests without an explicit tenant header are
+  // scoped to the key's org downstream via result.orgId. Legacy keys
+  // (orgId NULL) keep pre-G9 user-scoped behavior until reissued.
+  const keyOrgId = key.orgId ?? null;
+  if (req && keyOrgId) {
+    const presentedRaw = req.headers["x-org-id"] ?? req.headers["x-tenant-id"];
+    const presented = Array.isArray(presentedRaw) ? presentedRaw[0] : presentedRaw;
+    if (presented && presented !== keyOrgId) {
+      throw new BearerAuthError("cross_org_tenant_rejected");
+    }
+  }
+
   // Touch lastUsedAt without blocking the request.
   drizzle.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, key.id))
     .then(() => {}, err => console.warn("[Auth] apiKeys lastUsedAt update failed:", err instanceof Error ? err.message : err));
 
-  return { user, scopes };
+  return { user, scopes, orgId: keyOrgId };
 }
 
 export async function authenticateApiKeyRequest(req: Request): Promise<ApiKeyAuthResult> {
   const token = extractBearerToken(req);
   if (!token || !isApiKeyToken(token)) throw new BearerAuthError("missing or malformed API key");
-  return authenticateApiKey(token);
+  return authenticateApiKey(token, req);
 }
 
 /**
