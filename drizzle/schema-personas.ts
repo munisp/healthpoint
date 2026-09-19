@@ -141,6 +141,16 @@ export const organizations = pgTable(
     id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
     name: varchar("name", { length: 255 }).notNull(),
     type: varchar("type", { length: 32 }).notNull(),
+    /**
+     * Phase13-FC (G8): org suspension. 'active' | 'suspended'. Org-scoped
+     * mutations are blocked for members of suspended orgs (see
+     * assertOrgNotSuspended in server/routers/personas.ts). Reads remain
+     * allowed so members can see why their org is suspended.
+     */
+    status: varchar("status", { length: 16 }).notNull().default("active"),
+    suspendedAt: timestamp("suspendedAt"),
+    suspendedByUserId: varchar("suspendedByUserId", { length: 64 }),
+    suspensionReason: text("suspensionReason"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => [index("organizations_type_idx").on(t.type)]
