@@ -10,6 +10,10 @@
  * SERVER-AUTHORITATIVE: PPDR disputes are persisted server-side in the
  * fsm-store and addressed by (tenantId, disputeId). Clients NEVER round-trip
  * dispute state — transition takes only disputeId + target state + params.
+ *
+ * Phase 13 FB (O1.32/O1.33): validateUpdatedGfe and renderGfeDocument were
+ * REMOVED (zero callers); O1.31 computeTotalExpectedCharges is now wired into
+ * the ConsentCenter GFE tab.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -20,9 +24,7 @@ import {
   isGfeLate,
   validateGfeContent,
   validateRecurringGfeWindow,
-  validateUpdatedGfeRule,
 } from "./gfe-clock";
-import { composeGfeDocument } from "../../shared/i18n/notices";
 import {
   evaluatePpdrEligibility,
   createPpdrDispute,
@@ -190,62 +192,6 @@ export const gfePpdrRouter = router({
             input.coProviders,
           ),
           rule: "total = convening + Σ co-providers (45 CFR 149.610(b))",
-        };
-      } catch (err) {
-        toTrpcError(err);
-      }
-    }),
-
-  /**
-   * W4-F5: updated-GFE rule — when expected charges change, an updated GFE
-   * must be delivered >= 1 business day before service (45 CFR 149.610(a)(2)).
-   */
-  validateUpdatedGfe: protectedProcedure
-    .input(z.object({
-      expectedChargesChanged: z.boolean(),
-      updatedGfeDeliveredAt: z.coerce.date().optional(),
-      serviceAt: z.coerce.date(),
-      holidays: holidaySetSchema.optional(),
-    }))
-    .query(({ input }) => {
-      try {
-        return validateUpdatedGfeRule(input);
-      } catch (err) {
-        toTrpcError(err);
-      }
-    }),
-
-  /**
-   * W4-F1/F5: compose the GFE document text (en/es). The printed total is
-   * ALWAYS computed by the aggregation rule, never caller-supplied.
-   */
-  renderGfeDocument: protectedProcedure
-    .input(z.object({
-      caseId: idSchema,
-      providerName: z.string().min(1).max(255),
-      conveningChargesUsd: z.number().nonnegative(),
-      coProviders: z.array(coProviderSchema).max(64).optional(),
-      itemsAndServices: z.array(z.string().max(512)).max(128).optional(),
-      language: z.string().max(16).optional(),
-    }))
-    .query(({ input }) => {
-      try {
-        const document = composeGfeDocument({
-          providerName: input.providerName,
-          caseId: input.caseId,
-          conveningChargesUsd: input.conveningChargesUsd,
-          coProviders: input.coProviders,
-          itemsAndServices: input.itemsAndServices,
-          language: input.language,
-        });
-        return {
-          caseId: input.caseId,
-          language: input.language ?? "en",
-          document,
-          totalExpectedChargesUsd: computeGfeTotalExpectedCharges(
-            input.conveningChargesUsd,
-            input.coProviders ?? [],
-          ),
         };
       } catch (err) {
         toTrpcError(err);
