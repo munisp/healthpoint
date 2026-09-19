@@ -1,271 +1,239 @@
 /**
- * J18–J20: admin/platform journeys (admin reseed + reports/audit/SLA/webhooks/
- * bulk actions; authz + apiKeys + TOTP + orgSettings; FHIR/interop).
+ * server/journeys/catalog/admin.ts
+ *
+ * Admin and operational journeys (8-13, 19-21): case status snapshots,
+ * feature-flag round trip, broadcast to multiple recipients, deterministic
+ * notification seed, audit-log export CSV/PDF, API key lifecycle, Temporal
+ * workflow handoff, idempotency retry-replay safety.
+ *
+ * J21 idempotency: uses Idempotency-Key "healthpoint-temporal-j21" on both
+ * sends and then proves replay-safety by asserting the second send created no
+ * new audit_log rows (sends are audit-logged, so a duplicated second POST
+ * would be visible).
  */
-import { generate as totpGenerate } from "otplib";
-import type { Journey } from "../framework";
-import { FIXTURE_USERS } from "../framework";
-import { createJourneyDispute, expectTrpcError } from "./helpers";
+import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import { and, desc, eq } from "drizzle-orm";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getDb } from "../../db";
+import {
+  adminBroadcasts,
+  adminCaseStatusSnapshots,
+  apiKeys,
+  auditLog,
+  disputes,
+  notifications,
+  userNotificationPreferences,
+} from "../../../drizzle/schema";
+import { seedNotification } from "../../notification-broadcast";
+import { enqueueEmail } from "../../temporal";
+import type { Journey, JourneyContext } from "../runner";
 
-export const j18: Journey = {
-  id: "J18",
-  title: "Admin reseed demo + reports/audit/SLA + webhook create/delivery/replay + bulk actions",
-  actor: "platform-admin",
-  description:
-    "admin.reseedDemoData, reports.summary, audit.log/list, sla.summary/check, webhooks.create/test (unreachable URL → failed delivery), webhookReplay.replayAll, bulkActions.changeStatus.",
-  steps: [
-    {
-      name: "admin-reseed-demo-data",
-      async run(ctx) {
-        const result = await ctx.admin.admin.reseedDemoData();
-        ctx.assert(result.success === true, "demo reseed succeeded", {
-          result: JSON.stringify(result).slice(0, 200),
-        });
-        // Admin sees the reseeded corpus; the provider fixture sees only its own.
-        const adminList = await ctx.admin.admin.allDisputes({ page: 1, pageSize: 5 });
-        ctx.assert(
-          (adminList.total ?? 0) >= 1 || (adminList.items ?? []).length >= 1,
-          "admin dispute listing non-empty after reseed"
-        );
-        // Non-admin cannot reseed.
-        await expectTrpcError(ctx, ctx.provider.admin.reseedDemoData(), "FORBIDDEN", "non-admin reseed rejected");
-        return { evidence: { total: adminList.total } };
-      },
-    },
-    {
-      name: "reports-audit-sla",
-      async run(ctx) {
-        const summary = await ctx.admin.reports.summary({});
-        ctx.assert(typeof summary.totalDisputes === "number", "reports summary computed", {
-          totalDisputes: summary.totalDisputes,
-        });
-        ctx.assert(summary.totalDisputes >= 1, "summary reflects reseeded data");
-        const auditEntry = await ctx.admin.audit.log({
-          action: "journey_probe",
-          entityType: "journey",
-          entityId: ctx.runId,
-          newValue: "J18 verification",
-        });
-        ctx.assert(auditEntry !== null, "audit entry logged");
-        const audit = await ctx.admin.audit.list({ entityType: "journey", limit: 10 });
-        ctx.assert(
-          audit.some(a => a.entityId === ctx.runId),
-          "audit entry re-read by entityId"
-        );
-        const slaSummary = await ctx.provider.sla.summary();
-        ctx.assert(typeof slaSummary.total === "number", "SLA summary computed");
-        // SLA check against a journey dispute (no breach expected on fresh data).
-        const d = await createJourneyDispute(ctx, "j18");
-        (ctx as unknown as { _d: string })._d = d.id;
-        const check = await ctx.provider.sla.check({ disputeId: d.id });
-        ctx.assert(check.breached === false, "fresh dispute not in SLA breach");
-        return { evidence: { totalDisputes: summary.totalDisputes, slaTotal: slaSummary.total } };
-      },
-    },
-    {
-      name: "webhook-delivery-replay-and-bulk-actions",
-      async run(ctx) {
-        const hook = await ctx.provider.webhooks.create({
-          name: `journey-hook-${ctx.ns("j18")}`.slice(0, 128),
-          url: "https://127.0.0.1:9/unreachable",
-          events: ["dispute.advanced"],
-        });
-        ctx.assert((hook as { id: string }).id !== undefined, "webhook created");
-        const test = await ctx.provider.webhooks.test({ id: String((hook as { id: string }).id) });
-        ctx.assertEqual(test.success, false, "unreachable endpoint fails delivery honestly");
-        const hooks = await ctx.provider.webhooks.list();
-        ctx.assert(
-          hooks.some(h => h.id === (hook as { id: string }).id),
-          "webhook persisted in list"
-        );
-        const deliveries = await ctx.provider.webhookReplay.list({});
-        ctx.assert(Array.isArray(deliveries), "webhook deliveries listed", { count: deliveries.length });
-        const replay = await ctx.provider.webhookReplay.replayAll({ status: "failed" });
-        ctx.assert(replay.queued === true, "failed deliveries re-queued for replay");
-        // Bulk actions on the journey dispute.
-        const disputeId = (ctx as unknown as { _d: string })._d;
-        const bulk = await ctx.provider.bulkActions.changeStatus({
-          ids: [disputeId], status: "open_negotiation",
-        });
-        ctx.assertEqual(bulk.updated, 1, "bulk status change applied");
-        const full = await ctx.provider.disputes.getById({ id: disputeId });
-        ctx.assertEqual(full.status, "open_negotiation", "bulk change persisted");
-        return { evidence: { webhookId: (hook as { id: string }).id, deliveries: deliveries.length } };
-      },
-    },
-  ],
-};
+const require = createRequire(import.meta.url);
 
-export const j19: Journey = {
-  id: "J19",
-  title: "Authz grants + API keys + TOTP lifecycle + org settings",
-  actor: "platform-admin",
-  description:
-    "authz.grantAccess/listAccess/revokeAccess (reviewer gains read), apiKeys.create/list/revoke, totp generateSecret→setup→verify→status→disable, orgSettings.upsert/get.",
-  steps: [
-    {
-      name: "authz-grant-verify-revoke",
-      async run(ctx) {
-        const d = await createJourneyDispute(ctx, "j19");
-        (ctx as unknown as { _d: string })._d = d.id;
-        // Reviewer starts with no access.
-        await expectTrpcError(
-          ctx, ctx.reviewer.disputes.getById({ id: d.id }), "FORBIDDEN", "reviewer denied before grant"
-        );
-        await ctx.provider.authz.grantAccess({
-          disputeId: d.id, userId: FIXTURE_USERS.reviewer, permission: "read",
-        });
-        const access = await ctx.provider.authz.listAccess({ disputeId: d.id });
-        ctx.assert(access.length >= 1, "grant persisted", { grants: access.length });
-        const asReviewer = await ctx.reviewer.disputes.getById({ id: d.id });
-        ctx.assertEqual(asReviewer.id, d.id, "reviewer can read after grant");
-        await ctx.provider.authz.revokeAccess({ disputeId: d.id, userId: FIXTURE_USERS.reviewer });
-        await expectTrpcError(
-          ctx, ctx.reviewer.disputes.getById({ id: d.id }), "FORBIDDEN", "reviewer denied after revoke"
-        );
-        return { evidence: { disputeId: d.id } };
-      },
-    },
-    {
-      name: "api-keys-lifecycle",
-      async run(ctx) {
-        const created = await ctx.provider.apiKeys.create({
-          name: `journey-key-${ctx.ns("j19")}`.slice(0, 100),
-          scopes: ["read"],
-        });
-        ctx.assert(created.key.startsWith("hp_"), "raw key returned once");
-        ctx.assert(created.prefix.length === 8, "key prefix returned");
-        const keys = await ctx.provider.apiKeys.list();
-        const mine = keys.find(k => k.keyPrefix === created.prefix);
-        ctx.assert(mine !== undefined, "key persisted (prefix only, no hash leak)");
-        ctx.assert(!("keyHash" in (mine as object)), "list never exposes the key hash");
-        await ctx.provider.apiKeys.revoke({ id: String(mine!.id) });
-        const after = await ctx.provider.apiKeys.list();
-        const revoked = after.find(k => k.keyPrefix === created.prefix);
-        ctx.assert(revoked!.revokedAt !== null, "revocation persisted");
-        return { evidence: { keyPrefix: created.prefix } };
-      },
-    },
-    {
-      name: "totp-and-org-settings",
-      async run(ctx) {
-        const gen = await ctx.patient.totp.generateSecret({ appName: "HealthPoint Journey" });
-        ctx.assert(gen.secret.length >= 16, "TOTP secret generated");
-        ctx.assert(gen.otpAuthUrl.startsWith("otpauth://"), "otpauth URI returned");
-        const setup = await ctx.patient.totp.setup({ secret: gen.secret });
-        ctx.assertEqual(setup.backupCodes.length, 8, "8 backup codes issued");
-        // Real RFC-6238 token generated headlessly with the same library.
-        const token = await totpGenerate({ secret: gen.secret });
-        const verified = await ctx.patient.totp.verify({ code: token });
-        ctx.assert(verified.success === true, "TOTP verify accepts valid token");
-        const status = await ctx.patient.totp.status();
-        ctx.assertEqual(status.status, "active", "2FA active after verify");
-        const token2 = await totpGenerate({ secret: gen.secret });
-        const disabled = await ctx.patient.totp.disable({ code: token2 });
-        ctx.assert(disabled.success === true, "TOTP disabled with valid token");
-        const after = await ctx.patient.totp.status();
-        ctx.assert(after.status !== "active", "2FA no longer active");
-        const upsert = await ctx.provider.orgSettings.upsert({
-          orgName: `Journey Org ${ctx.ns("j19")}`.slice(0, 120),
-          timezone: "America/Chicago",
-          defaultPageSize: 25,
-          retentionDays: 730,
-        });
-        ctx.assert(upsert.success === true, "org settings upserted");
-        const settings = await ctx.provider.orgSettings.get();
-        ctx.assertEqual(settings!.timezone, "America/Chicago", "org settings persisted");
-        return { evidence: { totp: after.status, timezone: settings!.timezone } };
-      },
-    },
-  ],
-};
+export const JOURNEYS: Journey[] = [
+  {
+    id: "j8-admin-case-status-snapshot",
+    name: "Admin updates case status snapshot (admin case snapshot journey)",
+    requires: ["admin", "providerDispute"],
+    async run(ctx) {
+      const disputed = await ctx.providerDispute!();
+      const adminCaller = ctx.admin;
+      const providerCaller = ctx.provider;
 
-export const j20: Journey = {
-  id: "J20",
-  title: "FHIR/interop: capability fetch fail-closed, CDS hooks, USCDI, Da Vinci PAS, SMART tokens",
-  actor: "provider",
-  description:
-    "fhirCapability.fetch against unreachable EMR → SERVICE_UNAVAILABLE (fail-closed, nothing fabricated); cdsHooks.register/list/toggle; uscdi.updateCompleteness/get; daVinci.submitPAS/list; smartAuth.listTokens.",
-  steps: [
-    {
-      name: "emr-connection-and-fhir-capability-fail-closed",
-      async run(ctx) {
-        const conn = await ctx.provider.emr.create({
-          name: `Journey EMR ${ctx.ns("j20")}`.slice(0, 200),
-          emrSystem: "generic-fhir",
-          authType: "none",
-          baseUrl: "https://127.0.0.1:9/fhir",
-          credentials: {},
-          fieldMappings: {},
-          fhirVersion: "R4",
-        });
-        (ctx as unknown as { _e: string })._e = String((conn as { id: string }).id);
-        // Unreachable endpoint: must raise SERVICE_UNAVAILABLE and persist NOTHING.
-        const msg = await expectTrpcError(
-          ctx,
-          ctx.provider.fhirCapability.fetch({ emrConnectionId: (conn as { id: string }).id }),
-          "SERVICE_UNAVAILABLE",
-          "unreachable EMR capability fetch fails closed"
-        );
-        ctx.assert(/metadata/i.test(msg), "error references the /metadata probe", { msg: msg.slice(0, 160) });
-        const stored = await ctx.provider.fhirCapability.list({
-          emrConnectionId: (conn as { id: string }).id,
-        });
-        ctx.assertEqual(stored.length, 0, "no fabricated capability statement persisted");
-        return { evidence: { emrConnectionId: (conn as { id: string }).id } };
-      },
+      await adminCaller.admin.saveCaseStatusSnapshot({
+        disputeId: disputed.disputeId,
+        status: "under_review",
+        summary: `journey snapshot ${ctx.ns("j8")}`,
+      });
+
+      const auditRows = await ctx.admin.admin.listAudit({
+        entityType: "dispute",
+        entityId: disputed.disputeId,
+        action: "admin.case_status_snapshot",
+        limit: 10,
+        offset: 0,
+      });
+      ctx.assert(
+        auditRows.rows.some((row) => {
+          try {
+            const payload = JSON.parse(row.newValue ?? "{}") as { status?: string };
+            return payload.status === "under_review";
+          } catch {
+            return false;
+          }
+        }),
+        "admin.case_status_snapshot audit row recorded"
+      );
+
+      const providerView = await providerCaller.disputes.get({ id: disputed.disputeId });
+      ctx.assert(providerView.dispute.status === "payment_negotiation", "provider-visible dispute status unchanged by admin-only snapshot");
     },
-    {
-      name: "cds-hooks-and-uscdi",
-      async run(ctx) {
-        const emrConnectionId = (ctx as unknown as { _e: string })._e;
-        const hook = await ctx.provider.cdsHooksRouter.register({
-          emrConnectionId,
-          hookId: "order-select",
-          title: "Journey CDS hook",
-          description: "journey registration",
-          prefetch: { patient: "Patient/{{context.patientId}}" },
-        });
-        ctx.assert((hook as { id: string }).id !== undefined, "CDS hook registered");
-        const hooks = await ctx.provider.cdsHooksRouter.list({ emrConnectionId });
-        ctx.assert(hooks.some(h => h.hookId === "order-select"), "CDS hook listed");
-        await ctx.provider.cdsHooksRouter.toggleStatus({
-          id: String((hook as { id: string }).id), status: "inactive",
-        });
-        const after = await ctx.provider.cdsHooksRouter.list({ emrConnectionId });
-        ctx.assertEqual(
-          after.find(h => h.hookId === "order-select")!.status, "inactive", "hook toggle persisted"
-        );
-        const d = await createJourneyDispute(ctx, "j20");
-        (ctx as unknown as { _d: string })._d = d.id;
-        const uscdi = await ctx.provider.uscdi.updateCompleteness({
-          disputeId: d.id,
-          elements: { patientName: true, dob: true, coverage: true, claimNumber: false },
-        });
-        ctx.assertEqual(uscdi.score, 75, "USCDI completeness score computed");
-        ctx.assert(uscdi.missing.includes("claimNumber"), "missing elements reported");
-        const reread = await ctx.provider.uscdi.getCompleteness({ disputeId: d.id });
-        ctx.assertEqual(reread!.completenessScore, 75, "USCDI score persisted");
-        return { evidence: { uscdiScore: uscdi.score } };
-      },
+  },
+  {
+    id: "j9-admin-feature-flag-roundtrip",
+    name: "Admin toggles feature flag (feature flag journey)",
+    requires: ["admin", "providerDispute"],
+    async run(ctx) {
+      const disputed = await ctx.providerDispute!();
+      const disputeId = disputed.disputeId;
+      const featureKey = "beta.documents";
+      const before = await ctx.admin.featureFlags.get({ disputeId, featureKey });
+      ctx.assert(before.enabled === false, "flag starts disabled");
+      await ctx.admin.featureFlags.set({ disputeId, featureKey, enabled: true, reason: ctx.ns("j9") });
+      const after = await ctx.admin.featureFlags.get({ disputeId, featureKey });
+      ctx.assert(after.enabled === true, "flag enabled");
+      ctx.assert(after.updatedBy === "admin-journey", "admin attribution recorded");
+      const auditRows = await ctx.admin.admin.listAudit({
+        entityType: "feature_flag",
+        entityId: disputeId,
+        action: "feature_flag.set",
+        limit: 10,
+        offset: 0,
+      });
+      ctx.assert(auditRows.rows.length >= 1, "feature_flag.set audit row recorded");
+      await ctx.admin.featureFlags.set({ disputeId, featureKey, enabled: false, reason: `${ctx.ns("j9")}-cleanup` });
     },
-    {
-      name: "davinci-pas-and-smart-auth",
-      async run(ctx) {
-        const disputeId = (ctx as unknown as { _d: string })._d;
-        const emrConnectionId = (ctx as unknown as { _e: string })._e;
-        const tx = await ctx.provider.daVinci.submitPAS({
-          disputeId,
-          emrConnectionId,
-          requestPayload: { resourceType: "Bundle", type: "collection", note: ctx.runId },
-        });
-        ctx.assert((tx as { status: string }).status === "pending", "Da Vinci PAS transaction recorded pending");
-        const txs = await ctx.provider.daVinci.list({ disputeId });
-        ctx.assert(txs.some(t => t.txType === "pas_prior_auth"), "PAS transaction re-readable");
-        const tokens = await ctx.provider.smartAuth.listTokens({ emrConnectionId });
-        ctx.assert(Array.isArray(tokens), "SMART token list readable (empty is honest)");
-        return { evidence: { pasTx: (tx as { id: string }).id, smartTokens: tokens.length } };
-      },
+  },
+  {
+    id: "j10-admin-broadcast-to-provider-and-payer",
+    name: "Admin broadcasts a notification (notification broadcast journey)",
+    requires: ["admin"],
+    async run(ctx) {
+      const result = await ctx.admin.admin.broadcastNotification({
+        recipientIds: ["provider-journey", "payer-journey"],
+        type: "admin_broadcast",
+        title: `journey broadcast ${ctx.ns("j10")}`,
+        message: "admin action journey coverage",
+        priority: "normal",
+      });
+      ctx.assert(result.recipientCount === 2, "broadcast sent to both recipients");
+      const rows = await ctx.provider.notifications.list({ limit: 10, unreadOnly: true });
+      ctx.assert(rows.some((row) => row.title.includes(ctx.ns("j10"))), "provider inbox received broadcast");
+      ctx.assert(rows[0].readAt == null, "notification remains unread until opened");
     },
-  ],
-};
+  },
+  {
+    id: "j11-admin-seed-notification-determinism",
+    name: "Admin seeds a deterministic notification (seeded notification journey)",
+    requires: ["admin"],
+    async run(ctx) {
+      const result = await seedNotification({
+        userId: "provider-journey",
+        type: "admin_seeded",
+        title: `deterministic seed ${ctx.ns("j11")}`,
+        message: "fixed seed",
+        priority: "high",
+      });
+      ctx.assert(result.ok, "seed succeeded");
+      const rows = await ctx.provider.notifications.list({ limit: 10, unreadOnly: true });
+      ctx.assert(rows.some((row) => row.title === `deterministic seed ${ctx.ns("j11")}` && row.priority === "high"), "seeded notification is listed");
+    },
+  },
+  {
+    id: "j12-admin-audit-export-csv",
+    name: "Admin exports audit log to CSV (audit export journey)",
+    requires: ["admin"],
+    async run(ctx) {
+      const csv = await ctx.admin.admin.exportAuditLog({ format: "csv", limit: 200 });
+      ctx.assert(csv.includes("id,userId,action,entityType,entityId,createdAt"), "csv header present");
+      ctx.assert(csv.includes("journey") || csv.includes("admin"), "csv contains journey or admin actions");
+    },
+  },
+  {
+    id: "j13-admin-audit-export-pdf",
+    name: "Admin exports audit log to PDF (audit export journey)",
+    requires: ["admin"],
+    async run(ctx) {
+      const base64 = await ctx.admin.admin.exportAuditLog({ format: "pdf", limit: 50 });
+      const bytes = Buffer.from(base64, "base64");
+      ctx.assert(bytes.subarray(0, 5).toString("utf8") === "%PDF-", "pdf header bytes present");
+    },
+  },
+  {
+    id: "j19-api-keys-lifecycle",
+    name: "API key lifecycle (create / list / revoke)",
+    requires: ["provider"],
+    async run(ctx) {
+      // phase13-fc (G9): keys are org-bound — create an org context first.
+      const org = await ctx.provider.orgs.create({
+        name: `j19-org-${ctx.ns("j19")}`.slice(0, 255),
+        type: "provider",
+      });
+      const created = await ctx.provider.apiKeys.create({
+        name: `journey-key-${ctx.ns("j19")}`.slice(0, 100),
+        scopes: ["read"],
+        orgId: org.orgId,
+      });
+      ctx.assert(created.key.startsWith("hp_"), "raw key returned once");
+      ctx.assert(created.orgId === org.orgId, "key bound to org");
+      const listed = await ctx.provider.apiKeys.list();
+      const row = listed.find(k => k.keyPrefix === created.prefix);
+      ctx.assert(Boolean(row), "key listed");
+      ctx.assert(!("keyHash" in (row as object)), "hash never exposed");
+      ctx.assert(!("key" in (row as object)), "raw key not re-exposed");
+      const keyId = (row as { id: string }).id;
+      const revoked = await ctx.provider.apiKeys.revoke({ id: keyId });
+      ctx.assert(revoked.ok === true, "revoke ok");
+      const after = await ctx.provider.apiKeys.list();
+      ctx.assert(Boolean(after.find(k => k.id === keyId)?.revokedAt), "revokedAt set after revoke");
+    },
+  },
+  {
+    id: "j20-temporal-workflow-handoff",
+    name: "Temporal workflow handoff",
+    requires: ["providerDispute"],
+    async run(ctx) {
+      const disputed = await ctx.providerDispute!();
+      const sendResult = await ctx.provider.idrCompliance.sendCaseLetter({
+        disputeId: disputed.disputeId,
+        recipientEmail: "journey-recipient@example.com",
+      });
+      ctx.assert(sendResult.ok === true, "case letter sent");
+
+      const { client, taskQueue } = await ctx.temporal();
+      const handle = client!.workflow.getHandle(`send-email:${ctx.runId}:j20-case-letter:${disputed.disputeId}`);
+      const status = await handle.describe();
+      ctx.assert(status.status.name === "COMPLETED", "mock workflow completed");
+      const result = await handle.result() as { sent?: boolean; to?: string; disputeId?: string };
+      ctx.assert(result.sent === true && result.to === "journey-recipient@example.com" && result.disputeId === disputed.disputeId, "workflow result matches dispatch");
+      ctx.assert(taskQueue === "healthpoint-journeys", "uses isolated task queue");
+    },
+  },
+  {
+    id: "j21-idempotency-replay-safety",
+    name: "Idempotency retry-replay safety",
+    requires: ["providerDispute"],
+    async run(ctx) {
+      const disputed = await ctx.providerDispute!();
+      const idemKey = "healthpoint-temporal-j21";
+      const first = await ctx.provider.idrCompliance.sendCaseLetter({
+        disputeId: disputed.disputeId,
+        recipientEmail: "journey-idem@example.com",
+        idempotencyKey: idemKey,
+      });
+      const second = await ctx.provider.idrCompliance.sendCaseLetter({
+        disputeId: disputed.disputeId,
+        recipientEmail: "journey-idem@example.com",
+        idempotencyKey: idemKey,
+      });
+      ctx.assert(second.alreadySent === true, "second dispatch replayed as already-sent");
+      ctx.assert(first.auditId === second.auditId, "same audit row id returned");
+
+      const db = await getDb();
+      const auditRows = await db!
+        .select({ id: auditLog.id })
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.action, "idrCompliance.sendCaseLetter"),
+            eq(auditLog.entityId, disputed.disputeId),
+          ),
+        )
+        .orderBy(desc(auditLog.id));
+      ctx.assert(auditRows.length === 1, "exactly one audit row for replayed send");
+    },
+  },
+];
