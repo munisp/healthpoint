@@ -14,7 +14,7 @@ import { Users, Search, Shield, UserCheck, UserX, RefreshCw, Crown, Ban, CheckCi
 import { setImpersonationSession } from "@/components/ImpersonationBanner";
 import EmptyState from "@/components/EmptyState";
 
-type ActionType = "role" | "suspend" | "unsuspend";
+type ActionType = "role" | "suspend" | "unsuspend" | "offboard" | "delete";
 
 export default function AdminUserManagement() {
   const { user: currentUser } = useAuth();
@@ -63,6 +63,28 @@ export default function AdminUserManagement() {
     onError: (e) => toast.error(e.message),
   });
 
+  // O1.3/O1.4: offboarding cascade (disable access, revoke sessions) and
+  // soft-delete (offboard + PII anonymization), both fully audited.
+  const offboardMutation = trpc.admin.offboardUser.useMutation({
+    onSuccess: () => {
+      toast.success("User offboarded — access revoked and audit trail recorded");
+      setShowDialog(false);
+      setSuspendReason("");
+      refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const deleteMutation = trpc.admin.deleteUser.useMutation({
+    onSuccess: () => {
+      toast.success("User deleted — PII anonymized, row retained for statutory audit");
+      setShowDialog(false);
+      setSuspendReason("");
+      refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   // Wave W5-6: audited impersonation (15-min token; every request audited).
   const [impersonateUser, setImpersonateUser] = useState<any>(null);
   const [impersonateReason, setImpersonateReason] = useState("");
@@ -95,12 +117,18 @@ export default function AdminUserManagement() {
         reason: suspendReason || undefined,
         suspendUntil: suspendUntil ? new Date(suspendUntil).toISOString() : undefined,
       });
+    } else if (actionType === "offboard") {
+      if (!suspendReason.trim()) { toast.error("A reason is required for offboarding"); return; }
+      offboardMutation.mutate({ userId: selectedUser.id, reason: suspendReason.trim() });
+    } else if (actionType === "delete") {
+      if (!suspendReason.trim()) { toast.error("A reason is required for deletion"); return; }
+      deleteMutation.mutate({ userId: selectedUser.id, reason: suspendReason.trim() });
     } else {
       unsuspendMutation.mutate({ userId: selectedUser.id });
     }
   };
 
-  const isPending = updateRoleMutation.isPending || suspendMutation.isPending || unsuspendMutation.isPending;
+  const isPending = updateRoleMutation.isPending || suspendMutation.isPending || unsuspendMutation.isPending || offboardMutation.isPending || deleteMutation.isPending;
 
   if (currentUser?.role !== "admin") {
     return (
@@ -309,6 +337,8 @@ export default function AdminUserManagement() {
               {actionType === "role" && <><Shield className="h-4 w-4" />Change User Role</>}
               {actionType === "suspend" && <><Ban className="h-4 w-4 text-red-500" />Suspend User</>}
               {actionType === "unsuspend" && <><CheckCircle2 className="h-4 w-4 text-green-500" />Restore User Access</>}
+              {actionType === "offboard" && <><UserX className="h-4 w-4 text-orange-500" />Offboard User</>}
+              {actionType === "delete" && <><UserX className="h-4 w-4 text-red-600" />Delete User (anonymize PII)</>}
             </DialogTitle>
           </DialogHeader>
 
@@ -365,15 +395,41 @@ export default function AdminUserManagement() {
             </p>
           )}
 
+          {(actionType === "offboard" || actionType === "delete") && (
+            <div className="space-y-4">
+              <div className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-950/20 rounded-lg">
+                <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                <p className="text-sm text-red-700 dark:text-red-400">
+                  {actionType === "offboard" ? (
+                    <><strong>{selectedUser?.name}</strong> will be offboarded: sessions and tokens revoked, access disabled. This is recorded in the audit log.</>
+                  ) : (
+                    <><strong>{selectedUser?.name}</strong> will be offboarded and their PII (name, email, credentials) permanently anonymized. The row and audit trail are retained for statutory record-keeping. This cannot be undone.</>
+                  )}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="offboard-reason">Reason (required)</Label>
+                <Textarea
+                  id="offboard-reason"
+                  placeholder="Offboarding reason (recorded in the audit log)"
+                  value={suspendReason}
+                  onChange={e => setSuspendReason(e.target.value)}
+                  rows={2}
+                  maxLength={500}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-3 pt-2">
             <Button variant="outline" className="flex-1" onClick={() => setShowDialog(false)}>Cancel</Button>
             <Button
-              className={`flex-1 ${actionType === "suspend" ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
+              className={`flex-1 ${actionType === "suspend" || actionType === "delete" ? "bg-red-600 hover:bg-red-700 text-white" : ""} ${actionType === "offboard" ? "bg-orange-600 hover:bg-orange-700 text-white" : ""}`}
               variant={actionType === "unsuspend" ? "default" : "default"}
               onClick={handleConfirm}
               disabled={isPending}
             >
-              {isPending ? "Processing..." : actionType === "role" ? "Confirm" : actionType === "suspend" ? "Suspend User" : "Restore Access"}
+              {isPending ? "Processing..." : actionType === "role" ? "Confirm" : actionType === "suspend" ? "Suspend User" : actionType === "offboard" ? "Offboard User" : actionType === "delete" ? "Delete User" : "Restore Access"}
             </Button>
           </div>
         </DialogContent>
