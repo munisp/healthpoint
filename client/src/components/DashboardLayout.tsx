@@ -113,6 +113,7 @@ import { useLocation } from "wouter";
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal";
 import OnboardingTour from "./OnboardingTour";
 import MobileNavFab from "./MobileNavFab";
+import SessionTimeoutWarning from "./SessionTimeoutWarning";
 import { useRecentDisputes } from "../hooks/useRecentDisputes";
 import { usePinnedDisputes } from "../hooks/usePinnedDisputes";
 import { useMyBranding } from "../hooks/useBranding";
@@ -848,6 +849,7 @@ function DashboardLayoutContent({
           </div>
         </header>
         <main id="main-content" tabIndex={-1} className="flex-1 p-6">{children}</main>
+        <SessionTimeoutWarning />
       </SidebarInset>
     </>
   );
@@ -950,7 +952,7 @@ function SidebarToggleButton() {
       onClick={toggleSidebar}
       aria-label="Toggle sidebar"
     >
-      <PanelLeft className="h-4 w-4" />
+      <PanelLeft className="h-5 w-5" />
     </Button>
   );
 }
