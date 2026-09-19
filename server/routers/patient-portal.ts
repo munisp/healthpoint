@@ -18,14 +18,21 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { router, protectedProcedure, publicProcedure } from "../_core/trpc";
-import { addDocument } from "../db";
+import { addDocument, createAuditEntry } from "../db";
 import { disputes } from "../../drizzle/schema";
 import { patientAccessTokens } from "../../drizzle/schema-personas";
 import { assertPatientToken, hashPatientToken, loadDispute, markPatientTokenUsed, requireDb } from "../personas/guards";
 import { evaluatePpdrEligibility, createPpdrDispute, transition as ppdrTransition, type PpdrDispute } from "../gfe-ppdr/ppdr";
 import { getFsmCaseStore } from "../fsm-store/store";
+
+/** G4: revoked tokens must never grant access, even before expiry. */
+function assertNotRevoked(tokenRow: { revokedAt: Date | null }) {
+  if (tokenRow.revokedAt) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "This patient access link has been revoked" });
+  }
+}
 
 /** 14-day patient link expiry (v1 policy constant). */
 const PATIENT_LINK_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -131,8 +138,46 @@ export const patientPortalRouter = router({
         .filter(r => r.disputeId === input.disputeId)
         .map(r => ({
           id: r.id, patientName: r.patientName, scope: r.scope,
-          expiresAt: r.expiresAt, usedAt: r.usedAt, createdAt: r.createdAt,
+          expiresAt: r.expiresAt, usedAt: r.usedAt, revokedAt: r.revokedAt, createdAt: r.createdAt,
         }));
+    }),
+
+  /**
+   * G4: revoke a patient access token immediately (provider who issued it,
+   * dispute initiator, or admin). Idempotent; audit-logged.
+   */
+  revokeToken: protectedProcedure
+    .input(z.object({ tokenId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const rows = await db.select().from(patientAccessTokens)
+        .where(eq(patientAccessTokens.id, input.tokenId)).limit(1);
+      const tokenRow = rows[0];
+      if (!tokenRow) throw new TRPCError({ code: "NOT_FOUND", message: "Patient access token not found" });
+      const isAdmin = ctx.user.role === "admin";
+      let isAuthorized = isAdmin || tokenRow.createdByUserId === ctx.user.id;
+      if (!isAuthorized && tokenRow.disputeId) {
+        const dispute = await loadDispute(db, tokenRow.disputeId);
+        isAuthorized = dispute.initiatingPartyId === ctx.user.id || dispute.createdBy === ctx.user.id;
+      }
+      if (!isAuthorized) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only the issuing provider, dispute initiator, or an admin may revoke a patient link" });
+      }
+      if (!tokenRow.revokedAt) {
+        await db.update(patientAccessTokens).set({ revokedAt: new Date() })
+          .where(and(eq(patientAccessTokens.id, tokenRow.id), isNull(patientAccessTokens.revokedAt)));
+      }
+      await createAuditEntry({
+        userId: ctx.user.id,
+        action: "patientPortal.revokeToken",
+        entityType: "patient_access_token",
+        entityId: tokenRow.id,
+        oldValue: JSON.stringify({ revokedAt: tokenRow.revokedAt }),
+        newValue: JSON.stringify({ revokedAt: new Date(), alreadyRevoked: !!tokenRow.revokedAt }),
+        ipAddress: null,
+        userAgent: null,
+      });
+      return { ok: true as const, alreadyRevoked: !!tokenRow.revokedAt };
     }),
 
   // ── Public, token-guarded (no login) ───────────────────────────────────────
@@ -142,6 +187,7 @@ export const patientPortalRouter = router({
     .input(z.object({ token: z.string().min(1) }))
     .query(async ({ input }) => {
       const { db, tokenRow } = await assertPatientToken(input.token, "view");
+      assertNotRevoked(tokenRow);
       if (!tokenRow.disputeId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This token is not linked to a dispute" });
       }
@@ -172,8 +218,8 @@ export const patientPortalRouter = router({
       const hash = hashPatientToken(input.token);
       const rows = await db.select().from(patientAccessTokens).where(eq(patientAccessTokens.tokenHash, hash));
       const tokenRow = rows.find(r => r.scope === "view");
-      if (!tokenRow || tokenRow.expiresAt < new Date()) {
-        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid or expired patient access token" });
+      if (!tokenRow || tokenRow.expiresAt < new Date() || tokenRow.revokedAt) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid, expired, or revoked patient access token" });
       }
       if (!tokenRow.disputeId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This token is not linked to a dispute" });
@@ -212,6 +258,7 @@ export const patientPortalRouter = router({
     }))
     .mutation(async ({ input }) => {
       const { db, tokenRow } = await assertPatientToken(input.token, "ppdr_intake");
+      assertNotRevoked(tokenRow);
       const eligibility = evaluatePpdrEligibility({
         gfeTotalUsd: input.gfeTotalUsd,
         billedTotalUsd: input.billedTotalUsd,
