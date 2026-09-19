@@ -622,6 +622,24 @@ async function assertMembership(userId: string, orgId: string) {
   return { db, membership: rows[0] };
 }
 
+/**
+ * Phase13-FC (G8): org suspension guard. Org-scoped MUTATIONS by members of
+ * a suspended organization are blocked; queries stay allowed so members can
+ * see the suspension state. Platform admins are NOT exempt for member-level
+ * mutations (suspension is a billing/compliance hold, not a permissions
+ * issue) — admins act via orgs.suspendOrg/unsuspendOrg.
+ */
+export async function assertOrgNotSuspended(db: Awaited<ReturnType<typeof requireDb>>, orgId: string) {
+  const org = (await db.select({ status: organizations.status }).from(organizations)
+    .where(eq(organizations.id, orgId)).limit(1))[0];
+  if (org?.status === "suspended") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "org_suspended: this organization is suspended; write operations are disabled until an administrator reactivates it",
+    });
+  }
+}
+
 export const orgsRouter = router({
   create: protectedProcedure
     .input(z.object({
@@ -646,7 +664,7 @@ export const orgsRouter = router({
     const byId = new Map(orgs.map(o => [o.id, o]));
     return memberships
       .filter(m => byId.has(m.orgId))
-      .map(m => ({ orgId: m.orgId, role: m.role, name: byId.get(m.orgId)!.name, type: byId.get(m.orgId)!.type }));
+      .map(m => ({ orgId: m.orgId, role: m.role, name: byId.get(m.orgId)!.name, type: byId.get(m.orgId)!.type, status: byId.get(m.orgId)!.status }));
   }),
 
   addMember: protectedProcedure
@@ -657,6 +675,7 @@ export const orgsRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const { db, membership } = await assertMembership(ctx.user.id, input.orgId);
+      await assertOrgNotSuspended(db, input.orgId);
       if (membership.role !== "owner" && ctx.user.role !== "admin") {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only org owners may add members" });
       }
@@ -690,6 +709,7 @@ export const orgsRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const { db, membership } = await assertMembership(ctx.user.id, input.orgId);
+      await assertOrgNotSuspended(db, input.orgId);
       if (membership.role !== "owner" && ctx.user.role !== "admin") {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only org owners may invite members" });
       }
@@ -759,6 +779,7 @@ export const orgsRouter = router({
       let membershipId: string | null = null;
       let activatedLinks = 0;
       if (invite.purpose === "org_member" && invite.orgId) {
+        await assertOrgNotSuspended(db, invite.orgId);
         const existing = await db.select().from(orgMemberships)
           .where(and(eq(orgMemberships.orgId, invite.orgId), eq(orgMemberships.userId, ctx.user.id))).limit(1);
         if (existing.length) {
@@ -835,6 +856,7 @@ export const orgsRouter = router({
     .input(z.object({ orgId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { db, membership } = await assertMembership(ctx.user.id, input.orgId);
+      await assertOrgNotSuspended(db, input.orgId);
       const org = (await db.select().from(organizations).where(eq(organizations.id, input.orgId)).limit(1))[0];
       if (!org) throw new TRPCError({ code: "NOT_FOUND", message: "Organization not found" });
       return {
@@ -934,6 +956,7 @@ export const orgsRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const { db, membership } = await assertMembership(ctx.user.id, input.orgId);
+      await assertOrgNotSuspended(db, input.orgId);
       if (membership.role !== "owner" && ctx.user.role !== "admin") {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only org owners may edit branding" });
       }
@@ -949,5 +972,71 @@ export const orgsRouter = router({
         WHERE id = ${input.orgId}
       `);
       return { ok: true as const };
+    }),
+
+  /**
+   * Phase13-FC (G8): admin org suspension. Suspending blocks all org-scoped
+   * member mutations (assertOrgNotSuspended); reads stay available. Both
+   * transitions require a reason and are audit-logged
+   * (org.suspend / org.unsuspend).
+   */
+  suspendOrg: protectedProcedure
+    .input(z.object({
+      orgId: z.string().min(1).max(64),
+      reason: z.string().min(10, "A suspension reason of at least 10 characters is required").max(1000),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
+      const db = await requireDb();
+      const org = (await db.select().from(organizations).where(eq(organizations.id, input.orgId)).limit(1))[0];
+      if (!org) throw new TRPCError({ code: "NOT_FOUND", message: "Organization not found" });
+      if (org.status === "suspended") return { ok: true as const, status: "suspended" as const, alreadySuspended: true };
+      await db.update(organizations).set({
+        status: "suspended",
+        suspendedAt: new Date(),
+        suspendedByUserId: ctx.user.id,
+        suspensionReason: input.reason,
+      }).where(eq(organizations.id, input.orgId));
+      await createAuditEntry({
+        userId: ctx.user.id,
+        action: "org.suspend",
+        entityType: "organization",
+        entityId: input.orgId,
+        oldValue: JSON.stringify({ status: org.status }),
+        newValue: JSON.stringify({ status: "suspended", reason: input.reason }),
+        ipAddress: null,
+        userAgent: null,
+      });
+      return { ok: true as const, status: "suspended" as const, alreadySuspended: false };
+    }),
+
+  unsuspendOrg: protectedProcedure
+    .input(z.object({
+      orgId: z.string().min(1).max(64),
+      reason: z.string().min(10, "A reinstatement reason of at least 10 characters is required").max(1000),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
+      const db = await requireDb();
+      const org = (await db.select().from(organizations).where(eq(organizations.id, input.orgId)).limit(1))[0];
+      if (!org) throw new TRPCError({ code: "NOT_FOUND", message: "Organization not found" });
+      if (org.status !== "suspended") return { ok: true as const, status: org.status as "active", alreadyActive: true };
+      await db.update(organizations).set({
+        status: "active",
+        suspendedAt: null,
+        suspendedByUserId: null,
+        suspensionReason: null,
+      }).where(eq(organizations.id, input.orgId));
+      await createAuditEntry({
+        userId: ctx.user.id,
+        action: "org.unsuspend",
+        entityType: "organization",
+        entityId: input.orgId,
+        oldValue: JSON.stringify({ status: "suspended", suspensionReason: org.suspensionReason }),
+        newValue: JSON.stringify({ status: "active", reason: input.reason }),
+        ipAddress: null,
+        userAgent: null,
+      });
+      return { ok: true as const, status: "active" as const, alreadyActive: false };
     }),
 });
