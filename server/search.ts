@@ -48,7 +48,9 @@ function getOpenSearchClient(): OpenSearchClient | null {
       auth: process.env.OPENSEARCH_USER
         ? { username: process.env.OPENSEARCH_USER, password: process.env.OPENSEARCH_PASSWORD || "" }
         : undefined,
-      ssl: { rejectUnauthorized: false },
+      // OPENSEARCH_VERIFY_TLS=true enforces certificate verification (recommended
+      // in production); anything else keeps the legacy lenient behavior.
+      ssl: { rejectUnauthorized: process.env.OPENSEARCH_VERIFY_TLS === "true" },
     });
     return _osClient;
   } catch {
