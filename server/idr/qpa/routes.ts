@@ -7,12 +7,16 @@
  * registered separately from the pre-existing illustrative `qpa` router
  * (which remains untouched); it is the §149.140 median-of-contracted-rates
  * computation path.
+ *
+ * Phase 13 FB (O5): qpaServiceCodeFirstSeen is now wired — the Postgres store
+ * implements getFirstSeenDate/recordFirstSeenDate against the table and the
+ * compute route feeds loadFirstSeenDates() into computeQPA.
  */
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, protectedProcedure } from "../../_core/trpc";
-import { qpaContractedRates, qpaIngestionBatches, qpaCpiFactors } from "../../../drizzle/schema-qpa";
+import { qpaContractedRates, qpaIngestionBatches, qpaCpiFactors, qpaServiceCodeFirstSeen } from "../../../drizzle/schema-qpa";
 import { computeQPA } from "./engine";
 import {
   ingestContractedRates,
@@ -65,6 +69,7 @@ export function createPostgresStore(db: any): ContractedRateStore & {
   loadRates(): Promise<ContractedRateRow[]>;
   loadCpiFactors(): Promise<CpiFactorTable | null>;
   batchStats(): Promise<{ batches: number; rates: number; cpiYears: number }>;
+  loadFirstSeenDates(): Promise<Record<string, string>>;
 } {
   return {
     async findBatchByContentHash(contentHash: string) {
@@ -146,6 +151,38 @@ export function createPostgresStore(db: any): ContractedRateStore & {
       const cpi = await db.select({ year: qpaCpiFactors.year }).from(qpaCpiFactors);
       return { batches: batches.length, rates: rates.length, cpiYears: cpi.length };
     },
+    // W1-F8 (149.140(c)(3)): durable per-code first-seen tracking. Ingestion
+    // keeps the EARLIEST day; the QPA engine consumes the map below.
+    async getFirstSeenDate(serviceCode: string) {
+      const rows = await db
+        .select({ firstSeenDate: qpaServiceCodeFirstSeen.firstSeenDate })
+        .from(qpaServiceCodeFirstSeen)
+        .where(eq(qpaServiceCodeFirstSeen.serviceCode, serviceCode.trim().toUpperCase()))
+        .limit(1);
+      return rows[0]?.firstSeenDate ?? null;
+    },
+    async recordFirstSeenDate(serviceCode: string, firstSeenDate: string, batchId: string) {
+      // Read-modify-write (ingestion is admin-only, low volume): keep the
+      // earliest observed day so replays never move the window later.
+      const code = serviceCode.trim().toUpperCase();
+      const cur = await db.select({ firstSeenDate: qpaServiceCodeFirstSeen.firstSeenDate })
+        .from(qpaServiceCodeFirstSeen).where(eq(qpaServiceCodeFirstSeen.serviceCode, code)).limit(1);
+      if (!cur.length) {
+        await db.insert(qpaServiceCodeFirstSeen)
+          .values({ serviceCode: code, firstSeenDate, batchId, updatedAt: new Date() })
+          .onConflictDoNothing({ target: qpaServiceCodeFirstSeen.serviceCode });
+      } else if (firstSeenDate < cur[0].firstSeenDate) {
+        await db.update(qpaServiceCodeFirstSeen)
+          .set({ firstSeenDate, batchId, updatedAt: new Date() })
+          .where(eq(qpaServiceCodeFirstSeen.serviceCode, code));
+      }
+    },
+    async loadFirstSeenDates(): Promise<Record<string, string>> {
+      const rows = await db.select().from(qpaServiceCodeFirstSeen);
+      const map: Record<string, string> = {};
+      for (const r of rows) map[r.serviceCode] = r.firstSeenDate;
+      return map;
+    },
   };
 }
 
@@ -181,11 +218,12 @@ export const qpaEngineRouter = router({
         };
       }
       const store = createPostgresStore(db);
-      const [rates, cpiFactors] = await Promise.all([store.loadRates(), store.loadCpiFactors()]);
+      const [rates, cpiFactors, serviceCodeFirstSeen] = await Promise.all([store.loadRates(), store.loadCpiFactors(), store.loadFirstSeenDates()]);
       const batches = await db.select().from(qpaIngestionBatches);
       return computeQPA(input, {
         rates,
         cpiFactors: cpiFactors ?? loadCpiFactorsFromEnv(),
+        serviceCodeFirstSeen,
         provenance: batches.map((b: any) => ({
           sourceType: b.sourceType as ProvenanceSourceType,
           sourceRef: b.sourceRef,
