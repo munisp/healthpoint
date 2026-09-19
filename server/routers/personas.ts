@@ -18,12 +18,13 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { router, protectedProcedure, publicProcedure } from "../_core/trpc";
 import { sql } from "drizzle-orm";
 import {
   acceptOffer as acceptOfferDb,
   advanceDisputeStep,
+  createAuditEntry,
   createNotification,
   getDisputeById,
   submitOffer as submitOfferDb,
@@ -32,17 +33,74 @@ import {
   disputeEvents,
   disputes,
   settlementTransfers,
+  users,
 } from "../../drizzle/schema";
 import {
   idreAssignments,
+  inviteTokens,
   organizations,
   orgMemberships,
   payerAccounts,
   payerCaseLinks,
   type CoiAttestation,
 } from "../../drizzle/schema-personas";
-import { assertPayerLink, loadDispute, requireDb } from "../personas/guards";
+import { assertPayerLink, hashPatientToken, loadDispute, requireDb } from "../personas/guards";
 import { screenProhibitedBasis } from "../personas/prohibited-basis";
+import { dispatchNotification } from "../notifications";
+
+/** Phase13-FA (G1): invite links live 14 days, same policy as patient links. */
+const INVITE_TOKEN_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Issue an email-delivered invite token and send it through the existing
+ * notifications pipeline (server/notifications.ts — retry-queued on provider
+ * failure; honestly reported 'unconfigured' when no SMTP/SendGrid exists).
+ * The raw token is returned to the caller exactly once; only its sha256 hash
+ * is persisted. In-app notification remains as a fallback when a matching
+ * platform user already exists.
+ */
+async function issueInviteToken(args: {
+  email: string;
+  purpose: "payer_invite" | "org_member";
+  invitedByUserId: string;
+  orgId?: string | null;
+  orgRole?: string | null;
+  payerAccountId?: string | null;
+  disputeId?: string | null;
+  subject: string;
+  message: string;
+  disputeRef: string;
+}): Promise<{ inviteId: string; emailStatus: string }> {
+  const db = await requireDb();
+  const rawToken = crypto.randomBytes(32).toString("base64url");
+  const inviteId = crypto.randomUUID();
+  await db.insert(inviteTokens).values({
+    id: inviteId,
+    tokenHash: hashPatientToken(rawToken),
+    email: args.email,
+    purpose: args.purpose,
+    orgId: args.orgId ?? null,
+    orgRole: args.orgRole ?? null,
+    payerAccountId: args.payerAccountId ?? null,
+    disputeId: args.disputeId ?? null,
+    invitedByUserId: args.invitedByUserId,
+    expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS),
+  });
+  const baseUrl = (process.env.PUBLIC_APP_URL ?? process.env.VITE_APP_URL ?? "").replace(/\/$/, "");
+  const acceptUrl = `${baseUrl || ""}/accept-invite?token=${rawToken}`;
+  const results = await dispatchNotification({
+    type: "system_alert",
+    recipientEmail: args.email,
+    disputeRef: args.disputeRef,
+    title: args.subject,
+    message: `${args.message}\n\nAccept the invitation: ${acceptUrl}\n\nThis link expires in 14 days. If you did not expect this invitation, ignore this email.`,
+  });
+  const emailStatus = results[0]?.deliveryStatus ?? "skipped";
+  if (emailStatus !== "delivered") {
+    console.warn(`[invite] email to ${args.email} not delivered (status=${emailStatus}); invite token ${inviteId} recorded, in-app fallback applies`);
+  }
+  return { inviteId, emailStatus };
+}
 
 const moneySchema = z.string().regex(/^\d+(\.\d{1,2})?$/, "amount must be a positive decimal string");
 
@@ -71,13 +129,26 @@ export const payerRouter = router({
       }
       let account = (await db.select().from(payerAccounts).where(eq(payerAccounts.contactEmail, input.contactEmail)).limit(1))[0];
       if (!account) {
-        account = (await db.insert(payerAccounts).values({
-          id: crypto.randomUUID(),
-          payerName: input.payerName,
-          contactEmail: input.contactEmail,
-          orgRef: null,
-          apiKeyHash: null,
-        }).returning())[0];
+        // G7: unique index on payer_accounts.contactEmail guards races; a
+        // concurrent insert surfaces as a friendly 409 instead of a silent
+        // duplicate that would mis-bind via accounts[0] email resolution.
+        try {
+          account = (await db.insert(payerAccounts).values({
+            id: crypto.randomUUID(),
+            payerName: input.payerName,
+            contactEmail: input.contactEmail,
+            orgRef: null,
+            apiKeyHash: null,
+          }).returning())[0];
+        } catch (err: any) {
+          if (String(err?.code) === "23505" || /duplicate key/i.test(String(err?.message))) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `A payer account already exists for ${input.contactEmail}. Re-invite the existing account or contact an admin to merge duplicates.`,
+            });
+          }
+          throw err;
+        }
       }
       let link = (await db.select().from(payerCaseLinks).where(and(
         eq(payerCaseLinks.payerAccountId, account.id),
@@ -103,16 +174,31 @@ export const payerRouter = router({
         performedByName: ctx.user.name ?? undefined,
         metadata: { payerAccountId: account.id, contactEmail: input.contactEmail },
       });
-      // Notify the payer's platform user when one exists for the contact email.
+      // G1: notify the payer's platform user in-app when one exists for the
+      // contact email (previously userId:null — invisible to everyone), and
+      // send a real invite email with a signed accept-link via the
+      // notifications pipeline (honest 'unconfigured' when SMTP is absent).
+      const payerUser = (await db.select({ id: users.id }).from(users)
+        .where(eq(users.email, input.contactEmail)).limit(1))[0];
       await createNotification({
         disputeId: input.disputeId,
-        userId: null,
+        userId: payerUser?.id ?? null,
         dueDate: null,
         notificationType: "payer_invite",
         title: "Payer invited to dispute",
         message: `Payer "${input.payerName}" (${input.contactEmail}) was invited to dispute ${dispute.referenceNumber}.`,
       });
-      return { payerAccountId: account.id, linkId: link.id, status: link.status };
+      const invite = await issueInviteToken({
+        email: input.contactEmail,
+        purpose: "payer_invite",
+        invitedByUserId: ctx.user.id,
+        payerAccountId: account.id,
+        disputeId: input.disputeId,
+        subject: "You've been invited to respond to an IDR dispute",
+        message: `Payer "${input.payerName}" was invited to dispute ${dispute.referenceNumber}. Sign in (or register) with this email address, then open the accept link below to activate your case access.`,
+        disputeRef: dispute.referenceNumber,
+      });
+      return { payerAccountId: account.id, linkId: link.id, status: link.status, inviteId: invite.inviteId, inviteEmailStatus: invite.emailStatus };
     }),
 
   /** Payer-side queue: disputes linked to the caller's payer account. */
@@ -588,6 +674,158 @@ export const orgsRouter = router({
       const { db } = await assertMembership(ctx.user.id, input.orgId);
       return db.select().from(orgMemberships).where(eq(orgMemberships.orgId, input.orgId));
     }),
+
+  /**
+   * G1: invite a (possibly not-yet-registered) user to an org by email.
+   * Sends a real email with a signed accept-link via the notifications
+   * pipeline (retry-queued; honestly 'unconfigured' without SMTP), plus an
+   * in-app notification when a matching platform user already exists.
+   * Acceptance happens via acceptInvite on/after first login.
+   */
+  inviteMember: protectedProcedure
+    .input(z.object({
+      orgId: z.string().min(1),
+      email: z.string().email().max(320),
+      role: z.enum(["staff", "viewer"]).default("staff"),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { db, membership } = await assertMembership(ctx.user.id, input.orgId);
+      if (membership.role !== "owner" && ctx.user.role !== "admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only org owners may invite members" });
+      }
+      const org = (await db.select().from(organizations).where(eq(organizations.id, input.orgId)).limit(1))[0];
+      if (!org) throw new TRPCError({ code: "NOT_FOUND", message: "Organization not found" });
+      const existingUser = (await db.select({ id: users.id }).from(users)
+        .where(eq(users.email, input.email)).limit(1))[0];
+      if (existingUser) {
+        const existingMembership = await db.select().from(orgMemberships)
+          .where(and(eq(orgMemberships.orgId, input.orgId), eq(orgMemberships.userId, existingUser.id))).limit(1);
+        if (existingMembership.length) {
+          throw new TRPCError({ code: "CONFLICT", message: "This user is already a member of the organization" });
+        }
+        // In-app fallback notification: the notifications table requires a
+        // disputeId, which org invites do not have — the audit entry +
+        // invite email are the delivery record for org invites.
+      }
+      const invite = await issueInviteToken({
+        email: input.email,
+        purpose: "org_member",
+        invitedByUserId: ctx.user.id,
+        orgId: input.orgId,
+        orgRole: input.role,
+        subject: `Invitation to join ${org.name} on HealthPoint IDR`,
+        message: `You were invited to join organization "${org.name}" (${org.type}) as ${input.role}. Sign in (or register) with this email address, then open the accept link below.`,
+        disputeRef: `ORG-${org.name}`,
+      });
+      await createAuditEntry({
+        userId: ctx.user.id,
+        action: "org.inviteMember",
+        entityType: "organization",
+        entityId: input.orgId,
+        oldValue: null,
+        newValue: JSON.stringify({ email: input.email, role: input.role, inviteId: invite.inviteId, emailStatus: invite.emailStatus }),
+        ipAddress: null,
+        userAgent: null,
+      });
+      return { inviteId: invite.inviteId, inviteEmailStatus: invite.emailStatus, existingUser: !!existingUser };
+    }),
+
+  /**
+   * G1: accept an email invite. Binds the caller to the org+role
+   * (org_member) or activates payer case links (payer_invite). The invite
+   * email must match the caller's account email; tokens are single-use and
+   * expire after 14 days.
+   */
+  acceptInvite: protectedProcedure
+    .input(z.object({ token: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const rows = await db.select().from(inviteTokens)
+        .where(eq(inviteTokens.tokenHash, hashPatientToken(input.token))).limit(1);
+      const invite = rows[0];
+      if (!invite || invite.revokedAt) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found or revoked" });
+      }
+      if (invite.acceptedAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invite already accepted" });
+      }
+      if (invite.expiresAt < new Date()) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invite link has expired — ask the inviter to re-send" });
+      }
+      const userEmail = (ctx.user.email ?? "").toLowerCase();
+      if (!userEmail || invite.email.toLowerCase() !== userEmail) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "This invite was issued to a different email address" });
+      }
+      let membershipId: string | null = null;
+      let activatedLinks = 0;
+      if (invite.purpose === "org_member" && invite.orgId) {
+        const existing = await db.select().from(orgMemberships)
+          .where(and(eq(orgMemberships.orgId, invite.orgId), eq(orgMemberships.userId, ctx.user.id))).limit(1);
+        if (existing.length) {
+          membershipId = existing[0].id;
+        } else {
+          membershipId = crypto.randomUUID();
+          await db.insert(orgMemberships).values({
+            id: membershipId,
+            orgId: invite.orgId,
+            userId: ctx.user.id,
+            role: (invite.orgRole as "owner" | "staff" | "viewer") ?? "staff",
+          });
+        }
+      } else if (invite.purpose === "payer_invite" && invite.payerAccountId) {
+        const updated = await db.update(payerCaseLinks).set({ status: "active" })
+          .where(and(
+            eq(payerCaseLinks.payerAccountId, invite.payerAccountId),
+            eq(payerCaseLinks.status, "invited"),
+          )).returning({ id: payerCaseLinks.id });
+        activatedLinks = updated.length;
+      }
+      await db.update(inviteTokens).set({ acceptedAt: new Date(), acceptedByUserId: ctx.user.id })
+        .where(eq(inviteTokens.id, invite.id));
+      await createAuditEntry({
+        userId: ctx.user.id,
+        action: "invite.accept",
+        entityType: "invite_token",
+        entityId: invite.id,
+        oldValue: null,
+        newValue: JSON.stringify({ purpose: invite.purpose, orgId: invite.orgId, payerAccountId: invite.payerAccountId, membershipId, activatedLinks }),
+        ipAddress: null,
+        userAgent: null,
+      });
+      return { ok: true as const, purpose: invite.purpose, membershipId, activatedLinks };
+    }),
+
+  /**
+   * G2: one-time first-admin bootstrap. When ZERO active admin users exist,
+   * any authenticated user may claim the platform admin role exactly once;
+   * the claim is audit-logged as `admin.bootstrap`. Refused while any active
+   * admin exists (normal path: admin.updateUserRole).
+   */
+  claimBootstrapAdmin: protectedProcedure
+    .mutation(async ({ ctx }) => {
+      const db = await requireDb();
+      const admins = await db.select({ id: users.id }).from(users)
+        .where(and(eq(users.role, "admin"), isNull(users.suspendedAt))).limit(1);
+      if (admins.length) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Bootstrap unavailable: an active platform admin already exists. Ask an admin to grant the role via admin.updateUserRole.",
+        });
+      }
+      await db.update(users).set({ role: "admin" }).where(eq(users.id, ctx.user.id));
+      await createAuditEntry({
+        userId: ctx.user.id,
+        action: "admin.bootstrap",
+        entityType: "user",
+        entityId: ctx.user.id,
+        oldValue: JSON.stringify({ role: ctx.user.role }),
+        newValue: JSON.stringify({ role: "admin", reason: "first-admin bootstrap (zero active admins)" }),
+        ipAddress: null,
+        userAgent: null,
+      });
+      return { ok: true as const, role: "admin" as const };
+    }),
+
 
   /**
    * Switch the caller's working context to an org. v1 returns the org-scoped
