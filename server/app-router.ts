@@ -26,6 +26,9 @@ import { feeSchedulesRouter } from "./routers/fee-schedules";
 import { featureFlagsRouter } from "./feature-flags";
 import { impersonationRouter } from "./impersonation";
 import { unsubscribeRouter } from "./routers/unsubscribe";
+// phase13-fc additions (G6 identity verification, G14b admin TOTP reset)
+import { identityRouter } from "./auth/nppes";
+import { adminTotpRouter } from "./auth/totp-admin";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -42,7 +45,10 @@ export const rootRouter = mergeRouters(
   router({ featureFlags: featureFlagsRouter }),
   router({ impersonation: impersonationRouter }),
   // wave-w7 additions
-  router({ unsubscribe: unsubscribeRouter })
+  router({ unsubscribe: unsubscribeRouter }),
+  // phase13-fc additions
+  router({ identity: identityRouter }),
+  router({ adminTotp: adminTotpRouter })
 );
 
 export type RootRouter = typeof rootRouter;
