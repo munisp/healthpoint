@@ -23,13 +23,16 @@
  *    the same bucket, so rollouts are stable and monotonic — increasing the
  *    percentage only ADDS users. Anonymous callers (no userId) are bucketed
  *    on the literal "anonymous" identity.
+ *
+ * Phase 13 FB (O1.36-38): the admin list/set/remove procedures were REMOVED
+ * (zero callers, no flag-admin UI exists). Flags are managed via the flags.*
+ * helpers (seed/ops scripts) until an admin UI is built.
  */
 import crypto from "node:crypto";
 import { z } from "zod";
-import { TRPCError } from "@trpc/server";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
+import { router, publicProcedure } from "./_core/trpc";
 
 export interface FeatureFlag {
   key: string;
@@ -109,13 +112,6 @@ export const flags = {
   },
 };
 
-const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  if (ctx.user.role !== "admin") {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
-  }
-  return next({ ctx });
-});
-
 export const featureFlagsRouter = router({
   /** Public check — pages gate themselves on this. Default-ON semantics. */
   check: publicProcedure
@@ -123,26 +119,5 @@ export const featureFlagsRouter = router({
     .query(async ({ input, ctx }) => {
       const enabled = await flags.isEnabled(input.key, input.userId ?? ctx.user?.id);
       return { key: input.key, enabled };
-    }),
-
-  list: adminProcedure.query(async () => flags.list()),
-
-  set: adminProcedure
-    .input(z.object({
-      key: z.string().min(1).max(128).regex(/^[a-z0-9][a-z0-9._-]*$/i, "Flag keys: alphanumeric plus . _ -"),
-      enabled: z.boolean(),
-      rolloutPercent: z.number().int().min(0).max(100).default(100),
-      description: z.string().max(500).optional(),
-    }))
-    .mutation(async ({ input, ctx }) => {
-      await flags.set(input.key, input.enabled, input.rolloutPercent, input.description ?? null, ctx.user.id);
-      return { success: true };
-    }),
-
-  remove: adminProcedure
-    .input(z.object({ key: z.string().min(1).max(128) }))
-    .mutation(async ({ input }) => {
-      await flags.remove(input.key);
-      return { success: true };
     }),
 });

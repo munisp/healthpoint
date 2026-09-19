@@ -94,6 +94,15 @@ export async function runNoticeConsentExpirySweep(now: Date = new Date()): Promi
         now,
       });
       expired++;
+      // O9: publish consent.expired so audit/webhook consumers see the sweep.
+      const { eventBus } = await import("../events/bus");
+      eventBus.publish(
+        "consent.expired",
+        row.caseId,
+        "notice_consent_case",
+        { tenantId: row.tenantId, caseId: row.caseId, reasons: verdict.reasons },
+        { timestamp: now.toISOString() },
+      ).catch((e) => console.warn("[EventBus] consent.expired publish failed", e));
     } catch (err) {
       errors++;
       console.error(
