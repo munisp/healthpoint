@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import WorkflowTimeline from "@/components/WorkflowTimeline";
 import DeadlineCountdownBanner from "@/components/DeadlineCountdownBanner";
+import DuplicateDetectionBanner from "@/components/DuplicateDetectionBanner";
 import OutcomePredictionGauge from "@/components/OutcomePredictionGauge";
 import DisputeComments from "@/components/DisputeComments";
 import { useRecentDisputes } from "@/hooks/useRecentDisputes";
@@ -375,6 +376,15 @@ export default function DisputeDetail() {
           currentStep={dispute.currentStep}
           deadlineDays={(dispute as any).deadlineDays ?? 99}
           deadlineDate={(dispute as any).deadlineDate}
+        />
+      )}
+      {/* Duplicate detection banner — surfaces similar open disputes */}
+      {dispute && (
+        <DuplicateDetectionBanner
+          disputeId={dispute.id}
+          claimNumber={dispute.referenceNumber}
+          payerName={dispute.respondingPartyName}
+          billedAmount={dispute.billedAmount != null ? String(dispute.billedAmount) : null}
         />
       )}
         {/* Page header */}
