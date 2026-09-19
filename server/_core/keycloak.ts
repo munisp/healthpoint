@@ -363,8 +363,11 @@ export function registerKeycloakRoutes(app: Express) {
       // not enrolled yet) get a short-lived mfa-pending token instead of a
       // full session. They must complete auth.verifyLoginTotp (or TOTP
       // enrollment) before any other protected procedure will run.
+      // Phase13-FA (G3): evaluate the requirement for NEW users too — a
+      // pre-provisioned orgSettings.requireMFA row must force enrollment on
+      // first login, not be bypassed by isNewUser.
       const { getMfaRequirement } = await import("../auth/mfa");
-      const mfaRequirement = isNewUser ? "none" : await getMfaRequirement(userId);
+      const mfaRequirement = await getMfaRequirement(userId);
       if (mfaRequirement !== "none") {
         const mfaToken = await createMfaPendingToken(userId, name, email);
         res.cookie(COOKIE_NAME, mfaToken, {
