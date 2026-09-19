@@ -204,8 +204,8 @@ Service Type: ${dispute.serviceType}
 CPT Codes: ${(dispute.cptCodes as string[]).join(", ")}
 Billed: $${dispute.billedAmount}
 QPA: $${dispute.qpaAmount ?? "Unknown"}
-Provider Offer: ${dispute.initiatingPartyOffer ?? "Not submitted"}
-Payer Offer: ${dispute.respondingPartyOffer ?? "Not submitted"}
+Provider Offer: $${dispute.initiatingPartyOffer ?? "Not submitted"}
+Payer Offer: $${dispute.respondingPartyOffer ?? "Not submitted"}
 State: ${dispute.patientState}
 Step: ${dispute.currentStep}
 ${input.additionalContext ? `Additional context: ${input.additionalContext}` : ""}`,
@@ -308,7 +308,7 @@ Consider: deadline proximity, billed/QPA ratio, step progression, missing offers
             content: `Score risk for dispute ${dispute.referenceNumber}:
 Status: ${dispute.status} | Step: ${dispute.currentStep}
 Billed: $${dispute.billedAmount} | QPA: $${dispute.qpaAmount ?? "Unknown"}
-Provider offer: ${dispute.initiatingPartyOffer ?? "None"} | Payer offer: ${dispute.respondingPartyOffer ?? "None"}
+Provider offer: $${dispute.initiatingPartyOffer ?? "None"} | Payer offer: $${dispute.respondingPartyOffer ?? "None"}
 Nearest deadline in days: ${nearestDeadlineDays}
 Eligible: ${dispute.isEligible ?? "Unknown"}`,
           },
