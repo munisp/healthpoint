@@ -29,6 +29,7 @@ import { notificationRetryWorkerHandler } from "../scheduled/notificationRetryWo
 import { dailyDigestHandler } from "../scheduled/dailyDigest";
 import { regulatoryFeedPollHandler } from "../scheduled/regulatoryFeedPoll";
 import { bulkFhirWorkerHandler } from "../scheduled/bulkFhirWorker";
+import { retentionWorkerHandler, startRetentionWorker } from "../scheduled/retentionWorker";
 import { ENV } from "./env";
 import {
   SETTLEMENT_EVENT_ID_HEADER,
@@ -567,6 +568,16 @@ async function startServer() {
   app.post("/api/scheduled/daily-digest", scheduledAuth, dailyDigestHandler);
   app.post("/api/scheduled/regulatory-feed-poll", scheduledAuth, regulatoryFeedPollHandler);
   app.post("/api/scheduled/bulk-fhir-worker", scheduledAuth, bulkFhirWorkerHandler);
+  app.post("/api/scheduled/retention-purge", scheduledAuth, retentionWorkerHandler);
+
+  // PHI retention purge (fhir_resource_cache, smart_form_extractions) on an
+  // env-configurable cadence (RETENTION_SWEEP_INTERVAL_MS, default daily; 0
+  // disables the in-process interval — e.g. when an external cron drives
+  // POST /api/scheduled/retention-purge above).
+  {
+    const intervalMs = Number(process.env.RETENTION_SWEEP_INTERVAL_MS ?? 24 * 60 * 60 * 1000);
+    if (Number.isFinite(intervalMs) && intervalMs > 0) startRetentionWorker(intervalMs);
+  }
 
   // Durable settlement and payment-evidence events are reconciled after their
   // transaction commits. The worker is single-flight in each process; database
