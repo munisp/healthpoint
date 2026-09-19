@@ -39,6 +39,9 @@ export const payerAccounts = pgTable(
   },
   (t) => [
     index("payer_accounts_email_idx").on(t.contactEmail),
+    // Phase13-FA (G7): one payer account per contact email — prevents silent
+    // mis-binding via accounts[0] email resolution. Applied by 0044_wave_fa.sql.
+    uniqueIndex("payer_accounts_contact_email_uidx").on(t.contactEmail),
     index("payer_accounts_name_idx").on(t.payerName),
   ]
 );
@@ -85,6 +88,8 @@ export const patientAccessTokens = pgTable(
     expiresAt: timestamp("expiresAt").notNull(),
     createdByUserId: varchar("createdByUserId", { length: 64 }).notNull(),
     usedAt: timestamp("usedAt"),
+    /** Phase13-FA (G4): explicit revocation, checked alongside expiry on access. */
+    revokedAt: timestamp("revokedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => [
@@ -160,3 +165,37 @@ export const orgMemberships = pgTable(
   ]
 );
 export type OrgMembership = typeof orgMemberships.$inferSelect;
+
+// ─── Invite tokens (Phase13-FA, G1) ──────────────────────────────────────────
+// Email-delivered invitations for payer contacts and org members. The raw
+// token is emailed once; only its sha256 hash is persisted (same pattern as
+// patient_access_tokens). Acceptance binds the accepting platform user to the
+// org/role (org_member) or activates payer case links (payer_invite).
+export const INVITE_TOKEN_PURPOSE = ["payer_invite", "org_member"] as const;
+export type InviteTokenPurpose = (typeof INVITE_TOKEN_PURPOSE)[number];
+
+export const inviteTokens = pgTable(
+  "invite_tokens",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    /** sha256 hex of the bearer invite token; the raw token is never stored. */
+    tokenHash: varchar("tokenHash", { length: 128 }).notNull(),
+    email: varchar("email", { length: 320 }).notNull(),
+    purpose: varchar("purpose", { length: 32 }).notNull(),
+    orgId: varchar("orgId", { length: 64 }),
+    orgRole: varchar("orgRole", { length: 32 }),
+    payerAccountId: varchar("payerAccountId", { length: 64 }),
+    disputeId: varchar("disputeId", { length: 64 }),
+    invitedByUserId: varchar("invitedByUserId", { length: 64 }).notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    acceptedAt: timestamp("acceptedAt"),
+    acceptedByUserId: varchar("acceptedByUserId", { length: 64 }),
+    revokedAt: timestamp("revokedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("invite_tokens_hash_idx").on(t.tokenHash),
+    index("invite_tokens_email_idx").on(t.email),
+  ]
+);
+export type InviteToken = typeof inviteTokens.$inferSelect;
