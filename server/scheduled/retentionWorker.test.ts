@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import postgres from "postgres";
-import { retentionDays, runRetentionPurge, DEFAULT_RETENTION_DAYS } from "./retentionWorker";
+import { retentionDays, runRetentionPurge, retentionWorkerHandler, DEFAULT_RETENTION_DAYS } from "./retentionWorker";
 
 describe("retentionDays config", () => {
   it("defaults to 90 and honors RETENTION_DAYS", () => {
@@ -14,6 +14,23 @@ describe("retentionDays config", () => {
 
 const DB_URL = process.env.DATABASE_URL;
 const describeDb = DB_URL ? describe : describe.skip;
+
+describe("retentionWorkerHandler (HTTP mount)", () => {
+  it("responds ok with purge counts (no DB → zero counts)", async () => {
+    const calls: Array<{ status?: number; body: unknown }> = [];
+    const res = {
+      status(n: number) { return { json(body: unknown) { calls.push({ status: n, body }); } }; },
+      json(body: unknown) { calls.push({ body }); },
+    };
+    await retentionWorkerHandler({}, res);
+    expect(calls).toHaveLength(1);
+    const body = calls[0].body as { ok: boolean; retentionDays: number; fhirCachePurged: number; smartFormExtractionsPurged: number };
+    expect(body.ok).toBe(true);
+    expect(body.retentionDays).toBe(DEFAULT_RETENTION_DAYS);
+    expect(body.fhirCachePurged).toBe(0);
+    expect(body.smartFormExtractionsPurged).toBe(0);
+  });
+});
 
 describeDb("runRetentionPurge (DB)", () => {
   const sql = postgres(DB_URL!, { max: 1 });

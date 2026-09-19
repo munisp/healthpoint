@@ -53,3 +53,17 @@ export function startRetentionWorker(intervalMs = 24 * 60 * 60 * 1000): () => vo
   timer.unref?.();
   return () => clearInterval(timer);
 }
+
+/**
+ * HTTP handler for POST /api/scheduled/retention-purge (mounted behind
+ * `scheduledAuth` in server/_core/index.ts like the other heartbeat workers).
+ */
+export async function retentionWorkerHandler(_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void }; json: (b: unknown) => void }) {
+  try {
+    const result = await runRetentionPurge();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[retention] scheduled purge failed:", err);
+    res.status(500).json({ ok: false, error: "retention purge failed" });
+  }
+}
