@@ -149,6 +149,21 @@ const auditImpersonatedRequest = t.middleware(async opts => {
     ipAddress: null,
     userAgent: null,
   }).catch(err => console.warn("[impersonation] audit write failed:", err instanceof Error ? err.message : err));
+  // Phase13-FC (G12): impersonation sessions must not perform
+  // onboarding-state transitions for the target — MFA enrollment completion,
+  // invite acceptance, bootstrap-admin claim, and onboarding completion are
+  // identity-binding actions that must come from the real user's session.
+  const IMPERSONATION_BLOCKED_ONBOARDING_PATHS = new Set([
+    "totp.setup", "totp.verify", "totp.disable",
+    "orgs.acceptInvite", "orgs.claimBootstrapAdmin",
+    "profiles.completeOnboarding", "profiles.save",
+  ]);
+  if (type === "mutation" && IMPERSONATION_BLOCKED_ONBOARDING_PATHS.has(path)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "onboarding_state_blocked_during_impersonation: onboarding-state transitions (MFA enrollment, invite acceptance, bootstrap claim, onboarding completion) cannot be performed from an impersonation session",
+    });
+  }
   if (type === "mutation" && path.startsWith("admin.") && claims.targetId !== claims.impersonatorId) {
     const db = await getDb();
     if (db) {
