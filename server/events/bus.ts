@@ -82,7 +82,10 @@ export type IDREventType =
   | "webhook.triggered"
   | "audit.logged"
   | "user.login"
-  | "user.logout";
+  | "user.logout"
+  | "consent.signed"
+  | "consent.revoked"
+  | "consent.expired";
 
 export type IDRTopic =
   | "idr.disputes.state_changes"
@@ -91,7 +94,8 @@ export type IDRTopic =
   | "idr.payments"
   | "idr.notifications"
   | "idr.audit"
-  | "idr.users";
+  | "idr.users"
+  | "idr.consent";
 
 const EVENT_TOPIC_MAP: Record<IDREventType, IDRTopic> = {
   "dispute.created": "idr.disputes.state_changes",
@@ -112,6 +116,9 @@ const EVENT_TOPIC_MAP: Record<IDREventType, IDRTopic> = {
   "audit.logged": "idr.audit",
   "user.login": "idr.users",
   "user.logout": "idr.users",
+  "consent.signed": "idr.consent",
+  "consent.revoked": "idr.consent",
+  "consent.expired": "idr.consent",
 };
 
 export interface IDREvent<T = Record<string, unknown>> {
@@ -194,7 +201,19 @@ class IDREventBus extends EventEmitter {
 
     // 2. Forward to Kafka for downstream services. Kafka failure leaves the
     // outbox event pending/failed for a later retry instead of being ignored.
+    // M7: when Kafka is CONFIGURED (KAFKA_BROKERS set) but the producer is
+    // unavailable, we must NOT silently mark the event delivered — throw so
+    // the outbox worker keeps it pending/failed (and eventually dead-letters
+    // it with an operator alert). When Kafka is not configured at all the
+    // in-process bus is the intended delivery mechanism (dev/test), so
+    // delivery may proceed.
     const producer = await getKafkaProducer();
+    if (!producer && process.env.KAFKA_BROKERS) {
+      throw new Error(
+        `[EventBus] Kafka is configured (KAFKA_BROKERS) but the producer is unavailable; ` +
+        `event ${event.id} (${event.eventType}) was NOT delivered and remains pending for retry`,
+      );
+    }
     if (producer) {
       await producer.send({
         topic: event.topic,
@@ -315,22 +334,37 @@ eventBus.on("*", async (event: IDREvent) => {
 });
 
 /**
- * Outcome prediction trigger — regenerates predictions when dispute state changes.
+ * Outcome prediction staleness — any lifecycle event that materially changes
+ * the dispute (state advance, offers, determination, payment) marks the
+ * stored prediction stale. predictions.get surfaces { stale: true } so the
+ * UI can badge it. The isStale column comes from migration 0039_wave_w3.sql
+ * (raw SQL — drizzle/schema.ts is owned by another wave).
  */
-eventBus.on("dispute.advanced", async (event: IDREvent) => {
-  // Trigger async prediction regeneration (fire-and-forget)
-  setTimeout(async () => {
-    try {
-      const db = await getDb();
-      if (!db) return;
-      // Mark existing prediction as stale so it gets regenerated on next view
-      const { outcomePredictions } = await import("../../drizzle/schema");
-      const { eq } = await import("drizzle-orm");
-      await db.update(outcomePredictions)
-        .set({ updatedAt: new Date() })
-        .where(eq(outcomePredictions.disputeId, event.aggregateId));
-    } catch {
-      // Non-fatal
-    }
-  }, 100);
-});
+async function markPredictionStale(disputeId: string): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`
+      UPDATE outcome_predictions SET "isStale" = true, "updatedAt" = NOW()
+      WHERE "disputeId" = ${disputeId}
+    `);
+  } catch {
+    // Non-fatal
+  }
+}
+
+for (const staleEvent of [
+  "dispute.advanced",
+  "dispute.offer_submitted",
+  "offer.accepted",
+  "offer.rejected",
+  "determination.issued",
+  "payment.recorded",
+  "payment.settled",
+] as const) {
+  eventBus.on(staleEvent, (event: IDREvent) => {
+    // Fire-and-forget; never block event handling.
+    setTimeout(() => { void markPredictionStale(event.aggregateId); }, 100);
+  });
+}

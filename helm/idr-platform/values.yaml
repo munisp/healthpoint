@@ -1,4 +1,6 @@
-# HealthPoint IDR Platform — Helm Values
+# HealthPoint IDR Platform — Helm Values (LEGACY CHART)
+# This chart is superseded by deploy/helm/healthpoint/ (pinned images, no
+# Dapr/Fluvio). It is kept for reference only.
 # Override any value with: helm install idr-platform ./helm/idr-platform -f my-values.yaml
 
 global:
@@ -13,7 +15,7 @@ app:
   replicaCount: 2
   image:
     repository: healthpoint/idr-app
-    tag: "latest"
+    tag: ""  # REQUIRED: set an immutable release tag or digest (never "latest")
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -74,7 +76,7 @@ goServices:
   replicaCount: 2
   image:
     repository: healthpoint/idr-go-services
-    tag: "latest"
+    tag: ""  # REQUIRED: set an immutable release tag or digest (never "latest")
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -93,7 +95,7 @@ rustServices:
   replicaCount: 2
   image:
     repository: healthpoint/idr-rust-services
-    tag: "latest"
+    tag: ""  # REQUIRED: set an immutable release tag or digest (never "latest")
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -109,7 +111,7 @@ temporalWorker:
   replicaCount: 2
   image:
     repository: healthpoint/idr-temporal-worker
-    tag: "latest"
+    tag: ""  # REQUIRED: set an immutable release tag or digest (never "latest")
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -125,7 +127,7 @@ lakehousePipeline:
   replicaCount: 1
   image:
     repository: healthpoint/idr-lakehouse
-    tag: "latest"
+    tag: ""  # REQUIRED: set an immutable release tag or digest (never "latest")
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -202,11 +204,26 @@ opensearch:
       memory: "4Gi"
 
 # ── Keycloak ──────────────────────────────────────────────────────────────────
+# Audit P1 (2026-09-05): production mode. The Bitnami subchart runs Keycloak
+# with `kc.sh start` (production) against the shared PostgreSQL `keycloak`
+# database — NOT start-dev/dev-mem, which are development-only and lose all
+# realm/user state on restart while disabling hostname/HTTPS enforcement.
+# `production: true` makes the chart require `hostname` and TLS-related
+# settings explicitly, matching the compose service's KC_DB=postgres +
+# KC_HOSTNAME_STRICT hardening.
 keycloak:
   enabled: true
+  production: true
+  # REQUIRED in production: the public base URL of this Keycloak. The chart
+  # fails templating without it when production=true — that is intentional.
+  hostname: ""   # e.g. keycloak.example.com (https implied; TLS at edge)
+  # Caddy terminates TLS and forwards X-Forwarded-* headers.
+  proxyHeaders: xforwarded
+  # KC_HOSTNAME_STRICT equivalent: chart 21.x sets KC_HOSTNAME_STRICT=true
+  # automatically when production=true; keep it that way.
   auth:
     adminUser: admin
-    adminPassword: ""  # Set via secret
+    adminPassword: ""  # Set via secret — NO default admin password
   postgresql:
     enabled: false  # Use the shared PostgreSQL instance
   externalDatabase:
@@ -214,7 +231,13 @@ keycloak:
     port: 5432
     database: keycloak
     user: keycloak
-    password: ""  # Set via secret
+    password: ""  # Set via secret — dedicated keycloak DB credentials
+  extraEnvVars:
+    # Runtime health/metrics endpoints (Keycloak management port 9000).
+    - name: KC_HEALTH_ENABLED
+      value: "true"
+    - name: KC_METRICS_ENABLED
+      value: "true"
   replicaCount: 2
   service:
     type: ClusterIP
@@ -247,7 +270,7 @@ permify:
   replicaCount: 2
   image:
     repository: ghcr.io/permify/permify
-    tag: "latest"
+    tag: ""  # REQUIRED: pin a registry-verified tag/digest (never "latest")
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -277,12 +300,18 @@ apisix:
     replicaCount: 3
 
 # ── OpenAppsec ────────────────────────────────────────────────────────────────
+# Audit P1 / ADR-003 (one-WAF decision, 2026-09-05): DISABLED. Caddy's
+# embedded Coraza (OWASP CRS) is the single WAF; templates/caddy.yaml proxies
+# directly to APISIX. Re-enable only together with re-pointing the Caddy
+# reverse_proxy at the openappsec hop (see ADR-003 in
+# infra/ARCHITECTURE-DECISIONS.md); the `latest`-tagged openappsec image must
+# be pinned before any re-enable.
 openappsec:
-  enabled: true
+  enabled: false
   replicaCount: 2
   image:
     repository: openappsec/nginx
-    tag: "latest"
+    tag: ""  # REQUIRED: pin a registry-verified tag/digest (never "latest")
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -303,18 +332,6 @@ tigerbeetle:
     type: ClusterIP
     port: 3000
 
-# ── Fluvio ────────────────────────────────────────────────────────────────────
-fluvio:
-  enabled: true
-  replicaCount: 3
-  image:
-    repository: infinyon/fluvio
-    tag: "latest"
-    pullPolicy: IfNotPresent
-  persistence:
-    enabled: true
-    size: 20Gi
-
 # ── Mojaloop ──────────────────────────────────────────────────────────────────
 mojaloop:
   enabled: false  # Enable when payment interoperability is needed
@@ -322,17 +339,6 @@ mojaloop:
     enabled: true
   centralSettlement:
     enabled: true
-
-# ── Dapr ──────────────────────────────────────────────────────────────────────
-dapr:
-  enabled: true
-  global:
-    ha:
-      enabled: true
-  dapr_operator:
-    replicaCount: 2
-  dapr_sidecar_injector:
-    replicaCount: 2
 
 # ── MinIO (Lakehouse object storage) ─────────────────────────────────────────
 minio:
@@ -370,8 +376,6 @@ caddy:
       port: 6380
     opensearch:
       port: 9201
-    fluvio:
-      port: 9004
   resources:
     requests:
       memory: "128Mi"
@@ -384,6 +388,24 @@ caddy:
     size: 1Gi
   internalCaSecret: caddy-internal-ca
 
+# ── Internal mTLS (cert-manager) ─────────────────────────────────────────────
+# Audit P1 (2026-09-05): when enabled, templates/certificates.yaml renders a
+# cert-manager v1 CA Issuer (backed by caddy.internalCaSecret — the internal
+# CA the Caddy layer-4 mTLS listeners already trust) plus Certificate
+# resources issuing service certs for kafka / temporal / tigerbeetle / redis /
+# opensearch into `<release>-<svc>-tls` Secrets. templates/internal-ca.yaml
+# (P1-5) bootstraps that CA from a self-signed ClusterIssuer when
+# internalMtls.bootstrap=true; set bootstrap=false when the CA Secret is
+# provisioned out-of-band (Vault/KMS/sealed-secrets). Requires cert-manager
+# v1 CRDs in the cluster. Default OFF — enable with
+# --set internalMtls.enabled=true after cert-manager is installed.
+internalMtls:
+  enabled: false
+  bootstrap: true   # internal-ca.yaml: self-signed root CA bootstrap
+  caSecretName: ""   # default: .Values.caddy.internalCaSecret
+  duration: "2160h"  # 90 days
+  renewBefore: "360h"  # 15 days
+
 # ── Legacy nginx Ingress (disabled — Caddy replaces it) ──────────────────────
 ingress:
   enabled: false
@@ -395,17 +417,6 @@ ingress:
     - host: idr.healthpoint.io
       paths:
         - path: /
-          pathType: Prefix
-          service: app
-  tls:
-    - secretName: idr-tls
-      hosts:
-        - idr.healthpoint.io
-      paths:
-        - path: /
-          pathType: Prefix
-          service: app
-        - path: /api/
           pathType: Prefix
           service: app
   tls:

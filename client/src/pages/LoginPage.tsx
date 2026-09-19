@@ -24,6 +24,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { AlertCircle, Loader2, LogIn, UserPlus, ShieldCheck } from "lucide-react";
+import { useOrgBranding } from "@/hooks/useBranding";
 
 /** Maps ?auth_error= values to human-readable messages */
 const AUTH_ERROR_MESSAGES: Record<string, string> = {
@@ -50,6 +51,13 @@ export default function LoginPage() {
   const redirectTo = params.get("redirectTo") || "/dashboard";
   const authError  = params.get("auth_error");
   const errorMsg   = getAuthErrorMessage(authError);
+
+  // W7-4 white-label: /login?org=<id> renders that org's brand name, logo,
+  // and primary color (falls back to platform defaults when unset).
+  const orgId = params.get("org");
+  const { branding } = useOrgBranding(orgId);
+  const brandTitle = branding?.brandName || APP_TITLE;
+  const brandLogo = branding?.logoUrl || APP_LOGO;
 
   // If already authenticated, redirect immediately
   useEffect(() => {
@@ -84,11 +92,11 @@ export default function LoginPage() {
       <header className="w-full border-b bg-background/80 backdrop-blur px-6 flex items-center h-14">
         <div className="flex items-center gap-2">
           <img
-            src={APP_LOGO}
-            alt={APP_TITLE}
+            src={brandLogo}
+            alt={`${brandTitle} logo`}
             className="h-8 w-8 rounded-lg border border-border object-cover"
           />
-          <span className="text-xl font-bold tracking-tight">{APP_TITLE}</span>
+          <span className="text-xl font-bold tracking-tight">{brandTitle}</span>
         </div>
       </header>
 
@@ -110,7 +118,7 @@ export default function LoginPage() {
                   <ShieldCheck className="h-6 w-6 text-primary" />
                 </div>
               </div>
-              <CardTitle className="text-2xl">Welcome to {APP_TITLE}</CardTitle>
+              <CardTitle className="text-2xl">Welcome to {brandTitle}</CardTitle>
               <CardDescription className="text-sm">
                 Sign in to manage insurance disputes and track IDR workflows.
               </CardDescription>

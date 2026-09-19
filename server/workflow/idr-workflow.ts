@@ -17,20 +17,62 @@
 
 import { getDb } from "../db";
 import { disputes, disputeEvents } from "../../drizzle/schema";
-import { eq } from "drizzle-orm";
+import { idrFeeAssessments } from "../../drizzle/schema-idr-compliance";
+import { and, eq } from "drizzle-orm";
 import { eventBus } from "../events/bus";
 import { withDisputeLock } from "../redis";
+// W1-F9: shared prohibited determination-basis screen (45 CFR §
+// 149.510(c)(4)(ii)) — same keyword list the personas/IDRE UI module uses.
+import { screenProhibitedBasis } from "../personas/prohibited-basis";
+
+/** Steps from which a party may withdraw the dispute (pre-determination). */
+export const WITHDRAWABLE_STEPS: readonly IDRStep[] = [
+  "STEP_01_OPEN_NEGOTIATION_INITIATED",
+  "STEP_02_OPEN_NEGOTIATION_PERIOD",
+  "STEP_03_OPEN_NEGOTIATION_FAILED",
+  "STEP_04_IDR_INITIATED",
+  "STEP_05_IDR_NOTICE_SENT",
+  "STEP_06_IDR_ENTITY_SELECTION",
+  "STEP_07_IDR_ENTITY_SELECTED",
+  "STEP_08_ELIGIBILITY_REVIEW",
+  "STEP_09_OFFER_SUBMISSION",
+  "STEP_10_QPA_DISCLOSURE",
+  "STEP_11_ADDITIONAL_INFORMATION",
+  "STEP_12_ARBITRATION_REVIEW",
+];
 
 // ── Step definitions ──────────────────────────────────────────────────────────
 
 // Import the canonical types from the schema
 import type { IDRStep, DisputeStatus } from "../../drizzle/schema";
 
+// Canonical business-day arithmetic (algorithmic US federal holidays,
+// 5 U.S.C. § 6103) lives in server/idr/deadlines.ts. This module previously
+// maintained its own weekend-only addBusinessDays; it now delegates so every
+// workflow deadline honors federal holidays identically. Re-exported so
+// existing importers (e.g. server/routers.ts) keep working.
+import { addBusinessDays, addCalendarDays } from "../idr/deadlines";
+export { addBusinessDays } from "../idr/deadlines";
+
+/** End-of-day (UTC 23:59:59.999) for calendar-day statutory deadlines. */
+function endOfDayUtc(d: Date): Date {
+  const r = new Date(d.getTime());
+  r.setUTCHours(23, 59, 59, 999);
+  return r;
+}
+
 export interface WorkflowStepDefinition {
   id: IDRStep;
   name: string;
   description: string;
-  deadlineBusinessDays: number | null; // null = no statutory deadline
+  deadlineBusinessDays: number | null; // null = no statutory business-day deadline
+  /**
+   * Statutory deadline in CALENDAR days (end-of-day UTC), for steps whose
+   * governing rule is calendar-day based — e.g. STEP_14 payment within
+   * 30 calendar days of the determination (PHSA § 2799A-1(c)(6)).
+   * Mutually exclusive with deadlineBusinessDays.
+   */
+  deadlineCalendarDays?: number | null;
   allowedTransitions: IDRStep[];
   isTerminal: boolean;
   requiredFields: string[]; // fields that must be present on the dispute before advancing
@@ -43,7 +85,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "Open Negotiation Initiated",
     description: "Provider sends open negotiation notice to payer",
     deadlineBusinessDays: null,
-    allowedTransitions: ["STEP_02_OPEN_NEGOTIATION_PERIOD"],
+    allowedTransitions: ["STEP_02_OPEN_NEGOTIATION_PERIOD", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: ["billedAmount", "qpaAmount", "serviceDate"],
     nsaReference: "45 CFR § 149.410(b)",
@@ -53,7 +95,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "Open Negotiation Period",
     description: "30-business-day open negotiation window",
     deadlineBusinessDays: 30,
-    allowedTransitions: ["STEP_03_OPEN_NEGOTIATION_FAILED"],
+    allowedTransitions: ["STEP_03_OPEN_NEGOTIATION_FAILED", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.410(b)(1)",
@@ -63,7 +105,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "Open Negotiation Failed",
     description: "Parties failed to reach agreement; IDR may be initiated",
     deadlineBusinessDays: null,
-    allowedTransitions: ["STEP_04_IDR_INITIATED"],
+    allowedTransitions: ["STEP_04_IDR_INITIATED", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.410(b)(2)",
@@ -73,7 +115,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "IDR Initiated",
     description: "Initiating party submits IDR request within 4 business days",
     deadlineBusinessDays: 4,
-    allowedTransitions: ["STEP_05_IDR_NOTICE_SENT"],
+    allowedTransitions: ["STEP_05_IDR_NOTICE_SENT", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: ["serviceType"],
     nsaReference: "45 CFR § 149.510(b)(1)(i)",
@@ -83,7 +125,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "IDR Notice Sent",
     description: "Federal IDR portal sends notice to responding party",
     deadlineBusinessDays: 3,
-    allowedTransitions: ["STEP_06_IDR_ENTITY_SELECTION"],
+    allowedTransitions: ["STEP_06_IDR_ENTITY_SELECTION", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.510(b)(1)(ii)",
@@ -93,7 +135,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "IDR Entity Selection",
     description: "Parties jointly select certified IDR entity within 3 business days",
     deadlineBusinessDays: 3,
-    allowedTransitions: ["STEP_07_IDR_ENTITY_SELECTED"],
+    allowedTransitions: ["STEP_07_IDR_ENTITY_SELECTED", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.510(b)(1)(iii)",
@@ -103,7 +145,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "IDR Entity Selected",
     description: "Certified IDR entity assigned (by agreement or random selection)",
     deadlineBusinessDays: null,
-    allowedTransitions: ["STEP_08_ELIGIBILITY_REVIEW"],
+    allowedTransitions: ["STEP_08_ELIGIBILITY_REVIEW", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: ["idrEntityId"],
     nsaReference: "45 CFR § 149.510(b)(1)(iii)(B)",
@@ -113,7 +155,20 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "Eligibility Review",
     description: "IDR entity reviews eligibility of the dispute",
     deadlineBusinessDays: 3,
-    allowedTransitions: ["STEP_09_OFFER_SUBMISSION"],
+    // W1-F2: backward transitions out of eligibility review —
+    //  → STEP_06: certified IDRE declined / has a conflict / was decertified
+    //    after selection; parties (or the Departments) must re-select
+    //    (45 CFR § 149.510(b)(1)(iii); § 149.510(e)(2) conflict-of-interest
+    //    decertification). Guarded: requires a reason AND either admin actor
+    //    or a documented IDRE-declination event.
+    //  → STEP_01: open-negotiation restart on remand (e.g. dispute returned
+    //    after eligibility mis-review). Same guard.
+    allowedTransitions: [
+      "STEP_09_OFFER_SUBMISSION",
+      "STEP_06_IDR_ENTITY_SELECTION",
+      "STEP_01_OPEN_NEGOTIATION_INITIATED",
+      "STEP_20_DISPUTE_WITHDRAWN",
+    ],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.510(b)(1)(ii)",
@@ -123,7 +178,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "Offer Submission",
     description: "Each party submits a final offer within 10 business days",
     deadlineBusinessDays: 10,
-    allowedTransitions: ["STEP_10_QPA_DISCLOSURE"],
+    allowedTransitions: ["STEP_10_QPA_DISCLOSURE", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.510(b)(1)(iv)",
@@ -133,7 +188,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "QPA Disclosure",
     description: "Payer discloses Qualifying Payment Amount",
     deadlineBusinessDays: 5,
-    allowedTransitions: ["STEP_11_ADDITIONAL_INFORMATION"],
+    allowedTransitions: ["STEP_11_ADDITIONAL_INFORMATION", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.510(b)(1)(iv)(B)",
@@ -143,7 +198,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "Additional Information Period",
     description: "IDR entity may request additional information within 5 business days",
     deadlineBusinessDays: 5,
-    allowedTransitions: ["STEP_12_ARBITRATION_REVIEW"],
+    allowedTransitions: ["STEP_12_ARBITRATION_REVIEW", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.510(b)(1)(v)",
@@ -153,7 +208,7 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "Arbitration Review",
     description: "IDR entity reviews all submissions and prepares determination",
     deadlineBusinessDays: 30,
-    allowedTransitions: ["STEP_13_DETERMINATION_ISSUED"],
+    allowedTransitions: ["STEP_13_DETERMINATION_ISSUED", "STEP_20_DISPUTE_WITHDRAWN"],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.510(b)(1)(vi)",
@@ -163,7 +218,16 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     name: "Determination Issued",
     description: "IDR entity selects one party's offer as the out-of-network rate",
     deadlineBusinessDays: null,
-    allowedTransitions: ["STEP_14_PAYMENT_DETERMINATION"],
+    // Appeal path: a party may seek judicial review of the determination
+    // (45 CFR § 149.510(b)(2)) — STEP_18_APPEAL_FILED must be reachable
+    // from the determination step, otherwise the appeal steps are dead.
+    // W1-F3 (45 CFR § 149.510(c)(4)(viii)): correction of a determination
+    // issued on the basis of misinformation — reopens to STEP_12 arbitration
+    // review. Guarded in advanceWorkflow: admin-only, requires
+    // {correctionReason, misinformationBy}; the prior determination is voided
+    // (flagged, history preserved in disputeEvents) and the determination
+    // deadline re-runs from re-entry into STEP_12.
+    allowedTransitions: ["STEP_14_PAYMENT_DETERMINATION", "STEP_18_APPEAL_FILED", "STEP_12_ARBITRATION_REVIEW"],
     isTerminal: false,
     requiredFields: [],
     nsaReference: "45 CFR § 149.510(b)(1)(vi)(A)",
@@ -171,8 +235,11 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
   STEP_14_PAYMENT_DETERMINATION: {
     id: "STEP_14_PAYMENT_DETERMINATION",
     name: "Payment Determination",
-    description: "Final payment amount determined; payer must pay within 30 days",
-    deadlineBusinessDays: 30,
+    description: "Final payment amount determined; payer must pay within 30 calendar days",
+    // PHSA § 2799A-1(c)(6): payment is due within 30 CALENDAR days of the
+    // determination (end-of-day), not business days.
+    deadlineBusinessDays: null,
+    deadlineCalendarDays: 30,
     allowedTransitions: ["STEP_15_PAYMENT_MADE"],
     isTerminal: false,
     requiredFields: [],
@@ -190,13 +257,19 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
   },
   STEP_16_ADMINISTRATIVE_FEE_PAID: {
     id: "STEP_16_ADMINISTRATIVE_FEE_PAID",
-    name: "Administrative Fee Paid",
-    description: "Losing party pays administrative fee to federal IDR portal",
-    deadlineBusinessDays: 30,
+    name: "Administrative Fee Reconciliation",
+    // W1-F4: the administrative fee is DUE AT IDR INITIATION by both parties
+    // (45 CFR § 149.510(d)(1)-(2); assessed at STEP_04 via
+    // fees.assessOnIdrInitiation). This step is a confirmation/reconciliation
+    // checkpoint — it verifies the initiation assessments were collected (or
+    // waived for hardship), it does not mark the moment payment becomes due.
+    description:
+      "Confirmation/reconciliation that both parties' non-refundable administrative fees — due and assessed at IDR initiation (STEP_04) — were collected or hardship-waived",
+    deadlineBusinessDays: null,
     allowedTransitions: ["STEP_17_DISPUTE_CLOSED"],
     isTerminal: false,
     requiredFields: [],
-    nsaReference: "45 CFR § 149.510(b)(1)(viii)",
+    nsaReference: "45 CFR § 149.510(d)(1) (fee due at IDR initiation; collection tracked since STEP_04 assessment)",
   },
   STEP_17_DISPUTE_CLOSED: {
     id: "STEP_17_DISPUTE_CLOSED",
@@ -228,9 +301,43 @@ export const IDR_WORKFLOW_STEPS: Record<IDRStep, WorkflowStepDefinition> = {
     requiredFields: [],
     nsaReference: "45 CFR § 149.510(b)(2)",
   },
+  STEP_20_DISPUTE_WITHDRAWN: {
+    id: "STEP_20_DISPUTE_WITHDRAWN",
+    name: "Dispute Withdrawn",
+    // W1-F1: either party may withdraw before a determination issues; the
+    // dispute becomes terminal with status 'withdrawn', is excluded from
+    // cooling-off keys and analytics, and never re-enters the FSM.
+    description:
+      "Dispute withdrawn by a party before determination (terminal); requires a documented withdrawalReason",
+    deadlineBusinessDays: null,
+    allowedTransitions: [],
+    isTerminal: true,
+    requiredFields: [],
+    nsaReference: "45 CFR § 149.510(b) (pre-determination withdrawal); CMS Federal IDR Guidance for Disputing Parties",
+  },
 };
 
 // ── Workflow engine ───────────────────────────────────────────────────────────
+
+/**
+ * Compute the entry deadline for a step from its definition. Calendar-day
+ * steps (STEP_14 payment, PHSA § 2799A-1(c)(6)) run 30 calendar days to
+ * end-of-day UTC; business-day steps delegate to the canonical deadlines
+ * engine (server/idr/deadlines.ts).
+ */
+export function computeStepDeadline(
+  stepDef: WorkflowStepDefinition,
+  from: Date = new Date()
+): Date | null {
+  if (stepDef.deadlineCalendarDays) {
+    return endOfDayUtc(addCalendarDays(from, stepDef.deadlineCalendarDays));
+  }
+  if (stepDef.deadlineBusinessDays) {
+    return addBusinessDays(from, stepDef.deadlineBusinessDays);
+  }
+  return null;
+}
+
 
 export interface WorkflowAdvanceResult {
   success: boolean;
@@ -238,7 +345,32 @@ export interface WorkflowAdvanceResult {
   newStep: IDRStep;
   deadline: Date | null;
   message: string;
+  /** Non-fatal advisories (e.g. assessed-but-unpaid initiation admin fees). */
+  warnings: string[];
 }
+
+/** Optional statutory inputs for guarded transitions (W1 fixes). */
+export interface WorkflowAdvanceOptions {
+  /** Actor role from the auth context; required for admin-only transitions. */
+  actorRole?: string;
+  /** W1-F1: mandatory when withdrawing (target STEP_20_DISPUTE_WITHDRAWN). */
+  withdrawalReason?: string;
+  /** W1-F2: mandatory reason for STEP_08 backward transitions. */
+  reason?: string;
+  /** W1-F3 (§ 149.510(c)(4)(viii)): determination-correction inputs. */
+  correctionReason?: string;
+  misinformationBy?: string;
+  /** W1-F9: stated basis when issuing a determination (screened). */
+  determinationBasis?: string;
+}
+
+/** disputeEvents event types used by the guarded transitions. */
+export const IDRE_DECLINATION_EVENT_TYPES = [
+  "idre_declination",
+  "idre_declined",
+  "idre_conflicted",
+  "idre_decertified",
+] as const;
 
 export function validateWorkflowTransition(
   currentStep: IDRStep,
@@ -271,11 +403,14 @@ export async function advanceWorkflow(
   disputeId: string,
   targetStep: IDRStep,
   userId: string,
-  notes?: string
+  notes?: string,
+  options: WorkflowAdvanceOptions = {}
 ): Promise<WorkflowAdvanceResult> {
   return withDisputeLock(disputeId, 10000, async () => {
     const db = await getDb();
     if (!db) throw new Error("Database unavailable");
+    const warnings: string[] = [];
+    const isAdmin = options.actorRole === "admin";
 
     // Load current dispute state
     const rows = await db
@@ -291,11 +426,100 @@ export async function advanceWorkflow(
     validateWorkflowTransition(currentStep, targetStep, dispute as Record<string, unknown>);
     const stepDef = IDR_WORKFLOW_STEPS[currentStep];
 
-    // Calculate deadline for new step
+    // ── W1-F1: withdrawal guard — mandatory documented reason ──────────────
+    if (targetStep === "STEP_20_DISPUTE_WITHDRAWN") {
+      if (!WITHDRAWABLE_STEPS.includes(currentStep)) {
+        throw new Error(
+          `Dispute cannot be withdrawn from ${currentStep}; withdrawal is only available pre-determination (STEP_01–STEP_12)`
+        );
+      }
+      if (!options.withdrawalReason || options.withdrawalReason.trim().length === 0) {
+        throw new Error("withdrawalReason is required to withdraw a dispute");
+      }
+    }
+
+    // ── W1-F2: backward transitions out of STEP_08 (IDRE re-selection / ON
+    // restart on remand) — reason required; admin OR documented IDRE
+    // declination/conflict/decertification event. ────────────────────────────
+    if (
+      currentStep === "STEP_08_ELIGIBILITY_REVIEW" &&
+      (targetStep === "STEP_06_IDR_ENTITY_SELECTION" || targetStep === "STEP_01_OPEN_NEGOTIATION_INITIATED")
+    ) {
+      if (!options.reason || options.reason.trim().length === 0) {
+        throw new Error(`A reason is required for the backward transition ${currentStep} → ${targetStep}`);
+      }
+      if (!isAdmin) {
+        const priorEvents = await db
+          .select()
+          .from(disputeEvents)
+          .where(eq(disputeEvents.disputeId, disputeId));
+        const documented = priorEvents.some(e =>
+          (IDRE_DECLINATION_EVENT_TYPES as readonly string[]).includes(e.eventType as string)
+        );
+        if (!documented) {
+          throw new Error(
+            `Backward transition ${currentStep} → ${targetStep} requires an admin actor or a documented IDRE declination/conflict/decertification event`
+          );
+        }
+      }
+    }
+
+    // ── W1-F3 (§ 149.510(c)(4)(viii)): determination correction for
+    // misinformation — admin-only, mandatory correction inputs. ─────────────
+    if (currentStep === "STEP_13_DETERMINATION_ISSUED" && targetStep === "STEP_12_ARBITRATION_REVIEW") {
+      if (!isAdmin) {
+        throw new Error("Determination correction (§ 149.510(c)(4)(viii)) is admin-only");
+      }
+      if (!options.correctionReason || options.correctionReason.trim().length === 0) {
+        throw new Error("correctionReason is required to reopen a determination for misinformation");
+      }
+      if (!options.misinformationBy || options.misinformationBy.trim().length === 0) {
+        throw new Error("misinformationBy (which party supplied the misinformation) is required");
+      }
+    }
+
+    // ── W1-F9 (§ 149.510(c)(4)(ii)): prohibited determination basis screen ──
+    if (targetStep === "STEP_13_DETERMINATION_ISSUED" && options.determinationBasis) {
+      const hit = screenProhibitedBasis(options.determinationBasis);
+      if (hit) {
+        throw new Error(
+          `Determination basis rejected (45 CFR § 149.510(c)(4)(ii)): ${hit} may not be considered as the basis for a payment determination`
+        );
+      }
+    }
+
+    // ── W1-F4: initiation admin-fee assessment must exist before the dispute
+    // advances past entity selection (STEP_06 → STEP_07). The fee is due at
+    // IDR initiation (assessed at STEP_04 via fees.assessOnIdrInitiation);
+    // the assessment ROWS are a hard requirement, payment itself is
+    // warning-level (collection is reconciled at STEP_16). ──────────────────
+    if (currentStep === "STEP_06_IDR_ENTITY_SELECTION" && targetStep === "STEP_07_IDR_ENTITY_SELECTED") {
+      const feeRows = await db
+        .select()
+        .from(idrFeeAssessments)
+        .where(and(eq(idrFeeAssessments.disputeId, disputeId), eq(idrFeeAssessments.feeType, "administrative")));
+      const roles = new Set(feeRows.map(r => r.partyRole as string));
+      const missing = (["initiating_party", "responding_party"] as const).filter(r => !roles.has(r));
+      if (missing.length) {
+        throw new Error(
+          `Administrative fee assessment missing for ${missing.join(", ")}. The admin fee is due at IDR initiation ` +
+          `(45 CFR § 149.510(d)(1)); call fees.assessOnIdrInitiation before completing IDR entity selection.`
+        );
+      }
+      const unsettled = feeRows.filter(r => r.status !== "paid" && r.status !== "waived");
+      if (unsettled.length) {
+        warnings.push(
+          `Administrative fee assessed at initiation but not yet collected/waived for: ` +
+          `${unsettled.map(r => r.partyRole).join(", ")} — reconcile at STEP_16.`
+        );
+      }
+    }
+
+    // Calculate deadline for new step — business-day steps use the canonical
+    // business-day engine; calendar-day steps (e.g. STEP_14 payment) use
+    // addCalendarDays and run to end-of-day UTC.
     const targetStepDef = IDR_WORKFLOW_STEPS[targetStep];
-    const deadline = targetStepDef.deadlineBusinessDays
-      ? addBusinessDays(new Date(), targetStepDef.deadlineBusinessDays)
-      : null;
+    const deadline = computeStepDeadline(targetStepDef, new Date());
 
     // Determine new status
     const newStatus = getStatusForStep(targetStep);
@@ -322,6 +546,55 @@ export async function advanceWorkflow(
       createdAt: new Date(),
     });
 
+    // ── Guarded-transition side-effect events (history is append-only) ─────
+    if (targetStep === "STEP_20_DISPUTE_WITHDRAWN") {
+      await db.insert(disputeEvents).values({
+        id: crypto.randomUUID(),
+        disputeId,
+        step: targetStep,
+        previousStep: currentStep,
+        eventType: "dispute_withdrawn",
+        description: `Dispute withdrawn: ${options.withdrawalReason}`,
+        performedBy: userId,
+        createdAt: new Date(),
+      });
+    }
+    if (
+      currentStep === "STEP_08_ELIGIBILITY_REVIEW" &&
+      (targetStep === "STEP_06_IDR_ENTITY_SELECTION" || targetStep === "STEP_01_OPEN_NEGOTIATION_INITIATED")
+    ) {
+      await db.insert(disputeEvents).values({
+        id: crypto.randomUUID(),
+        disputeId,
+        step: targetStep,
+        previousStep: currentStep,
+        eventType: "workflow_backward_transition",
+        description:
+          (targetStep === "STEP_06_IDR_ENTITY_SELECTION"
+            ? "IDRE re-selection (declined/conflicted/decertified)"
+            : "Open-negotiation restart on remand") + `: ${options.reason}`,
+        performedBy: userId,
+        createdAt: new Date(),
+      });
+    }
+    if (currentStep === "STEP_13_DETERMINATION_ISSUED" && targetStep === "STEP_12_ARBITRATION_REVIEW") {
+      // Void/flag the prior determination; the determination record itself is
+      // retained (append-only history) and the STEP_12 re-entry above already
+      // re-triggered the 30-business-day determination deadline.
+      await db.insert(disputeEvents).values({
+        id: crypto.randomUUID(),
+        disputeId,
+        step: currentStep,
+        previousStep: currentStep,
+        eventType: "determination_voided",
+        description:
+          `Prior determination VOIDED — reopened for misinformation (45 CFR § 149.510(c)(4)(viii)). ` +
+          `Misinformation by: ${options.misinformationBy}. Correction reason: ${options.correctionReason}`,
+        performedBy: userId,
+        createdAt: new Date(),
+      });
+    }
+
     // Publish event
     await eventBus.publish(
       "dispute.advanced",
@@ -334,6 +607,9 @@ export async function advanceWorkflow(
         deadline: deadline?.toISOString() ?? null,
         userId,
         notes,
+        warnings,
+        ...(options.withdrawalReason ? { withdrawalReason: options.withdrawalReason } : {}),
+        ...(options.correctionReason ? { correctionReason: options.correctionReason, misinformationBy: options.misinformationBy } : {}),
       },
       { userId, timestamp: new Date().toISOString() }
     );
@@ -344,6 +620,7 @@ export async function advanceWorkflow(
       newStep: targetStep,
       deadline,
       message: `Advanced from ${stepDef.name} to ${targetStepDef.name}`,
+      warnings,
     };
   });
 }
@@ -353,6 +630,7 @@ export async function advanceWorkflow(
  */
 export function getStatusForStep(step: IDRStep): DisputeStatus {
   if (step === "STEP_17_DISPUTE_CLOSED") return "closed";
+  if (step === "STEP_20_DISPUTE_WITHDRAWN") return "withdrawn";
   if (step === "STEP_18_APPEAL_FILED" || step === "STEP_19_APPEAL_RESOLVED") return "appealed";
   if (step === "STEP_13_DETERMINATION_ISSUED") return "determination_issued";
   if (step === "STEP_14_PAYMENT_DETERMINATION" || step === "STEP_15_PAYMENT_MADE" || step === "STEP_16_ADMINISTRATIVE_FEE_PAID") return "payment_pending";
@@ -369,20 +647,6 @@ export function getStatusForStep(step: IDRStep): DisputeStatus {
 export function getStepNumber(step: IDRStep): number {
   const match = step.match(/^STEP_(\d+)/);
   return match ? parseInt(match[1], 10) : 0;
-}
-
-/**
- * Add N business days to a date (skipping weekends).
- */
-export function addBusinessDays(date: Date, days: number): Date {
-  const result = new Date(date);
-  let added = 0;
-  while (added < days) {
-    result.setDate(result.getDate() + 1);
-    const dow = result.getDay();
-    if (dow !== 0 && dow !== 6) added++;
-  }
-  return result;
 }
 
 /**

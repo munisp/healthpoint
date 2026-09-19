@@ -1,0 +1,24 @@
+apiVersion: v2
+name: healthpoint
+description: |
+  HealthPoint IDR platform application services (server, client, Python
+  Temporal worker, Go ledger sidecar, Rust stream processor).
+
+  This chart deploys ONLY the stateless application tier. Stateful datastores
+  (PostgreSQL, Redis, Kafka, OpenSearch, MinIO, Temporal server, Keycloak,
+  Permify, TigerBeetle, APISIX+etcd) are intentionally NOT vendored here —
+  install them via their own operators/charts (see values.yaml "datastores"
+  and templates/NOTES.txt).
+
+type: application
+version: 1.0.0
+# appVersion is the default tag for all first-party images when
+# <component>.image.tag is empty. Bump it on every release and prefer
+# digest pinning (<component>.image.digest) in production.
+appVersion: "1.0.0"
+keywords:
+  - healthpoint
+  - idr
+  - no-surprises-act
+maintainers:
+  - name: HealthPoint Platform Team

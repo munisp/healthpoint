@@ -4,6 +4,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
+import RouteSkeleton from "./components/RouteSkeleton";
+import OfflineBanner from "./components/OfflineBanner";
+import ImpersonationBanner from "./components/ImpersonationBanner";
+import { FlagGate } from "./components/FlagGate";
+import InstallPrompt from "./components/InstallPrompt";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import LoginPage from "./pages/LoginPage";
@@ -44,7 +49,9 @@ const SystemHealthMonitor = lazy(() => import("./pages/SystemHealthMonitor"));
 const GlobalSettings = lazy(() => import("./pages/GlobalSettings"));
 const Changelog = lazy(() => import("./pages/Changelog"));
 const HelpCenter = lazy(() => import("./pages/HelpCenter"));
-const OfferNegotiationThread = lazy(() => import("./pages/OfferNegotiationThread"));
+// NOTE: the /disputes/:id/negotiate route below now renders OfferThreadLive
+// (server-persisted thread) instead of the legacy localStorage demo
+// OfferNegotiationThread, so that page is no longer lazy-loaded here.
 const PayerContactBook = lazy(() => import("./pages/PayerContactBook"));
 const APIKeyManagement = lazy(() => import("./pages/APIKeyManagement"));
 const SLABreachMonitor = lazy(() => import("./pages/SLABreachMonitor"));
@@ -114,6 +121,27 @@ const HeartbeatOperations = lazy(() => import("./pages/HeartbeatOperations"));
 const ProviderDisputeManagement = lazy(() => import("./pages/ProviderDisputeManagement"));
 const ProviderSandboxAcceptance = lazy(() => import("./pages/ProviderSandboxAcceptance"));
 const TemporalOperations = lazy(() => import("./pages/TemporalOperations"));
+const WorkflowMonitor = lazy(() => import("./pages/WorkflowMonitor"));
+const SubmissionTimeline = lazy(() => import("./pages/SubmissionTimeline"));
+const PortalOps = lazy(() => import("./pages/PortalOps"));
+const PriorAuthClocks = lazy(() => import("./pages/PriorAuthClocks"));
+const BatchBuilder = lazy(() => import("./pages/BatchBuilder"));
+const ConsentCenter = lazy(() => import("./pages/ConsentCenter"));
+const QpaExplorer = lazy(() => import("./pages/QpaExplorer"));
+const ComplianceCenter = lazy(() => import("./pages/ComplianceCenter"));
+const StatePathResolver = lazy(() => import("./pages/StatePathResolver"));
+const SettlementInbox = lazy(() => import("./pages/SettlementInbox"));
+// OfferThreadLive replaces the localStorage-based OfferNegotiationThread demo
+// on the same /disputes/:id/negotiate path (server-persisted offer thread).
+const OfferThreadLive = lazy(() => import("./pages/OfferThreadLive"));
+const OutcomeSimulatorShell = lazy(() => import("./pages/OutcomeSimulatorShell"));
+const PayerCases = lazy(() => import("./pages/personas/PayerCases"));
+const PatientPortal = lazy(() => import("./pages/personas/PatientPortal"));
+const IdreQueue = lazy(() => import("./pages/personas/IdreQueue"));
+const OrgsPage = lazy(() => import("./pages/personas/Orgs"));
+const IdreDirectoryAdmin = lazy(() => import("./pages/admin/IdreDirectory"));
+const FeeSchedulesAdmin = lazy(() => import("./pages/admin/FeeSchedules"));
+const Unsubscribe = lazy(() => import("./pages/Unsubscribe"));
 
 /** Helper: wraps a component in ProtectedRoute */
 function P({ component: C, admin }: { component: ComponentType; admin?: boolean }) {
@@ -144,6 +172,7 @@ function Router() {
       <Route path={"/404"} component={NotFound} />
       <Route path={"/changelog"} component={Changelog} />
       <Route path={"/help"} component={HelpCenter} />
+      <Route path={"/unsubscribe/:token"} component={Unsubscribe} />
       <Route path="/state-laws" component={StateBalanceBilling} />
 
       {/* Auth-required routes */}
@@ -153,7 +182,7 @@ function Router() {
       <Route path={"/disputes/merge"} component={() => <PL component={DisputeMerge} />} />
       <Route path={"/disputes/wizard"} component={() => <PL component={MobileDisputeWizard} />} />
       <Route path={"/disputes/clone"} component={() => <PL component={DisputeClone} />} />
-      <Route path={"/disputes/:id/negotiate"} component={() => <PL component={OfferNegotiationThread} />} />
+      <Route path={"/disputes/:id/negotiate"} component={() => <PL component={OfferThreadLive} />} />
       <Route path={"/disputes/:id"} component={() => <PL component={DisputeDetail} />} />
       <Route path="/disputes" component={() => <PL component={DisputesList} />} />
       <Route path="/provider/disputes" component={() => <PL component={ProviderDisputeManagement} />} />
@@ -175,7 +204,6 @@ function Router() {
       <Route path={"/lakehouse"} component={() => <PL component={LakehouseExport} />} />
       <Route path={"/system-health"} component={() => <PL component={SystemHealthMonitor} />} />
       <Route path={"/settings"} component={() => <PL component={GlobalSettings} />} />
-      <Route path={"/disputes/:id/negotiate"} component={() => <P component={OfferNegotiationThread} />} />
       <Route path="/templates" component={() => <PL component={DisputeTemplates} />} />
       <Route path="/payer-contacts" component={() => <PL component={PayerContactBook} />} />
       <Route path="/api-keys" component={() => <PL component={APIKeyManagement} />} />
@@ -239,12 +267,30 @@ function Router() {
       <Route path="/hermes" component={() => <PL component={HermesAssistant} />} />
       <Route path="/smartform-guide" component={() => <PL component={SmartFormVisualization} />} />
       <Route path="/cohort-analysis" component={() => <PL component={CohortAnalysis} />} />
+      <Route path="/submission-automation" component={() => <PL component={SubmissionTimeline} />} />
+      <Route path="/portal-ops" component={() => <PL component={PortalOps} />} />
+      <Route path="/prior-auth" component={() => <PL component={PriorAuthClocks} />} />
+      <Route path="/batch-builder" component={() => <PL component={BatchBuilder} />} />
+      <Route path="/consent-center" component={() => <PL component={ConsentCenter} />} />
+      <Route path="/qpa-explorer" component={() => <PL component={QpaExplorer} />} />
+      <Route path="/compliance-center" component={() => <PL component={ComplianceCenter} />} />
+      <Route path="/state-path" component={() => <PL component={StatePathResolver} />} />
+      <Route path="/outcome-simulator" component={() => <PL component={OutcomeSimulatorShell} />} />
+      {/* Persona routes gated by feature flags (wave W5-7; default-ON) */}
+      <Route path="/payer/cases" component={() => <FlagGate flag="personas.payerCases"><PL component={PayerCases} /></FlagGate>} />
+      <Route path="/patient/:token" component={PatientPortal} />
+      <Route path="/idre/queue" component={() => <FlagGate flag="personas.idreQueue"><PL component={IdreQueue} /></FlagGate>} />
+      <Route path="/orgs" component={() => <FlagGate flag="personas.orgs"><PL component={OrgsPage} /></FlagGate>} />
 
       {/* Admin-only routes */}
+      <Route path="/admin/idre-directory" component={() => <PL component={IdreDirectoryAdmin} admin />} />
+      <Route path="/admin/fee-schedules" component={() => <PL component={FeeSchedulesAdmin} admin />} />
+      <Route path="/admin/settlements" component={() => <PL component={SettlementInbox} admin />} />
       <Route path="/admin/leads" component={() => <PL component={LeadsManager} admin />} />
       <Route path="/admin/heartbeat" component={() => <PL component={HeartbeatOperations} admin />} />
       <Route path="/admin/provider-acceptance" component={() => <PL component={ProviderSandboxAcceptance} admin />} />
       <Route path="/admin/temporal-operations" component={() => <PL component={TemporalOperations} admin />} />
+      <Route path="/workflow-monitor" component={() => <PL component={WorkflowMonitor} admin />} />
       <Route path={"/admin/users"} component={() => <PL component={AdminUserManagement} admin />} />
       <Route path="/admin" component={() => <PL component={Admin} admin />} />
 
@@ -260,7 +306,13 @@ function AppInner() {
 
   return (
     <>
-      <Suspense fallback={<RouteLoading />}> 
+      <OfflineBanner />
+      <ImpersonationBanner />
+      <Suspense fallback={
+        <div className="min-h-[60vh] w-full bg-background p-6">
+          <RouteSkeleton />
+        </div>
+      }>
         <Router />
       </Suspense>
       <SessionExpiryWarning
@@ -268,6 +320,7 @@ function AppInner() {
         remainingMs={warningRemainingMs}
         onExtended={onSessionExtended}
       />
+      <InstallPrompt />
     </>
   );
 }
@@ -286,7 +339,3 @@ function App() {
 }
 
 export default App;
-
-function RouteLoading() {
-  return <div className="flex min-h-[14rem] items-center justify-center text-sm text-muted-foreground" role="status">Loading workspace…</div>;
-}

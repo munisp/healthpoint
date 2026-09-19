@@ -69,7 +69,7 @@ export default function CSVImport() {
   const [preview, setPreview] = useState<{ headers: string[]; preview: Record<string, string>[]; totalRows: number } | null>(null);
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [autoMapped, setAutoMapped] = useState(false);
-  const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
+  const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: { row: number; message: string }[]; errorCsv?: string | null } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const previewMutation = trpc.csvImport.preview.useMutation({
@@ -199,9 +199,26 @@ export default function CSVImport() {
               <div className="mt-3 space-y-1">
                 <p className="text-xs font-medium text-red-600">Errors:</p>
                 {importResult.errors.map((e, i) => (
-                  <p key={i} className="text-xs text-red-500 bg-red-50 dark:bg-red-950/20 px-2 py-1 rounded">{e}</p>
+                  <p key={i} className="text-xs text-red-500 bg-red-50 dark:bg-red-950/20 px-2 py-1 rounded">{`Row ${e.row}: ${e.message}`}</p>
                 ))}
               </div>
+            )}
+            {importResult.errorCsv && (
+              <button
+                type="button"
+                className="mt-2 text-xs text-blue-600 underline"
+                onClick={() => {
+                  const blob = new Blob([importResult.errorCsv!], { type: "text/csv" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "import-errors.csv";
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                Download error CSV
+              </button>
             )}
           </CardContent>
         </Card>

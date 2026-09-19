@@ -53,6 +53,7 @@ export const IDR_STEP = [
   "STEP_17_DISPUTE_CLOSED",
   "STEP_18_APPEAL_FILED",
   "STEP_19_APPEAL_RESOLVED",
+  "STEP_20_DISPUTE_WITHDRAWN",
 ] as const;
 export type IDRStep = (typeof IDR_STEP)[number];
 
@@ -68,6 +69,7 @@ export const DISPUTE_STATUS = [
   "closed",
   "appealed",
   "ineligible",
+  "withdrawn",
 ] as const;
 export type DisputeStatus = (typeof DISPUTE_STATUS)[number];
 
@@ -131,6 +133,10 @@ export const disputes = pgTable(
     idrEntityId: varchar("idrEntityId", { length: 64 }),
     idrEntityName: varchar("idrEntityName", { length: 255 }),
     // Deadlines
+    // Date of the initial payment (or notice of denial) for the claim — the
+    // statutory anchor for the 30-business-day open negotiation window
+    // (45 CFR § 149.510(b)(1)). Nullable; defaults to createdAt at creation.
+    initialPaymentDate: timestamp("initialPaymentDate"),
     openNegotiationDeadline: timestamp("openNegotiationDeadline"),
     idrInitiationDeadline: timestamp("idrInitiationDeadline"),
     entitySelectionDeadline: timestamp("entitySelectionDeadline"),
@@ -1867,3 +1873,5 @@ export const documentVersions = pgTable(
 );
 export type DocumentVersion = typeof documentVersions.$inferSelect;
 export type InsertDocumentVersion = typeof documentVersions.$inferInsert;
+export * from "./schema-idr-compliance";
+export * from "./schema-reconciliation";
