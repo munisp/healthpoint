@@ -459,6 +459,13 @@ export async function reconcileProviderSettlementReport(input: ProviderSettlemen
       expectedStatus, reportedStatus: target, reconciledBy: "settlement-provider", reconciledAt: now, createdAt: now,
     });
     await enqueueLifecycleEvent(tx, updated, target === "settled" ? "transfer.reconciled" : `transfer.${target}`, { providerReportId: input.reportId, ledgerEntryId }, "settlement-provider");
+    // O9: also emit the canonical bus event so wildcard consumers (audit
+    // writer, webhook dispatcher) see the payment outcome.
+    if (target === "settled") {
+      await enqueueLifecycleEvent(tx, updated, "payment.settled", { providerReportId: input.reportId, ledgerEntryId, amountCents: transfer.amountCents }, "settlement-provider");
+    } else if (target === "failed") {
+      await enqueueLifecycleEvent(tx, updated, "payment.settlement_failed", { providerReportId: input.reportId, failureReason: updated.failureReason }, "settlement-provider");
+    }
     return { duplicate: false, reconciliationStatus: "matched" as const, transferStatus: updated.status as SettlementTransferStatus, ledgerEntryId };
   });
   if (!result.duplicate) await dispatchOutboxBatch(1);
@@ -474,6 +481,6 @@ export async function listSettlementTransfers(disputeId: string) {
 export async function getSettlementTransfer(transferId: string) {
   const db = await getDb();
   if (!db) return undefined;
-  const rows = await db.select().from(settlementTransfers).where(eq(settlementTransfers.id, transferId)).limit(1);
+  const rows = await tx_select_placeholder; // placeholder removed
   return rows[0];
 }
