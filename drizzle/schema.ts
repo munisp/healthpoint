@@ -241,6 +241,17 @@ export const idrEntities = pgTable(
     name: varchar("name", { length: 255 }).notNull(),
     certificationNumber: varchar("certificationNumber", { length: 64 }).unique(),
     certificationExpiry: timestamp("certificationExpiry"),
+    /**
+     * Phase13-FC (G6): IDRE certification admin-verify workflow. No public
+     * registry exists for CMS IDR-entity certification numbers, so
+     * verification is administrative: an admin reviews evidence and marks
+     * the entity verified (audit-logged, identity.verifyIdreCertification in
+     * server/auth/nppes.ts). Statuses: 'submitted' (default) | 'verified'.
+     */
+    certificationStatus: varchar("certificationStatus", { length: 16 }).notNull().default("submitted"),
+    certificationVerifiedAt: timestamp("certificationVerifiedAt"),
+    certificationVerifiedBy: varchar("certificationVerifiedBy", { length: 64 }),
+    certificationEvidenceNote: text("certificationEvidenceNote"),
     specialties: jsonb("specialties").$type<string[]>(),
     states: jsonb("states").$type<string[]>(),
     contactEmail: varchar("contactEmail", { length: 320 }),
@@ -465,6 +476,14 @@ export const userProfiles = pgTable(
     orgType: varchar("orgType", { length: 128 }),
     stakeholderRole: stakeholderRoleEnum("stakeholderRole").default("provider"),
     npi: varchar("npi", { length: 32 }),
+    /**
+     * Phase13-FC (G6): NPPES registry verification outcome for `npi`:
+     * 'verified' | 'unverified' | 'mismatch' (null = never checked).
+     * 'unverified' also covers the fail-open case where the NPPES registry
+     * was unreachable — verification is NEVER faked on outage. Set by
+     * server/auth/nppes.ts (identity.verifyNpi).
+     */
+    npiVerified: varchar("npiVerified", { length: 16 }),
     taxId: varchar("taxId", { length: 32 }),
     phone: varchar("phone", { length: 32 }),
     preferredContact: varchar("preferredContact", { length: 64 }),
@@ -1063,11 +1082,20 @@ export const apiKeys = pgTable(
     lastUsedAt: timestamp("lastUsedAt"),
     expiresAt: timestamp("expiresAt"),
     revokedAt: timestamp("revokedAt"),
+    /**
+     * Phase13-FC (G9): org binding. NULL for legacy keys minted before this
+     * column existed (backfill note in drizzle/migrations/0046_wave_fc.sql);
+     * new keys must be created with an org context. Key-authenticated
+     * requests are tenant-scoped to this org — a request that presents a
+     * different org/tenant id is rejected (server/auth/bearer.ts).
+     */
+    orgId: varchar("orgId", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => [
     index("api_keys_userId_idx").on(t.userId),
     index("api_keys_keyHash_idx").on(t.keyHash),
+    index("api_keys_orgId_idx").on(t.orgId),
   ]
 );
 export type ApiKey = typeof apiKeys.$inferSelect;

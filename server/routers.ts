@@ -3765,6 +3765,7 @@ Based on NSA IDR historical data and legal precedent, provide:
         name: apiKeys.name,
         keyPrefix: apiKeys.keyPrefix,
         scopes: apiKeys.scopes,
+        orgId: apiKeys.orgId,
         lastUsedAt: apiKeys.lastUsedAt,
         expiresAt: apiKeys.expiresAt,
         revokedAt: apiKeys.revokedAt,
@@ -3777,10 +3778,23 @@ Based on NSA IDR historical data and legal precedent, provide:
         name: z.string().min(1).max(100),
         scopes: z.array(z.enum(["read", "write", "admin"])).min(1),
         expiresAt: z.string().datetime().optional(),
+        // Phase13-FC (G9): keys are org-bound. The caller must be a member of
+        // the org; key-authenticated requests are tenant-scoped to it
+        // (cross-org tenant ids rejected in server/auth/bearer.ts).
+        orgId: z.string().min(1).max(64),
       }))
       .mutation(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // G9: require an org context — the caller must hold a membership in
+        // the org the key is bound to, and the org must not be suspended.
+        const { orgMemberships, organizations } = await import("../drizzle/schema-personas");
+        const membership = (await db.select().from(orgMemberships)
+          .where(and(eq(orgMemberships.orgId, input.orgId), eq(orgMemberships.userId, ctx.user.id))).limit(1))[0];
+        if (!membership) throw new TRPCError({ code: "FORBIDDEN", message: "API keys must be bound to an organization you are a member of" });
+        const org = (await db.select({ status: organizations.status }).from(organizations)
+          .where(eq(organizations.id, input.orgId)).limit(1))[0];
+        if (org?.status === "suspended") throw new TRPCError({ code: "FORBIDDEN", message: "org_suspended: cannot mint API keys for a suspended organization" });
         const { createHash, randomBytes } = await import("crypto");
         const rawKey = `hp_${randomBytes(32).toString("hex")}`;
         const keyHash = createHash("sha256").update(rawKey).digest("hex");
@@ -3794,13 +3808,14 @@ Based on NSA IDR historical data and legal precedent, provide:
         }
         await db.insert(apiKeys).values({
           userId: ctx.user.id,
+          orgId: input.orgId,
           name: input.name,
           keyHash,
           keyPrefix,
           scopes: effectiveScopes.join(","),
           expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
         });
-        return { key: rawKey, prefix: keyPrefix }; // raw key returned only once
+        return { key: rawKey, prefix: keyPrefix, orgId: input.orgId }; // raw key returned only once
       }),
 
     revoke: protectedProcedure
