@@ -2549,6 +2549,24 @@ export const appRouter = router({
         onboardingCompleted: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        // G13 (residual): stakeholderRole is self-asserted on save. Users may
+        // self-select only low-privilege roles (provider/facility/other);
+        // privileged roles (payer admin-tier, idr_entity arbitrator-tier) are
+        // granted exclusively via admin/invite flows (see the Phase13-FC G13
+        // note in _core/keycloak.ts and personas.claimBootstrapAdmin). A
+        // profile that already holds the privileged role (admin-granted) may
+        // keep it; otherwise refuse rather than silently strip, matching the
+        // FORBIDDEN style of claimBootstrapAdmin.
+        const PRIVILEGED_STAKEHOLDER_ROLES: readonly string[] = ["payer", "idr_entity"];
+        if (input.stakeholderRole && PRIVILEGED_STAKEHOLDER_ROLES.includes(input.stakeholderRole)) {
+          const existingProfile = await getUserProfile(ctx.user.id);
+          if (existingProfile?.stakeholderRole !== input.stakeholderRole) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: `The '${input.stakeholderRole}' role can only be assigned by an admin or invite flow; it cannot be self-selected.`,
+            });
+          }
+        }
         // G7: NPI is a provider identifier — guard against two provider
         // profiles claiming the same NPI. Pre-check for a friendly 409
         // (same pattern as payer.invite in routers/personas.ts); the
