@@ -29,7 +29,12 @@ const emptyForm: FeeForm = { effectiveYear: "2026", tier: "single", effectiveFro
 
 export default function FeeSchedulesAdmin() {
   const utils = trpc.useUtils();
-  const { data: rows, isLoading } = trpc.feeSchedules.list.useQuery();
+  // Reference data: fee tiers change only via the upsert below, which
+  // invalidates explicitly — a 5-minute staleTime avoids refetch-on-mount
+  // churn when admins navigate away and back.
+  const { data: rows, isLoading } = trpc.feeSchedules.list.useQuery(undefined, {
+    staleTime: 5 * 60_000,
+  });
 
   const [showEditor, setShowEditor] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
