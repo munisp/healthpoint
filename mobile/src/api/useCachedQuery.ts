@@ -6,7 +6,7 @@
  * show a staleness indicator. This is the "offline queue" for reads: last
  * fetched lists stay visible when the network is unavailable.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery, type QueryKey } from "@tanstack/react-query";
 import { readCache, writeCache, type CachedEntry } from "./cache";
 
@@ -43,6 +43,11 @@ export function useCachedQuery<T>(opts: {
   }, [cacheKey]);
 
   const query = useQuery({ queryKey, queryFn, enabled });
+  // Stable refetch identity so memoized list props (RefreshControl etc.)
+  // don't churn every render.
+  const refetch = useCallback(() => {
+    void query.refetch();
+  }, [query.refetch]);
 
   useEffect(() => {
     if (query.data != null) void writeCache(cacheKey, query.data);
@@ -57,8 +62,6 @@ export function useCachedQuery<T>(opts: {
     isRefetching: query.isRefetching,
     isFromCache: fromCache,
     dataUpdatedAtMs: query.dataUpdatedAt || cached?.fetchedAt || null,
-    refetch: () => {
-      void query.refetch();
-    },
+    refetch,
   };
 }
