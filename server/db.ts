@@ -1,4 +1,4 @@
-import { eq, desc, and, or, like, count, sql, inArray } from "drizzle-orm";
+import { eq, desc, and, or, like, count, sql, inArray, gte, lt, lte, isNotNull, notInArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { existsSync, readFileSync } from "node:fs";
@@ -92,6 +92,15 @@ export function resolvePostgresDriverUrl(connectionString: string): string {
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pgClient: ReturnType<typeof postgres> | null = null;
 
+/** Parse a positive-int env knob with clamping; falls back to `fallback`. */
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
 export async function getDb() {
   if (!_db) {
     const connectionString = resolvePostgresUrl();
@@ -103,18 +112,23 @@ export async function getDb() {
     const maxAttempts = 5;
     while (attempts < maxAttempts) {
       try {
+        // phase14-perfa: pool sizing is now env-tunable (defaults unchanged).
+        const poolMax = envInt("PG_POOL_MAX", 20, 1, 200);
+        const idleTimeout = envInt("PG_POOL_IDLE_TIMEOUT_SEC", 30, 1, 3600);
+        const connectTimeout = envInt("PG_POOL_CONNECT_TIMEOUT_SEC", 10, 1, 120);
+        const maxLifetime = envInt("PG_POOL_MAX_LIFETIME_SEC", 1800, 0, 86400);
         _pgClient = postgres(resolvePostgresDriverUrl(connectionString), {
-          max: 20,                  // connection pool size
-          idle_timeout: 30,         // seconds before idle connection is closed
-          connect_timeout: 10,      // seconds to wait for a connection
-          max_lifetime: 1800,       // seconds before connection is recycled
+          max: poolMax,             // connection pool size
+          idle_timeout: idleTimeout,   // seconds before idle connection is closed
+          connect_timeout: connectTimeout, // seconds to wait for a connection
+          max_lifetime: maxLifetime,  // seconds before connection is recycled
           onnotice: () => {},       // suppress NOTICE messages
           ...resolvePostgresTlsOptions(connectionString),
         });
         _db = drizzle(_pgClient);
         // Verify connectivity with a lightweight query
         await _pgClient`SELECT 1`;
-        console.info(`[Database] Connected to PostgreSQL (pool max=20)`);
+        console.info(`[Database] Connected to PostgreSQL (pool max=${poolMax})`);
         break;
       } catch (error) {
         attempts++;
@@ -402,50 +416,44 @@ export async function getDashboardStats(userId: string | undefined) {
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   // 5 business days ≈ 7 calendar days (conservative)
   const fiveBusinessDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const [
-    totalResult,
-    openResult,
-    idrResult,
-    closedResult,
-    overdueResult,
-    dueSoonResult,
-    recentDisputes,
-  ] = await Promise.all([
-    db.select({ count: count() }).from(disputes),
-    db.select({ count: count() }).from(disputes).where(eq(disputes.status, "open_negotiation")),
-    db.select({ count: count() }).from(disputes).where(inArray(disputes.status, ["idr_initiated", "idr_entity_selection", "eligibility_review", "offer_submission", "under_arbitration"])),
-    db.select({ count: count() }).from(disputes).where(and(eq(disputes.status, "closed"), sql`${disputes.closedAt} >= ${thirtyDaysAgo}`)),
-    db.select({ count: count() }).from(disputes).where(and(
-      sql`${disputes.status} NOT IN ('closed', 'ineligible', 'withdrawn')`,
-      or(
-        and(sql`${disputes.openNegotiationDeadline} IS NOT NULL`, sql`${disputes.openNegotiationDeadline} < ${now}`),
-        and(sql`${disputes.offerSubmissionDeadline} IS NOT NULL`, sql`${disputes.offerSubmissionDeadline} < ${now}`),
-        and(sql`${disputes.paymentDeadline} IS NOT NULL`, sql`${disputes.paymentDeadline} < ${now}`)
-      )
-    )),
-    // Due within 5 business days (not yet overdue)
-    db.select({ count: count() }).from(disputes).where(and(
-      sql`${disputes.status} NOT IN ('closed', 'ineligible', 'withdrawn')`,
-      or(
-        and(
-          sql`${disputes.openNegotiationDeadline} IS NOT NULL`,
-          sql`${disputes.openNegotiationDeadline} >= ${now}`,
-          sql`${disputes.openNegotiationDeadline} <= ${fiveBusinessDaysFromNow}`
-        ),
-        and(
-          sql`${disputes.offerSubmissionDeadline} IS NOT NULL`,
-          sql`${disputes.offerSubmissionDeadline} >= ${now}`,
-          sql`${disputes.offerSubmissionDeadline} <= ${fiveBusinessDaysFromNow}`
-        ),
-        and(
-          sql`${disputes.paymentDeadline} IS NOT NULL`,
-          sql`${disputes.paymentDeadline} >= ${now}`,
-          sql`${disputes.paymentDeadline} <= ${fiveBusinessDaysFromNow}`
-        )
-      )
-    )),
+  // phase14-perfa: the six dispute count queries are consolidated into ONE
+  // conditional-aggregation round trip (previously 6 parallel round trips),
+  // and the raw `sql` date interpolations are replaced with column-bound
+  // drizzle operators (lt/gte/lte/isNotNull/notInArray). The raw form 500'd
+  // at runtime with drizzle-orm@0.45.2 + postgres@3.4.9 (Date params in raw
+  // sql fragments fail driver serialization); column-bound operators map
+  // Date values through the timestamp column type and work. Semantics are
+  // identical to the previous six queries.
+  const openStatusFilter = notInArray(disputes.status, ["closed", "ineligible", "withdrawn"]);
+  const overdueClause = or(
+    and(isNotNull(disputes.openNegotiationDeadline), lt(disputes.openNegotiationDeadline, now)),
+    and(isNotNull(disputes.offerSubmissionDeadline), lt(disputes.offerSubmissionDeadline, now)),
+    and(isNotNull(disputes.paymentDeadline), lt(disputes.paymentDeadline, now))
+  );
+  // Due within 5 business days (not yet overdue)
+  const dueSoonClause = or(
+    and(isNotNull(disputes.openNegotiationDeadline), gte(disputes.openNegotiationDeadline, now), lte(disputes.openNegotiationDeadline, fiveBusinessDaysFromNow)),
+    and(isNotNull(disputes.offerSubmissionDeadline), gte(disputes.offerSubmissionDeadline, now), lte(disputes.offerSubmissionDeadline, fiveBusinessDaysFromNow)),
+    and(isNotNull(disputes.paymentDeadline), gte(disputes.paymentDeadline, now), lte(disputes.paymentDeadline, fiveBusinessDaysFromNow))
+  );
+  const [countsRow, recentDisputes] = await Promise.all([
+    db.select({
+      total: count(),
+      openNegotiation: count(sql`CASE WHEN ${disputes.status} = 'open_negotiation' THEN 1 END`),
+      inIDR: count(sql`CASE WHEN ${disputes.status} IN ('idr_initiated', 'idr_entity_selection', 'eligibility_review', 'offer_submission', 'under_arbitration') THEN 1 END`),
+      closedThisMonth: count(sql`CASE WHEN ${and(eq(disputes.status, "closed"), gte(disputes.closedAt, thirtyDaysAgo))} THEN 1 END`),
+      overdue: count(sql`CASE WHEN ${openStatusFilter} AND ${overdueClause} THEN 1 END`),
+      dueSoon: count(sql`CASE WHEN ${openStatusFilter} AND ${dueSoonClause} THEN 1 END`),
+    }).from(disputes),
     db.select().from(disputes).orderBy(desc(disputes.createdAt)).limit(5),
   ]);
+  const counts = countsRow[0] ?? { total: 0, openNegotiation: 0, inIDR: 0, closedThisMonth: 0, overdue: 0, dueSoon: 0 };
+  const totalResult = [{ count: counts.total }];
+  const openResult = [{ count: counts.openNegotiation }];
+  const idrResult = [{ count: counts.inIDR }];
+  const closedResult = [{ count: counts.closedThisMonth }];
+  const overdueResult = [{ count: counts.overdue }];
+  const dueSoonResult = [{ count: counts.dueSoon }];
   // Unread notifications
   const notifResult = userId
     ? await db.select({ count: count() }).from(notifications)
