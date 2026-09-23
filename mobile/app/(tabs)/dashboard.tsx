@@ -47,7 +47,7 @@ import {
 import type { DailyStat } from "../../src/api/types";
 
 /** Pure-RN bar sparkline: one bar per day, scaled to the max bucket. */
-function Sparkline({ data, c }: { data: DailyStat[]; c: Palette }) {
+const Sparkline = React.memo(function Sparkline({ data, c }: { data: DailyStat[]; c: Palette }) {
   const max = Math.max(1, ...data.map((d) => d.total));
   return (
     <View>
@@ -77,7 +77,7 @@ function Sparkline({ data, c }: { data: DailyStat[]; c: Palette }) {
       </View>
     </View>
   );
-}
+});
 
 const sparkStyles = StyleSheet.create({
   row: {
@@ -100,7 +100,7 @@ interface KpiProps {
   onPress?: () => void;
 }
 
-function KpiCard({ label, value, icon, tint, c, onPress }: KpiProps) {
+const KpiCard = React.memo(function KpiCard({ label, value, icon, tint, c, onPress }: KpiProps) {
   return (
     <Pressable
       onPress={onPress}
@@ -119,7 +119,7 @@ function KpiCard({ label, value, icon, tint, c, onPress }: KpiProps) {
       </Text>
     </Pressable>
   );
-}
+});
 
 const kpiStyles = StyleSheet.create({
   card: {
@@ -226,7 +226,7 @@ export default function DashboardScreen() {
                 {data.overdue > 0
                   ? `${data.overdue} dispute${data.overdue === 1 ? "" : "s"} past deadline`
                   : ""}
-                {data.overdue > 0 && data.dueSoon > 0 ? " \u00b7 " : ""}
+                {data.overdue > 0 && data.dueSoon > 0 ? " · " : ""}
                 {data.dueSoon > 0
                   ? `${data.dueSoon} due within 5 business days`
                   : ""}
@@ -310,9 +310,9 @@ export default function DashboardScreen() {
                         numberOfLines={1}
                       >
                         {item.respondingPartyName ?? "Unknown payer"}
-                        {" \u00b7 "}
+                        {" · "}
                         {formatUsd(item.billedAmount)}
-                        {" \u00b7 "}
+                        {" · "}
                         {formatDate(item.serviceDate)}
                       </Text>
                     </View>
