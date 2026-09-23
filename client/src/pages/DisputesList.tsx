@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, memo } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -36,7 +36,7 @@ const DISPUTE_STATUSES = [
 const STATUS_LABELS: Record<string, string> = {
   open_negotiation: "Open Negotiation",
   idr_initiated: "IDR Initiated",
-  idr_entity_selection: "IDR Entity Selection",
+  idr_entity_selection: "Entity Selection",
   eligibility_review: "Eligibility Review",
   offer_submission: "Offer Submission",
   under_arbitration: "Under Arbitration",
@@ -86,7 +86,10 @@ const RISK_CONFIG = {
   low:      { badge: "bg-success text-success-foreground border-success-foreground/30", dot: "bg-success-foreground", label: "Low" },
 };
 
-function RiskBadge({ dispute }: { dispute: any }) {
+// Memoized: bulk-selection toggles re-render the whole table; the badge is a
+// pure function of the dispute row, whose object identity is stable between
+// renders (react-query structural sharing), so memo skips the recompute.
+const RiskBadge = memo(function RiskBadge({ dispute }: { dispute: any }) {
   const { score, level, factors } = computeRisk(dispute);
   const cfg = RISK_CONFIG[level];
   return (
@@ -98,14 +101,15 @@ function RiskBadge({ dispute }: { dispute: any }) {
       {cfg.label}
     </span>
   );
-}
+});
 
 /**
  * Win-probability badge — reads the latest server-side outcome prediction
  * (trpc.predictions.get) for the row. One query per visible row; renders
  * nothing while loading, when no prediction exists, or on error.
+ * Memoized for the same reason as RiskBadge (stable disputeId prop).
  */
-function WinProbBadge({ disputeId }: { disputeId: string }) {
+const WinProbBadge = memo(function WinProbBadge({ disputeId }: { disputeId: string }) {
   const q = trpc.predictions.get.useQuery(
     { disputeId },
     { retry: false, staleTime: 5 * 60_000 }
@@ -127,7 +131,7 @@ function WinProbBadge({ disputeId }: { disputeId: string }) {
       Win {p}%{pred.stale ? " (stale)" : ""}
     </span>
   );
-}
+});
 
 const SERVICE_TYPES = [
   { value: "all", label: "All Service Types" },
