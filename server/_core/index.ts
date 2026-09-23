@@ -107,7 +107,7 @@ async function findAvailablePort(startPort = 3000): Promise<number> {
   for (let port = startPort; port < startPort + 20; port++) {
     if (await isPortAvailable(port)) return port;
   }
-  throw new Error(`No available port found starting from ${startPort}`);
+  throw new Error(`No available port found starting at ${startPort}`);
 }
 
 // ─── Scheduled endpoint auth ─────────────────────────────────────────────────
@@ -240,7 +240,7 @@ async function startServer() {
       required: ENV.isProduction || process.env.SETTLEMENT_MTLS_REQUIRED === "true",
       verifiedHeader: req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
       fingerprintHeader: req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
-      ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
+      ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN) ?? undefined,
       expectedIngressToken: process.env.SETTLEMENT_MTLS_INGRESS_TOKEN,
       allowedFingerprints: parseSettlementMtlsFingerprints(process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS),
     });
@@ -251,7 +251,7 @@ async function startServer() {
     const verification = verifySettlementCallbackSignature({
       secret: process.env.SETTLEMENT_CALLBACK_SECRET,
       keyring: parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING),
-      keyId: req.header(SETTLEMENT_KEY_ID_HEADER),
+      keyId: req.header(SETTLEMENT_CALLBACK_KEY_ID_HEADER),
       timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER),
       signature: req.header(SETTLEMENT_SIGNATURE_HEADER),
       rawBody,
@@ -309,7 +309,7 @@ async function startServer() {
       required: ENV.isProduction || process.env.SETTLEMENT_MTLS_REQUIRED === "true",
       verifiedHeader: req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
       fingerprintHeader: req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
-      ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
+      ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN) ?? undefined,
       expectedIngressToken: process.env.SETTLEMENT_MTLS_INGRESS_TOKEN,
       allowedFingerprints: parseSettlementMtlsFingerprints(process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS),
     });
@@ -329,6 +329,7 @@ async function startServer() {
       res.status(401).json({ error: "Invalid settlement report", reason: verification.reason });
       return;
     }
+
     let parsedPayload: unknown;
     try {
       parsedPayload = JSON.parse(rawBody);
@@ -643,10 +644,10 @@ async function startServer() {
           if (!trimmed) continue;
           try {
             const parsed = JSON.parse(trimmed) as {
-              status?: string;
-              completed?: number;
-              total?: number;
-              error?: string;
+              status: string;
+              completed: string;
+              total: string;
+              error: string;
             };
             if (parsed.error) {
               sendEvent({ type: "error", message: parsed.error });
@@ -654,10 +655,10 @@ async function startServer() {
               sendEvent({
                 type: "progress",
                 status: parsed.status ?? "",
-                completed: parsed.completed ?? 0,
-                total: parsed.total ?? 0,
-                pct: parsed.total && parsed.total > 0
-                  ? Math.round((parsed.completed ?? 0) / parsed.total * 100)
+                completed: parsed.completed ?? null,
+                total: parsed.total ?? null,
+                pct: parsed.total && parsed.completed
+                  ? Math.round((Number(parsed.completed) / Number(parsed.total)) * 100)
                   : null,
               });
             }
@@ -683,6 +684,28 @@ async function startServer() {
     createExpressMiddleware({
       router: rootRouter,
       createContext,
+      // phase14-perfa: short private caching for slow-changing reference-data
+      // reads (fee schedules, IDRE directory, QPA benchmark tables, org
+      // branding). All other tRPC responses keep their previous headers
+      // (no explicit Cache-Control) — PHI-bearing reads are never cached.
+      responseMeta({ paths, type }) {
+        if (type !== "query") return {};
+        const CACHEABLE = new Set([
+          "feeSchedules.list",
+          "idreDirectory.list",
+          "qpaBenchmarks.list",
+          "qpaBenchmarks.stateModifiers",
+          "orgs.getBranding",
+        ]);
+        if (paths?.some(p => CACHEABLE.has(p))) {
+          return {
+            headers: {
+              "Cache-Control": "private, max-age=30, stale-while-revalidate=60",
+            },
+          };
+        }
+        return {};
+      },
       onError: ({ error, path }) => {
         if (error.code === "INTERNAL_SERVER_ERROR") {
           console.error(`[tRPC] Internal error on ${path}:`, error.message);
