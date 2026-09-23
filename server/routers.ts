@@ -288,29 +288,46 @@ export const appRouter = router({
         if (!db) return [];
         // Cross-tenant fix (W2): scope to the caller unless admin.
         const scopeUserId = ctx.user.role === "admin" ? null : ctx.user.id;
-        const result: { date: string; total: number; opened: number; closed: number }[] = [];
+        // phase14-perfa: replaced the per-day loop (2 × days round trips,
+        // 14 for the default 7-day sparkline) with two GROUP BY day queries.
+        // Column-bound operators (gte/lt/eq) bind Date params through the
+        // timestamp column type — raw sql`${date}` interpolation 500s with
+        // drizzle-orm@0.45.2 + postgres@3.4.9. Bucket labels use
+        // TO_CHAR(..., 'YYYY-MM-DD') in the DB's timezone, matching the
+        // previous local-midnight bucketing on a UTC-offset-free host.
+        const { sql, and, gte, lt, eq } = await import("drizzle-orm");
+        const { disputes: disputesTable } = await import("../drizzle/schema");
         const now = new Date();
+        const rangeStart = new Date(now);
+        rangeStart.setDate(now.getDate() - (input.days - 1));
+        rangeStart.setHours(0, 0, 0, 0);
+        // exclusive upper bound = start of tomorrow (matches the previous
+        // between(dayStart, dayEnd 23:59:59.999) semantics without edge loss)
+        const rangeEnd = new Date(now);
+        rangeEnd.setDate(now.getDate() + 1);
+        rangeEnd.setHours(0, 0, 0, 0);
+        const dayExpr = sql<string>`TO_CHAR(${disputesTable.createdAt}, 'YYYY-MM-DD')`;
+        const closedDayExpr = sql<string>`TO_CHAR(${disputesTable.closedAt}, 'YYYY-MM-DD')`;
+        const openedConds = [gte(disputesTable.createdAt, rangeStart), lt(disputesTable.createdAt, rangeEnd)];
+        const closedConds = [gte(disputesTable.closedAt!, rangeStart), lt(disputesTable.closedAt!, rangeEnd)];
+        if (scopeUserId) { openedConds.push(eq(disputesTable.initiatingPartyId, scopeUserId)); closedConds.push(eq(disputesTable.initiatingPartyId, scopeUserId)); }
+        const [openedRows, closedRows] = await Promise.all([
+          db.select({ day: dayExpr, c: sql<number>`COUNT(*)` }).from(disputesTable)
+            .where(and(...openedConds)).groupBy(dayExpr),
+          db.select({ day: closedDayExpr, c: sql<number>`COUNT(*)` }).from(disputesTable)
+            .where(and(...closedConds)).groupBy(closedDayExpr),
+        ]);
+        const openedByDay = new Map(openedRows.map(r => [r.day, Number(r.c)]));
+        const closedByDay = new Map(closedRows.map(r => [r.day, Number(r.c)]));
+        const result: { date: string; total: number; opened: number; closed: number }[] = [];
         for (let i = input.days - 1; i >= 0; i--) {
           const dayStart = new Date(now);
           dayStart.setDate(now.getDate() - i);
           dayStart.setHours(0, 0, 0, 0);
-          const dayEnd = new Date(dayStart);
-          dayEnd.setHours(23, 59, 59, 999);
-          const { sql, and, between, eq } = await import("drizzle-orm");
-          const { disputes: disputesTable } = await import("../drizzle/schema");
-          const openedConds = [between(disputesTable.createdAt, dayStart, dayEnd)];
-          const closedConds = [between(disputesTable.closedAt!, dayStart, dayEnd)];
-          if (scopeUserId) { openedConds.push(eq(disputesTable.initiatingPartyId, scopeUserId)); closedConds.push(eq(disputesTable.initiatingPartyId, scopeUserId)); }
-          const [openedRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(disputesTable)
-            .where(and(...openedConds));
-          const [closedRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(disputesTable)
-            .where(and(...closedConds));
-          result.push({
-            date: dayStart.toISOString().slice(0, 10),
-            total: Number(openedRow?.count ?? 0) + Number(closedRow?.count ?? 0),
-            opened: Number(openedRow?.count ?? 0),
-            closed: Number(closedRow?.count ?? 0),
-          });
+          const key = dayStart.toISOString().slice(0, 10);
+          const opened = openedByDay.get(key) ?? 0;
+          const closed = closedByDay.get(key) ?? 0;
+          result.push({ date: key, total: opened + closed, opened, closed });
         }
         return result;
       }),
@@ -323,7 +340,7 @@ export const appRouter = router({
       // 'initiating_party' = provider won; 'responding_party' = payer won
       const rows = scopeUserId
         ? await db.execute(
-          sql`SELECT serviceType,
+          sql`SELECT "serviceType" AS "serviceType",
                 COUNT(*) AS total,
                 SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
                 AVG(COALESCE("determinationAmount", 0)) AS "avgDeterminationAmount",
@@ -334,7 +351,7 @@ export const appRouter = router({
          GROUP BY "serviceType"`
         ) as unknown as { rows: { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[] }
         : await db.execute(
-          sql`SELECT serviceType,
+          sql`SELECT "serviceType" AS "serviceType",
                 COUNT(*) AS total,
                 SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
                 AVG(COALESCE("determinationAmount", 0)) AS "avgDeterminationAmount",
@@ -343,7 +360,11 @@ export const appRouter = router({
          WHERE status IN ('closed', 'determination_issued') AND "determinationWinner" IS NOT NULL
          GROUP BY "serviceType"`
         ) as unknown as { rows: { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[] };
-      const byServiceType = (rows.rows ?? []).map(r => ({
+      // phase14-perfa: drizzle postgres-js `execute` returns the rows array
+      // directly (no pg-style `.rows` wrapper) — the old `rows.rows ?? []`
+      // silently dropped every aggregate row.
+      const outcomeRows = (Array.isArray(rows) ? rows : (rows as { rows?: unknown[] }).rows ?? []) as { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[];
+      const byServiceType = outcomeRows.map(r => ({
         serviceType: r.serviceType,
         total: Number(r.total),
         wins: Number(r.wins),
@@ -397,8 +418,11 @@ export const appRouter = router({
            GROUP BY ${groupCol}
            ORDER BY total DESC`
         ) as unknown as { rows: { label: string; total: string; wins: string; losses: string; avgDetermination: string; avgBilled: string; avgDaysToClose: string }[] };
+        // phase14-perfa: same `.rows` unwrap fix as outcomeAnalytics —
+        // postgres-js execute returns a bare array.
+        const cohortRows = (Array.isArray(result) ? result : (result as { rows?: unknown[] }).rows ?? []) as { label: string; total: string; wins: string; losses: string; avgDetermination: string; avgBilled: string; avgDaysToClose: string }[];
         return {
-          rows: (result.rows ?? []).map(r => ({
+          rows: cohortRows.map(r => ({
             label: r.label ?? "Unknown",
             total: Number(r.total),
             wins: Number(r.wins),
