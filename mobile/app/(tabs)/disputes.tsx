@@ -3,7 +3,7 @@
  * (muted green/amber/red palette mirroring the web client), pull-to-refresh,
  * skeleton loading, empty + error states, and an offline staleness banner.
  */
-import React, { useEffect, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "expo-router";
 import {
   FlatList,
@@ -26,8 +26,51 @@ import {
 } from "../../src/components/Feedback";
 import { hapticSelection } from "../../src/lib/haptics";
 import { formatDate, formatUsd, humanize } from "../../src/lib/format";
-import { fontSize, spacing, useColors, MIN_TOUCH_TARGET } from "../../src/theme";
+import { fontSize, spacing, useColors, MIN_TOUCH_TARGET, type Palette } from "../../src/theme";
 import type { DisputeListItem } from "../../src/api/types";
+
+/**
+ * Memoized list row. FlatList re-invokes renderItem on every parent render
+ * (e.g. each debounced search keystroke changes state); with a stable
+ * renderItem + a memoized row, unchanged rows skip reconciliation entirely.
+ */
+const DisputeRow = memo(function DisputeRow({
+  item,
+  c,
+}: {
+  item: DisputeListItem;
+  c: Palette;
+}) {
+  return (
+    <Link href={`/dispute/${item.id}`} asChild>
+      <Pressable
+        style={[
+          styles.card,
+          { backgroundColor: c.card, borderColor: c.border },
+        ]}
+      >
+        <View style={styles.cardTopRow}>
+          <Text style={[styles.cardTitle, { color: c.text }]}>
+            {item.referenceNumber}
+          </Text>
+          <StatusBadge status={item.status} />
+        </View>
+        <Text style={[styles.cardSubtitle, { color: c.textMuted }]}>
+          {item.respondingPartyName ?? "Unknown payer"}
+          {item.serviceType ? ` · ${humanize(item.serviceType)}` : ""}
+        </Text>
+        <View style={styles.cardBottomRow}>
+          <Text style={[styles.cardAmount, { color: c.text }]}>
+            {formatUsd(item.billedAmount)}
+          </Text>
+          <Text style={[styles.cardDate, { color: c.textFaint }]}>
+            {formatDate(item.serviceDate)}
+          </Text>
+        </View>
+      </Pressable>
+    </Link>
+  );
+});
 
 const STATUS_FILTERS = [
   "all",
@@ -53,6 +96,12 @@ export default function DisputesScreen() {
     return () => clearTimeout(t);
   }, [search]);
 
+  // Stable filter object: a fresh inline object each render would give
+  // downstream memoized hooks a new reference identity for no reason.
+  const filter = useMemo(
+    () => ({ status, search: debouncedSearch }),
+    [status, debouncedSearch]
+  );
   const {
     data,
     isLoading,
@@ -62,10 +111,35 @@ export default function DisputesScreen() {
     isRefetching,
     isFromCache,
     dataUpdatedAtMs,
-  } = useDisputes({ status, search: debouncedSearch });
+  } = useDisputes(filter);
 
-  const items = data?.items ?? [];
+  const items = useMemo(() => data?.items ?? [], [data]);
   const total = data?.total ?? items.length;
+
+  const keyExtractor = useCallback((item: DisputeListItem) => item.id, []);
+  const renderItem = useCallback(
+    ({ item }: { item: DisputeListItem }) => <DisputeRow item={item} c={c} />,
+    [c]
+  );
+  const refreshControl = useMemo(
+    () => (
+      <RefreshControl
+        refreshing={isRefetching}
+        onRefresh={refetch}
+        tintColor={c.primary}
+      />
+    ),
+    [isRefetching, refetch, c.primary]
+  );
+  const listHeader = useMemo(
+    () =>
+      total > 0 ? (
+        <Text style={[styles.countText, { color: c.textFaint }]}>
+          {total} dispute{total === 1 ? "" : "s"}
+        </Text>
+      ) : null,
+    [total, c.textFaint]
+  );
 
   return (
     <View style={[styles.container, { backgroundColor: c.bg }]}>
@@ -156,22 +230,11 @@ export default function DisputesScreen() {
       ) : (
         <FlatList
           data={items}
-          keyExtractor={(item: DisputeListItem) => item.id}
-          contentContainerStyle={items.length === 0 ? { flexGrow: 1 } : undefined}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefetching}
-              onRefresh={refetch}
-              tintColor={c.primary}
-            />
-          }
-          ListHeaderComponent={
-            total > 0 ? (
-              <Text style={[styles.countText, { color: c.textFaint }]}>
-                {total} dispute{total === 1 ? "" : "s"}
-              </Text>
-            ) : null
-          }
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          contentContainerStyle={items.length === 0 ? styles.emptyList : undefined}
+          refreshControl={refreshControl}
+          ListHeaderComponent={listHeader}
           ListEmptyComponent={
             <EmptyState
               title="No disputes found"
@@ -182,35 +245,15 @@ export default function DisputesScreen() {
               }
             />
           }
-          renderItem={({ item }) => (
-            <Link href={`/dispute/${item.id}`} asChild>
-              <Pressable
-                style={[
-                  styles.card,
-                  { backgroundColor: c.card, borderColor: c.border },
-                ]}
-              >
-                <View style={styles.cardTopRow}>
-                  <Text style={[styles.cardTitle, { color: c.text }]}>
-                    {item.referenceNumber}
-                  </Text>
-                  <StatusBadge status={item.status} />
-                </View>
-                <Text style={[styles.cardSubtitle, { color: c.textMuted }]}>
-                  {item.respondingPartyName ?? "Unknown payer"}
-                  {item.serviceType ? ` \u00b7 ${humanize(item.serviceType)}` : ""}
-                </Text>
-                <View style={styles.cardBottomRow}>
-                  <Text style={[styles.cardAmount, { color: c.text }]}>
-                    {formatUsd(item.billedAmount)}
-                  </Text>
-                  <Text style={[styles.cardDate, { color: c.textFaint }]}>
-                    {formatDate(item.serviceDate)}
-                  </Text>
-                </View>
-              </Pressable>
-            </Link>
-          )}
+          /* Virtualization tuning (STATIC-ONLY rationale, see
+             mobile/docs/performance.md): cap the initial render burst and
+             per-batch work after a 50-item fetch, and clip off-screen rows
+             to free native view memory while scrolling. */
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          updateCellsBatchingPeriod={50}
+          windowSize={7}
+          removeClippedSubviews
         />
       )}
     </View>
@@ -219,6 +262,7 @@ export default function DisputesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  emptyList: { flexGrow: 1 },
   searchBox: {
     flexDirection: "row",
     alignItems: "center",
