@@ -107,7 +107,7 @@ async function findAvailablePort(startPort = 3000): Promise<number> {
   for (let port = startPort; port < startPort + 20; port++) {
     if (await isPortAvailable(port)) return port;
   }
-  throw new Error(`No available port found starting at ${startPort}`);
+  throw new Error(`No available port found starting from ${startPort}`);
 }
 
 // ─── Scheduled endpoint auth ─────────────────────────────────────────────────
@@ -240,7 +240,7 @@ async function startServer() {
       required: ENV.isProduction || process.env.SETTLEMENT_MTLS_REQUIRED === "true",
       verifiedHeader: req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
       fingerprintHeader: req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
-      ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN) ?? undefined,
+      ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
       expectedIngressToken: process.env.SETTLEMENT_MTLS_INGRESS_TOKEN,
       allowedFingerprints: parseSettlementMtlsFingerprints(process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS),
     });
@@ -309,7 +309,7 @@ async function startServer() {
       required: ENV.isProduction || process.env.SETTLEMENT_MTLS_REQUIRED === "true",
       verifiedHeader: req.header(SETTLEMENT_MTLS_VERIFIED_HEADER) ?? undefined,
       fingerprintHeader: req.header(SETTLEMENT_MTLS_FINGERPRINT_HEADER) ?? undefined,
-      ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN) ?? undefined,
+      ingressTokenHeader: req.header(SETTLEMENT_MTLS_INGRESS_TOKEN_HEADER) ?? undefined,
       expectedIngressToken: process.env.SETTLEMENT_MTLS_INGRESS_TOKEN,
       allowedFingerprints: parseSettlementMtlsFingerprints(process.env.SETTLEMENT_MTLS_CLIENT_FINGERPRINTS),
     });
@@ -644,10 +644,10 @@ async function startServer() {
           if (!trimmed) continue;
           try {
             const parsed = JSON.parse(trimmed) as {
-              status: string;
-              completed: string;
-              total: string;
-              error: string;
+              status?: string;
+              completed?: number;
+              total?: number;
+              error?: string;
             };
             if (parsed.error) {
               sendEvent({ type: "error", message: parsed.error });
@@ -655,10 +655,10 @@ async function startServer() {
               sendEvent({
                 type: "progress",
                 status: parsed.status ?? "",
-                completed: parsed.completed ?? null,
-                total: parsed.total ?? null,
-                pct: parsed.total && parsed.completed
-                  ? Math.round((Number(parsed.completed) / Number(parsed.total)) * 100)
+                completed: parsed.completed ?? 0,
+                total: parsed.total ?? 0,
+                pct: parsed.total && parsed.total > 0
+                  ? Math.round((parsed.completed ?? 0) / parsed.total * 100)
                   : null,
               });
             }
