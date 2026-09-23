@@ -251,7 +251,7 @@ async function startServer() {
     const verification = verifySettlementCallbackSignature({
       secret: process.env.SETTLEMENT_CALLBACK_SECRET,
       keyring: parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING),
-      keyId: req.header(SETTLEMENT_CALLBACK_KEY_ID_HEADER),
+      keyId: req.header(SETTLEMENT_KEY_ID_HEADER),
       timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER),
       signature: req.header(SETTLEMENT_SIGNATURE_HEADER),
       rawBody,
