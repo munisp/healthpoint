@@ -39,11 +39,15 @@ export default function RegulatoryChangeFeed() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [impactFilter, setImpactFilter] = useState("all");
 
+  // Reference-style feed: refreshed server-side on a schedule, not realtime —
+  // a 60s staleTime prevents refetch-on-mount churn on repeat visits.
   const { data: updates, isLoading, refetch } = trpc.regulatoryFeed.list.useQuery({
     search: search || undefined,
     category: categoryFilter !== "all" ? categoryFilter : undefined,
     impact: impactFilter !== "all" ? impactFilter : undefined,
     limit: 100,
+  }, {
+    staleTime: 60_000,
   });
 
   const seedMutation = trpc.regulatoryFeed.seed.useMutation({
