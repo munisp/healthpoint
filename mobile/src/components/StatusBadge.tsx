@@ -17,15 +17,27 @@ function Badge({ value, tones }: BadgeProps) {
   );
 }
 
-/** Muted green/amber/red-family status pill, mirroring the web palette. */
-export function StatusBadge({ status }: { status: string }) {
+/**
+ * Muted green/amber/red-family status pill, mirroring the web palette.
+ * Memoized: badges render inside FlatList rows, so skipping re-renders when
+ * the status string is unchanged keeps row reconciliation cheap.
+ */
+export const StatusBadge = React.memo(function StatusBadge({
+  status,
+}: {
+  status: string;
+}) {
   return <Badge value={status} tones={statusTones} />;
-}
+});
 
 /** Pill for notification types (deadline_warning, determination_issued…). */
-export function NotificationTypeBadge({ type }: { type: string }) {
+export const NotificationTypeBadge = React.memo(function NotificationTypeBadge({
+  type,
+}: {
+  type: string;
+}) {
   return <Badge value={type} tones={notificationTones} />;
-}
+});
 
 const styles = StyleSheet.create({
   badge: {
