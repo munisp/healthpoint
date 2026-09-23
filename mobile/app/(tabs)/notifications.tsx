@@ -2,7 +2,7 @@
  * Alerts tab: in-app notifications with unread highlighting, tap-to-read
  * (deep-linking into the related dispute), and mark-all-read.
  */
-import React from "react";
+import React, { memo, useCallback, useMemo } from "react";
 import { useRouter } from "expo-router";
 import {
   FlatList,
@@ -26,8 +26,57 @@ import {
 } from "../../src/components/Feedback";
 import { hapticConfirm, hapticSelection } from "../../src/lib/haptics";
 import { formatDateTime } from "../../src/lib/format";
-import { fontSize, spacing, useColors, MIN_TOUCH_TARGET } from "../../src/theme";
+import { fontSize, spacing, useColors, MIN_TOUCH_TARGET, type Palette } from "../../src/theme";
 import type { NotificationItem } from "../../src/api/types";
+
+
+/** Memoized row so list-level re-renders (mark-all pending state, refetch)
+ * don't re-render rows whose item didn't change. */
+const NotificationRow = memo(function NotificationRow({
+  item,
+  c,
+  onPress,
+}: {
+  item: NotificationItem;
+  c: Palette;
+  onPress: (item: NotificationItem) => void;
+}) {
+  const handlePress = useCallback(() => onPress(item), [onPress, item]);
+  return (
+    <Pressable
+      style={[
+        styles.row,
+        { backgroundColor: c.card, borderBottomColor: c.border },
+        !item.isRead && { backgroundColor: c.primarySoft },
+      ]}
+      onPress={handlePress}
+    >
+      <View style={styles.dotWrap}>
+        {!item.isRead && (
+          <View style={[styles.dot, { backgroundColor: c.primary }]} />
+        )}
+      </View>
+      <View style={styles.rowBody}>
+        <View style={styles.rowTop}>
+          <Text style={[styles.rowTitle, { color: c.text }]} numberOfLines={1}>
+            {item.title ?? "Notification"}
+          </Text>
+          {item.notificationType ? (
+            <NotificationTypeBadge type={item.notificationType} />
+          ) : null}
+        </View>
+        {item.message ? (
+          <Text style={[styles.rowMessage, { color: c.textMuted }]} numberOfLines={2}>
+            {item.message}
+          </Text>
+        ) : null}
+        <Text style={[styles.rowDate, { color: c.textFaint }]}>
+          {formatDateTime(item.createdAt)}
+        </Text>
+      </View>
+    </Pressable>
+  );
+});
 
 export default function NotificationsScreen() {
   const c = useColors();
@@ -45,14 +94,35 @@ export default function NotificationsScreen() {
   const markRead = useMarkNotificationRead();
   const markAll = useMarkAllNotificationsRead();
 
-  const items = data ?? [];
+  const items = useMemo(() => data ?? [], [data]);
   const hasUnread = items.some((n) => !n.isRead);
 
-  const onPress = (item: NotificationItem) => {
-    hapticSelection();
-    if (!item.isRead) markRead.mutate(item.id);
-    if (item.disputeId) router.push(`/dispute/${item.disputeId}`);
-  };
+  const onPress = useCallback(
+    (item: NotificationItem) => {
+      hapticSelection();
+      if (!item.isRead) markRead.mutate(item.id);
+      if (item.disputeId) router.push(`/dispute/${item.disputeId}`);
+    },
+    [markRead, router]
+  );
+
+  const keyExtractor = useCallback((item: NotificationItem) => item.id, []);
+  const renderItem = useCallback(
+    ({ item }: { item: NotificationItem }) => (
+      <NotificationRow item={item} c={c} onPress={onPress} />
+    ),
+    [c, onPress]
+  );
+  const refreshControl = useMemo(
+    () => (
+      <RefreshControl
+        refreshing={isRefetching}
+        onRefresh={refetch}
+        tintColor={c.primary}
+      />
+    ),
+    [isRefetching, refetch, c.primary]
+  );
 
   return (
     <View style={[styles.container, { backgroundColor: c.bg }]}>
@@ -72,15 +142,10 @@ export default function NotificationsScreen() {
       ) : (
         <FlatList
           data={items}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={items.length === 0 ? { flexGrow: 1 } : undefined}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefetching}
-              onRefresh={refetch}
-              tintColor={c.primary}
-            />
-          }
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          contentContainerStyle={items.length === 0 ? styles.emptyList : undefined}
+          refreshControl={refreshControl}
           ListHeaderComponent={
             hasUnread ? (
               <Pressable
@@ -93,7 +158,7 @@ export default function NotificationsScreen() {
                 }}
               >
                 <Text style={[styles.markAllText, { color: c.primary }]}>
-                  {markAll.isPending ? "Marking\u2026" : "Mark all as read"}
+                  {markAll.isPending ? "Marking…" : "Mark all as read"}
                 </Text>
               </Pressable>
             ) : null
@@ -104,40 +169,12 @@ export default function NotificationsScreen() {
               message="Deadline warnings, step changes, and determinations will appear here."
             />
           }
-          renderItem={({ item }) => (
-            <Pressable
-              style={[
-                styles.row,
-                { backgroundColor: c.card, borderBottomColor: c.border },
-                !item.isRead && { backgroundColor: c.primarySoft },
-              ]}
-              onPress={() => onPress(item)}
-            >
-              <View style={styles.dotWrap}>
-                {!item.isRead && (
-                  <View style={[styles.dot, { backgroundColor: c.primary }]} />
-                )}
-              </View>
-              <View style={styles.rowBody}>
-                <View style={styles.rowTop}>
-                  <Text style={[styles.rowTitle, { color: c.text }]} numberOfLines={1}>
-                    {item.title ?? "Notification"}
-                  </Text>
-                  {item.notificationType ? (
-                    <NotificationTypeBadge type={item.notificationType} />
-                  ) : null}
-                </View>
-                {item.message ? (
-                  <Text style={[styles.rowMessage, { color: c.textMuted }]} numberOfLines={2}>
-                    {item.message}
-                  </Text>
-                ) : null}
-                <Text style={[styles.rowDate, { color: c.textFaint }]}>
-                  {formatDateTime(item.createdAt)}
-                </Text>
-              </View>
-            </Pressable>
-          )}
+          /* Virtualization tuning — see mobile/docs/performance.md. */
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
+          updateCellsBatchingPeriod={50}
+          windowSize={7}
+          removeClippedSubviews
         />
       )}
     </View>
@@ -146,6 +183,7 @@ export default function NotificationsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  emptyList: { flexGrow: 1 },
   markAll: {
     alignItems: "flex-end",
     justifyContent: "center",
