@@ -36,7 +36,19 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-const queryClient = new QueryClient();
+// Global query defaults: a short staleTime prevents refetch-on-mount storms
+// when navigating between pages whose data was fetched moments ago, while
+// keeping data effectively live. refetchOnWindowFocus is disabled globally
+// (per-query overrides still apply, e.g. useAuth already sets its own).
+// Mutations are unaffected — they always execute and invalidate explicitly.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 const trpcClient = trpc.createClient({
   links: [
     httpBatchLink({
