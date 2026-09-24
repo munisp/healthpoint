@@ -41,6 +41,28 @@ CMS_API_KEY = os.getenv("CMS_IDR_API_KEY", "")
 CMS_TIMEOUT = int(os.getenv("CMS_TIMEOUT_SECONDS", "30"))
 S3_BUCKET = os.getenv("CMS_DOCUMENTS_S3_BUCKET", "healthpoint-cms-documents")
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEPRECATION NOTICE — LEGACY 25-ITEM BATCH CAP (NON-CONFORMANT)
+# ═══════════════════════════════════════════════════════════════════════════════
+# This legacy service hardcodes a 25-line-item batch cap (MAX_BATCH_ITEMS = 25).
+# That cap is NON-CONFORMANT with 45 CFR 149.510(c)(4) as amended by CMS-9897-F
+# (91 FR 33900), which permits up to 50 line items in a batched dispute,
+# applicable to open negotiation periods beginning on or after November 1, 2026.
+#
+# This service MUST NOT be used for federal IDR batching decisions. The
+# TypeScript core (server/) is the canonical implementation of NSA IDR batching
+# rules; the real batched-dispute entity will be built there. This module is
+# retained for containment only — do not extend or rewire it.
+# ═══════════════════════════════════════════════════════════════════════════════
+LEGACY_BATCH_CAP_DEPRECATION_NOTICE = (
+    "DEPRECATED: this legacy service's 25-item batch cap (MAX_BATCH_ITEMS) is "
+    "non-conformant with 45 CFR 149.510(c)(4) as amended by CMS-9897-F "
+    "(91 FR 33900), which permits up to 50 line items per batched dispute for "
+    "open negotiation periods beginning on or after November 1, 2026. It must "
+    "not be used for federal IDR batching decisions; the TypeScript core "
+    "(server/) is canonical for NSA IDR batching."
+)
+
 MAX_BATCH_ITEMS = 25
 MAX_RETRY_ATTEMPTS = 5
 BASE_RETRY_DELAY = 2.0
@@ -425,9 +447,11 @@ async def _submit_with_retry(payload: Dict, submission_id: str, pool) -> Dict:
 def _collect_warnings(req: DisputeInitiationRequest) -> List[str]:
     warnings = []
     total_disputed = sum(i.disputed_amount for i in req.service_items)
-    if total_disputed < Decimal("115"):
+    if total_disputed < Decimal("15"):
         warnings.append(
-            f"Total disputed amount (${total_disputed}) is less than the CMS IDR admin fee ($115). "
+            f"Total disputed amount (${total_disputed}) is less than the CMS IDR administrative fee "
+            "(advisory: $15 flat fee for disputes initiated on or after June 11, 2026, "
+            "per CMS-9897-F, 91 FR 33900). "
             "Consider whether IDR is cost-effective."
         )
     for item in req.service_items:

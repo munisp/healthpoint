@@ -167,8 +167,19 @@ Provide: 1) A 2-3 sentence executive summary, 2) Key action items for the week, 
       stats,
     };
 
+    // ── Wave W5-3: per-user weekly email digests honoring email_prefs ─────
+    // Sends to users with digestFrequency='weekly' whose digestDayOfWeek is
+    // today; honors 'never'; idempotent via lastWeeklyDigestSentAt.
+    let emailDigest: unknown = null;
+    try {
+      const { runEmailDigest } = await import("./emailDigest");
+      emailDigest = await runEmailDigest("weekly");
+    } catch (digestErr) {
+      console.warn("[WeeklyDigest] per-user email digest failed:", digestErr instanceof Error ? digestErr.message : digestErr);
+    }
+
     console.log(`[WeeklyDigest] Completed: ${notificationsSent}/${adminUsers.length} admins notified`);
-    return res.json(result);
+    return res.json({ ...result, emailDigest });
 
   } catch (err) {
     console.error("[WeeklyDigest] Error:", err);

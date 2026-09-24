@@ -1,20 +1,25 @@
 /**
  * Hermes AI Agent Router
- * Provides 8 AI-powered capabilities for the HealthPoint IDR platform:
+ * AI-powered capabilities for the HealthPoint IDR platform:
  * 1. Narrative generation
  * 2. Outcome simulation
  * 3. FHIR/EMR enrichment
  * 4. Risk scoring
  * 5. Payer intelligence synthesis
- * 6. Regulatory change feed
+ * 6. Regulatory change feed generation
  * 7. Arbitrator scoring
- * 8. Chat (general agent)
+ * 8. Chat (general agent) + job history
+ *
+ * Phase 13 FB (O1.24-27): listRegulatoryEntries, markRegulatoryRead,
+ * getChatHistory and getDisputeInsights were REMOVED — zero callers and no
+ * corresponding UI surfaces (HermesAssistant has no history/insights panel).
  */
 
 import { router, protectedProcedure } from "../_core/trpc";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import { getDb } from "../db";
+import { assertDisputeAccess } from "../authz";
 import {
   hermesJobs,
   hermesInsights,
@@ -92,6 +97,9 @@ export const hermesRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
+      // IDOR guard: narrative generation reads the full dispute (PHI + financials).
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
+
       const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
       if (!dispute) throw new Error("Dispute not found");
 
@@ -165,6 +173,9 @@ Notes: ${dispute.notes ?? "None"}`;
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
+
+      // IDOR guard: outcome simulation reads the full dispute record.
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
 
       const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
       if (!dispute) throw new Error("Dispute not found");
@@ -263,6 +274,9 @@ ${input.additionalContext ? `Additional context: ${input.additionalContext}` : "
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
+      // IDOR guard: risk scoring reads the full dispute record.
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
+
       const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
       if (!dispute) throw new Error("Dispute not found");
 
@@ -353,6 +367,9 @@ Eligible: ${dispute.isEligible ?? "Unknown"}`,
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
+
+      // IDOR guard: enrichment attaches insights to the dispute.
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
 
       const t0 = Date.now();
 
@@ -582,34 +599,6 @@ Current date context: ${new Date().toISOString().split("T")[0]}`,
       return { entries, latencyMs };
     }),
 
-  listRegulatoryEntries: protectedProcedure
-    .input(z.object({
-      limit: z.number().min(1).max(50).default(20),
-      unreadOnly: z.boolean().default(false),
-    }))
-    .query(async ({ input }) => {
-      const db = await getDb();
-      if (!db) return [];
-      const rows = await db
-        .select()
-        .from(hermesRegulatoryEntries)
-        .where(input.unreadOnly ? eq(hermesRegulatoryEntries.isRead, false) : undefined)
-        .orderBy(desc(hermesRegulatoryEntries.createdAt))
-        .limit(input.limit);
-      return rows;
-    }),
-
-  markRegulatoryRead: protectedProcedure
-    .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database unavailable");
-      await db.update(hermesRegulatoryEntries)
-        .set({ isRead: true })
-        .where(eq(hermesRegulatoryEntries.id, input.id));
-      return { success: true };
-    }),
-
   // ── 7. Arbitrator Scoring ───────────────────────────────────────────────────
   scoreArbitrator: protectedProcedure
     .input(z.object({
@@ -622,6 +611,11 @@ Current date context: ${new Date().toISOString().split("T")[0]}`,
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
+
+      // IDOR guard: arbitrator scoring may attach an insight to the dispute.
+      if (input.disputeId) {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
+      }
 
       const t0 = Date.now();
 
@@ -711,6 +705,8 @@ ${input.cptCodes?.length ? `CPT codes: ${input.cptCodes.join(", ")}` : ""}`,
       // Fetch dispute context if provided
       let disputeContext = "";
       if (input.disputeId) {
+        // IDOR guard: dispute context contains PHI/financials.
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
         const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
         if (dispute) {
           disputeContext = `\n\nActive dispute context:
@@ -782,25 +778,6 @@ Be concise, accurate, and actionable. Cite regulatory references when relevant.$
       return { reply, messageId: assistantMsgId, latencyMs };
     }),
 
-  getChatHistory: protectedProcedure
-    .input(z.object({
-      sessionId: z.string(),
-      limit: z.number().min(1).max(100).default(50),
-    }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) return [];
-      return db
-        .select()
-        .from(hermesChatMessages)
-        .where(and(
-          eq(hermesChatMessages.sessionId, input.sessionId),
-          eq(hermesChatMessages.userId, ctx.user.id),
-        ))
-        .orderBy(hermesChatMessages.createdAt)
-        .limit(input.limit);
-    }),
-
   // ── Job history ─────────────────────────────────────────────────────────────
   listJobs: protectedProcedure
     .input(z.object({
@@ -820,18 +797,5 @@ Be concise, accurate, and actionable. Cite regulatory references when relevant.$
         .where(and(...conditions))
         .orderBy(desc(hermesJobs.createdAt))
         .limit(input.limit);
-    }),
-
-  // ── Insights for a dispute ───────────────────────────────────────────────────
-  getDisputeInsights: protectedProcedure
-    .input(z.object({ disputeId: z.string() }))
-    .query(async ({ input }) => {
-      const db = await getDb();
-      if (!db) return [];
-      return db
-        .select()
-        .from(hermesInsights)
-        .where(eq(hermesInsights.disputeId, input.disputeId))
-        .orderBy(desc(hermesInsights.generatedAt));
     }),
 });

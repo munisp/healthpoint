@@ -39,11 +39,15 @@ export default function RegulatoryChangeFeed() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [impactFilter, setImpactFilter] = useState("all");
 
+  // Reference-style feed: refreshed server-side on a schedule, not realtime —
+  // a 60s staleTime prevents refetch-on-mount churn on repeat visits.
   const { data: updates, isLoading, refetch } = trpc.regulatoryFeed.list.useQuery({
     search: search || undefined,
     category: categoryFilter !== "all" ? categoryFilter : undefined,
     impact: impactFilter !== "all" ? impactFilter : undefined,
     limit: 100,
+  }, {
+    staleTime: 60_000,
   });
 
   const seedMutation = trpc.regulatoryFeed.seed.useMutation({
@@ -144,7 +148,19 @@ export default function RegulatoryChangeFeed() {
                         <span className="text-xs text-muted-foreground">
                           {update.publishedAt ? new Date(update.publishedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : ""}
                         </span>
-                        <span className="text-xs font-medium text-slate-500">— {update.source}</span>
+                        {update.sourceUrl ? (
+                          <a
+                            href={update.sourceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                            title="View source citation"
+                          >
+                            — {update.source}
+                          </a>
+                        ) : (
+                          <span className="text-xs font-medium text-slate-500">— {update.source}</span>
+                        )}
                       </div>
                       <h3 className="font-semibold text-sm text-slate-800 mb-1">{update.title}</h3>
                       <p className="text-xs text-muted-foreground leading-relaxed">{update.summary}</p>
@@ -161,9 +177,9 @@ export default function RegulatoryChangeFeed() {
                         href={update.sourceUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="shrink-0 text-blue-600 hover:text-blue-800"
+                        className="shrink-0 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800"
                       >
-                        <ExternalLink className="h-4 w-4" />
+                        Citation <ExternalLink className="h-4 w-4" />
                       </a>
                     )}
                   </div>

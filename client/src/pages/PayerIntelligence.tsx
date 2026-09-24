@@ -97,9 +97,11 @@ export default function PayerIntelligence() {
 
   const { data: disputes, isLoading } = trpc.disputes.list.useQuery({ limit: 1000, offset: 0 });
 
+  // Server returns `respondingPartyName` on dispute rows (see drizzle/schema.ts);
+  // the old `payerName` field never existed, so every bucket was "Unknown Payer".
   type DisputeItem = {
     id: string;
-    payerName?: string | null;
+    respondingPartyName?: string | null;
     billedAmount?: string | null;
     determinationAmount?: string | null;
     status: string;
@@ -116,7 +118,7 @@ export default function PayerIntelligence() {
   const payerStats = useMemo((): PayerStat[] => {
     const map: Record<string, PayerStat> = {};
     for (const d of items) {
-      const payer = d.payerName ?? "Unknown Payer";
+      const payer = d.respondingPartyName ?? "Unknown Payer";
       if (!map[payer]) {
         map[payer] = { payerName: payer, totalDisputes: 0, wonDisputes: 0, totalBilled: 0, totalDetermination: 0, avgDaysToClose: 0, winRate: 0, recoveryRate: 0 };
       }
@@ -133,7 +135,7 @@ export default function PayerIntelligence() {
       }
     }
     return Object.values(map).map(stat => {
-      const closed = items.filter(d => d.payerName === stat.payerName && d.status === "closed").length;
+      const closed = items.filter(d => d.respondingPartyName === stat.payerName && d.status === "closed").length;
       return {
         ...stat,
         winRate: closed > 0 ? Math.round((stat.wonDisputes / closed) * 100) : 0,
@@ -162,7 +164,7 @@ export default function PayerIntelligence() {
 
   // ── Single-payer trend data (win + recovery for one payer) ────────────────
   const singleTrend = useMemo(() => {
-    const filtered = singlePayer === "all" ? items : items.filter(d => d.payerName === singlePayer);
+    const filtered = singlePayer === "all" ? items : items.filter(d => d.respondingPartyName === singlePayer);
     const buckets: Record<string, { disputes: number; won: number; billed: number; det: number }> = {};
     monthKeys.forEach(m => { buckets[m] = { disputes: 0, won: 0, billed: 0, det: 0 }; });
     for (const d of filtered) {
@@ -204,7 +206,7 @@ export default function PayerIntelligence() {
     }
 
     for (const d of items) {
-      const payer = d.payerName ?? "Unknown Payer";
+      const payer = d.respondingPartyName ?? "Unknown Payer";
       if (!perPayer[payer]) continue;
       if (d.status !== "closed") continue;
       const closeDate = d.updatedAt ? new Date(d.updatedAt) : null;
@@ -280,17 +282,17 @@ export default function PayerIntelligence() {
         {/* KPI Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: "Total Disputes", value: totalDisputes, icon: Scale, color: "text-blue-500" },
-            { label: "Total Billed", value: `$${(totalBilled / 1000).toFixed(0)}K`, icon: DollarSign, color: "text-green-500" },
+            { label: "Total Disputes", value: totalDisputes, icon: Scale, color: "text-info-foreground" },
+            { label: "Total Billed", value: `$${(totalBilled / 1000).toFixed(0)}K`, icon: DollarSign, color: "text-success-foreground" },
             {
-              label: "Avg Win Rate", value: `${avgWinRate}%`, icon: TrendingUp, color: "text-purple-500",
+              label: "Avg Win Rate", value: `${avgWinRate}%`, icon: TrendingUp, color: "text-chart-3",
               sub: trendDirection !== null
                 ? trendDirection > 0 ? `↑ ${trendDirection}pp last 3 mo`
                 : trendDirection < 0 ? `↓ ${Math.abs(trendDirection)}pp last 3 mo`
                 : "Stable last 3 mo"
                 : undefined,
             },
-            { label: "Payers Tracked", value: payerStats.length, icon: Building2, color: "text-orange-500" },
+            { label: "Payers Tracked", value: payerStats.length, icon: Building2, color: "text-warning-foreground" },
           ].map(kpi => {
             const Icon = kpi.icon;
             return (
@@ -303,7 +305,7 @@ export default function PayerIntelligence() {
                     <p className="text-xl font-bold">{kpi.value}</p>
                     <p className="text-xs text-muted-foreground">{kpi.label}</p>
                     {kpi.sub && (
-                      <p className={`text-xs font-medium mt-0.5 ${trendDirection && trendDirection > 0 ? "text-green-600" : "text-red-500"}`}>
+                      <p className={`text-xs font-medium mt-0.5 ${trendDirection && trendDirection > 0 ? "text-success-foreground" : "text-danger-foreground"}`}>
                         {kpi.sub}
                       </p>
                     )}
@@ -499,8 +501,8 @@ export default function PayerIntelligence() {
                     const latestRec = withData.length > 0 ? withData[withData.length - 1].recoveryRate : 0;
                     const totalClosed = singleTrend.reduce((s, m) => s + m.disputes, 0);
                     return [
-                      { label: "Latest Win Rate", value: `${latestWin}%`, color: latestWin >= 60 ? "text-green-600" : latestWin >= 40 ? "text-yellow-600" : "text-red-500" },
-                      { label: "Latest Recovery Rate", value: `${latestRec}%`, color: latestRec >= 70 ? "text-green-600" : "text-muted-foreground" },
+                      { label: "Latest Win Rate", value: `${latestWin}%`, color: latestWin >= 60 ? "text-success-foreground" : latestWin >= 40 ? "text-warning-foreground" : "text-danger-foreground" },
+                      { label: "Latest Recovery Rate", value: `${latestRec}%`, color: latestRec >= 70 ? "text-success-foreground" : "text-muted-foreground" },
                       { label: `Closed (${trendWindow})`, value: totalClosed, color: "text-foreground" },
                     ].map(s => (
                       <div key={s.label} className="text-center">
@@ -564,7 +566,7 @@ export default function PayerIntelligence() {
                             </td>
                             <td className="py-2 px-3 text-right font-medium">{overall}%</td>
                             <td className="py-2 px-3 text-right">{latest}%</td>
-                            <td className={`py-2 pl-3 text-right font-medium ${delta > 0 ? "text-green-600" : delta < 0 ? "text-red-500" : "text-muted-foreground"}`}>
+                            <td className={`py-2 pl-3 text-right font-medium ${delta > 0 ? "text-success-foreground" : delta < 0 ? "text-danger-foreground" : "text-muted-foreground"}`}>
                               {delta > 0 ? `↑ ${delta}pp` : delta < 0 ? `↓ ${Math.abs(delta)}pp` : "—"}
                             </td>
                           </tr>
@@ -683,13 +685,13 @@ export default function PayerIntelligence() {
                         <td className="py-3 px-3 text-right">
                           <div className="flex items-center justify-end gap-2">
                             <Progress value={stat.winRate} className="w-16 h-1.5" />
-                            <span className={stat.winRate >= 60 ? "text-green-600" : stat.winRate >= 40 ? "text-yellow-600" : "text-red-600"}>
+                            <span className={stat.winRate >= 60 ? "text-success-foreground" : stat.winRate >= 40 ? "text-warning-foreground" : "text-danger-foreground"}>
                               {stat.winRate}%
                             </span>
                           </div>
                         </td>
                         <td className="py-3 px-3 text-right">
-                          <span className={stat.recoveryRate >= 70 ? "text-green-600" : "text-muted-foreground"}>
+                          <span className={stat.recoveryRate >= 70 ? "text-success-foreground" : "text-muted-foreground"}>
                             {stat.recoveryRate}%
                           </span>
                         </td>

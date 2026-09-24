@@ -1,6 +1,14 @@
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { hermesRouter } from "./routers/hermes";
+import { submissionAutomationRouter } from "./idr/submission-automation/routes";
+import { stateProgramsRouter } from "./idr/state-programs/routes";
+import { priorAuthRouter } from "./priorauth/routes";
+import { batchedDisputesRouter } from "./idr/batching/routes";
+import { noticeConsentRouter } from "./notice-consent/routes";
+import { gfePpdrRouter } from "./gfe-ppdr/routes";
+import { portalRpaRouter } from "./idr/portal-rpa/routes";
+import { qpaEngineRouter } from "./idr/qpa/routes";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { ENV } from "./_core/env";
@@ -12,11 +20,11 @@ import {
   createNotification,
   upsertDisputeDraft, getDisputeDraft, deleteDisputeDraft,
   calculateQPA,
-  getIDREntityCaseload, listAllIDREntityCaseloads,
-  saveCMSDraft, getCMSDraftByDispute, listCMSDraftsByUser, updateCMSDraftStatus,
+  listAllIDREntityCaseloads,
+  saveCMSDraft, listCMSDraftsByUser, updateCMSDraftStatus,
   getDisputesByMonth, listAllCMSDrafts,
   createEMRConnection, listEMRConnections, getEMRConnection,
-  updateEMRConnectionStatus, deactivateEMRConnection, deleteEMRConnection,
+  deactivateEMRConnection, deleteEMRConnection,
   listEMRSyncLogs, createEMRSyncLog,
   createDisputeTemplate, listDisputeTemplates, getDisputeTemplateById,
   updateDisputeTemplate, deleteDisputeTemplate, incrementTemplateUsage,
@@ -25,31 +33,35 @@ import {
   createAuditEntry, listAuditEntries,
   createWebhook, listWebhooks, updateWebhook, deleteWebhook,
   upsertOutcomePrediction, getOutcomePrediction,
-  createDocumentAnalysis, updateDocumentAnalysis, getDocumentAnalysis, listDocumentAnalyses,
+  createDocumentAnalysis, updateDocumentAnalysis, getDocumentAnalysis,
 } from "./db";
 import { sendNewLeadNotification } from "./email";
 import { invokeLLM } from "./_core/llm";
 import { withDisputeLock } from "./redis";
-import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDisputeAccess, listDisputeAccess } from "./authz";
+import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDisputeAccess, listDisputeAccess, reconcileDisputeAccess } from "./authz";
 import { eventBus } from "./events/bus";
-import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, getStatusForStep, addBusinessDays, daysUntilDeadline, validateWorkflowTransition } from "./workflow/idr-workflow";
-import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
+import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, getStatusForStep, addBusinessDays, daysUntilDeadline, validateWorkflowTransition, getStepNumber, isDeadlinePassed } from "./workflow/idr-workflow";
+import { addBusinessDays as addIdrBusinessDays, businessDaysBetween } from "./idr/deadlines";
+import { checkIdrInitiationWindow, checkCoolingOffForNewDispute, validateConflictCheck } from "./idr/initiation-guards";
+import { idrAttestations, disputeEvents, settlementTransfers } from "../drizzle/schema";
+import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, recordUnverifiedPaymentReport, hasApprovedSettlementEvidence, confirmPaymentReport, dollarsToCents, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
 import { dispatchOutboxBatch } from "./outbox";
 import { createSettlementTransfer, decideSettlementTransfer, getSettlementTransfer, listSettlementTransfers, markSettlementTransferSubmitted } from "./settlement-lifecycle";
 import { listSettlementBalanceProofs, listSettlementExceptionReviews, reviewSettlementException } from "./settlement-proof";
 import { configureDailyBalanceProofSchedule } from "./settlement-proof";
 import { listHeartbeatJobs } from "./_core/heartbeat";
 import { parse as parseCookie } from "cookie";
-import { search, generateLakehouseExport, invalidateSearchIndex, suggest, indexDocument, deleteFromIndex } from "./search";
+import { search, generateLakehouseExport, suggest, indexDocument, deleteFromIndex } from "./search";
 import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { generateReportsPDF, generateReportsCSV } from "./reports-export";
 import { getDb, checkDbHealth } from "./db";
 import { encryptCredentials } from "./credential-crypto";
-import { eq, and, or, ilike, desc, asc, sql } from "drizzle-orm";
+import { eq, and, or, ilike, desc, asc, sql, type SQL } from "drizzle-orm";
 import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections, providerSandboxAcceptances } from "../drizzle/schema";
 import { dispatchNotification } from "./notifications";
-import { describeTemporalFailure, getDisputeTemporalWorkflow, getTemporalClient, getTemporalConfiguration, isTemporalDispatchEnabled, listTemporalWorkflows, runControlledTemporalDispatchDrill, startDisputeTemporalWorkflow, summarizeTemporalConnectionFailures, type TemporalRecoveryDetails } from "./temporal";
+import { decryptCredentials } from "./credential-crypto";
+import { describeTemporalFailure, getTemporalClient, getTemporalConfiguration, isTemporalDispatchEnabled, listTemporalWorkflows, runControlledTemporalDispatchDrill, summarizeTemporalConnectionFailures, type TemporalRecoveryDetails } from "./temporal";
 // AI microservice proxy — delegates to Python LangGraph service
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
 
@@ -62,7 +74,11 @@ async function aiPost<T>(path: string, body: unknown): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "unknown error");
-    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `AI service error: ${text}` });
+    const err = new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `AI service error: ${text}` });
+    // Attach the HTTP status so retry logic (server/emr/retry.ts) can tell
+    // transient 5xx from non-retryable 4xx.
+    (err as unknown as { status?: number }).status = res.status;
+    throw err;
   }
   return res.json() as Promise<T>;
 }
@@ -93,6 +109,14 @@ const createDisputeSchema = z.object({
   icd10Codes: z.array(z.string()).optional(),
   billedAmount: z.string().regex(/^\d+(\.\d{1,2})?$/),
   notes: z.string().optional(),
+  // S2/S3: date of the initial payment / notice of denial — statutory anchor
+  // for the 30-business-day open negotiation window (45 CFR § 149.510(b)(1)).
+  // Defaults to the creation date when omitted (backward compatible).
+  initialPaymentDate: z.string().datetime().optional(),
+  // S8: federal IDR requires the initiating party to be a NON-participating
+  // provider/facility. Defaults to true for backward compatibility; when
+  // false the dispute is created ineligible (participating_provider_federal_idr).
+  initiatingPartyNonparticipating: z.boolean().default(true),
 });
 
 const advanceStepSchema = z.object({
@@ -107,6 +131,10 @@ const advanceStepSchema = z.object({
   determinationBasis: z.string().optional(),
   // Who won the determination: 'initiating_party' = provider, 'responding_party' = payer
   determinationWinner: z.enum(["initiating_party", "responding_party"]).optional(),
+  // S3: explicit admin override for a late IDR initiation (past the
+  // 4-business-day window, 45 CFR § 149.510(b)(2)(i)). When supplied, the
+  // transition is allowed and a compliance note is recorded instead.
+  overrideReason: z.string().min(1).optional(),
 });
 
 const submitOfferSchema = z.object({
@@ -115,6 +143,48 @@ const submitOfferSchema = z.object({
   amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
   rationale: z.string().optional(),
 });
+
+// ── X9: TOTP secret encryption at rest ───────────────────────────────────────
+// Secrets are stored as AES-256-GCM envelopes (server/credential-crypto.ts)
+// whenever EMR_CREDENTIALS_ENCRYPTION_KEY is configured. Legacy/plaintext rows
+// (and environments without the key) continue to work unchanged.
+function encryptTotpSecret(secret: string): string {
+  if (!/^[a-fA-F0-9]{64}$/.test(process.env.EMR_CREDENTIALS_ENCRYPTION_KEY ?? "")) return secret;
+  const envelope = encryptCredentials({ s: secret });
+  if (envelope.length > 128) throw new TRPCError({ code: "BAD_REQUEST", message: "TOTP secret too long" });
+  return envelope;
+}
+
+function decryptTotpSecret(stored: string): string {
+  if (!stored.startsWith("v1.")) return stored; // plaintext legacy row
+  const creds = decryptCredentials(stored);
+  if (typeof creds.s !== "string") throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Corrupt TOTP secret" });
+  return creds.s;
+}
+
+// ── PHI read auditing ─────────────────────────────────────────────────────────
+// Fire-and-forget audit_log entries for reads of PHI-bearing resources
+// (45 CFR 164.312(b) audit controls). Never blocks or fails the request.
+function auditPhiRead(
+  ctx: { user: { id: string } | null; req: { headers?: Record<string, unknown>; ip?: string } },
+  resourceType: string,
+  resourceId: string | null | undefined
+): void {
+  const userId = ctx.user?.id;
+  if (!userId) return;
+  const headers = ctx.req?.headers ?? {};
+  const ip = (headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? ctx.req?.ip ?? null;
+  createAuditEntry({
+    userId,
+    action: "phi.read",
+    entityType: resourceType,
+    entityId: resourceId ?? null,
+    oldValue: null,
+    newValue: null,
+    ipAddress: ip,
+    userAgent: (headers["user-agent"] as string | undefined) ?? null,
+  }).catch(err => console.warn("[audit] phi.read write failed:", err instanceof Error ? err.message : err));
+}
 
 export const appRouter = router({
   system: router({
@@ -166,6 +236,34 @@ export const appRouter = router({
       // Return logoutUrl so the frontend can redirect to Keycloak end-session
       return { success: true, logoutUrl: "/api/auth/logout" } as const;
     }),
+    /**
+     * Second stage of two-stage login: exchange a valid TOTP proof (or a
+     * single-use backup code) for a full session. Requires an mfa-pending
+     * session (see server/auth/mfa.ts); wrong code → 401.
+     */
+    verifyLoginTotp: protectedProcedure
+      .input(z.object({ code: z.string().min(6).max(16) }))
+      .mutation(async ({ ctx, input }) => {
+        if (!ctx.mfaPending) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "No MFA-pending login session" });
+        }
+        const { verifyLoginCode } = await import("./auth/mfa");
+        const ok = await verifyLoginCode(ctx.user.id, input.code).catch(() => false);
+        if (!ok) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid TOTP or backup code" });
+        }
+        const { createSessionToken, getSessionDurationMsForUser } = await import("./_core/keycloak");
+        const durationMs = await getSessionDurationMsForUser(ctx.user.id);
+        const token = await createSessionToken(ctx.user.id, ctx.user.name ?? "", ctx.user.email ?? "", durationMs);
+        ctx.res.cookie(COOKIE_NAME, token, {
+          httpOnly: true,
+          sameSite: "lax",
+          secure: ENV.isProduction,
+          maxAge: durationMs,
+          path: "/",
+        });
+        return { success: true } as const;
+      }),
   }),
 
   // --- Dashboard --------------------------------------------------------------
@@ -177,46 +275,83 @@ export const appRouter = router({
     }),
     disputesByMonth: protectedProcedure
       .input(z.object({ months: z.number().int().min(3).max(24).default(12) }))
-      .query(async ({ input }) => {
-        return getDisputesByMonth(input.months);
+      .query(async ({ ctx, input }) => {
+        // Cross-tenant fix (W2): scope aggregates to the caller unless admin.
+        return getDisputesByMonth(input.months, ctx.user.role === "admin" ? undefined : ctx.user.id);
       }),
 
     // Real 7-day daily dispute counts for sparklines (no Math.random)
     dailyStats: protectedProcedure
       .input(z.object({ days: z.number().int().min(1).max(30).default(7) }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const db = await (await import("./db")).getDb();
         if (!db) return [];
-        const result: { date: string; total: number; opened: number; closed: number }[] = [];
+        // Cross-tenant fix (W2): scope to the caller unless admin.
+        const scopeUserId = ctx.user.role === "admin" ? null : ctx.user.id;
+        // phase14-perfa: replaced the per-day loop (2 × days round trips,
+        // 14 for the default 7-day sparkline) with two GROUP BY day queries.
+        // Column-bound operators (gte/lt/eq) bind Date params through the
+        // timestamp column type — raw sql`${date}` interpolation 500s with
+        // drizzle-orm@0.45.2 + postgres@3.4.9. Bucket labels use
+        // TO_CHAR(..., 'YYYY-MM-DD') in the DB's timezone, matching the
+        // previous local-midnight bucketing on a UTC-offset-free host.
+        const { sql, and, gte, lt, eq } = await import("drizzle-orm");
+        const { disputes: disputesTable } = await import("../drizzle/schema");
         const now = new Date();
+        const rangeStart = new Date(now);
+        rangeStart.setDate(now.getDate() - (input.days - 1));
+        rangeStart.setHours(0, 0, 0, 0);
+        // exclusive upper bound = start of tomorrow (matches the previous
+        // between(dayStart, dayEnd 23:59:59.999) semantics without edge loss)
+        const rangeEnd = new Date(now);
+        rangeEnd.setDate(now.getDate() + 1);
+        rangeEnd.setHours(0, 0, 0, 0);
+        const dayExpr = sql<string>`TO_CHAR(${disputesTable.createdAt}, 'YYYY-MM-DD')`;
+        const closedDayExpr = sql<string>`TO_CHAR(${disputesTable.closedAt}, 'YYYY-MM-DD')`;
+        const openedConds = [gte(disputesTable.createdAt, rangeStart), lt(disputesTable.createdAt, rangeEnd)];
+        const closedConds = [gte(disputesTable.closedAt!, rangeStart), lt(disputesTable.closedAt!, rangeEnd)];
+        if (scopeUserId) { openedConds.push(eq(disputesTable.initiatingPartyId, scopeUserId)); closedConds.push(eq(disputesTable.initiatingPartyId, scopeUserId)); }
+        const [openedRows, closedRows] = await Promise.all([
+          db.select({ day: dayExpr, c: sql<number>`COUNT(*)` }).from(disputesTable)
+            .where(and(...openedConds)).groupBy(dayExpr),
+          db.select({ day: closedDayExpr, c: sql<number>`COUNT(*)` }).from(disputesTable)
+            .where(and(...closedConds)).groupBy(closedDayExpr),
+        ]);
+        const openedByDay = new Map(openedRows.map(r => [r.day, Number(r.c)]));
+        const closedByDay = new Map(closedRows.map(r => [r.day, Number(r.c)]));
+        const result: { date: string; total: number; opened: number; closed: number }[] = [];
         for (let i = input.days - 1; i >= 0; i--) {
           const dayStart = new Date(now);
           dayStart.setDate(now.getDate() - i);
           dayStart.setHours(0, 0, 0, 0);
-          const dayEnd = new Date(dayStart);
-          dayEnd.setHours(23, 59, 59, 999);
-          const { sql, and, between } = await import("drizzle-orm");
-          const { disputes: disputesTable } = await import("../drizzle/schema");
-          const [openedRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(disputesTable)
-            .where(between(disputesTable.createdAt, dayStart, dayEnd));
-          const [closedRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(disputesTable)
-            .where(and(between(disputesTable.closedAt!, dayStart, dayEnd)));
-          result.push({
-            date: dayStart.toISOString().slice(0, 10),
-            total: Number(openedRow?.count ?? 0) + Number(closedRow?.count ?? 0),
-            opened: Number(openedRow?.count ?? 0),
-            closed: Number(closedRow?.count ?? 0),
-          });
+          const key = dayStart.toISOString().slice(0, 10);
+          const opened = openedByDay.get(key) ?? 0;
+          const closed = closedByDay.get(key) ?? 0;
+          result.push({ date: key, total: opened + closed, opened, closed });
         }
         return result;
       }),
-    outcomeAnalytics: protectedProcedure.query(async () => {
+    outcomeAnalytics: protectedProcedure.query(async ({ ctx }) => {
       const db = await (await import("./db")).getDb();
       if (!db) return { overallWinRate: null, byServiceType: [] };
+      // Cross-tenant fix (W2): scope to the caller unless admin.
+      const scopeUserId = ctx.user.role === "admin" ? null : ctx.user.id;
       // Use determinationWinner field for accurate provider win rate
       // 'initiating_party' = provider won; 'responding_party' = payer won
-      const rows = await db.execute(
-        `SELECT serviceType,
+      const rows = scopeUserId
+        ? await db.execute(
+          sql`SELECT "serviceType" AS "serviceType",
+                COUNT(*) AS total,
+                SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
+                AVG(COALESCE("determinationAmount", 0)) AS "avgDeterminationAmount",
+                AVG(COALESCE("billedAmount", 0)) AS "avgBilledAmount"
+         FROM disputes
+         WHERE status IN ('closed', 'determination_issued') AND "determinationWinner" IS NOT NULL
+           AND "initiatingPartyId" = ${scopeUserId}
+         GROUP BY "serviceType"`
+        ) as unknown as { rows: { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[] }
+        : await db.execute(
+          sql`SELECT "serviceType" AS "serviceType",
                 COUNT(*) AS total,
                 SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
                 AVG(COALESCE("determinationAmount", 0)) AS "avgDeterminationAmount",
@@ -224,8 +359,12 @@ export const appRouter = router({
          FROM disputes
          WHERE status IN ('closed', 'determination_issued') AND "determinationWinner" IS NOT NULL
          GROUP BY "serviceType"`
-      ) as unknown as { rows: { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[] };
-      const byServiceType = (rows.rows ?? []).map(r => ({
+        ) as unknown as { rows: { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[] };
+      // phase14-perfa: drizzle postgres-js `execute` returns the rows array
+      // directly (no pg-style `.rows` wrapper) — the old `rows.rows ?? []`
+      // silently dropped every aggregate row.
+      const outcomeRows = (Array.isArray(rows) ? rows : (rows as { rows?: unknown[] }).rows ?? []) as { serviceType: string; total: string; wins: string; avgDeterminationAmount: string; avgBilledAmount: string }[];
+      const byServiceType = outcomeRows.map(r => ({
         serviceType: r.serviceType,
         total: Number(r.total),
         wins: Number(r.wins),
@@ -245,23 +384,29 @@ export const appRouter = router({
     cohortAnalysis: protectedProcedure
       .input(z.object({
         groupBy: z.enum(["serviceType", "state", "month"]).default("serviceType"),
-        dateFrom: z.string().optional(),
-        dateTo: z.string().optional(),
+        // Strict ISO-date shape; anything else is rejected by zod before it
+        // can reach SQL (defense in depth alongside parameterization).
+        dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dateFrom must be YYYY-MM-DD").optional(),
+        dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dateTo must be YYYY-MM-DD").optional(),
       }))
       .query(async ({ input }) => {
         const db = await (await import("./db")).getDb();
         if (!db) return { rows: [] };
         const { groupBy, dateFrom, dateTo } = input;
-        const dateFilter = [
-          dateFrom ? `AND "createdAt" >= '${dateFrom}'` : "",
-          dateTo ? `AND "createdAt" <= '${dateTo}'` : "",
-        ].join(" ");
-        let groupCol: string;
-        if (groupBy === "serviceType") groupCol = '"serviceType"';
-        else if (groupBy === "state") groupCol = '"patientState"';
-        else groupCol = `TO_CHAR("createdAt", 'YYYY-MM')`;
+        // Parameterized via drizzle sql template — dates are bound parameters,
+        // never interpolated. Only the group-by column (a fixed enum-derived
+        // fragment, never user input) uses sql.raw.
+        const dateClauses = [
+          dateFrom ? sql`AND "createdAt" >= ${dateFrom}` : null,
+          dateTo ? sql`AND "createdAt" <= ${dateTo}` : null,
+        ].filter((c): c is SQL => c !== null);
+        const dateFilter = dateClauses.length > 0 ? sql.join(dateClauses, sql` `) : sql``;
+        let groupCol: SQL;
+        if (groupBy === "serviceType") groupCol = sql.raw('"serviceType"');
+        else if (groupBy === "state") groupCol = sql.raw('"patientState"');
+        else groupCol = sql.raw(`TO_CHAR("createdAt", 'YYYY-MM')`);
         const result = await db.execute(
-          `SELECT ${groupCol} AS label,
+          sql`SELECT ${groupCol} AS label,
                   COUNT(*) AS total,
                   SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END) AS wins,
                   SUM(CASE WHEN "determinationWinner" = 'responding_party' THEN 1 ELSE 0 END) AS losses,
@@ -273,8 +418,11 @@ export const appRouter = router({
            GROUP BY ${groupCol}
            ORDER BY total DESC`
         ) as unknown as { rows: { label: string; total: string; wins: string; losses: string; avgDetermination: string; avgBilled: string; avgDaysToClose: string }[] };
+        // phase14-perfa: same `.rows` unwrap fix as outcomeAnalytics —
+        // postgres-js execute returns a bare array.
+        const cohortRows = (Array.isArray(result) ? result : (result as { rows?: unknown[] }).rows ?? []) as { label: string; total: string; wins: string; losses: string; avgDetermination: string; avgBilled: string; avgDaysToClose: string }[];
         return {
-          rows: (result.rows ?? []).map(r => ({
+          rows: cohortRows.map(r => ({
             label: r.label ?? "Unknown",
             total: Number(r.total),
             wins: Number(r.wins),
@@ -307,27 +455,59 @@ export const appRouter = router({
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.id, "read");
         const dispute = await getDisputeById(input.id);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        auditPhiRead(ctx, "dispute", input.id);
         return dispute;
       }),
 
     create: protectedProcedure
       .input(createDisputeSchema)
       .mutation(async ({ ctx, input }) => {
+        // S4: cooling-off screen (45 CFR 149.510(c)(4)(vii)(B)) — reject a new
+        // dispute against the same other party for the same/similar item or
+        // service when a prior determination's 90-calendar-day suspension
+        // period is still running.
+        const db = await getDb();
+        if (db) {
+          const cooling = await checkCoolingOffForNewDispute(db, {
+            initiatingPartyName: input.initiatingPartyName,
+            respondingPartyName: input.respondingPartyName ?? null,
+            serviceType: input.serviceType,
+            cptCodes: input.cptCodes,
+          });
+          if (cooling.blocked) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: cooling.detail });
+          }
+        }
+        // S8: participating providers are not eligible for the federal IDR
+        // process — create ineligible with the statutory reason code.
+        const participating = input.initiatingPartyNonparticipating === false;
         const dispute = await createDispute({
           ...input,
           id: crypto.randomUUID(),
           referenceNumber: "", // will be generated in createDispute
           serviceDate: new Date(input.serviceDate),
+          initialPaymentDate: input.initialPaymentDate ? new Date(input.initialPaymentDate) : undefined,
           cptCodes: input.cptCodes,
           icd10Codes: input.icd10Codes ?? null,
           billedAmount: input.billedAmount,
           createdBy: ctx.user.id,
           initiatingPartyId: ctx.user.id,
+          ...(participating
+            ? { isEligible: false, ineligibilityReason: "participating_provider_federal_idr" }
+            : {}),
         });
         // Initialize double-entry ledger accounts for this dispute
         initializeDisputeLedger(dispute.id).catch((e) =>
           console.warn("[Ledger] Failed to initialize ledger for dispute", dispute.id, e)
         );
+        // M1: record the billed amount on the ledger at creation so
+        // getDisputeFinancialSummary reflects a non-zero billed balance.
+        const billedCents = dollarsToCents(input.billedAmount);
+        if (billedCents > 0) {
+          recordBilledAmount(dispute.id, billedCents, dispute.id).catch((e) =>
+            console.warn("[Ledger] Failed to record billed amount for dispute", dispute.id, e)
+          );
+        }
         // Sync to OpenSearch
         indexDocument("dispute", dispute.id, dispute as unknown as Record<string, unknown>).catch(() => {});
         // Create deadline notification
@@ -339,6 +519,20 @@ export const appRouter = router({
           message: `You have 30 business days to complete open negotiation for dispute ${dispute.referenceNumber}. Deadline: ${dispute.openNegotiationDeadline?.toLocaleDateString()}.`,
           dueDate: dispute.openNegotiationDeadline ?? null,
         });
+        // O9: publish dispute.created so audit/webhook bus consumers see it.
+        eventBus.publish(
+          "dispute.created",
+          dispute.id,
+          "dispute",
+          {
+            referenceNumber: dispute.referenceNumber,
+            serviceType: input.serviceType,
+            billedAmount: input.billedAmount,
+            initiatingPartyName: input.initiatingPartyName,
+            respondingPartyName: input.respondingPartyName ?? null,
+          },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] dispute.created publish failed", e));
         return dispute;
       }),
 
@@ -349,6 +543,66 @@ export const appRouter = router({
         await assertDisputeAccess(ctx.user.id, ctx.user.role, disputeId, "write");
         const current = await getDisputeById(disputeId);
         if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        // S8: disputes screened ineligible (e.g. participating provider in the
+        // federal process) cannot advance past the open-negotiation steps.
+        if (current.isEligible === false && getStepNumber(newStep) >= 4) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Dispute ${current.referenceNumber} is ineligible for the federal IDR process ` +
+              `(${current.ineligibilityReason ?? "eligibility screen"}); it cannot advance past STEP_03.`,
+          });
+        }
+        if (newStep === "STEP_04_IDR_INITIATED") {
+          // S3: reject late IDR initiation — more than 4 business days past
+          // the end of the 30-BD open negotiation period anchored on
+          // initialPaymentDate (canonical deadlines engine), unless an
+          // explicit admin override reason is supplied (recorded as a
+          // compliance note instead of blocking).
+          const late = checkIdrInitiationWindow({
+            initialPaymentDate: current.initialPaymentDate ?? null,
+            fallbackAnchor: current.createdAt ?? null,
+          });
+          if (late.late && isDeadlinePassed(late.idrInitiationDeadline)) {
+            if (!additionalData.overrideReason) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: late.detail });
+            }
+            const db = await getDb();
+            if (db) {
+              await db.insert(disputeEvents).values({
+                id: crypto.randomUUID(),
+                disputeId,
+                step: current.currentStep,
+                eventType: "compliance_override",
+                description:
+                  `ADMIN OVERRIDE — late IDR initiation accepted. ${late.detail} ` +
+                  `Override reason: ${additionalData.overrideReason}`,
+                performedBy: ctx.user.id,
+                performedByName: ctx.user.name ?? "Unknown",
+                metadata: {
+                  overrideReason: additionalData.overrideReason,
+                  openNegotiationEnd: late.openNegotiationEnd?.toISOString() ?? null,
+                  idrInitiationDeadline: late.idrInitiationDeadline?.toISOString() ?? null,
+                  businessDaysPastDeadline: late.businessDaysPastDeadline,
+                },
+                createdAt: new Date(),
+              });
+            }
+          }
+          // S4: cooling-off screen on entry into IDR initiation.
+          const db = await getDb();
+          if (db) {
+            const cooling = await checkCoolingOffForNewDispute(db, {
+              initiatingPartyName: current.initiatingPartyName,
+              respondingPartyName: current.respondingPartyName ?? null,
+              serviceType: current.serviceType,
+              cptCodes: Array.isArray(current.cptCodes) ? current.cptCodes : [],
+              excludeDisputeId: disputeId,
+            });
+            if (cooling.blocked) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: cooling.detail });
+            }
+          }
+        }
         try {
           validateWorkflowTransition(current.currentStep, newStep, { ...current, ...additionalData });
         } catch (error) {
@@ -371,6 +625,18 @@ export const appRouter = router({
             determinationWinner: additionalData.determinationWinner ?? undefined,
           }
         ));
+        // M1: record the IDR determination on the ledger when the dispute
+        // reaches the determination step. Delta-based (see recordDetermination):
+        // re-issue of the same amount is a no-op; a reduced determination books
+        // a reversal and any resulting overpayment credit (M3).
+        if (newStep === "STEP_13_DETERMINATION_ISSUED" && dispute.determinationAmount) {
+          const determinationCents = dollarsToCents(dispute.determinationAmount);
+          if (determinationCents > 0) {
+            recordDetermination(dispute.id, determinationCents, dispute.id).catch((e) =>
+              console.warn("[Ledger] Failed to record determination for dispute", dispute.id, e)
+            );
+          }
+        }
         // Create step-specific notifications
         if (newStep === "STEP_04_IDR_INITIATED") {
           await createNotification({
@@ -378,7 +644,7 @@ export const appRouter = router({
             userId: ctx.user.id,
             notificationType: "step_advanced",
             title: `IDR Initiated — ${dispute.referenceNumber}`,
-            message: `Federal IDR has been initiated. You have 4 business days to select a certified IDR entity.`,
+            message: `IDR initiated for dispute ${dispute.referenceNumber}. The parties have 3 business days to jointly select a certified IDR entity (45 CFR § 149.510(c)(1)).`,
             dueDate: dispute.idrInitiationDeadline ?? null,
           });
         } else if (newStep === "STEP_09_OFFER_SUBMISSION") {
@@ -399,9 +665,31 @@ export const appRouter = router({
             message: `The IDR entity has issued a payment determination. Payment is due within 30 days.`,
             dueDate: dispute.paymentDeadline ?? null,
           });
+          eventBus.publish(
+            "determination.issued",
+            disputeId,
+            "dispute",
+            {
+              determinationAmount: dispute.determinationAmount ?? null,
+              determinationWinner: dispute.determinationWinner ?? null,
+              paymentDeadline: dispute.paymentDeadline?.toISOString() ?? null,
+            },
+            { userId: ctx.user.id, timestamp: new Date().toISOString() },
+          ).catch((e) => console.warn("[EventBus] determination.issued publish failed", e));
         }
         // Sync updated dispute to OpenSearch
         indexDocument("dispute", dispute.id, dispute as unknown as Record<string, unknown>).catch(() => {});
+        // O9: terminal close transitions emit dispute.closed in addition to
+        // the dispute.advanced event already published by the workflow engine.
+        if (newStatus === "closed") {
+          eventBus.publish(
+            "dispute.closed",
+            disputeId,
+            "dispute",
+            { referenceNumber: dispute.referenceNumber, finalStep: newStep },
+            { userId: ctx.user.id, timestamp: new Date().toISOString() },
+          ).catch((e) => console.warn("[EventBus] dispute.closed publish failed", e));
+        }
         return dispute;
       }),
 
@@ -417,6 +705,23 @@ export const appRouter = router({
           supportingDocIds: null,
           submittedBy: ctx.user.id,
         });
+        // M1: payer-side offers (QPA / responding-party counter) establish the
+        // allowed amount on the ledger.
+        if (input.offerType === "qpa" || input.offerType === "responding_party") {
+          const allowedCents = dollarsToCents(input.amount);
+          if (allowedCents > 0) {
+            recordAllowedAmount(input.disputeId, allowedCents, offerId).catch((e) =>
+              console.warn("[Ledger] Failed to record allowed amount for dispute", input.disputeId, e)
+            );
+          }
+        }
+        eventBus.publish(
+          "dispute.offer_submitted",
+          input.disputeId,
+          "dispute",
+          { offerId, offerType: input.offerType, amount: input.amount },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] dispute.offer_submitted publish failed", e));
         return { offerId };
       }),
 
@@ -433,6 +738,16 @@ export const appRouter = router({
           ctx.user.id,
           ctx.user.name ?? "Unknown"
         );
+        // M1: an accepted offer resolves the dispute — record the
+        // determination amount on the ledger (delta-based, idempotent).
+        if (dispute.determinationAmount) {
+          const determinationCents = dollarsToCents(dispute.determinationAmount);
+          if (determinationCents > 0) {
+            recordDetermination(dispute.id, determinationCents, input.offerId).catch((e) =>
+              console.warn("[Ledger] Failed to record determination for dispute", dispute.id, e)
+            );
+          }
+        }
         await createNotification({
           disputeId: input.disputeId,
           userId: ctx.user.id,
@@ -441,6 +756,13 @@ export const appRouter = router({
           message: `An offer has been accepted and the dispute has been resolved. Determination amount: $${Number(dispute.determinationAmount).toLocaleString()}.`,
           dueDate: null,
         });
+        eventBus.publish(
+          "offer.accepted",
+          input.disputeId,
+          "dispute",
+          { offerId: input.offerId, determinationAmount: dispute.determinationAmount ?? null },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] offer.accepted publish failed", e));
         return { success: true, dispute };
       }),
 
@@ -449,11 +771,63 @@ export const appRouter = router({
         disputeId: z.string(),
         idrEntityId: z.string(),
         idrEntityName: z.string(),
+        // S5: conflict-of-interest screen (45 CFR § 149.510(c)(1)(iv)) — the
+        // certified IDR entity may not be selected unless all checks pass.
+        // Optional at the wire-schema level (older clients compile), but
+        // REQUIRED at runtime: validateConflictCheck rejects a missing or
+        // failing screen before selection proceeds.
+        conflictCheck: z.object({
+          attestedBy: z.string().min(1),
+          checks: z.object({
+            noFinancialInterest: z.boolean(),
+            noPriorEngagement: z.boolean(),
+            noPartyAffiliation: z.boolean(),
+          }),
+        }).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
         const current = await getDisputeById(input.disputeId);
         if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        const conflictError = validateConflictCheck(input.conflictCheck);
+        if (conflictError) throw new TRPCError({ code: "BAD_REQUEST", message: conflictError });
+        // Persist the screen: append-only dispute event + idr_attestations row.
+        // (conflictCheck is defined here — validateConflictCheck above rejects
+        // undefined before this point.)
+        const conflictCheck = input.conflictCheck!;
+        const db = await getDb();
+        if (db) {
+          await db.insert(disputeEvents).values({
+            id: crypto.randomUUID(),
+            disputeId: input.disputeId,
+            step: current.currentStep,
+            eventType: "idre_conflict_check",
+            description:
+              `IDR entity conflict-of-interest screen passed for ${input.idrEntityName} ` +
+              `(no financial interest, no prior engagement, no party affiliation) — ` +
+              `45 CFR § 149.510(c)(1)(iv).`,
+            performedBy: ctx.user.id,
+            performedByName: ctx.user.name ?? "Unknown",
+            metadata: { idrEntityId: input.idrEntityId, conflictCheck },
+            createdAt: new Date(),
+          });
+          await db.insert(idrAttestations).values({
+            id: crypto.randomUUID(),
+            disputeId: input.disputeId,
+            attestationType: "idre_conflict_check",
+            partyRole: "initiating_party",
+            attestedBy: conflictCheck.attestedBy,
+            attestedByName: ctx.user.name ?? conflictCheck.attestedBy,
+            attestationText:
+              `Conflict-of-interest screen for certified IDR entity ${input.idrEntityName} ` +
+              `(${input.idrEntityId}): attested no financial interest, no prior engagement, ` +
+              `and no party affiliation (45 CFR § 149.510(c)(1)(iv)).`,
+            informationComplete: true,
+            informationAccurate: true,
+            attestedAt: new Date(),
+            createdAt: new Date(),
+          });
+        }
         try {
           validateWorkflowTransition(current.currentStep, "STEP_07_IDR_ENTITY_SELECTED", {
             ...current,
@@ -465,7 +839,7 @@ export const appRouter = router({
             message: error instanceof Error ? error.message : "Invalid workflow transition",
           });
         }
-        return withDisputeLock(input.disputeId, 10_000, () => advanceDisputeStep(
+        const selection = await withDisputeLock(input.disputeId, 10_000, () => advanceDisputeStep(
           input.disputeId,
           "STEP_07_IDR_ENTITY_SELECTED",
           getStatusForStep("STEP_07_IDR_ENTITY_SELECTED"),
@@ -474,30 +848,16 @@ export const appRouter = router({
           `IDR entity selected: ${input.idrEntityName}`,
           { idrEntityId: input.idrEntityId, idrEntityName: input.idrEntityName }
         ));
+        eventBus.publish(
+          "dispute.arbitrator_selected",
+          input.disputeId,
+          "dispute",
+          { idrEntityId: input.idrEntityId, idrEntityName: input.idrEntityName },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] dispute.arbitrator_selected publish failed", e));
+        return selection;
       }),
 
-    uploadDocument: protectedProcedure
-      .input(z.object({
-        disputeId: z.string(),
-        documentType: z.string(),
-        fileName: z.string(),
-        fileSize: z.number().optional(),
-        mimeType: z.string().optional(),
-        s3Key: z.string().optional(),
-        description: z.string().optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
-        const docId = await addDocument({
-          ...input,
-          fileSize: input.fileSize ?? null,
-          mimeType: input.mimeType ?? null,
-          s3Key: input.s3Key ?? null,
-          description: input.description ?? null,
-          uploadedBy: ctx.user.id,
-        });
-        return { docId };
-      }),
 
     getTimeline: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
@@ -526,6 +886,7 @@ export const appRouter = router({
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
         const dispute = await getDisputeById(input.disputeId);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        auditPhiRead(ctx, "dispute.export.pdf", input.disputeId);
         const pdfBuffer = await generateDisputePDF(dispute as any);
         // Return as base64 so it can be decoded client-side and downloaded
         return {
@@ -544,6 +905,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         // Fetch up to 10,000 rows for export
         const { items } = await listDisputes({ userId: ctx.user.id, ...input, limit: 10000, offset: 0 });
+        auditPhiRead(ctx, "dispute.export.csv", null);
         const headers = [
           "Reference #", "Status", "Current Step", "Service Type", "Service Date",
           "Initiating Party", "Initiating Party Type", "Responding Party", "Responding Party Type",
@@ -605,13 +967,29 @@ export const appRouter = router({
         if (input.claimNumber) conditions.push(ilike(disputesTable.referenceNumber, `%${input.claimNumber}%`));
         if (input.payerName) conditions.push(ilike(disputesTable.respondingPartyName, `%${input.payerName}%`));
         if (conditions.length === 0) return [];
+        // X5: candidates must be disputes the caller can actually access —
+        // owned (initiatingPartyId) or granted via dispute_access. Admins
+        // see all. Previously any matching dispute in the tenant leaked.
+        const { eq, inArray } = await import("drizzle-orm");
+        const { disputeAccess: disputeAccessTable } = await import("../drizzle/schema");
+        const accessScope = ctx.user.role === "admin"
+          ? undefined
+          : or(
+              eq(disputesTable.initiatingPartyId, ctx.user.id),
+              inArray(
+                disputesTable.id,
+                db.select({ id: disputeAccessTable.disputeId })
+                  .from(disputeAccessTable)
+                  .where(eq(disputeAccessTable.userId, ctx.user.id))
+              )
+            );
         const results = await db.select({
           id: disputesTable.id,
           referenceNumber: disputesTable.referenceNumber,
           status: disputesTable.status,
           createdAt: disputesTable.createdAt,
         }).from(disputesTable)
-          .where(and(ne(disputesTable.id, input.disputeId), or(...conditions)))
+          .where(and(ne(disputesTable.id, input.disputeId), or(...conditions), accessScope))
           .limit(5);
         return results;
       }),
@@ -626,19 +1004,37 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
         const { eq } = await import("drizzle-orm");
         const { disputeEvents: disputeEventsTable } = await import("../drizzle/schema");
-        // Mark dispute as rejected / ineligible and record in timeline
-        await db.update(disputesTable)
-          .set({
-            status: "ineligible" as any,
-            currentStep: "STEP_19_APPEAL_RESOLVED",
-            updatedAt: new Date(),
-          })
-          .where(eq(disputesTable.id, input.disputeId));
+        // Business intent: rejecting the other party's offer escalates the
+        // dispute to judicial review / appeal (STEP_18_APPEAL_FILED, 45 CFR
+        // § 149.510(b)(2)). Route through advanceWorkflow so the transition
+        // is validated (validateWorkflowTransition) — never write
+        // currentStep/status directly. Previously this wrote STEP_19 +
+        // status "ineligible" directly, bypassing the workflow guard.
+        const dispute = await getDisputeById(input.disputeId);
+        if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+        try {
+          validateWorkflowTransition(
+            dispute.currentStep as Parameters<typeof validateWorkflowTransition>[0],
+            "STEP_18_APPEAL_FILED",
+            dispute as Record<string, unknown>
+          );
+        } catch (err) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: err instanceof Error ? err.message : "Cannot file an appeal from the current step",
+          });
+        }
+        await advanceWorkflow(
+          input.disputeId,
+          "STEP_18_APPEAL_FILED",
+          ctx.user.id,
+          input.reason ? `Offer rejected: ${input.reason}` : "Offer rejected by initiating party"
+        );
         // Record timeline event
         await db.insert(disputeEventsTable).values({
           id: crypto.randomUUID(),
           disputeId: input.disputeId,
-          step: "STEP_19_APPEAL_RESOLVED",
+          step: "STEP_18_APPEAL_FILED",
           eventType: "offer_rejected",
           description: input.reason ? `Offer rejected: ${input.reason}` : "Offer rejected by initiating party",
           performedBy: ctx.user.id,
@@ -652,9 +1048,16 @@ export const appRouter = router({
           userId: ctx.user.id,
           notificationType: "system_alert",
           title: "Offer Rejected",
-          message: input.reason ? `Offer was rejected: ${input.reason}` : "The offer has been rejected and the dispute has been closed.",
+          message: input.reason ? `Offer was rejected: ${input.reason}` : "The offer has been rejected and an appeal has been filed.",
           dueDate: null,
         });
+        eventBus.publish(
+          "offer.rejected",
+          input.disputeId,
+          "dispute",
+          { reason: input.reason ?? null },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] offer.rejected publish failed", e));
         return { success: true };
       }),
 
@@ -688,6 +1091,13 @@ export const appRouter = router({
           title: input.title,
           message: input.message,
         });
+        eventBus.publish(
+          "notification.sent",
+          input.disputeId,
+          "dispute",
+          { notificationType: input.notificationType, title: input.title, deliveryResults: results },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] notification.sent publish failed", e));
         return { success: true, deliveryResults: results };
       }),
 
@@ -731,11 +1141,20 @@ export const appRouter = router({
         return { success: true, newDisputeId: newDispute.id, referenceNumber: newDispute.referenceNumber };
       }),
 
+    // M8: merge hardening. A clean merge requires the same responding party
+    // (payer), no money recorded on EITHER dispute (paidAmount = 0), and no
+    // approved (or further-along) settlement transfers on either dispute.
+    // An admin may override with { force: true, reason }; the override is
+    // recorded in the audit event. Everything happens in ONE transaction:
+    // offers/documents move to the primary, the secondary's ledger entries
+    // are voided with reversal entries, and the secondary is closed WITH a
+    // workflow/audit event listing the moved/voided artifacts.
     merge: protectedProcedure
       .input(z.object({
         primaryDisputeId: z.string(),
         secondaryDisputeId: z.string(),
         reason: z.string().max(1000).optional(),
+        force: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         if (input.primaryDisputeId === input.secondaryDisputeId) {
@@ -743,29 +1162,148 @@ export const appRouter = router({
         }
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { eq } = await import("drizzle-orm");
+        const { eq, and, sql: dsql } = await import("drizzle-orm");
         const primary = await getDisputeById(input.primaryDisputeId);
         const secondary = await getDisputeById(input.secondaryDisputeId);
         if (!primary || !secondary) throw new TRPCError({ code: "NOT_FOUND", message: "One or both disputes not found" });
-        // Mark secondary as merged/closed
-        await db.update(disputesTable).set({
-          status: "closed" as any,
-          notes: `[Merged into ${primary.referenceNumber}] ${secondary.notes ?? ""}`.trim(),
-          updatedAt: new Date(),
-        }).where(eq(disputesTable.id, input.secondaryDisputeId));
-        // Record merge event on primary
+
+        const isAdmin = ctx.user.role === "admin";
+        const forced = input.force === true;
+        if (forced && !isAdmin) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin may force a dispute merge" });
+        }
+        if (forced && !input.reason?.trim()) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "A forced merge requires a reason" });
+        }
+        if (!forced) {
+          const blockers: string[] = [];
+          if ((primary.respondingPartyName ?? null) !== (secondary.respondingPartyName ?? null)) {
+            blockers.push("the disputes name different responding parties (payers)");
+          }
+          const paidNonZero = (v: string | null) => v !== null && Number(v) !== 0;
+          if (paidNonZero(primary.paidAmount) || paidNonZero(secondary.paidAmount)) {
+            blockers.push("one or both disputes already have recorded payments (paidAmount ≠ 0)");
+          }
+          const approvedTransfers = await db.select({ id: settlementTransfers.id, disputeId: settlementTransfers.disputeId })
+            .from(settlementTransfers)
+            .where(and(
+              dsql`${settlementTransfers.disputeId} IN (${input.primaryDisputeId}, ${input.secondaryDisputeId})`,
+              dsql`${settlementTransfers.status} IN ('authorized','submitted','accepted','settled','reconciled','hold_unknown')`,
+            )).limit(1);
+          if (approvedTransfers[0]) {
+            blockers.push("one or both disputes have approved (or further-along) settlement transfers");
+          }
+          if (blockers.length) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Merge refused: ${blockers.join("; ")}. An admin may override with force:true and a reason.`,
+            });
+          }
+        }
+
+        const mergeResult = await db.transaction(async (tx) => {
+          // Serialize both disputes for the duration of the merge.
+          await tx.execute(dsql`SELECT pg_advisory_xact_lock(hashtext(${input.primaryDisputeId}), hashtext(${input.secondaryDisputeId}))`);
+          const { disputeOffers, disputeDocuments, disputeEvents: disputeEventsTable, ledgerAccounts: la, ledgerEntries: le } = await import("../drizzle/schema");
+          const now = new Date();
+
+          // 1. Move offers and documents to the primary.
+          const movedOffers = await tx.update(disputeOffers)
+            .set({ disputeId: input.primaryDisputeId })
+            .where(eq(disputeOffers.disputeId, input.secondaryDisputeId))
+            .returning({ id: disputeOffers.id });
+          const movedDocuments = await tx.update(disputeDocuments)
+            .set({ disputeId: input.primaryDisputeId })
+            .where(eq(disputeDocuments.disputeId, input.secondaryDisputeId))
+            .returning({ id: disputeDocuments.id });
+
+          // 2. Void the secondary's ledger entries with reversal entries.
+          const secondaryAccounts = await tx.select().from(la).where(eq(la.disputeId, input.secondaryDisputeId));
+          const secondaryEntries = await tx.select().from(le).where(eq(le.disputeId, input.secondaryDisputeId));
+          const accountTypeById = new Map(secondaryAccounts.map(a => [a.id, a.accountType]));
+          const voidedEntryIds: string[] = [];
+          for (const entry of secondaryEntries) {
+            if (entry.entryType === "reversal") continue; // don't reverse reversals
+            const alreadyReversed = secondaryEntries.some(r =>
+              r.entryType === "reversal" && r.idempotencyKey === `merge-void:${entry.id}`);
+            if (alreadyReversed) continue;
+            const reversalId = crypto.randomUUID();
+            await tx.insert(le).values({
+              id: reversalId,
+              disputeId: input.secondaryDisputeId,
+              // Inverse direction of the original entry (see recordEntry convention).
+              debitAccountId: entry.creditAccountId,
+              creditAccountId: entry.debitAccountId,
+              amountCents: entry.amountCents,
+              currency: entry.currency,
+              entryType: "reversal",
+              description: `Merge void: reversal of entry ${entry.id} (${entry.description}) — dispute merged into ${primary.referenceNumber}`,
+              referenceId: entry.referenceId,
+              referenceType: "merge_void",
+              idempotencyKey: `merge-void:${entry.id}`,
+              metadata: { mergeVoid: true, voidedEntryId: entry.id, primaryDisputeId: input.primaryDisputeId },
+              createdAt: now,
+            });
+            // Balance effect: debit (+) the original credit account, credit (−)
+            // the original debit account — exactly undoing the original movement.
+            await tx.update(la).set({ balanceCents: dsql`${la.balanceCents} + ${entry.amountCents}`, updatedAt: now }).where(eq(la.id, entry.creditAccountId));
+            await tx.update(la).set({ balanceCents: dsql`${la.balanceCents} - ${entry.amountCents}`, updatedAt: now }).where(eq(la.id, entry.debitAccountId));
+            voidedEntryIds.push(entry.id);
+          }
+
+          // 3. Close the secondary with an audit trail.
+          await tx.update(disputesTable).set({
+            status: "closed" as any,
+            closedAt: now,
+            notes: `[Merged into ${primary.referenceNumber}] ${secondary.notes ?? ""}`.trim(),
+            updatedAt: now,
+          }).where(eq(disputesTable.id, input.secondaryDisputeId));
+          const artifacts = {
+            movedOfferIds: movedOffers.map(o => o.id),
+            movedDocumentIds: movedDocuments.map(d => d.id),
+            voidedLedgerEntryIds: voidedEntryIds,
+            forced,
+            forceReason: forced ? input.reason : null,
+          };
+          await tx.insert(disputeEventsTable).values({
+            id: crypto.randomUUID(),
+            disputeId: input.secondaryDisputeId,
+            step: secondary.currentStep,
+            eventType: "dispute_merged_closed",
+            description:
+              `Dispute merged into ${primary.referenceNumber} and closed. ` +
+              `Moved ${artifacts.movedOfferIds.length} offer(s), ${artifacts.movedDocumentIds.length} document(s); ` +
+              `voided ${artifacts.voidedLedgerEntryIds.length} ledger entrie(s) with reversal entries.` +
+              (input.reason ? ` Reason: ${input.reason}` : ""),
+            performedBy: ctx.user.id,
+            performedByName: ctx.user.name ?? "Unknown",
+            metadata: { primaryDisputeId: input.primaryDisputeId, primaryRef: primary.referenceNumber, ...artifacts },
+            createdAt: now,
+          });
+          return artifacts;
+        });
+
+        // Record merge event on primary (after the transaction commits).
         const { disputeEvents: disputeEventsTable } = await import("../drizzle/schema");
         await db.insert(disputeEventsTable).values({
           id: crypto.randomUUID(),
           disputeId: input.primaryDisputeId,
           step: primary.currentStep,
           eventType: "dispute_merged",
-          description: `Merged with ${secondary.referenceNumber}${input.reason ? `: ${input.reason}` : ""}`,
+          description: `Merged with ${secondary.referenceNumber}${input.reason ? `: ${input.reason}` : ""}${forced ? " (ADMIN FORCED)" : ""}`,
           performedBy: ctx.user.id,
           performedByName: ctx.user.name ?? "Unknown",
-          metadata: { mergedDisputeId: input.secondaryDisputeId, mergedRef: secondary.referenceNumber, reason: input.reason ?? null },
+          metadata: { ...mergeResult, mergedDisputeId: input.secondaryDisputeId, mergedRef: secondary.referenceNumber, reason: input.reason ?? null },
         });
-        return { success: true, primaryDisputeId: input.primaryDisputeId };
+        // O9: the merged secondary dispute is closed by the merge.
+        eventBus.publish(
+          "dispute.closed",
+          input.secondaryDisputeId,
+          "dispute",
+          { reason: "merged", primaryDisputeId: input.primaryDisputeId, primaryRef: primary.referenceNumber, mergeReason: input.reason ?? null },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] dispute.closed publish failed", e));
+        return { ...mergeResult, success: true, primaryDisputeId: input.primaryDisputeId };
       }),
   }),
 
@@ -777,23 +1315,29 @@ export const appRouter = router({
         specialty: z.string().optional(),
       }))
       .query(async ({ input }) => {
-        await seedIDREntities(); // Seed on first call
+        // No auto-seed: production reads must never fabricate entities.
+        // Returns [] when no certified IDR entities are registered.
         return listIDREntities(input);
       }),
 
-    caseload: protectedProcedure
-      .input(z.object({ entityId: z.string() }))
-      .query(async ({ input }) => {
-        await seedIDREntities();
-        const result = await getIDREntityCaseload(input.entityId);
-        if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "IDR entity not found" });
-        return result;
-      }),
 
     allCaseloads: protectedProcedure
       .query(async () => {
-        await seedIDREntities();
         return listAllIDREntityCaseloads();
+      }),
+
+    /**
+     * Admin-only explicit demo seed. Inserts the 5 synthetic IDR entities,
+     * all clearly labelled "DEMO" (see seedIDREntities in server/db.ts).
+     * Never invoked implicitly from read paths.
+     */
+    seedDemoEntities: adminProcedure
+      // Wave W5-1: explicit opt-in required — callers must affirm they are
+      // knowingly inserting DEMO-labelled synthetic entities.
+      .input(z.object({ demo: z.literal(true, { message: "Pass { demo: true } to confirm seeding DEMO entities" }) }))
+      .mutation(async () => {
+        await seedIDREntities();
+        return { seeded: true };
       }),
   }),
 
@@ -892,7 +1436,7 @@ export const appRouter = router({
         description: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        return addDocument({
+        const docId = await addDocument({
           disputeId: input.disputeId,
           uploadedBy: ctx.user.id,
           fileName: input.fileName,
@@ -902,14 +1446,23 @@ export const appRouter = router({
           s3Key: input.storageKey,
           description: input.description ?? null,
         });
+        eventBus.publish(
+          "document.uploaded",
+          input.disputeId,
+          "dispute",
+          { documentId: docId, fileName: input.fileName, documentType: input.documentType },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] document.uploaded publish failed", e));
+        return docId;
       }),
     list: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const db = await (await import("./db")).getDb();
         if (!db) return [];
         const { disputeDocuments } = await import("../drizzle/schema");
         const { eq, desc } = await import("drizzle-orm");
+        auditPhiRead(ctx, "document.list", input.disputeId);
         return db.select().from(disputeDocuments)
           .where(eq(disputeDocuments.disputeId, input.disputeId))
           .orderBy(desc(disputeDocuments.uploadedAt));
@@ -941,31 +1494,36 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database unavailable");
         const { documentVersions } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
-        // Mark all previous versions as not latest
-        await db.update(documentVersions)
-          .set({ isLatest: false })
-          .where(eq(documentVersions.documentId, input.documentId));
-        // Get current max version number
-        const { max } = await import("drizzle-orm");
-        const [{ maxVer }] = await db.select({ maxVer: max(documentVersions.versionNumber) })
-          .from(documentVersions)
-          .where(eq(documentVersions.documentId, input.documentId));
-        const nextVersion = (maxVer ?? 0) + 1;
-        const [version] = await db.insert(documentVersions).values({
-          id: crypto.randomUUID(),
-          documentId: input.documentId,
-          disputeId: input.disputeId,
-          versionNumber: nextVersion,
-          s3Key: input.storageKey,
-          fileName: input.fileName,
-          fileSize: input.fileSize,
-          mimeType: input.fileType,
-          uploadedBy: ctx.user.id,
-          changeNote: input.changeNote ?? null,
-          isLatest: true,
-        }).returning();
-        return version;
+        const { eq, max, sql: dsql } = await import("drizzle-orm");
+        // M10: the isLatest-flip + max(version)+insert sequence raced under
+        // concurrent uploads (two writers could compute the same next version
+        // and leave two isLatest rows). Serialize per document with a pg
+        // advisory xact lock (same pattern as server/settlement-lifecycle.ts)
+        // and run the flip+read+insert in ONE transaction.
+        return db.transaction(async (tx) => {
+          await tx.execute(dsql`SELECT pg_advisory_xact_lock(hashtext(${input.documentId}))`);
+          await tx.update(documentVersions)
+            .set({ isLatest: false })
+            .where(eq(documentVersions.documentId, input.documentId));
+          const [{ maxVer }] = await tx.select({ maxVer: max(documentVersions.versionNumber) })
+            .from(documentVersions)
+            .where(eq(documentVersions.documentId, input.documentId));
+          const nextVersion = (maxVer ?? 0) + 1;
+          const [version] = await tx.insert(documentVersions).values({
+            id: crypto.randomUUID(),
+            documentId: input.documentId,
+            disputeId: input.disputeId,
+            versionNumber: nextVersion,
+            s3Key: input.storageKey,
+            fileName: input.fileName,
+            fileSize: input.fileSize,
+            mimeType: input.fileType,
+            uploadedBy: ctx.user.id,
+            changeNote: input.changeNote ?? null,
+            isLatest: true,
+          }).returning();
+          return version;
+        });
       }),
   }),
 
@@ -1052,13 +1610,50 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { eq } = await import("drizzle-orm");
         await db.update(users).set({
           suspendedAt: null,
           suspendedUntil: null,
           suspendReason: null,
         }).where(eq(users.id, input.userId));
         return { success: true };
+      }),
+
+    /**
+     * Wave W5-5: full offboarding cascade — suspend + revoke API keys +
+     * disable TOTP + revoke dispute_access grants (Permify tuples included)
+     * + audit. Idempotent; refuses self-offboarding and last-admin removal.
+     */
+    offboardUser: adminProcedure
+      .input(z.object({
+        userId: z.string().min(1),
+        reason: z.string().min(1).max(500),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { offboardUser } = await import("./offboarding");
+        try {
+          return await offboardUser({ adminId: ctx.user.id, userId: input.userId, reason: input.reason });
+        } catch (err) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "Offboarding failed" });
+        }
+      }),
+
+    /**
+     * Wave W5-8: soft user deletion — runs the offboarding cascade and then
+     * anonymizes PII (name/email/passwordHash), keeping the row and audit
+     * trail for statutory record-keeping.
+     */
+    deleteUser: adminProcedure
+      .input(z.object({
+        userId: z.string().min(1),
+        reason: z.string().min(1).max(500),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { offboardUser } = await import("./offboarding");
+        try {
+          return await offboardUser({ adminId: ctx.user.id, userId: input.userId, reason: input.reason, anonymize: true });
+        } catch (err) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "Deletion failed" });
+        }
       }),
 
     reseedDemoData: adminProcedure.mutation(async ({ ctx }) => {
@@ -1217,11 +1812,6 @@ export const appRouter = router({
       }),
 
     // Get a single CMS draft by dispute ID
-    getCMSDraft: protectedProcedure
-      .input(z.object({ disputeId: z.string() }))
-      .query(async ({ input, ctx }) => {
-        return getCMSDraftByDispute(input.disputeId, ctx.user.id);
-      }),
 
     // Update the status of a CMS draft (draft → submitted → determined)
     updateDraftStatus: protectedProcedure
@@ -1356,11 +1946,16 @@ export const appRouter = router({
         encounterId: z.string().optional(),
         claimId: z.string().optional(),
         dateOfService: z.string().optional(),
+        /** When set, extracted fields are merged into this dispute (see merge rule). */
+        disputeId: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const startMs = Date.now();
+        const { withEmrRetry, persistSyncLogWithRetry } = await import("./emr/retry");
         try {
-          const result = await aiPost<{
+          // Transient EMR/AI failures (5xx, timeouts, network resets) are
+          // retried up to 3 attempts with exponential backoff; 4xx fails fast.
+          const result = await withEmrRetry(() => aiPost<{
             success: boolean;
             emrSystem: string;
             vendor: string;
@@ -1380,7 +1975,15 @@ export const appRouter = router({
             claim_id: input.claimId,
             date_of_service: input.dateOfService,
             connection_id: input.connectionId,
-          });
+          }), { attempts: 3 });
+          // Provenance-aware merge: a re-pull only fills dispute fields that
+          // were NOT manually edited (manual edits are never overwritten).
+          let provenanceMerge: { applied: string[]; skippedManual: string[] } | undefined;
+          if (input.disputeId && result.success && result.extractedData) {
+            const { applyEmrExtractedFields } = await import("./emr/provenance");
+            provenanceMerge = await applyEmrExtractedFields(input.disputeId, result.extractedData)
+              .catch(() => undefined);
+          }
           // Log successful pull
           await createEMRSyncLog({
             id: crypto.randomUUID(),
@@ -1397,10 +2000,11 @@ export const appRouter = router({
             patientId: input.patientId ?? null,
             claimId: input.claimId ?? null,
           }).catch(() => { /* non-blocking */ });
-          return result;
+          return { ...result, provenanceMerge };
         } catch (err) {
-          // Log failed pull
-          await createEMRSyncLog({
+          // Log failed pull — the failure record must persist even when the
+          // first log insert itself fails (one retry inside the helper).
+          await persistSyncLogWithRetry(() => createEMRSyncLog({
             id: crypto.randomUUID(),
             connectionId: input.connectionId,
             triggerType: "dispute_pull",
@@ -1415,7 +2019,7 @@ export const appRouter = router({
             triggeredBy: ctx.user.id,
             patientId: input.patientId ?? null,
             claimId: input.claimId ?? null,
-          }).catch(() => { /* non-blocking */ });
+          }));
           return {
             success: false,
             emrSystem: input.emrSystem,
@@ -1515,16 +2119,6 @@ export const appRouter = router({
       return conns.map(({ credentialsEncrypted: _creds, ...rest }) => rest);
     }),
 
-    get: protectedProcedure
-      .input(z.object({ id: z.string() }))
-      .query(async ({ ctx, input }) => {
-        const conn = await getEMRConnection(input.id);
-        if (!conn) throw new TRPCError({ code: "NOT_FOUND" });
-        if (conn.createdBy !== ctx.user.id && ctx.user.role !== "admin")
-          throw new TRPCError({ code: "FORBIDDEN" });
-        const { credentialsEncrypted: _creds, ...rest } = conn;
-        return rest;
-      }),
 
     testById: protectedProcedure
       .input(z.object({ connectionId: z.string() }))
@@ -1559,10 +2153,11 @@ export const appRouter = router({
             triggeredBy: ctx.user.id,
           }).catch(() => { /* non-blocking */ });
           return result;
-        } catch {
-          const fallback = { success: true, confidence: 0.85, message: "Connection verified (offline mode)", resourcesFound: ["Patient", "Claim"], mappingValidation: [], aiAnalysis: "Fallback test" };
-          await createEMRSyncLog({ id: crypto.randomUUID(), connectionId: input.connectionId, triggerType: "test", status: "success", fieldsExtracted: 2, fieldConfidence: { overall: 0.85 }, fhirResourcesAccessed: ["Patient", "Claim"], warnings: ["AI service unavailable — offline test"], summary: "Offline test", durationMs: Date.now() - startMs, triggeredBy: ctx.user.id }).catch(() => {});
-          return fallback;
+        } catch (err) {
+          // FAIL CLOSED: never fabricate a successful connection test.
+          const reason = err instanceof Error ? err.message : "EMR connection test service unavailable";
+          await createEMRSyncLog({ id: crypto.randomUUID(), connectionId: input.connectionId, triggerType: "test", status: "failed", fieldsExtracted: 0, fieldConfidence: { overall: 0 }, fhirResourcesAccessed: [], warnings: [reason], summary: `EMR connection test failed: ${reason}`, durationMs: Date.now() - startMs, triggeredBy: ctx.user.id }).catch(() => {});
+          throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: `EMR connection test failed: ${reason}` });
         }
       }),
 
@@ -1607,41 +2202,29 @@ export const appRouter = router({
             }).catch(() => { /* non-blocking */ });
           }
           return result;
-        } catch {
-          // Graceful fallback: simulate a successful test with mock data
-          const fhirResources = ["Patient", "Claim", "Coverage", "Organization", "ExplanationOfBenefit"];
-          const mappingValidation = Object.entries(input.fieldMappings).map(([field, pathVal]) => {
-            const p = String(pathVal ?? "");
-            return {
-              field,
-              status: p.length > 0 ? "ok" : "missing",
-              sample: p ? `<${p.split(".")[0]}>` : undefined,
-            };
-          });
-          const fallbackResult = {
-            success: true,
-            message: `FHIR R4 endpoint reachable at ${input.baseUrl}. All required resources found.`,
-            resourcesFound: fhirResources,
-            mappingValidation,
-            aiAnalysis: `The ${input.emrSystem} FHIR server responded correctly. All 8 IDR field mappings resolved successfully. The connection is ready for production use.`,
-            confidence: 0.91,
-          };
+        } catch (err) {
+          // FAIL CLOSED: never fabricate a successful connection test. Record
+          // the real failure and surface it.
+          const reason = err instanceof Error ? err.message : "EMR connection test service unavailable";
           if (input.connectionId) {
             await createEMRSyncLog({
               id: crypto.randomUUID(),
               connectionId: input.connectionId,
               triggerType: "test",
-              status: "success",
-              fieldsExtracted: fhirResources.length,
-              fieldConfidence: { overall: 0.91 },
-              fhirResourcesAccessed: fhirResources,
-              warnings: ["AI service unavailable; used fallback test"],
-              summary: fallbackResult.message,
+              status: "failed",
+              fieldsExtracted: 0,
+              fieldConfidence: { overall: 0 },
+              fhirResourcesAccessed: [],
+              warnings: [reason],
+              summary: `EMR connection test failed: ${reason}`,
               durationMs: Date.now() - startMs,
               triggeredBy: ctx.user.id,
             }).catch(() => { /* non-blocking */ });
           }
-          return fallbackResult;
+          throw new TRPCError({
+            code: "SERVICE_UNAVAILABLE",
+            message: `EMR connection test failed: ${reason}`,
+          });
         }
       }),
 
@@ -1712,38 +2295,6 @@ export const appRouter = router({
 
   // --- State Balance-Billing Laws -------------------------------------------
   stateLaws: router({
-    list: publicProcedure
-      .input(z.object({ state: z.string().optional(), hasProtection: z.boolean().optional() }))
-      .query(async ({ input }) => {
-        const stateFilter = input.state;
-        // Comprehensive 50-state balance billing law reference dataset
-        const STATE_LAWS = [
-          { state: "CA", name: "California", hasProtection: true, lawName: "SB 1021 / AB 72", effectiveDate: "2017-07-01", scope: "Emergency + Non-emergency out-of-network", idrProcess: "Independent Dispute Resolution", maxPenalty: "$25,000 per violation", notes: "Strongest state protections; applies to fully-insured plans" },
-          { state: "NY", name: "New York", hasProtection: true, lawName: "NY Surprise Bill Law", effectiveDate: "2015-03-31", scope: "Emergency + Non-emergency out-of-network", idrProcess: "Independent Dispute Resolution", maxPenalty: "$10,000 per violation", notes: "First state surprise billing law; model for federal NSA" },
-          { state: "TX", name: "Texas", hasProtection: true, lawName: "HB 1941", effectiveDate: "2020-01-01", scope: "Emergency services", idrProcess: "Mediation for amounts > $500", maxPenalty: "$5,000 per violation", notes: "Mediation-based resolution" },
-          { state: "FL", name: "Florida", hasProtection: true, lawName: "FS 627.64194", effectiveDate: "2016-07-01", scope: "Emergency services", idrProcess: "Negotiation required", maxPenalty: "License action", notes: "Applies to state-regulated plans only" },
-          { state: "IL", name: "Illinois", hasProtection: true, lawName: "SB 1584", effectiveDate: "2021-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$10,000 per violation", notes: "Mirrors federal NSA provisions" },
-          { state: "WA", name: "Washington", hasProtection: true, lawName: "SB 5526", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Broad consumer protections" },
-          { state: "CO", name: "Colorado", hasProtection: true, lawName: "HB 1174", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Applies to state-regulated plans" },
-          { state: "NJ", name: "New Jersey", hasProtection: true, lawName: "A1952", effectiveDate: "2018-08-01", scope: "Emergency + Non-emergency", idrProcess: "Arbitration", maxPenalty: "$10,000 per violation", notes: "Arbitration-based resolution" },
-          { state: "AZ", name: "Arizona", hasProtection: false, lawName: "No state law", effectiveDate: null, scope: "Federal NSA only", idrProcess: "Federal NSA IDR", maxPenalty: null, notes: "Relies on federal NSA protections" },
-          { state: "GA", name: "Georgia", hasProtection: false, lawName: "No state law", effectiveDate: null, scope: "Federal NSA only", idrProcess: "Federal NSA IDR", maxPenalty: null, notes: "Relies on federal NSA protections" },
-          { state: "OH", name: "Ohio", hasProtection: true, lawName: "HB 388", effectiveDate: "2022-04-07", scope: "Emergency services", idrProcess: "Negotiation", maxPenalty: "$1,000 per violation", notes: "Limited scope" },
-          { state: "PA", name: "Pennsylvania", hasProtection: true, lawName: "Act 77", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Comprehensive protections" },
-          { state: "MI", name: "Michigan", hasProtection: false, lawName: "No state law", effectiveDate: null, scope: "Federal NSA only", idrProcess: "Federal NSA IDR", maxPenalty: null, notes: "Relies on federal NSA protections" },
-          { state: "NC", name: "North Carolina", hasProtection: false, lawName: "No state law", effectiveDate: null, scope: "Federal NSA only", idrProcess: "Federal NSA IDR", maxPenalty: null, notes: "Relies on federal NSA protections" },
-          { state: "VA", name: "Virginia", hasProtection: true, lawName: "SB 172", effectiveDate: "2021-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Comprehensive state protections" },
-          { state: "MA", name: "Massachusetts", hasProtection: true, lawName: "Chapter 224", effectiveDate: "2012-11-01", scope: "Emergency services", idrProcess: "Negotiation", maxPenalty: "License action", notes: "Early adopter state" },
-          { state: "MN", name: "Minnesota", hasProtection: true, lawName: "HF 4", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Strong consumer protections" },
-          { state: "OR", name: "Oregon", hasProtection: true, lawName: "HB 2339", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Comprehensive protections" },
-          { state: "CT", name: "Connecticut", hasProtection: true, lawName: "PA 19-117", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Mirrors federal NSA" },
-          { state: "MD", name: "Maryland", hasProtection: true, lawName: "HB 1420", effectiveDate: "2020-01-01", scope: "Emergency + Non-emergency", idrProcess: "IDR", maxPenalty: "$5,000 per violation", notes: "Comprehensive protections" },
-        ];
-        let results = STATE_LAWS;
-        if (stateFilter) results = results.filter(l => l.state === stateFilter.toUpperCase());
-        if (input.hasProtection !== undefined) results = results.filter(l => l.hasProtection === input.hasProtection);
-        return { laws: results, total: results.length, withProtection: STATE_LAWS.filter(l => l.hasProtection).length, withoutProtection: STATE_LAWS.filter(l => !l.hasProtection).length };
-      }),
     checkCompliance: protectedProcedure
       .input(z.object({ disputeId: z.string(), state: z.string() }))
       .query(async ({ input }) => {
@@ -1849,14 +2400,6 @@ export const appRouter = router({
     list: protectedProcedure
       .query(async ({ ctx }) => {
         return listDisputeTemplates(ctx.user.id);
-      }),
-    getById: protectedProcedure
-      .input(z.object({ id: z.string() }))
-      .query(async ({ ctx, input }) => {
-        const template = await getDisputeTemplateById(input.id);
-        if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
-        if (template.createdBy !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
-        return template;
       }),
     create: protectedProcedure
       .input(z.object({
@@ -2030,12 +2573,61 @@ export const appRouter = router({
         onboardingCompleted: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const profile = await upsertUserProfile({
-          id: ctx.user.id,
-          ...input,
-          onboardingCompletedAt: input.onboardingCompleted ? new Date() : undefined,
-        });
-        return profile;
+        // G13 (residual): stakeholderRole is self-asserted on save. Users may
+        // self-select only low-privilege roles (provider/facility/other);
+        // privileged roles (payer admin-tier, idr_entity arbitrator-tier) are
+        // granted exclusively via admin/invite flows (see the Phase13-FC G13
+        // note in _core/keycloak.ts and personas.claimBootstrapAdmin). A
+        // profile that already holds the privileged role (admin-granted) may
+        // keep it; otherwise refuse rather than silently strip, matching the
+        // FORBIDDEN style of claimBootstrapAdmin.
+        const PRIVILEGED_STAKEHOLDER_ROLES: readonly string[] = ["payer", "idr_entity"];
+        if (input.stakeholderRole && PRIVILEGED_STAKEHOLDER_ROLES.includes(input.stakeholderRole)) {
+          const existingProfile = await getUserProfile(ctx.user.id);
+          if (existingProfile?.stakeholderRole !== input.stakeholderRole) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: `The '${input.stakeholderRole}' role can only be assigned by an admin or invite flow; it cannot be self-selected.`,
+            });
+          }
+        }
+        // G7: NPI is a provider identifier — guard against two provider
+        // profiles claiming the same NPI. Pre-check for a friendly 409
+        // (same pattern as payer.invite in routers/personas.ts); the
+        // current profile's own row is excluded so updates are idempotent.
+        if (input.npi) {
+          const existingProfile = await getUserProfile(ctx.user.id);
+          const effectiveRole = input.stakeholderRole ?? existingProfile?.stakeholderRole ?? "provider";
+          if (effectiveRole === "provider") {
+            const db = await getDb();
+            if (db) {
+              const { userProfiles } = await import("../drizzle/schema");
+              const dup = (await db.select().from(userProfiles).where(eq(userProfiles.npi, input.npi)).limit(1))[0];
+              if (dup && dup.id !== ctx.user.id) {
+                throw new TRPCError({
+                  code: "CONFLICT",
+                  message: "This NPI is already registered to another provider account. Contact an admin if you believe this is an error.",
+                });
+              }
+            }
+          }
+        }
+        try {
+          const profile = await upsertUserProfile({
+            id: ctx.user.id,
+            ...input,
+            onboardingCompletedAt: input.onboardingCompleted ? new Date() : undefined,
+          });
+          return profile;
+        } catch (err: any) {
+          if (String(err?.code) === "23505" || /duplicate key/i.test(String(err?.message))) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "This NPI is already registered to another provider account. Contact an admin if you believe this is an error.",
+            });
+          }
+          throw err;
+        }
       }),
     completeOnboarding: protectedProcedure.mutation(async ({ ctx }) => {
       await markOnboardingComplete(ctx.user.id);
@@ -2106,17 +2698,20 @@ export const appRouter = router({
           }
         }
         const outcomeByMonth = Object.values(outcomeMap);
-        // avgDaysByStep: average days spent at each IDR step
-        const IDR_STEPS = ["STEP_1","STEP_2","STEP_3","STEP_4","STEP_5","STEP_6","STEP_7","STEP_8","STEP_9","STEP_10","STEP_11","STEP_12","STEP_13","STEP_14","STEP_15","STEP_16","STEP_17","STEP_18","STEP_19"] as const;
+        // avgDaysByStep: average days spent at each IDR step. Keys MUST be
+        // the real IDRStep enum values (STEP_01_… etc.) — the previous
+        // "STEP_1"… keys never matched dispute.currentStep, so every bucket
+        // was permanently zero.
+        const IDR_STEPS = Object.keys(IDR_WORKFLOW_STEPS);
         const stepDayMap: Record<string, number[]> = {};
         for (const d of filtered) {
-          const step = d.currentStep ?? "STEP_1";
+          const step = d.currentStep ?? "STEP_01_OPEN_NEGOTIATION_INITIATED";
           if (!stepDayMap[step]) stepDayMap[step] = [];
           const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now());
           stepDayMap[step].push(ms / 86400000);
         }
-        const avgDaysByStep = IDR_STEPS.slice(0, 10).map(step => ({
-          step: step.replace("STEP_", "Step "),
+        const avgDaysByStep = IDR_STEPS.map(step => ({
+          step: step.replace(/^STEP_\d+_/, "").replace(/_/g, " "),
           avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a, b) => a + b, 0) / stepDayMap[step].length) : 0,
         }));
                 return { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
@@ -2154,10 +2749,11 @@ export const appRouter = router({
         const outcomeMap: Record<string, { month: string; won: number; lost: number; pending: number }> = {};
         for (const d of filtered) { const dt = d.createdAt ?? new Date(); const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`; const label = MONTHS[dt.getMonth()]!; if (!outcomeMap[key]) outcomeMap[key] = { month: label, won: 0, lost: 0, pending: 0 }; if (d.status === "closed") { if (Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0)) outcomeMap[key].won++; else outcomeMap[key].lost++; } else { outcomeMap[key].pending++; } }
         const outcomeByMonth = Object.values(outcomeMap);
-        const IDR_STEPS = ["STEP_1","STEP_2","STEP_3","STEP_4","STEP_5","STEP_6","STEP_7","STEP_8","STEP_9","STEP_10"] as const;
+        // Real IDRStep enum keys (see reports.summary) — "STEP_1"… keys never matched.
+        const IDR_STEPS = Object.keys(IDR_WORKFLOW_STEPS);
         const stepDayMap: Record<string, number[]> = {};
-        for (const d of filtered) { const step = d.currentStep ?? "STEP_1"; if (!stepDayMap[step]) stepDayMap[step] = []; const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); stepDayMap[step].push(ms / 86400000); }
-        const avgDaysByStep = IDR_STEPS.map(step => ({ step: step.replace("STEP_", "Step "), avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a,b)=>a+b,0)/stepDayMap[step].length) : 0 }));
+        for (const d of filtered) { const step = d.currentStep ?? "STEP_01_OPEN_NEGOTIATION_INITIATED"; if (!stepDayMap[step]) stepDayMap[step] = []; const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); stepDayMap[step].push(ms / 86400000); }
+        const avgDaysByStep = IDR_STEPS.map(step => ({ step: step.replace(/^STEP_\d+_/, "").replace(/_/g, " "), avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a,b)=>a+b,0)/stepDayMap[step].length) : 0 }));
         const summary = { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
         const csv = generateReportsCSV(summary, filtered as any, input.dateRangeLabel);
         return {
@@ -2194,10 +2790,11 @@ export const appRouter = router({
         const outcomeMap: Record<string, { month: string; won: number; lost: number; pending: number }> = {};
         for (const d of filtered) { const dt = d.createdAt ?? new Date(); const key = `${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`; const label = MONTHS[dt.getMonth()]!; if (!outcomeMap[key]) outcomeMap[key] = { month: label, won: 0, lost: 0, pending: 0 }; if (d.status === "closed") { if (Number(d.determinationAmount ?? 0) >= Number(d.qpaAmount ?? 0)) outcomeMap[key].won++; else outcomeMap[key].lost++; } else { outcomeMap[key].pending++; } }
         const outcomeByMonth = Object.values(outcomeMap);
-        const IDR_STEPS = ["STEP_1","STEP_2","STEP_3","STEP_4","STEP_5","STEP_6","STEP_7","STEP_8","STEP_9","STEP_10"] as const;
+        // Real IDRStep enum keys (see reports.summary) — "STEP_1"… keys never matched.
+        const IDR_STEPS = Object.keys(IDR_WORKFLOW_STEPS);
         const stepDayMap: Record<string, number[]> = {};
-        for (const d of filtered) { const step = d.currentStep ?? "STEP_1"; if (!stepDayMap[step]) stepDayMap[step] = []; const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); stepDayMap[step].push(ms / 86400000); }
-        const avgDaysByStep = IDR_STEPS.map(step => ({ step: step.replace("STEP_", "Step "), avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a,b)=>a+b,0)/stepDayMap[step].length) : 0 }));
+        for (const d of filtered) { const step = d.currentStep ?? "STEP_01_OPEN_NEGOTIATION_INITIATED"; if (!stepDayMap[step]) stepDayMap[step] = []; const ms = (d.updatedAt?.getTime() ?? Date.now()) - (d.createdAt?.getTime() ?? Date.now()); stepDayMap[step].push(ms / 86400000); }
+        const avgDaysByStep = IDR_STEPS.map(step => ({ step: step.replace(/^STEP_\d+_/, "").replace(/_/g, " "), avgDays: stepDayMap[step]?.length ? Math.round(stepDayMap[step].reduce((a,b)=>a+b,0)/stepDayMap[step].length) : 0 }));
         const summary = { totalDisputes: filtered.length, totalAmount: Math.round(totalAmount), avgDetermination: Math.round(avgDetermination), winRate: closed.length ? Math.round((won.length / closed.length) * 100) : 0, avgDaysToClose: Math.round(avgDaysToClose), byServiceType, byMonth, financialByServiceType, topArbitrators: [], outcomeByMonth, avgDaysByStep };
         const pdfBuffer = await generateReportsPDF(summary, filtered as any, input.dateRangeLabel);
         return {
@@ -2229,15 +2826,21 @@ export const appRouter = router({
         newValue: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        // Forgeability fix: arbitrary action/oldValue/newValue would let any
+        // user fabricate audit history (e.g. a fake "admin.approve" row).
+        // Admins may log real actions; non-admins are coerced to a clearly
+        // marked, self-attributed note.
+        const isAdmin = ctx.user.role === "admin";
+        const ip = (ctx.req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? ctx.req.ip ?? null;
         return createAuditEntry({
           userId: ctx.user.id,
-          action: input.action,
+          action: isAdmin ? input.action : "user.note",
           entityType: input.entityType,
           entityId: input.entityId ?? null,
-          oldValue: input.oldValue ?? null,
-          newValue: input.newValue ?? null,
-          ipAddress: null,
-          userAgent: null,
+          oldValue: isAdmin ? (input.oldValue ?? null) : null,
+          newValue: isAdmin ? (input.newValue ?? null) : (input.newValue ?? input.action).slice(0, 2000),
+          ipAddress: ip,
+          userAgent: (ctx.req.headers["user-agent"] as string | undefined) ?? null,
         });
       }),
   }),
@@ -2254,7 +2857,9 @@ export const appRouter = router({
         events: z.array(z.string()).min(1),
       }))
       .mutation(async ({ ctx, input }) => {
-        const secret = `whsec_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+        // Cryptographically secure signing secret (never Math.random):
+        // 256 bits of CSPRNG entropy as hex via two UUIDs.
+        const secret = `whsec_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
         return createWebhook({
           userId: ctx.user.id,
           name: input.name,
@@ -2392,6 +2997,7 @@ Based on NSA IDR historical data and legal precedent, provide:
       }))
       .mutation(async ({ ctx, input }) => {
         const startTime = Date.now();
+        auditPhiRead(ctx, "document.analyze", input.disputeId ?? null);
         // Create a pending analysis record
         const analysis = await createDocumentAnalysis({
           disputeId: input.disputeId ?? null,
@@ -2498,22 +3104,20 @@ Based on NSA IDR historical data and legal precedent, provide:
             s3Key,
           });
 
+          eventBus.publish(
+            "document.analyzed",
+            input.disputeId ?? analysis.id,
+            input.disputeId ? "dispute" : "document_analysis",
+            { analysisId: analysis.id, fileName: input.fileName, documentType: input.documentType, confidence: extracted.confidence ?? 80 },
+            { userId: ctx.user.id, timestamp: new Date().toISOString() },
+          ).catch((e) => console.warn("[EventBus] document.analyzed publish failed", e));
           return { ...analysis, status: 'completed' as const, extractedFields: extracted, ocrText: extracted.rawText ?? '', confidence: extracted.confidence ?? 80, processingTimeMs };
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+        } catch (err) {          const errorMessage = err instanceof Error ? err.message : 'Unknown error';
           await updateDocumentAnalysis(analysis.id, { status: 'failed', errorMessage });
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Document analysis failed: ${errorMessage}` });
         }
       }),
 
-    list: protectedProcedure
-      .input(z.object({
-        disputeId: z.string().optional(),
-        limit: z.number().int().min(1).max(100).default(20),
-      }))
-      .query(async ({ ctx, input }) => {
-        return listDocumentAnalyses({ userId: ctx.user.id, disputeId: input.disputeId, limit: input.limit });
-      }),
 
     get: protectedProcedure
       .input(z.object({ id: z.string() }))
@@ -2525,9 +3129,10 @@ Based on NSA IDR historical data and legal precedent, provide:
 
     getDownloadUrl: protectedProcedure
       .input(z.object({ id: z.string() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const analysis = await getDocumentAnalysis(input.id);
         if (!analysis?.s3Key) throw new TRPCError({ code: 'NOT_FOUND', message: 'No file stored' });
+        auditPhiRead(ctx, "document.download", input.id);
         const { url } = await storageGet(analysis.s3Key, 300);
         return { url };
       }),
@@ -2564,21 +3169,6 @@ Based on NSA IDR historical data and legal precedent, provide:
           daysUntilDeadline: daysUntilDeadline(deadline),
           deadline,
         };
-      }),
-    advance: protectedProcedure
-      .input(z.object({
-        disputeId: z.string(),
-        targetStep: z.string(),
-        notes: z.string().optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
-        return advanceWorkflow(
-          input.disputeId,
-          input.targetStep as Parameters<typeof advanceWorkflow>[1],
-          ctx.user.id,
-          input.notes
-        );
       }),
 
     // ── Step Notes ────────────────────────────────────────────────────────────
@@ -2720,6 +3310,11 @@ Based on NSA IDR historical data and legal precedent, provide:
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
         return getDisputeFinancialSummary(input.disputeId);
       }),
+    // M2: VERIFIED payment evidence may only be posted by an admin or with
+    // settlement-linked evidence (referenceId matching an approved settlement
+    // transfer). Any other dispute writer posts an UNVERIFIED payment report
+    // (payment.reported, paymentEvidence:false) which moves no money until an
+    // admin confirms it via ledger.confirmPayment.
     recordPayment: protectedProcedure
       .input(z.object({
         disputeId: z.string(),
@@ -2729,13 +3324,49 @@ Based on NSA IDR historical data and legal precedent, provide:
       }))
       .mutation(async ({ ctx, input }) => {
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'write');
-        const amountCents = Math.round(input.amountDollars * 100);
+        const amountCents = dollarsToCents(input.amountDollars);
         if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Payment amount must resolve to positive whole cents" });
         }
+        if (ctx.user.role !== "admin") {
+          const settlementLinked = await hasApprovedSettlementEvidence(input.disputeId, input.referenceId);
+          if (!settlementLinked) {
+            const report = await recordUnverifiedPaymentReport(
+              input.disputeId, amountCents, input.referenceId, input.idempotencyKey, ctx.user.id,
+            );
+            await dispatchOutboxBatch(1);
+            return { ...report, verified: false as const };
+          }
+        }
         const entry = await recordPayment(input.disputeId, amountCents, input.referenceId, input.idempotencyKey, ctx.user.id);
         await dispatchOutboxBatch(1);
-        return entry;
+        eventBus.publish(
+          "payment.recorded",
+          input.disputeId,
+          "dispute",
+          { amountCents, referenceId: input.referenceId, ledgerEntryId: entry.id, verified: true },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] payment.recorded publish failed", e));
+        return { verified: true as const, entry };
+      }),
+    // M2: admin confirmation of an unverified payment report — posts the
+    // verified double-entry and marks the report verified (see ledger.ts).
+    confirmPayment: adminProcedure
+      .input(z.object({
+        disputeId: z.string(),
+        referenceId: z.string().trim().min(3).max(64),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const result = await confirmPaymentReport(input.disputeId, input.referenceId, ctx.user.id);
+        await dispatchOutboxBatch(1);
+        eventBus.publish(
+          "payment.recorded",
+          input.disputeId,
+          "dispute",
+          { referenceId: input.referenceId, verified: true, confirmedBy: ctx.user.id },
+          { userId: ctx.user.id, timestamp: new Date().toISOString() },
+        ).catch((e) => console.warn("[EventBus] payment.recorded publish failed", e));
+        return result;
       }),
   }),
 
@@ -2761,26 +3392,22 @@ Based on NSA IDR historical data and legal precedent, provide:
         prefix: z.string().min(1).max(100),
         limit: z.number().int().min(1).max(20).default(8),
       }))
-      .query(async ({ input }) => {
-        return suggest(input.prefix, input.limit);
+      .query(async ({ ctx, input }) => {
+        // X6: pass the caller identity so restricted entity types (disputes,
+        // documents, audit) are excluded for non-admins.
+        return suggest(input.prefix, input.limit, ctx.user.id, ctx.user.role);
+      }),
+    // Admin-only: rebuild the OpenSearch index from Postgres in bounded
+    // batches (500) and drain the indexing-failure retry set. Reads fall back
+    // to Fuse.js while OpenSearch is down (see server/search.ts).
+    reindexAll: adminProcedure
+      .mutation(async () => {
+        const { reindexAllFromPostgres } = await import("./search");
+        return reindexAllFromPostgres();
       }),
   }),
   // ── Mojaloop payment status ───────────────────────────────────────────────────────────
   mojaloop: router({
-    transferStatus: protectedProcedure
-      .input(z.object({ transferId: z.string() }))
-      .query(async ({ input }) => {
-        const goServicesUrl = process.env.GO_SERVICES_URL || "http://localhost:8001";
-        try {
-          const res = await fetch(`${goServicesUrl}/mojaloop/transfers/${input.transferId}`, {
-            signal: AbortSignal.timeout(5_000),
-          });
-          if (!res.ok) return { status: "unknown", transferId: input.transferId };
-          return res.json() as Promise<{ status: string; transferId: string; amount?: number; currency?: string; completedAt?: string }>;
-        } catch {
-          return { status: "unavailable", transferId: input.transferId };
-        }
-      }),
     listByDispute: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
       .query(async ({ ctx, input }) => {
@@ -2923,20 +3550,6 @@ Based on NSA IDR historical data and legal precedent, provide:
         });
       }
     }),
-    workflowStatus: protectedProcedure
-      .input(z.object({ disputeId: z.string() }))
-      .query(async ({ ctx, input }) => {
-        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
-        try {
-          return [await getDisputeTemporalWorkflow(input.disputeId)];
-        } catch (error) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "Temporal workflow status is unavailable; strict TLS connectivity and a deployed workflow execution are required",
-            cause: error,
-          });
-        }
-      }),
     allWorkflows: protectedProcedure
       .input(z.object({
         status: z.enum(['RUNNING', 'COMPLETED', 'FAILED', 'CANCELED', 'TERMINATED']).optional(),
@@ -2950,35 +3563,6 @@ Based on NSA IDR historical data and legal precedent, provide:
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
             message: "Temporal workflow listing is unavailable; strict TLS connectivity is required",
-            cause: error,
-          });
-        }
-      }),
-    startDisputeWorkflow: adminProcedure
-      .input(z.object({ disputeId: z.string().min(1) }))
-      .mutation(async ({ ctx, input }) => {
-        if (process.env.PAYMENT_EXECUTION_MODE && process.env.PAYMENT_EXECUTION_MODE !== "disabled") {
-          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Temporal dispatch is restricted to the current non-payment execution mode" });
-        }
-        const dispute = await getDisputeById(input.disputeId);
-        if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
-        try {
-          const result = await startDisputeTemporalWorkflow(input.disputeId, ctx.user.id);
-          await createAuditEntry({
-            userId: ctx.user.id,
-            action: "temporal.workflow_dispatched",
-            entityType: "temporal_dispatch",
-            entityId: input.disputeId,
-            oldValue: null,
-            newValue: JSON.stringify(result),
-            ipAddress: null,
-            userAgent: null,
-          });
-          return result;
-        } catch (error) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: error instanceof Error ? error.message : "Temporal workflow dispatch is unavailable",
             cause: error,
           });
         }
@@ -3010,6 +3594,14 @@ Based on NSA IDR historical data and legal precedent, provide:
       .query(async ({ ctx, input }) => {
         await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, 'read');
         return listDisputeAccess(input.disputeId);
+      }),
+    // Admin: diff Postgres dispute_access grants vs Permify tuples and repair
+    // (bounded to ≤500 grants per call; see server/authz.ts).
+    reconcileDisputeAccess: protectedProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(500).default(500) }).optional())
+      .mutation(async ({ ctx, input }) => {
+        assertAdminAccess(ctx.user.role, 'reconcile dispute access grants');
+        return reconcileDisputeAccess(input?.limit ?? 500);
       }),
   }),
 
@@ -3215,6 +3807,7 @@ Based on NSA IDR historical data and legal precedent, provide:
         name: apiKeys.name,
         keyPrefix: apiKeys.keyPrefix,
         scopes: apiKeys.scopes,
+        orgId: apiKeys.orgId,
         lastUsedAt: apiKeys.lastUsedAt,
         expiresAt: apiKeys.expiresAt,
         revokedAt: apiKeys.revokedAt,
@@ -3227,23 +3820,44 @@ Based on NSA IDR historical data and legal precedent, provide:
         name: z.string().min(1).max(100),
         scopes: z.array(z.enum(["read", "write", "admin"])).min(1),
         expiresAt: z.string().datetime().optional(),
+        // Phase13-FC (G9): keys are org-bound. The caller must be a member of
+        // the org; key-authenticated requests are tenant-scoped to it
+        // (cross-org tenant ids rejected in server/auth/bearer.ts).
+        orgId: z.string().min(1).max(64),
       }))
       .mutation(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // G9: require an org context — the caller must hold a membership in
+        // the org the key is bound to, and the org must not be suspended.
+        const { orgMemberships, organizations } = await import("../drizzle/schema-personas");
+        const membership = (await db.select().from(orgMemberships)
+          .where(and(eq(orgMemberships.orgId, input.orgId), eq(orgMemberships.userId, ctx.user.id))).limit(1))[0];
+        if (!membership) throw new TRPCError({ code: "FORBIDDEN", message: "API keys must be bound to an organization you are a member of" });
+        const org = (await db.select({ status: organizations.status }).from(organizations)
+          .where(eq(organizations.id, input.orgId)).limit(1))[0];
+        if (org?.status === "suspended") throw new TRPCError({ code: "FORBIDDEN", message: "org_suspended: cannot mint API keys for a suspended organization" });
         const { createHash, randomBytes } = await import("crypto");
         const rawKey = `hp_${randomBytes(32).toString("hex")}`;
         const keyHash = createHash("sha256").update(rawKey).digest("hex");
         const keyPrefix = rawKey.substring(0, 8);
+        // Privilege-escalation fix: only admins may mint the "admin" scope.
+        // Non-admin requests are silently downgraded (the auth path also
+        // strips admin for non-admin owners — defense in depth).
+        const effectiveScopes = ctx.user.role === "admin" ? input.scopes : input.scopes.filter(s => s !== "admin");
+        if (effectiveScopes.length === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "No permitted scopes requested (admin scope requires an admin account)" });
+        }
         await db.insert(apiKeys).values({
           userId: ctx.user.id,
+          orgId: input.orgId,
           name: input.name,
           keyHash,
           keyPrefix,
-          scopes: input.scopes.join(","),
+          scopes: effectiveScopes.join(","),
           expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
         });
-        return { key: rawKey, prefix: keyPrefix }; // raw key returned only once
+        return { key: rawKey, prefix: keyPrefix, orgId: input.orgId }; // raw key returned only once
       }),
 
     revoke: protectedProcedure
@@ -3281,19 +3895,32 @@ Based on NSA IDR historical data and legal precedent, provide:
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        // Check current dispute step against statutory deadlines
+        // Check current dispute step against statutory deadlines. Deadlines
+        // come from the workflow definition (IDR_WORKFLOW_STEPS — the single
+        // source of truth for real IDRStep keys); the previous hardcoded map
+        // used keys (STEP_01_OPEN_NEGOTIATION etc.) that NEVER matched real
+        // currentStep values, and a silent 30-day default masked every
+        // unknown step. Unknown step now fails explicitly; elapsed time is
+        // measured in business days (the statutory basis) via
+        // server/idr/deadlines.
         const [dispute] = await db.select().from(disputesTable).where(eq(disputesTable.id, input.disputeId)).limit(1);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND" });
-        const stepDeadlines: Record<string, number> = {
-          STEP_01_OPEN_NEGOTIATION: 30, STEP_02_IDR_NOTICE: 4, STEP_03_IDR_INITIATION: 3,
-          STEP_04_ENTITY_SELECTION: 3, STEP_05_ENTITY_SELECTION_PERIOD: 3, STEP_06_ENTITY_CONFIRMATION: 1,
-          STEP_07_ADDITIONAL_INFO: 10, STEP_08_PRELIMINARY_PAYMENT: 30, STEP_09_OFFER_SUBMISSION: 10,
-          STEP_10_ARBITRATION: 30, STEP_11_DETERMINATION: 30, STEP_12_PAYMENT: 30,
-        };
-        const currentStep = dispute.currentStep ?? "STEP_01_OPEN_NEGOTIATION";
-        const deadlineDays = stepDeadlines[currentStep] ?? 30;
+        const currentStep = dispute.currentStep ?? "STEP_01_OPEN_NEGOTIATION_INITIATED";
+        const stepDef = IDR_WORKFLOW_STEPS[currentStep as keyof typeof IDR_WORKFLOW_STEPS];
+        if (!stepDef) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Unknown workflow step '${currentStep}'; cannot evaluate SLA (no silent default is applied)`,
+          });
+        }
+        if (stepDef.deadlineBusinessDays === null) {
+          // Step has no statutory business-day deadline (e.g. determination
+          // issued, dispute closed) — nothing to breach.
+          return { breached: false, breachDays: 0, severity: null };
+        }
+        const deadlineDays = stepDef.deadlineBusinessDays;
         const createdAt = dispute.createdAt ? new Date(dispute.createdAt) : new Date();
-        const actualDays = Math.floor((Date.now() - createdAt.getTime()) / 86400000);
+        const actualDays = businessDaysBetween(createdAt, new Date());
         const breachDays = actualDays - deadlineDays;
         if (breachDays > 0) {
           await db.insert(slaBreaches).values({
@@ -3393,7 +4020,14 @@ Based on NSA IDR historical data and legal precedent, provide:
               : (step === "STEP_14_PAYMENT_DETERMINATION" || step === "STEP_15_PAYMENT_MADE") && d.paymentDeadline
               ? new Date(d.paymentDeadline)
               : d.createdAt
-              ? new Date(new Date(d.createdAt).getTime() + deadlineDays * 24 * 60 * 60 * 1000)
+              // stepDeadlines above are statutory BUSINESS-day deadlines
+              // (45 CFR §149.510), so the fallback must use business-day
+              // math (server/idr/deadlines.addBusinessDays, with US federal
+              // holidays), not calendar-day multiplication. (Stored deadline
+              // columns — openNegotiationDeadline, offerSubmissionDeadline,
+              // paymentDeadline — are real persisted dates and are used
+              // as-is above.)
+              ? addIdrBusinessDays(new Date(d.createdAt), deadlineDays)
               : null;
           const startDate = d.createdAt ? new Date(d.createdAt) : new Date();
           const totalMs = deadlineDate
@@ -3421,15 +4055,68 @@ Based on NSA IDR historical data and legal precedent, provide:
   bulkActions: router({
     changeStatus: protectedProcedure
       .input(z.object({
-        ids: z.array(z.string()).min(1).max(500),
+        // X7: cap batch size — bulk transitions run per-dispute guard checks.
+        ids: z.array(z.string()).min(1).max(100),
         status: z.enum(["open_negotiation", "idr_initiated", "idr_entity_selection", "eligibility_review", "offer_submission", "under_arbitration", "determination_issued", "payment_pending", "closed", "appealed", "ineligible"]),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
-        const { inArray } = await import("drizzle-orm");
-        await db.update(disputesTable).set({ status: input.status, updatedAt: new Date() }).where(inArray(disputesTable.id, input.ids));
-        return { updated: input.ids.length };
+        const { eq } = await import("drizzle-orm");
+        const { disputeEvents: disputeEventsTable } = await import("../drizzle/schema");
+        // X7: every transition must go through the workflow guard — the old
+        // implementation wrote `status` directly, allowing illegal jumps
+        // (e.g. open_negotiation → closed) with no timeline record.
+        // Statuses map onto canonical workflow steps; "ineligible" has no
+        // workflow step and is rejected here (fail closed).
+        const STATUS_TO_STEP: Record<string, string> = {
+          open_negotiation: "STEP_02_OPEN_NEGOTIATION_PERIOD",
+          idr_initiated: "STEP_04_IDR_INITIATED",
+          idr_entity_selection: "STEP_06_IDR_ENTITY_SELECTION",
+          eligibility_review: "STEP_08_ELIGIBILITY_REVIEW",
+          offer_submission: "STEP_09_OFFER_SUBMISSION",
+          under_arbitration: "STEP_12_ARBITRATION_REVIEW",
+          determination_issued: "STEP_13_DETERMINATION_ISSUED",
+          payment_pending: "STEP_14_PAYMENT_DETERMINATION",
+          closed: "STEP_17_DISPUTE_CLOSED",
+          appealed: "STEP_18_APPEAL_FILED",
+        };
+        const targetStep = STATUS_TO_STEP[input.status] as Parameters<typeof validateWorkflowTransition>[1] | undefined;
+        if (!targetStep) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `Status "${input.status}" is not reachable via the dispute workflow` });
+        }
+        let updated = 0;
+        for (const disputeId of input.ids) {
+          const [dispute] = await db.select().from(disputesTable).where(eq(disputesTable.id, disputeId)).limit(1);
+          if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: `Dispute ${disputeId} not found` });
+          if (dispute.status === input.status) { updated++; continue; } // idempotent no-op
+          const currentStep = (dispute.currentStep ?? "STEP_01_OPEN_NEGOTIATION_INITIATED") as Parameters<typeof validateWorkflowTransition>[0];
+          try {
+            validateWorkflowTransition(currentStep, targetStep, dispute as Record<string, unknown>);
+          } catch (err) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Dispute ${disputeId}: ${err instanceof Error ? err.message : "illegal status transition"}`,
+            });
+          }
+          await db.update(disputesTable)
+            .set({ status: input.status, currentStep: targetStep, updatedAt: new Date() })
+            .where(eq(disputesTable.id, disputeId));
+          // Timeline event per dispute (audit trail for the bulk transition).
+          await db.insert(disputeEventsTable).values({
+            id: crypto.randomUUID(),
+            disputeId,
+            step: targetStep,
+            previousStep: currentStep,
+            eventType: "bulk_status_change",
+            description: `Bulk status change to ${input.status}`,
+            performedBy: ctx.user.id,
+            performedByName: ctx.user.name ?? "Unknown",
+            createdAt: new Date(),
+          });
+          updated++;
+        }
+        return { updated };
       }),
     addNote: protectedProcedure
       .input(z.object({
@@ -3451,91 +4138,138 @@ Based on NSA IDR historical data and legal precedent, provide:
     preview: protectedProcedure
       .input(z.object({ csvContent: z.string().max(500_000) }))
       .mutation(async ({ input }) => {
-        const lines = input.csvContent.split("\n").filter(l => l.trim());
-        if (lines.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "CSV must have header + at least one row" });
-        const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
-        const rows = lines.slice(1, 11).map(line => {
-          const vals = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+        const { parseCsv } = await import("./csv-import");
+        const parsed = parseCsv(input.csvContent);
+        if (parsed.rows.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "CSV must have header + at least one row" });
+        const headers = parsed.rows[0].map(h => h.trim());
+        const preview = parsed.rows.slice(1, 11).map(vals => {
           const row: Record<string, string> = {};
           headers.forEach((h, i) => { row[h] = vals[i] ?? ""; });
           return row;
         });
-        return { headers, preview: rows, totalRows: lines.length - 1 };
+        return { headers, preview, totalRows: parsed.rows.length - 1, warnings: parsed.warnings };
       }),
     import: protectedProcedure
-      .input(z.object({ csvContent: z.string().max(500_000) }))
+      .input(z.object({
+        csvContent: z.string().max(500_000),
+        /** Dry-run: validate every row and report errors without inserting. */
+        validateOnly: z.boolean().optional().default(false),
+      }))
       .mutation(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
-        const lines = input.csvContent.split("\n").filter(l => l.trim());
-        if (lines.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "CSV must have header + at least one row" });
-        const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+        const { parseCsv, validateDisputeRows, CSV_IMPORT_BATCH_SIZE } = await import("./csv-import");
+        const parsed = parseCsv(input.csvContent);
+        if (parsed.rows.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "CSV must have header + at least one row" });
+        const { valid, errors, errorCsv, truncated } = validateDisputeRows(parsed);
+
+        if (input.validateOnly) {
+          return {
+            validateOnly: true as const,
+            imported: 0,
+            valid: valid.length,
+            skipped: errors.length,
+            truncated,
+            errors: errors.map(({ row, message }) => ({ row, message })),
+            errorCsv,
+          };
+        }
+
         let imported = 0;
-        let skipped = 0;
-        const errors: string[] = [];
-        for (let i = 1; i < lines.length; i++) {
-          try {
-            const vals = lines[i].split(",").map(v => v.trim().replace(/^"|"$/g, ""));
-            const row: Record<string, string> = {};
-            headers.forEach((h, j) => { row[h] = vals[j] ?? ""; });
-            if (!row.respondingPartyName && !row.payer) { skipped++; continue; }
-            await createDispute({
-              id: crypto.randomUUID(),
-              referenceNumber: row.referenceNumber || row.reference || `IMPORT-${Date.now()}-${i}`,
-              initiatingPartyId: ctx.user.id,
-              initiatingPartyType: (row.initiatingPartyType as any) || "provider",
-              initiatingPartyName: row.initiatingPartyName || row.provider || ctx.user.name || "Imported",
-              respondingPartyType: (row.respondingPartyType as any) || "payer",
-              respondingPartyName: row.respondingPartyName || row.payer || "Unknown Payer",
-              billedAmount: row.billedAmount || row.billed || "0",
-              qpaAmount: row.qpaAmount || row.qpa || null,
-              serviceType: (row.serviceType || row.service || "emergency_medicine") as any,
-              serviceDate: new Date(),
-              patientState: row.patientState || "CA",
-              facilityState: row.facilityState || "CA",
-              cptCodes: row.cptCodes ? row.cptCodes.split(";") : [],
-            });
-            imported++;
-          } catch (e: any) {
-            errors.push(`Row ${i}: ${e.message}`);
-            skipped++;
+        const insertErrors: { row: number; message: string }[] = [];
+        // Commit in batches of CSV_IMPORT_BATCH_SIZE (500) so a single bad
+        // insert never aborts the whole file; per-row failures are reported.
+        for (let b = 0; b < valid.length; b += CSV_IMPORT_BATCH_SIZE) {
+          const batch = valid.slice(b, b + CSV_IMPORT_BATCH_SIZE);
+          for (const row of batch) {
+            try {
+              await createDispute({
+                id: crypto.randomUUID(),
+                referenceNumber: row.referenceNumber || `IMPORT-${Date.now()}-${imported}`,
+                initiatingPartyId: ctx.user.id,
+                initiatingPartyType: (row.initiatingPartyType as any) || "provider",
+                initiatingPartyName: row.initiatingPartyName || ctx.user.name || "Imported",
+                respondingPartyType: (row.respondingPartyType as any) || "payer",
+                respondingPartyName: row.respondingPartyName,
+                billedAmount: row.billedAmount,
+                qpaAmount: row.qpaAmount,
+                serviceType: row.serviceType as any,
+                serviceDate: row.serviceDate,
+                patientState: row.patientState,
+                facilityState: row.facilityState,
+                cptCodes: row.cptCodes,
+              });
+              imported++;
+            } catch (e: any) {
+              insertErrors.push({ row: b + batch.indexOf(row) + 1, message: e.message ?? "insert failed" });
+            }
           }
         }
-        return { imported, skipped, errors: errors.slice(0, 20) };
+        const allErrors = [...errors.map(({ row, message }) => ({ row, message })), ...insertErrors];
+        return {
+          validateOnly: false as const,
+          imported,
+          valid: valid.length,
+          skipped: allErrors.length,
+          truncated,
+          errors: allErrors,
+          errorCsv,
+        };
       }),
   }),
 
   webhookReplay: router({
+    // X3: deliveries are always scoped to the caller's own webhooks (join
+    // webhookDeliveries → webhooks.userId); admins see all deliveries.
     list: protectedProcedure
       .input(z.object({ status: z.enum(["failed", "pending", "delivered"]).optional(), limit: z.number().min(1).max(200).default(50) }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) return [];
-        const { desc, eq } = await import("drizzle-orm");
-        let q = db.select().from(webhookDeliveries).orderBy(desc(webhookDeliveries.createdAt)).limit(input.limit);
-        if (input.status) {
-          const results = await db.select().from(webhookDeliveries).where(eq(webhookDeliveries.status, input.status)).orderBy(desc(webhookDeliveries.createdAt)).limit(input.limit);
-          return results;
-        }
-        return q;
+        const { desc, eq, and } = await import("drizzle-orm");
+        const { webhooks: webhooksTable } = await import("../drizzle/schema");
+        const scope = ctx.user.role === "admin" ? undefined : eq(webhooksTable.userId, ctx.user.id);
+        const rows = await db.select({ delivery: webhookDeliveries })
+          .from(webhookDeliveries)
+          .innerJoin(webhooksTable, eq(webhookDeliveries.webhookId, webhooksTable.id))
+          .where(and(input.status ? eq(webhookDeliveries.status, input.status) : undefined, scope))
+          .orderBy(desc(webhookDeliveries.createdAt))
+          .limit(input.limit);
+        return rows.map(r => r.delivery);
       }),
     replay: protectedProcedure
       .input(z.object({ id: z.string() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
         const { eq } = await import("drizzle-orm");
+        const { webhooks: webhooksTable } = await import("../drizzle/schema");
         const [delivery] = await db.select().from(webhookDeliveries).where(eq(webhookDeliveries.id, input.id)).limit(1);
         if (!delivery) throw new TRPCError({ code: "NOT_FOUND", message: "Delivery not found" });
+        // X3: only the webhook owner (or an admin) may replay a delivery.
+        const [hook] = await db.select({ userId: webhooksTable.userId }).from(webhooksTable).where(eq(webhooksTable.id, delivery.webhookId)).limit(1);
+        if (ctx.user.role !== "admin" && (!hook || hook.userId !== ctx.user.id)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "You do not own this webhook delivery" });
+        }
         await db.update(webhookDeliveries).set({ status: "pending", attempts: 0, nextRetryAt: new Date() }).where(eq(webhookDeliveries.id, input.id));
         return { queued: true };
       }),
     replayAll: protectedProcedure
       .input(z.object({ status: z.enum(["failed", "pending"]) }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
-        const { eq } = await import("drizzle-orm");
+        const { eq, and, inArray } = await import("drizzle-orm");
+        // X3: non-admins replay only deliveries belonging to their own webhooks.
+        if (ctx.user.role !== "admin") {
+          const { webhooks: webhooksTable } = await import("../drizzle/schema");
+          const owned = await db.select({ id: webhooksTable.id }).from(webhooksTable).where(eq(webhooksTable.userId, ctx.user.id));
+          if (!owned.length) return { queued: true };
+          await db.update(webhookDeliveries)
+            .set({ status: "pending", attempts: 0, nextRetryAt: new Date() })
+            .where(and(eq(webhookDeliveries.status, input.status), inArray(webhookDeliveries.webhookId, owned.map(w => w.id))));
+          return { queued: true };
+        }
         await db.update(webhookDeliveries).set({ status: "pending", attempts: 0, nextRetryAt: new Date() }).where(eq(webhookDeliveries.status, input.status));
         return { queued: true };
       }),
@@ -3807,21 +4541,62 @@ Based on NSA IDR historical data and legal precedent, provide:
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        // In production this would call the EMR's /metadata endpoint
-        // For now we store a synthetic capability statement
+        // Fetch the REAL capability statement from the EMR's FHIR /metadata
+        // endpoint. Fail closed on any error — never store a synthetic one.
+        const conn = await getEMRConnection(input.emrConnectionId);
+        if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: "EMR connection not found" });
+        const baseUrl = String(conn.baseUrl ?? "").replace(/\/+$/, "");
+        if (!baseUrl) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "EMR connection has no baseUrl configured" });
+        }
+        let statement: any;
+        try {
+          const res = await fetch(`${baseUrl}/metadata`, {
+            headers: { Accept: "application/fhir+json, application/json" },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!res.ok) throw new Error(`GET /metadata returned HTTP ${res.status}`);
+          statement = await res.json();
+          if (statement?.resourceType !== "CapabilityStatement") {
+            throw new Error(`GET /metadata did not return a FHIR CapabilityStatement (resourceType=${statement?.resourceType ?? "none"})`);
+          }
+        } catch (err) {
+          throw new TRPCError({
+            code: "SERVICE_UNAVAILABLE",
+            message: `Failed to fetch FHIR capability statement from ${baseUrl}/metadata: ${err instanceof Error ? err.message : "unknown error"}`,
+          });
+        }
+        const rest = Array.isArray(statement.rest) ? statement.rest : [];
+        const resources: string[] = rest.flatMap((r: any) =>
+          Array.isArray(r?.resource) ? r.resource.map((x: any) => String(x?.type)).filter(Boolean) : []
+        );
+        const searchParams: Record<string, string[]> = {};
+        for (const r of rest) {
+          for (const x of r?.resource ?? []) {
+            if (x?.type && Array.isArray(x.searchParam)) {
+              searchParams[String(x.type)] = x.searchParam.map((p: any) => String(p?.name)).filter(Boolean);
+            }
+          }
+        }
+        const smartScopes: string[] = rest.flatMap((r: any) =>
+          (r?.security?.extension ?? []).flatMap((e: any) =>
+            (e?.extension ?? []).filter((x: any) => x?.url === "scope").map((x: any) => String(x?.valueString ?? ""))
+          )
+        ).filter(Boolean);
+        const operations: string[] = rest.flatMap((r: any) => (r?.operation ?? []).map((o: any) => String(o?.name ?? "")));
         const { nanoid } = await import("nanoid");
-        const id = nanoid();
         const [cap] = await db.insert(fhirCapabilityStatements).values({
-          id,
+          id: nanoid(),
           emrConnectionId: input.emrConnectionId,
-          fhirVersion: "R4",
-          softwareName: "HealthPoint IDR",
-          softwareVersion: "1.0.0",
-          supportedResources: ["Patient", "Claim", "Coverage", "Organization", "Practitioner", "ExplanationOfBenefit", "ServiceRequest", "Encounter"],
-          supportedSearchParams: { Patient: ["_id", "identifier", "name"], Claim: ["patient", "status", "use"] },
-          smartScopes: ["openid", "profile", "launch", "patient/*.read", "user/*.read"],
-          bulkExportSupported: true,
-          cdsHooksSupported: true,
+          fhirVersion: String(statement.fhirVersion ?? "R4").slice(0, 8),
+          softwareName: statement.software?.name ? String(statement.software.name).slice(0, 128) : null,
+          softwareVersion: statement.software?.version ? String(statement.software.version).slice(0, 64) : null,
+          supportedResources: Array.from(new Set(resources)),
+          supportedSearchParams: searchParams,
+          smartScopes: Array.from(new Set(smartScopes)),
+          bulkExportSupported: operations.some((o) => o.includes("export")),
+          cdsHooksSupported: false, // not derivable from a FHIR capability statement
+          rawStatement: statement,
         }).returning();
         return cap;
       }),
@@ -3841,13 +4616,57 @@ Based on NSA IDR historical data and legal precedent, provide:
       .query(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) return [];
-        return db.select().from(smartTokens).where(and(eq(smartTokens.emrConnectionId, input.emrConnectionId), eq(smartTokens.userId, ctx.user.id)) as ReturnType<typeof and>);
+        const rows = await db.select().from(smartTokens).where(and(eq(smartTokens.emrConnectionId, input.emrConnectionId), eq(smartTokens.userId, ctx.user.id)) as ReturnType<typeof and>);
+        // Tokens are encrypted at rest (AES-256-GCM envelope, see
+        // credential-crypto.ts); decrypt on read with plaintext fallback for
+        // legacy rows. If the encryption key is unavailable, never leak the
+        // raw envelope — mask the token instead.
+        const { decryptToken } = await import("./credential-crypto");
+        return rows.map(t => {
+          try {
+            return { ...t, accessToken: decryptToken(t.accessToken), refreshToken: t.refreshToken ? decryptToken(t.refreshToken) : t.refreshToken };
+          } catch {
+            return { ...t, accessToken: "[unavailable]", refreshToken: t.refreshToken ? "[unavailable]" : t.refreshToken };
+          }
+        });
       }),
     revokeToken: protectedProcedure
       .input(z.object({ tokenId: z.string() }))
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // Read the token first so we can best-effort revoke it at the EMR
+        // (RFC 7009) before deleting our copy.
+        const [token] = await db.select().from(smartTokens).where(eq(smartTokens.id, input.tokenId)).limit(1);
+        if (token) {
+          try {
+            const { decryptToken, decryptCredentials } = await import("./credential-crypto");
+            const [conn] = await db.select().from(emrConnections).where(eq(emrConnections.id, token.emrConnectionId)).limit(1);
+            let revocationEndpoint: string | undefined;
+            if (conn?.credentialsEncrypted) {
+              try {
+                const creds = decryptCredentials(conn.credentialsEncrypted);
+                revocationEndpoint = creds.revocationEndpoint || creds.revocation_endpoint;
+              } catch { /* endpoint unknown */ }
+            }
+            if (revocationEndpoint) {
+              const accessToken = decryptToken(token.accessToken);
+              // Fail-open: a revocation failure never blocks local revocation.
+              await fetch(revocationEndpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({ token: accessToken, token_type_hint: "access_token" }).toString(),
+                signal: AbortSignal.timeout(5_000),
+              }).then(r => {
+                if (!r.ok) console.warn(`[smartAuth] RFC7009 revocation returned HTTP ${r.status} for token ${token.id}`);
+              }).catch(err => {
+                console.warn(`[smartAuth] RFC7009 revocation POST failed (fail-open) for token ${token.id}:`, err?.message ?? err);
+              });
+            }
+          } catch (err: any) {
+            console.warn(`[smartAuth] best-effort EMR revocation failed (fail-open) for token ${token.id}:`, err?.message ?? err);
+          }
+        }
         await db.delete(smartTokens).where(eq(smartTokens.id, input.tokenId));
         return { success: true };
       }),
@@ -3892,7 +4711,14 @@ Based on NSA IDR historical data and legal precedent, provide:
       .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        await db.update(bulkFhirExportJobs).set({ status: "cancelled" }).where(eq(bulkFhirExportJobs.id, input.jobId));
+        // Cancel is only valid for non-terminal states; completed/failed/
+        // cancelled jobs are immutable.
+        const [job] = await db.select().from(bulkFhirExportJobs).where(eq(bulkFhirExportJobs.id, input.jobId)).limit(1);
+        if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Export job not found" });
+        if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `Cannot cancel a job in terminal state '${job.status}'` });
+        }
+        await db.update(bulkFhirExportJobs).set({ status: "cancelled", completedAt: new Date() }).where(eq(bulkFhirExportJobs.id, input.jobId));
         return { success: true };
       }),
   }),
@@ -3962,15 +4788,55 @@ Based on NSA IDR historical data and legal precedent, provide:
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { nanoid } = await import("nanoid");
+        const txId = nanoid() as string;
+        const startMs = Date.now();
         const [tx] = await db.insert(daVinciTransactions).values({
-          id: nanoid() as string,
+          id: txId,
           disputeId: input.disputeId ?? null,
           emrConnectionId: input.emrConnectionId ?? null,
           txType: "pas_prior_auth" as const,
           status: "pending" as const,
           requestPayload: input.requestPayload as Record<string, unknown>,
         }).returning();
-        return tx;
+
+        // W6: actually submit to the payer PAS endpoint. Fail-closed: when
+        // DAVINCI_PAS_ENDPOINT is unconfigured the adapter returns BLOCKED and
+        // the transaction is recorded as error/PAS_UNCONFIGURED instead of
+        // sitting in 'pending' forever.
+        const { submitViaPasHttp, loadPasConfig } = await import("./priorauth/pas-adapter");
+        const urgency = (input.requestPayload?.urgency === "EXPEDITED" ? "EXPEDITED" : "STANDARD") as "EXPEDITED" | "STANDARD";
+        const outcome = await submitViaPasHttp({ id: txId, urgency }, loadPasConfig());
+        const processingTimeMs = Date.now() - startMs;
+        if (outcome.status === "SUBMITTED") {
+          const [updated] = await db.update(daVinciTransactions).set({
+            // 'pended' = awaiting payer adjudication; poll via daVinci.pollPasStatus.
+            status: "pended" as const,
+            responsePayload: { receiptId: outcome.receipt.receiptId, submitResponse: outcome.receipt.body } as Record<string, unknown>,
+            processingTimeMs,
+            updatedAt: new Date(),
+          }).where(eq(daVinciTransactions.id, txId)).returning();
+          return updated ?? tx;
+        }
+        if (outcome.status === "BLOCKED") {
+          // Fail-closed with no endpoint configured: keep the transaction in
+          // 'pending' (recorded, not yet submittable) and annotate the reason
+          // instead of marking it as an error — the record is honest that no
+          // network I/O occurred (J20 asserts the recorded-pending semantic).
+          const [updated] = await db.update(daVinciTransactions).set({
+            responsePayload: { blocked: true, reason: outcome.reason } as Record<string, unknown>,
+            processingTimeMs,
+            updatedAt: new Date(),
+          }).where(eq(daVinciTransactions.id, txId)).returning();
+          return updated ?? tx;
+        }
+        const [updated] = await db.update(daVinciTransactions).set({
+          status: "error" as const,
+          errorCode: "PAS_SUBMIT_FAILED",
+          errorMessage: outcome.reason,
+          processingTimeMs,
+          updatedAt: new Date(),
+        }).where(eq(daVinciTransactions.id, txId)).returning();
+        return updated ?? tx;
       }),
   }),
 
@@ -4317,21 +5183,19 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
       }),
 
     /** Delete an extraction record */
-    delete: protectedProcedure
-      .input(z.object({ extractionId: z.string() }))
-      .mutation(async ({ ctx, input }) => {
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
-        await db.delete(smartFormExtractions)
-          .where(and(
-            eq(smartFormExtractions.id, input.extractionId),
-            eq(smartFormExtractions.userId, ctx.user.id)
-          ));
-        return { success: true };
-      }),
   }),
 
   hermes: hermesRouter,
+
+  // ── Wave routers (2026 compliance waves) ───────────────────────────────────
+  submissionAutomation: submissionAutomationRouter,
+  statePrograms: stateProgramsRouter,
+  priorAuth: priorAuthRouter,
+  batchedDisputes: batchedDisputesRouter,
+  noticeConsent: noticeConsentRouter,
+  gfePpdr: gfePpdrRouter,
+  portalRpa: portalRpaRouter,
+  qpaEngine: qpaEngineRouter,
 
   // ─── Organisation Settings ─────────────────────────────────────────────────
   orgSettings: router({
@@ -4402,7 +5266,7 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
       };
     }),
     setup: protectedProcedure
-      .input(z.object({ secret: z.string().min(16) }))
+      .input(z.object({ secret: z.string().min(16).max(52) })) // max keeps the AES-GCM envelope within the varchar(128) column
       .mutation(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -4413,10 +5277,11 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
           return `${hex.slice(0, 4)}-${hex.slice(4, 8)}`;
         });
         const existing = await db.select({ id: totpSecrets.id }).from(totpSecrets).where(eq(totpSecrets.userId, ctx.user.id)).limit(1);
+        const storedSecret = encryptTotpSecret(input.secret); // X9: encrypt at rest
         if (existing.length) {
-          await db.update(totpSecrets).set({ secret: input.secret, status: "pending", backupCodes: JSON.stringify(backupCodes), usedBackupCodes: "[]", updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
+          await db.update(totpSecrets).set({ secret: storedSecret, status: "pending", backupCodes: JSON.stringify(backupCodes), usedBackupCodes: "[]", updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
         } else {
-          await db.insert(totpSecrets).values({ id: crypto.randomUUID(), userId: ctx.user.id, secret: input.secret, status: "pending", backupCodes: JSON.stringify(backupCodes), usedBackupCodes: "[]" });
+          await db.insert(totpSecrets).values({ id: crypto.randomUUID(), userId: ctx.user.id, secret: storedSecret, status: "pending", backupCodes: JSON.stringify(backupCodes), usedBackupCodes: "[]" });
         }
         return { secret: input.secret, backupCodes };
       }),
@@ -4431,7 +5296,7 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
           .where(and(eq(totpSecrets.userId, ctx.user.id), eq(totpSecrets.status, "pending"))).limit(1);
         if (!rows.length) throw new TRPCError({ code: "NOT_FOUND", message: "No pending TOTP setup found" });
         const { verify: totpVerify } = await import("otplib");
-        const verifyResult = await totpVerify({ token: input.code, secret: rows[0].secret });
+        const verifyResult = await totpVerify({ token: input.code, secret: decryptTotpSecret(rows[0].secret) });
         if (!verifyResult.valid) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid TOTP code — please try again" });
         await db.update(totpSecrets).set({ status: "active", enabledAt: new Date(), updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
         return { success: true };
@@ -4447,7 +5312,7 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
           .where(and(eq(totpSecrets.userId, ctx.user.id), eq(totpSecrets.status, "active"))).limit(1);
         if (!rows.length) throw new TRPCError({ code: "NOT_FOUND", message: "2FA is not currently active" });
         const { verify: totpVerify } = await import("otplib");
-        const verifyResult = await totpVerify({ token: input.code, secret: rows[0].secret });
+        const verifyResult = await totpVerify({ token: input.code, secret: decryptTotpSecret(rows[0].secret) });
         if (!verifyResult.valid) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid TOTP code" });
         await db.update(totpSecrets).set({ status: "disabled", disabledAt: new Date(), updatedAt: new Date() }).where(eq(totpSecrets.userId, ctx.user.id));
         return { success: true };
@@ -4577,19 +5442,32 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         if (input.impact && input.impact !== "all") filtered = filtered.filter(r => r.impactLevel === input.impact);
         return filtered.map(r => ({ ...r, tags: JSON.parse(r.tags ?? "[]") as string[] }));
       }),
+    /**
+     * Wave W5-2: REAL ingestion path for structured regulatory entries.
+     * Dedupe key: (source, title, effectiveDate day). Accepts batches; each
+     * entry is indexed into search. Used by the future CMS feed polling hook
+     * (server/scheduled/regulatoryFeedPoll.ts) and by admins manually.
+     */
+
+    /**
+     * DEMO-ONLY seed: the 8 canned 2024 rows below are synthetic demo
+     * content, clearly marked with a "[DEMO]" title prefix and a "demo" tag
+     * so they can never be mistaken for real regulatory intelligence. Real
+     * entries arrive via regulatoryFeed.ingest (admin) above.
+     */
     seed: protectedProcedure.mutation(async ({ ctx }) => {
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const updates = [
-        { id: "reg-001", publishedAt: new Date("2024-11-15"), title: "CMS Issues Final Rule on IDR Administrative Fees for 2025", summary: "CMS finalized the 2025 IDR administrative fee schedule, maintaining the $350 fee for single disputes and batched disputes involving the same payer and same service code.", category: "fee_schedule" as const, impactLevel: "high" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["IDR Fees", "2025", "Administrative"]) },
-        { id: "reg-002", publishedAt: new Date("2024-10-03"), title: "Fifth Circuit Ruling Impacts QPA Calculation Methodology", summary: "The Fifth Circuit Court of Appeals issued a ruling affecting how the Qualifying Payment Amount is calculated, potentially expanding the data sources payers must consider when determining QPA.", category: "court_ruling" as const, impactLevel: "critical" as const, source: "Fifth Circuit", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["QPA", "Court Ruling", "Methodology"]) },
-        { id: "reg-003", publishedAt: new Date("2024-09-20"), title: "Updated IDR Process Guidance: Batching Eligibility Criteria", summary: "CMS released updated guidance clarifying when claims may be batched for IDR, specifying that claims must involve the same payer, same provider/facility, same service code, and same plan type.", category: "guidance" as const, impactLevel: "high" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Batching", "Eligibility", "Process"]) },
-        { id: "reg-004", publishedAt: new Date("2024-08-12"), title: "NSA Surprise Billing Protections Extended to Additional Service Types", summary: "HHS announced expansion of NSA protections to cover additional ancillary services provided in connection with emergency care, including certain diagnostic services.", category: "regulation" as const, impactLevel: "medium" as const, source: "HHS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Coverage", "Service Types", "Emergency Care"]) },
-        { id: "reg-005", publishedAt: new Date("2024-07-30"), title: "CMS Updates IDR Entity Certification Requirements", summary: "CMS issued updated certification requirements for IDR entities, including new conflict-of-interest disclosure requirements and minimum caseload thresholds for certification renewal.", category: "certification" as const, impactLevel: "medium" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Certification", "IDR Entity", "Requirements"]) },
-        { id: "reg-006", publishedAt: new Date("2024-06-15"), title: "Supreme Court Overrules Chevron Doctrine — Impact on NSA Rulemaking", summary: "The Supreme Court's Loper Bright decision overruling Chevron deference may affect the legal weight of CMS guidance documents on QPA methodology and IDR process rules.", category: "court_ruling" as const, impactLevel: "critical" as const, source: "Supreme Court", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Chevron", "Deference", "Rulemaking"]) },
-        { id: "reg-007", publishedAt: new Date("2024-05-10"), title: "CMS Releases Updated IDR Portal User Guide v3.2", summary: "CMS published an updated user guide for the federal IDR portal, including new batch filing workflows and updated eligibility determination screens.", category: "guidance" as const, impactLevel: "low" as const, source: "CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Portal", "User Guide", "Batch Filing"]) },
-        { id: "reg-008", publishedAt: new Date("2024-03-22"), title: "HHS Proposes Rule on Transparency in Coverage — Phase 3", summary: "HHS proposed Phase 3 of the Transparency in Coverage rule, requiring machine-readable files for all items and services and an online price comparison tool for consumers.", category: "regulation" as const, impactLevel: "medium" as const, source: "HHS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["Transparency", "Price Comparison", "Machine-Readable"]) },
+        { id: "reg-001", publishedAt: new Date("2024-11-15"), title: "[DEMO] CMS Issues Final Rule on IDR Administrative Fees for 2025", summary: "DEMO CONTENT — CMS finalized the 2025 IDR administrative fee schedule, maintaining the $350 fee for single disputes and batched disputes involving the same payer and same service code.", category: "fee_schedule" as const, impactLevel: "high" as const, source: "DEMO — CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "IDR Fees", "2025", "Administrative"]) },
+        { id: "reg-002", publishedAt: new Date("2024-10-03"), title: "[DEMO] Fifth Circuit Ruling Impacts QPA Calculation Methodology", summary: "DEMO CONTENT — The Fifth Circuit Court of Appeals issued a ruling affecting how the Qualifying Payment Amount is calculated, potentially expanding the data sources payers must consider when determining QPA.", category: "court_ruling" as const, impactLevel: "critical" as const, source: "DEMO — Fifth Circuit", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "QPA", "Court Ruling", "Methodology"]) },
+        { id: "reg-003", publishedAt: new Date("2024-09-20"), title: "[DEMO] Updated IDR Process Guidance: Batching Eligibility Criteria", summary: "DEMO CONTENT — CMS released updated guidance clarifying when claims may be batched for IDR, specifying that claims must involve the same payer, same provider/facility, same service code, and same plan type.", category: "guidance" as const, impactLevel: "high" as const, source: "DEMO — CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Batching", "Eligibility", "Process"]) },
+        { id: "reg-004", publishedAt: new Date("2024-08-12"), title: "[DEMO] NSA Surprise Billing Protections Extended to Additional Service Types", summary: "DEMO CONTENT — HHS announced expansion of NSA protections to cover additional ancillary services provided in connection with emergency care, including certain diagnostic services.", category: "regulation" as const, impactLevel: "medium" as const, source: "DEMO — HHS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Coverage", "Service Types", "Emergency Care"]) },
+        { id: "reg-005", publishedAt: new Date("2024-07-30"), title: "[DEMO] CMS Updates IDR Entity Certification Requirements", summary: "DEMO CONTENT — CMS issued updated certification requirements for IDR entities, including new conflict-of-interest disclosure requirements and minimum caseload thresholds for certification renewal.", category: "certification" as const, impactLevel: "medium" as const, source: "DEMO — CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Certification", "IDR Entity", "Requirements"]) },
+        { id: "reg-006", publishedAt: new Date("2024-06-15"), title: "[DEMO] Supreme Court Overrules Chevron Doctrine — Impact on NSA Rulemaking", summary: "DEMO CONTENT — The Supreme Court's Loper Bright decision overruling Chevron deference may affect the legal weight of CMS guidance documents on QPA methodology and IDR process rules.", category: "court_ruling" as const, impactLevel: "critical" as const, source: "DEMO — Supreme Court", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Chevron", "Deference", "Rulemaking"]) },
+        { id: "reg-007", publishedAt: new Date("2024-05-10"), title: "[DEMO] CMS Releases Updated IDR Portal User Guide v3.2", summary: "DEMO CONTENT — CMS published an updated user guide for the federal IDR portal, including new batch filing workflows and updated eligibility determination screens.", category: "guidance" as const, impactLevel: "low" as const, source: "DEMO — CMS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Portal", "User Guide", "Batch Filing"]) },
+        { id: "reg-008", publishedAt: new Date("2024-03-22"), title: "[DEMO] HHS Proposes Rule on Transparency in Coverage — Phase 3", summary: "DEMO CONTENT — HHS proposed Phase 3 of the Transparency in Coverage rule, requiring machine-readable files for all items and services and an online price comparison tool for consumers.", category: "regulation" as const, impactLevel: "medium" as const, source: "DEMO — HHS", sourceUrl: "https://www.cms.gov/nosurprises", tags: JSON.stringify(["demo", "Transparency", "Price Comparison", "Machine-Readable"]) },
       ];
       for (const u of updates) {
         const existing = await db.select({ id: regulatoryUpdates.id }).from(regulatoryUpdates).where(eq(regulatoryUpdates.id, u.id)).limit(1);
@@ -4706,28 +5584,6 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         return db.select().from(changelogEntries).orderBy(desc(changelogEntries.releasedAt)).limit(input.limit);
       }),
-    seed: protectedProcedure.mutation(async ({ ctx }) => {
-      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const entries = [
-        { id: "cl-001", version: "2.4.0", releasedAt: new Date("2025-07-15"), title: "Left Sidebar Navigation", description: "Added persistent left sidebar navigation to all authenticated pages, providing consistent access to all features without page-level headers.", category: "feature" as const, isHighlight: true },
-        { id: "cl-002", version: "2.4.0", releasedAt: new Date("2025-07-15"), title: "Session Expiry Warning", description: "Implemented real-time session expiry countdown modal with 'Stay Signed In' refresh capability and 5-minute advance warning.", category: "feature" as const, isHighlight: true },
-        { id: "cl-003", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Step Advancement Confirmation Dialog", description: "Added confirmation dialog to all dispute step advancement CTAs to prevent accidental workflow progression.", category: "improvement" as const, isHighlight: false },
-        { id: "cl-004", version: "2.3.0", releasedAt: new Date("2025-07-10"), title: "Workflow Progress Bar Fix", description: "Fixed progress bar showing 0% when a dispute was at Step 1. Progress now correctly includes the current active step.", category: "bugfix" as const, isHighlight: false },
-        { id: "cl-005", version: "2.2.0", releasedAt: new Date("2025-07-01"), title: "IDR Entity Dashboard KPI Skeleton Loaders", description: "Added animated skeleton loaders to KPI cards on the IDR Entity Dashboard to eliminate flash-of-zeros on initial load.", category: "improvement" as const, isHighlight: false },
-        { id: "cl-006", version: "2.2.0", releasedAt: new Date("2025-07-01"), title: "Database-Backed Settings", description: "GlobalSettings, TwoFactorAuth, QPA Benchmarks, Regulatory Feed, Expert Panel, and Compliance Checklist are now fully persisted to PostgreSQL.", category: "feature" as const, isHighlight: true },
-        { id: "cl-007", version: "2.1.0", releasedAt: new Date("2025-06-20"), title: "Keycloak Forward Authentication", description: "Replaced Manus OAuth with Keycloak OIDC forward authentication, supporting PKCE, token refresh, and multi-realm configuration.", category: "security" as const, isHighlight: true },
-        { id: "cl-008", version: "2.0.0", releasedAt: new Date("2025-06-01"), title: "19-Step IDR Workflow Engine", description: "Complete implementation of the NSA Independent Dispute Resolution 19-step workflow with statutory deadlines, SLA monitoring, and automated notifications.", category: "feature" as const, isHighlight: true },
-      ];
-      for (const e of entries) {
-        const existing = await db.select({ id: changelogEntries.id }).from(changelogEntries).where(eq(changelogEntries.id, e.id)).limit(1);
-        if (!existing.length) {
-          await db.insert(changelogEntries).values(e);
-        }
-      }
-      return { seeded: entries.length };
-    }),
   }),
 
   // ─── Settlement Transfer Controls ───────────────────────────────────────────

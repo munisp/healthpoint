@@ -13,14 +13,44 @@ import {
   AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock,
   DollarSign, FileText, Gavel, LogOut, Scale, Upload, Users,
   TrendingUp, CheckCircle, XCircle, RefreshCw, Download, Bell,
-  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp, Pin, PinOff
+  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp, Pin, PinOff, CalendarClock
 } from "lucide-react";
 import WorkflowTimeline from "@/components/WorkflowTimeline";
 import DeadlineCountdownBanner from "@/components/DeadlineCountdownBanner";
+import DuplicateDetectionBanner from "@/components/DuplicateDetectionBanner";
 import OutcomePredictionGauge from "@/components/OutcomePredictionGauge";
 import DisputeComments from "@/components/DisputeComments";
 import { useRecentDisputes } from "@/hooks/useRecentDisputes";
 import { usePinnedDisputes } from "@/hooks/usePinnedDisputes";
+import ComplianceRail from "@/components/ComplianceRail";
+
+/**
+ * SettlementChips — Mojaloop settlement transfer status chips for this
+ * dispute (trpc.mojaloop.listByDispute: ledger entries with ML- reference
+ * IDs). Hidden while loading, on error, or when no transfers exist.
+ */
+function SettlementChips({ disputeId }: { disputeId: string }) {
+  const q = trpc.mojaloop.listByDispute.useQuery(
+    { disputeId },
+    { enabled: !!disputeId, retry: false, staleTime: 30_000 }
+  );
+  const entries = (q.data ?? []) as Array<Record<string, any>>;
+  if (q.isLoading || q.isError || entries.length === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 flex-wrap" aria-label="Settlement transfers">
+      {entries.map((e, i) => (
+        <span
+          key={e.referenceId ?? i}
+          title={e.entryType ? `Settlement ledger entry: ${e.entryType}` : "Settlement transfer (Mojaloop)"}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-info-foreground/30 text-info-foreground bg-info"
+        >
+          ⇄ {e.referenceId ?? "ML-transfer"}
+          {e.status ? ` · ${String(e.status).replace(/_/g, " ")}` : ""}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 const IDR_STEPS = [
   { key: "STEP_01_OPEN_NEGOTIATION_INITIATED", label: "Open Negotiation Initiated", description: "Party sends open negotiation notice per NSA §2799A-1", days: "Day 0" },
@@ -348,6 +378,15 @@ export default function DisputeDetail() {
           deadlineDate={(dispute as any).deadlineDate}
         />
       )}
+      {/* Duplicate detection banner — surfaces similar open disputes */}
+      {dispute && (
+        <DuplicateDetectionBanner
+          disputeId={dispute.id}
+          claimNumber={dispute.referenceNumber}
+          payerName={dispute.respondingPartyName}
+          billedAmount={dispute.billedAmount != null ? String(dispute.billedAmount) : null}
+        />
+      )}
         {/* Page header */}
         <div className="flex items-start justify-between">
           <div>
@@ -374,6 +413,7 @@ export default function DisputeDetail() {
                   closed: "Closed",
                   appealed: "Appealed",
                   ineligible: "Ineligible",
+                  withdrawn: "Withdrawn",
                 }[dispute.status] ?? dispute.status?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
               </span>
             </div>
@@ -381,6 +421,9 @@ export default function DisputeDetail() {
               {dispute.initiatingPartyName} vs {dispute.respondingPartyName ?? "TBD"} ·{" "}
               {dispute.serviceType?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} · Filed {dispute.createdAt ? new Date(dispute.createdAt as unknown as string).toLocaleDateString() : "—"}
             </p>
+            <div className="ml-7 mt-1.5">
+              <SettlementChips disputeId={dispute.id} />
+            </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <Button
@@ -511,6 +554,18 @@ export default function DisputeDetail() {
 
           {/* Right sidebar */}
           <div className="space-y-4">
+            {/* Compliance rail — statutory deadline ledger (45 CFR 149.510) */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <CalendarClock size={14} className="text-blue-500" />Compliance Rail
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <ComplianceRail disputeId={dispute.id} />
+              </CardContent>
+            </Card>
+
             {/* Outcome Prediction */}
             <OutcomePredictionGauge
               disputeId={dispute.id}

@@ -1,4 +1,4 @@
-import { eq, desc, and, or, like, count, sql, inArray } from "drizzle-orm";
+import { eq, desc, and, or, like, count, sql, inArray, gte, lt, lte, isNotNull, notInArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { existsSync, readFileSync } from "node:fs";
@@ -23,6 +23,7 @@ import {
   IDR_STEP, IDRStep, DISPUTE_STATUS, DisputeStatus,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { mirrorDisputeCreation, mirrorOrgMembership } from './permify-write';
 
 export function isPostgresConnectionString(value: string | undefined): value is string {
   return Boolean(value && /^(postgres|postgresql):\/\//.test(value));
@@ -91,6 +92,15 @@ export function resolvePostgresDriverUrl(connectionString: string): string {
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pgClient: ReturnType<typeof postgres> | null = null;
 
+/** Parse a positive-int env knob with clamping; falls back to `fallback`. */
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
 export async function getDb() {
   if (!_db) {
     const connectionString = resolvePostgresUrl();
@@ -102,18 +112,23 @@ export async function getDb() {
     const maxAttempts = 5;
     while (attempts < maxAttempts) {
       try {
+        // phase14-perfa: pool sizing is now env-tunable (defaults unchanged).
+        const poolMax = envInt("PG_POOL_MAX", 20, 1, 200);
+        const idleTimeout = envInt("PG_POOL_IDLE_TIMEOUT_SEC", 30, 1, 3600);
+        const connectTimeout = envInt("PG_POOL_CONNECT_TIMEOUT_SEC", 10, 1, 120);
+        const maxLifetime = envInt("PG_POOL_MAX_LIFETIME_SEC", 1800, 0, 86400);
         _pgClient = postgres(resolvePostgresDriverUrl(connectionString), {
-          max: 20,                  // connection pool size
-          idle_timeout: 30,         // seconds before idle connection is closed
-          connect_timeout: 10,      // seconds to wait for a connection
-          max_lifetime: 1800,       // seconds before connection is recycled
+          max: poolMax,             // connection pool size
+          idle_timeout: idleTimeout,   // seconds before idle connection is closed
+          connect_timeout: connectTimeout, // seconds to wait for a connection
+          max_lifetime: maxLifetime,  // seconds before connection is recycled
           onnotice: () => {},       // suppress NOTICE messages
           ...resolvePostgresTlsOptions(connectionString),
         });
         _db = drizzle(_pgClient);
         // Verify connectivity with a lightweight query
         await _pgClient`SELECT 1`;
-        console.info(`[Database] Connected to PostgreSQL (pool max=20)`);
+        console.info(`[Database] Connected to PostgreSQL (pool max=${poolMax})`);
         break;
       } catch (error) {
         attempts++;
@@ -191,30 +206,17 @@ export async function countUsers(): Promise<number> {
 }
 
 // ─── Business day calculation ─────────────────────────────────────────────────
-
-const US_FEDERAL_HOLIDAYS_2024_2025 = [
-  "2024-01-01", "2024-01-15", "2024-02-19", "2024-05-27", "2024-06-19",
-  "2024-07-04", "2024-09-02", "2024-10-14", "2024-11-11", "2024-11-28",
-  "2024-12-25", "2025-01-01", "2025-01-20", "2025-02-17", "2025-05-26",
-  "2025-06-19", "2025-07-04", "2025-09-01", "2025-10-13", "2025-11-11",
-  "2025-11-27", "2025-12-25", "2026-01-01", "2026-01-19", "2026-02-16",
-  "2026-05-25", "2026-06-19", "2026-07-04", "2026-09-07",
-];
-
-export function addBusinessDays(startDate: Date, businessDays: number): Date {
-  const holidays = new Set(US_FEDERAL_HOLIDAYS_2024_2025);
-  let current = new Date(startDate);
-  let added = 0;
-  while (added < businessDays) {
-    current.setDate(current.getDate() + 1);
-    const dayOfWeek = current.getDay();
-    const dateStr = current.toISOString().split('T')[0];
-    if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidays.has(dateStr)) {
-      added++;
-    }
-  }
-  return current;
-}
+//
+// Canonical business-day arithmetic lives in server/idr/deadlines.ts. It
+// computes US federal holidays ALGORITHMICALLY (5 U.S.C. § 6103, with the
+// federal Saturday→Friday / Sunday→Monday observation shifts) instead of
+// relying on a hardcoded holiday table that silently expires, and supports
+// policy overrides (extra closures, holiday opt-out) via IDR_* env vars.
+// Re-exported here so existing callers (seed-demo, routers, etc.) keep their
+// import paths while sharing one implementation.
+import { addBusinessDays, addCalendarDays, computeIDRDeadlines, type DisputeDeadlineAnchors } from "./idr/deadlines";
+export { addBusinessDays, isBusinessDay, businessDaysBetween, usFederalHolidays } from "./idr/deadlines";
+export { addCalendarDays, computeIDRDeadlines } from "./idr/deadlines";
 
 export function generateReferenceNumber(): string {
   const year = new Date().getFullYear();
@@ -230,14 +232,21 @@ export async function createDispute(data: InsertDispute): Promise<Dispute> {
   const now = new Date();
   const id = crypto.randomUUID();
   const referenceNumber = generateReferenceNumber();
-  // Calculate NSA-mandated deadlines
-  const openNegotiationDeadline = addBusinessDays(now, 30);
+  // S2/S3: the 30-business-day open negotiation window anchors on the date of
+  // the initial payment (or notice of denial) — initialPaymentDate — not on
+  // the row creation time. Default to the creation date when not supplied.
+  const initialPaymentDate = data.initialPaymentDate ?? now;
+  // Canonical engine: 45 CFR § 149.510(b)(1) — 30 business days from the
+  // open negotiation initiation anchor (initialPaymentDate).
+  const { openNegotiationEnd } = computeIDRDeadlines({ openNegotiationInitiatedAt: initialPaymentDate, idrInitiatedAt: null, idreSelectedAt: null });
+  const openNegotiationDeadline = openNegotiationEnd ?? addBusinessDays(initialPaymentDate, 30);
   const insertData: InsertDispute = {
     ...data,
     id,
     referenceNumber,
     currentStep: "STEP_01_OPEN_NEGOTIATION_INITIATED",
     status: "open_negotiation",
+    initialPaymentDate,
     openNegotiationDeadline,
     createdAt: now,
     updatedAt: now,
@@ -254,6 +263,9 @@ export async function createDispute(data: InsertDispute): Promise<Dispute> {
     performedByName: data.initiatingPartyName,
     metadata: { referenceNumber, openNegotiationDeadline: openNegotiationDeadline.toISOString() },
   });
+  // Mirror-only Permify tuple write (PERMIFY_WRITE_ENABLED, default off);
+  // fail-open — Postgres authz remains the system of record for reads.
+  void mirrorDisputeCreation(id, data.initiatingPartyId, data.createdBy ?? undefined).catch(() => undefined);
   const result = await db.select().from(disputes).where(eq(disputes.id, id)).limit(1);
   return result[0];
 }
@@ -285,6 +297,17 @@ export async function listDisputes(opts: {
   if (!db) return { items: [], total: 0 };
   const { limit = 20, offset = 0, status, serviceType, search } = opts;
   const conditions = [];
+  // Object-level authorization: when a userId is supplied (non-admin callers),
+  // restrict results to disputes that user initiated/created. Admin listing
+  // paths omit userId and remain unfiltered.
+  if (opts.userId) {
+    conditions.push(
+      or(
+        eq(disputes.initiatingPartyId, opts.userId),
+        eq(disputes.createdBy, opts.userId)
+      )
+    );
+  }
   if (status) conditions.push(eq(disputes.status, status));
   if (serviceType) conditions.push(sql`${disputes.serviceType} = ${serviceType}`);
   if (search) {
@@ -318,21 +341,49 @@ export async function advanceDisputeStep(
   const existing = await db.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
   if (existing.length === 0) throw new Error("Dispute not found");
   const now = new Date();
-  // Calculate step-specific deadlines
+  // ── Deadline unification (S1b) ──────────────────────────────────────────
+  // All statutory deadline arithmetic is delegated to the canonical engine in
+  // server/idr/deadlines.ts (computeIDRDeadlines semantics). This function
+  // previously kept private math (e.g. payment deadline as `now + 30×24h`
+  // regardless of calendar-day end-of-day semantics); that competing math is
+  // removed. Backward-compatible columns stay populated, sourced from the
+  // canonical engine.
   const deadlineUpdates: Partial<InsertDispute> = {};
+  const dispute = existing[0];
   if (newStep === "STEP_04_IDR_INITIATED") {
-    deadlineUpdates.idrInitiationDeadline = addBusinessDays(now, 4);
+    // 45 CFR § 149.510(b)(2)(i) — the 4-business-day initiation window is
+    // anchored on the END of the 30-BD open negotiation period (itself
+    // anchored on initialPaymentDate), not on "now + 4 BD".
+    const anchors: DisputeDeadlineAnchors = {
+      openNegotiationInitiatedAt: dispute.initialPaymentDate ?? dispute.createdAt ?? now,
+      idrInitiatedAt: now,
+      idreSelectedAt: null,
+    };
+    const computed = computeIDRDeadlines(anchors);
+    deadlineUpdates.idrInitiationDeadline = computed.idrInitiationDeadline ?? addBusinessDays(now, 4);
+    // 45 CFR § 149.510(c)(1) — joint IDRE selection: 3 BD after initiation.
+    deadlineUpdates.entitySelectionDeadline = computed.idreSelectionDeadline ?? addBusinessDays(now, 3);
   } else if (newStep === "STEP_06_IDR_ENTITY_SELECTION") {
-    deadlineUpdates.entitySelectionDeadline = addBusinessDays(now, 4);
+    // 45 CFR § 149.510(c)(1) — 3 business days after IDR initiation.
+    const computed = computeIDRDeadlines({ openNegotiationInitiatedAt: null, idrInitiatedAt: now, idreSelectedAt: null });
+    deadlineUpdates.entitySelectionDeadline = computed.idreSelectionDeadline ?? addBusinessDays(now, 3);
   } else if (newStep === "STEP_08_ELIGIBILITY_REVIEW") {
     deadlineUpdates.eligibilityDeadline = addBusinessDays(now, 3);
   } else if (newStep === "STEP_09_OFFER_SUBMISSION") {
-    deadlineUpdates.offerSubmissionDeadline = addBusinessDays(now, 10);
-    deadlineUpdates.determinationDeadline = addBusinessDays(now, 30);
+    // 45 CFR § 149.510(c)(3)(i)/(c)(4)(ii) — 10 BD offers / 30 BD
+    // determination, both anchored on IDRE selection.
+    const computed = computeIDRDeadlines({ openNegotiationInitiatedAt: null, idrInitiatedAt: null, idreSelectedAt: now });
+    deadlineUpdates.offerSubmissionDeadline = computed.offerSubmissionDeadline ?? addBusinessDays(now, 10);
+    deadlineUpdates.determinationDeadline = computed.determinationDeadline ?? addBusinessDays(now, 30);
   } else if (newStep === "STEP_11_ADDITIONAL_INFORMATION") {
     deadlineUpdates.additionalInfoDeadline = addBusinessDays(now, 5);
   } else if (newStep === "STEP_14_PAYMENT_DETERMINATION") {
-    deadlineUpdates.paymentDeadline = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    // PHSA § 2799A-1(c)(6) — 30 CALENDAR days end-of-day from determination.
+    const computed = computeIDRDeadlines({ openNegotiationInitiatedAt: null, idrInitiatedAt: null, idreSelectedAt: null, determinationIssuedAt: now });
+    const raw = computed.paymentDeadline ?? addCalendarDays(now, 30);
+    const eod = new Date(raw.getTime());
+    eod.setUTCHours(23, 59, 59, 999);
+    deadlineUpdates.paymentDeadline = eod;
   } else if (newStep === "STEP_17_DISPUTE_CLOSED") {
     deadlineUpdates.closedAt = now;
   }
@@ -365,50 +416,44 @@ export async function getDashboardStats(userId: string | undefined) {
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   // 5 business days ≈ 7 calendar days (conservative)
   const fiveBusinessDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const [
-    totalResult,
-    openResult,
-    idrResult,
-    closedResult,
-    overdueResult,
-    dueSoonResult,
-    recentDisputes,
-  ] = await Promise.all([
-    db.select({ count: count() }).from(disputes),
-    db.select({ count: count() }).from(disputes).where(eq(disputes.status, "open_negotiation")),
-    db.select({ count: count() }).from(disputes).where(inArray(disputes.status, ["idr_initiated", "idr_entity_selection", "eligibility_review", "offer_submission", "under_arbitration"])),
-    db.select({ count: count() }).from(disputes).where(and(eq(disputes.status, "closed"), sql`${disputes.closedAt} >= ${thirtyDaysAgo}`)),
-    db.select({ count: count() }).from(disputes).where(and(
-      sql`${disputes.status} NOT IN ('closed', 'ineligible')`,
-      or(
-        and(sql`${disputes.openNegotiationDeadline} IS NOT NULL`, sql`${disputes.openNegotiationDeadline} < ${now}`),
-        and(sql`${disputes.offerSubmissionDeadline} IS NOT NULL`, sql`${disputes.offerSubmissionDeadline} < ${now}`),
-        and(sql`${disputes.paymentDeadline} IS NOT NULL`, sql`${disputes.paymentDeadline} < ${now}`)
-      )
-    )),
-    // Due within 5 business days (not yet overdue)
-    db.select({ count: count() }).from(disputes).where(and(
-      sql`${disputes.status} NOT IN ('closed', 'ineligible')`,
-      or(
-        and(
-          sql`${disputes.openNegotiationDeadline} IS NOT NULL`,
-          sql`${disputes.openNegotiationDeadline} >= ${now}`,
-          sql`${disputes.openNegotiationDeadline} <= ${fiveBusinessDaysFromNow}`
-        ),
-        and(
-          sql`${disputes.offerSubmissionDeadline} IS NOT NULL`,
-          sql`${disputes.offerSubmissionDeadline} >= ${now}`,
-          sql`${disputes.offerSubmissionDeadline} <= ${fiveBusinessDaysFromNow}`
-        ),
-        and(
-          sql`${disputes.paymentDeadline} IS NOT NULL`,
-          sql`${disputes.paymentDeadline} >= ${now}`,
-          sql`${disputes.paymentDeadline} <= ${fiveBusinessDaysFromNow}`
-        )
-      )
-    )),
+  // phase14-perfa: the six dispute count queries are consolidated into ONE
+  // conditional-aggregation round trip (previously 6 parallel round trips),
+  // and the raw `sql` date interpolations are replaced with column-bound
+  // drizzle operators (lt/gte/lte/isNotNull/notInArray). The raw form 500'd
+  // at runtime with drizzle-orm@0.45.2 + postgres@3.4.9 (Date params in raw
+  // sql fragments fail driver serialization); column-bound operators map
+  // Date values through the timestamp column type and work. Semantics are
+  // identical to the previous six queries.
+  const openStatusFilter = notInArray(disputes.status, ["closed", "ineligible", "withdrawn"]);
+  const overdueClause = or(
+    and(isNotNull(disputes.openNegotiationDeadline), lt(disputes.openNegotiationDeadline, now)),
+    and(isNotNull(disputes.offerSubmissionDeadline), lt(disputes.offerSubmissionDeadline, now)),
+    and(isNotNull(disputes.paymentDeadline), lt(disputes.paymentDeadline, now))
+  );
+  // Due within 5 business days (not yet overdue)
+  const dueSoonClause = or(
+    and(isNotNull(disputes.openNegotiationDeadline), gte(disputes.openNegotiationDeadline, now), lte(disputes.openNegotiationDeadline, fiveBusinessDaysFromNow)),
+    and(isNotNull(disputes.offerSubmissionDeadline), gte(disputes.offerSubmissionDeadline, now), lte(disputes.offerSubmissionDeadline, fiveBusinessDaysFromNow)),
+    and(isNotNull(disputes.paymentDeadline), gte(disputes.paymentDeadline, now), lte(disputes.paymentDeadline, fiveBusinessDaysFromNow))
+  );
+  const [countsRow, recentDisputes] = await Promise.all([
+    db.select({
+      total: count(),
+      openNegotiation: count(sql`CASE WHEN ${disputes.status} = 'open_negotiation' THEN 1 END`),
+      inIDR: count(sql`CASE WHEN ${disputes.status} IN ('idr_initiated', 'idr_entity_selection', 'eligibility_review', 'offer_submission', 'under_arbitration') THEN 1 END`),
+      closedThisMonth: count(sql`CASE WHEN ${and(eq(disputes.status, "closed"), gte(disputes.closedAt, thirtyDaysAgo))} THEN 1 END`),
+      overdue: count(sql`CASE WHEN ${openStatusFilter} AND ${overdueClause} THEN 1 END`),
+      dueSoon: count(sql`CASE WHEN ${openStatusFilter} AND ${dueSoonClause} THEN 1 END`),
+    }).from(disputes),
     db.select().from(disputes).orderBy(desc(disputes.createdAt)).limit(5),
   ]);
+  const counts = countsRow[0] ?? { total: 0, openNegotiation: 0, inIDR: 0, closedThisMonth: 0, overdue: 0, dueSoon: 0 };
+  const totalResult = [{ count: counts.total }];
+  const openResult = [{ count: counts.openNegotiation }];
+  const idrResult = [{ count: counts.inIDR }];
+  const closedResult = [{ count: counts.closedThisMonth }];
+  const overdueResult = [{ count: counts.overdue }];
+  const dueSoonResult = [{ count: counts.dueSoon }];
   // Unread notifications
   const notifResult = userId
     ? await db.select({ count: count() }).from(notifications)
@@ -507,17 +552,23 @@ export async function listIDREntities(opts: { state?: string; specialty?: string
   return db.select().from(idrEntities).where(eq(idrEntities.isActive, true)).orderBy(idrEntities.name);
 }
 
+/**
+ * DEMO-ONLY seed data. These 5 synthetic IDR entities are explicitly labelled
+ * "DEMO" (name prefix + DEMO- certification numbers) so they can never be
+ * mistaken for certified IDR entities. Invoked ONLY from the admin-only
+ * arbitrators.seedDemoEntities mutation — never auto-called from read paths.
+ */
 export async function seedIDREntities() {
   const db = await getDb();
   if (!db) return;
   const existing = await db.select({ count: count() }).from(idrEntities);
   if ((existing[0]?.count ?? 0) > 0) return; // Already seeded
   const entities = [
-    { id: crypto.randomUUID(), name: "JAMS Healthcare Arbitration", certificationNumber: "IDR-CERT-001", specialties: ["emergency_medicine", "anesthesiology", "radiology"], states: ["CA", "NY", "TX", "FL", "IL"], contactEmail: "idr@jams.com", contactPhone: "1-800-352-5267", website: "https://www.jamsadr.com", avgResolutionDays: 28, totalCasesHandled: 1247, isActive: true },
-    { id: crypto.randomUUID(), name: "AAA Healthcare Dispute Resolution", certificationNumber: "IDR-CERT-002", specialties: ["surgery", "hospitalist", "pathology"], states: ["NY", "NJ", "CT", "MA", "PA"], contactEmail: "healthcare@adr.org", contactPhone: "1-800-778-7879", website: "https://www.adr.org", avgResolutionDays: 25, totalCasesHandled: 892, isActive: true },
-    { id: crypto.randomUUID(), name: "AHLA Dispute Resolution Services", certificationNumber: "IDR-CERT-003", specialties: ["air_ambulance", "ground_ambulance", "emergency_medicine"], states: ["TX", "FL", "GA", "NC", "VA"], contactEmail: "disputes@ahla.com", contactPhone: "1-202-833-1100", website: "https://www.americanhealthlaw.org", avgResolutionDays: 22, totalCasesHandled: 634, isActive: true },
-    { id: crypto.randomUUID(), name: "National Arbitration Forum Healthcare", certificationNumber: "IDR-CERT-004", specialties: ["neonatology", "radiology", "anesthesiology"], states: ["MN", "WI", "IA", "ND", "SD"], contactEmail: "healthcare@nafresolution.com", contactPhone: "1-800-474-2371", website: "https://www.nafresolution.com", avgResolutionDays: 30, totalCasesHandled: 445, isActive: true },
-    { id: crypto.randomUUID(), name: "FINRA Healthcare Billing Arbitration", certificationNumber: "IDR-CERT-005", specialties: ["surgery", "emergency_medicine", "hospitalist"], states: ["DC", "MD", "VA", "DE", "WV"], contactEmail: "idr@finra.org", contactPhone: "1-301-590-6500", website: "https://www.finra.org", avgResolutionDays: 27, totalCasesHandled: 318, isActive: true },
+    { id: crypto.randomUUID(), name: "DEMO — JAMS Healthcare Arbitration", certificationNumber: "DEMO-IDR-CERT-001", specialties: ["emergency_medicine", "anesthesiology", "radiology"], states: ["CA", "NY", "TX", "FL", "IL"], contactEmail: "idr@jams.com", contactPhone: "1-800-352-5267", website: "https://www.jamsadr.com", avgResolutionDays: 28, totalCasesHandled: 1247, isActive: true },
+    { id: crypto.randomUUID(), name: "DEMO — AAA Healthcare Dispute Resolution", certificationNumber: "DEMO-IDR-CERT-002", specialties: ["surgery", "hospitalist", "pathology"], states: ["NY", "NJ", "CT", "MA", "PA"], contactEmail: "healthcare@adr.org", contactPhone: "1-800-778-7879", website: "https://www.adr.org", avgResolutionDays: 25, totalCasesHandled: 892, isActive: true },
+    { id: crypto.randomUUID(), name: "DEMO — AHLA Dispute Resolution Services", certificationNumber: "DEMO-IDR-CERT-003", specialties: ["air_ambulance", "ground_ambulance", "emergency_medicine"], states: ["TX", "FL", "GA", "NC", "VA"], contactEmail: "idr@ahla.com", contactPhone: "1-202-833-1100", website: "https://www.ahla.org", avgResolutionDays: 22, totalCasesHandled: 634, isActive: true },
+    { id: crypto.randomUUID(), name: "DEMO — National Arbitration Forum Healthcare", certificationNumber: "DEMO-IDR-CERT-004", specialties: ["neonatology", "radiology", "anesthesiology"], states: ["MN", "WI", "IA", "ND", "SD"], contactEmail: "healthcare@nafresolution.org", contactPhone: "1-800-474-2371", website: "https://www.nafresolution.org", avgResolutionDays: 30, totalCasesHandled: 445, isActive: true },
+    { id: crypto.randomUUID(), name: "DEMO — FINRA Healthcare Billing Arbitration", certificationNumber: "DEMO-IDR-CERT-005", specialties: ["surgery", "emergency_medicine", "hospitalist"], states: ["DC", "MD", "VA", "DE", "WV"], contactEmail: "idr@finra.org", contactPhone: "1-301-590-6500", website: "https://www.finra.org", avgResolutionDays: 27, totalCasesHandled: 318, isActive: true },
   ];
   for (const entity of entities) {
     await db.insert(idrEntities).values(entity).onConflictDoUpdate({ target: idrEntities.id, set: { name: entity.name } });
@@ -540,10 +591,17 @@ export async function listNotifications(userId: string, unreadOnly = false) {
   return db.select().from(notifications).where(and(...conditions)).orderBy(desc(notifications.createdAt)).limit(50);
 }
 
-export async function markNotificationRead(id: string) {
+export async function markNotificationRead(id: string, userId?: string) {
   const db = await getDb();
   if (!db) return;
-  await db.update(notifications).set({ isRead: true }).where(eq(notifications.id, id));
+  // When userId is provided, scope by it so a user cannot mark another user's
+  // notifications read. Callers that omit userId MUST be guarded by the
+  // authz-registry middleware (notifications.markRead) — unscoped by design
+  // at this layer. See server/authz-registry.ts.
+  await db
+    .update(notifications)
+    .set({ isRead: true })
+    .where(userId ? and(eq(notifications.id, id), eq(notifications.userId, userId)) : eq(notifications.id, id));
 }
 
 // ─── Event helpers ────────────────────────────────────────────────────────────
@@ -657,7 +715,7 @@ const QPA_BENCHMARKS_BY_CPT: Record<string, { median: number; p25: number; p75: 
   // Surgery
   "27447": { median: 1842, p25: 1285, p75: 2498, description: "Total knee arthroplasty" },
   "27130": { median: 1985, p25: 1385, p75: 2698, description: "Total hip arthroplasty" },
-  "43239": { median: 485,  p25: 338,  p75: 658,  description: "Upper GI endoscopy w/ biopsy" },
+  "43239": { median: 485,  p25: 338,  p75: 585,  description: "Upper GI endoscopy w/ biopsy" },
   "47562": { median: 1248, p25: 872,  p75: 1698, description: "Laparoscopic cholecystectomy" },
   // Pathology
   "88305": { median: 98,   p25: 68,   p75: 135,  description: "Tissue exam, surgical pathology" },
@@ -833,7 +891,7 @@ export async function getIDREntityCaseload(entityId: string): Promise<IDREntityC
   }).from(disputes).where(
     and(
       eq(disputes.idrEntityId, entityId),
-      sql`${disputes.status} NOT IN ('closed', 'ineligible', 'appealed')`
+      sql`${disputes.status} NOT IN ('closed', 'ineligible', 'appealed', 'withdrawn')`
     )
   ).orderBy(disputes.createdAt);
 
@@ -972,7 +1030,7 @@ export interface DisputeMonthBucket {
   ineligible: number;
 }
 
-export async function getDisputesByMonth(months = 12): Promise<DisputeMonthBucket[]> {
+export async function getDisputesByMonth(months = 12, userId?: string): Promise<DisputeMonthBucket[]> {
   const db = await getDb();
   if (!db) return [];
 
@@ -980,13 +1038,17 @@ export async function getDisputesByMonth(months = 12): Promise<DisputeMonthBucke
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - months);
 
+  // Cross-tenant fix (W2): non-admin callers only see their own disputes,
+  // matching listDisputes scoping (undefined userId = admin/unscoped).
   const rows = await db
     .select({
       createdAt: disputes.createdAt,
       status: disputes.status,
     })
     .from(disputes)
-    .where(sql`${disputes.createdAt} >= ${cutoff}`)
+    .where(userId
+      ? and(sql`${disputes.createdAt} >= ${cutoff}`, eq(disputes.initiatingPartyId, userId))
+      : sql`${disputes.createdAt} >= ${cutoff}`)
     .orderBy(disputes.createdAt);
 
   // Group in JS — avoids DB-specific date_trunc syntax differences
@@ -1197,6 +1259,11 @@ export async function upsertUserProfile(profile: InsertUserProfile): Promise<Use
         updatedAt: now,
       },
     });
+  // Mirror-only Permify organization membership tuple (PERMIFY_WRITE_ENABLED,
+  // default off); fail-open — Postgres authz remains the system of record.
+  if (profile.orgName) {
+    void mirrorOrgMembership(profile.orgName, profile.id).catch(() => undefined);
+  }
   const rows = await db.select().from(userProfiles).where(eq(userProfiles.id, profile.id)).limit(1);
   return rows[0];
 }
@@ -1288,36 +1355,65 @@ export async function listWebhooks(userId: string): Promise<Webhook[]> {
   if (!db) return [];
   return db.select().from(webhooks).where(eq(webhooks.userId, userId)).orderBy(desc(webhooks.createdAt));
 }
-export async function updateWebhook(id: string, data: Partial<InsertWebhook>): Promise<void> {
+export async function updateWebhook(id: string, data: Partial<InsertWebhook>, userId?: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  await db.update(webhooks).set({ ...data, updatedAt: new Date() }).where(eq(webhooks.id, id));
+  // When userId is provided, scope by it so webhook records cannot be
+  // modified cross-tenant. Callers that omit userId MUST be guarded by the
+  // authz-registry middleware (webhooks.update / webhooks.test) — unscoped
+  // by design at this layer. See server/authz-registry.ts.
+  await db
+    .update(webhooks)
+    .set({ ...data, updatedAt: new Date() })
+    .where(userId ? and(eq(webhooks.id, id), eq(webhooks.userId, userId)) : eq(webhooks.id, id));
 }
-export async function deleteWebhook(id: string): Promise<void> {
+export async function deleteWebhook(id: string, userId?: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  await db.delete(webhooks).where(eq(webhooks.id, id));
+  // When userId is provided, scope by it so webhook records cannot be deleted
+  // cross-tenant. Callers that omit userId MUST be guarded by the
+  // authz-registry middleware (webhooks.delete) — unscoped by design at this
+  // layer. See server/authz-registry.ts.
+  await db
+    .delete(webhooks)
+    .where(userId ? and(eq(webhooks.id, id), eq(webhooks.userId, userId)) : eq(webhooks.id, id));
 }
 
 // ─── Outcome Predictions Helpers ──────────────────────────────────────────────
 export async function upsertOutcomePrediction(pred: Omit<InsertOutcomePrediction, "id"> & { disputeId: string }): Promise<OutcomePrediction> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // Delete existing prediction for this dispute
-  await db.delete(outcomePredictions).where(eq(outcomePredictions.disputeId, pred.disputeId));
+  // Transactional delete+insert so a regenerated prediction never leaves the
+  // dispute momentarily prediction-less (previously two separate statements).
   const id = `pred_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-  await db.insert(outcomePredictions).values({ ...pred, id });
+  await db.transaction(async (tx) => {
+    await tx.delete(outcomePredictions).where(eq(outcomePredictions.disputeId, pred.disputeId));
+    await tx.insert(outcomePredictions).values({ ...pred, id });
+  });
+  // Fresh prediction is by definition not stale (isStale column from
+  // migration 0039_wave_w3.sql, default false).
   const rows = await db.select().from(outcomePredictions).where(eq(outcomePredictions.id, id)).limit(1);
   return rows[0];
 }
-export async function getOutcomePrediction(disputeId: string): Promise<OutcomePrediction | undefined> {
+export async function getOutcomePrediction(disputeId: string): Promise<(OutcomePrediction & { stale: boolean }) | undefined> {
   const db = await getDb();
   if (!db) return undefined;
   const rows = await db.select().from(outcomePredictions)
     .where(eq(outcomePredictions.disputeId, disputeId))
     .orderBy(desc(outcomePredictions.createdAt))
     .limit(1);
-  return rows[0];
+  const row = rows[0];
+  if (!row) return undefined;
+  // isStale comes from migration 0039_wave_w3.sql (raw SQL — schema.ts is
+  // owned by another wave). Fail-open to stale:false if the column is absent.
+  let stale = false;
+  try {
+    const { sql } = await import("drizzle-orm");
+    const r: any = await db.execute(sql`SELECT "isStale" FROM outcome_predictions WHERE id = ${row.id} LIMIT 1`);
+    const first = Array.isArray(r) ? r[0] : r?.rows?.[0];
+    stale = Boolean(first?.isStale);
+  } catch { /* column not yet migrated */ }
+  return { ...row, stale };
 }
 
 // ─── Document Analysis Helpers ────────────────────────────────────────────────

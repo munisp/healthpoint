@@ -15,6 +15,13 @@ import {
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import SmartFormPanel from "@/components/SmartFormPanel";
+import {
+  clearOfflineDrafts,
+  isNetworkError,
+  listOfflineDrafts,
+  removeOfflineDraft,
+  queueOfflineDraft,
+} from "@/lib/offline-drafts";
 
 const SERVICE_TYPES = [
   { value: "emergency_medicine", label: "Emergency Medicine" },
@@ -88,18 +95,18 @@ const INITIAL_FORM: FormData = {
 // ─── QPA severity colour map ──────────────────────────────────────────────────
 const SEVERITY_CONFIG = {
   ok: {
-    bg: "bg-green-50",
-    border: "border-green-200",
-    text: "text-green-800",
-    badge: "bg-green-100 text-green-800",
+    bg: "bg-success",
+    border: "border-success-foreground/30",
+    text: "text-success-foreground",
+    badge: "bg-success text-success-foreground",
     icon: CheckCircle2,
     label: "Within QPA Range",
   },
   warning: {
-    bg: "bg-amber-50",
-    border: "border-amber-200",
-    text: "text-amber-800",
-    badge: "bg-amber-100 text-amber-800",
+    bg: "bg-warning",
+    border: "border-warning-foreground/30",
+    text: "text-warning-foreground",
+    badge: "bg-warning text-warning-foreground",
     icon: AlertTriangle,
     label: "Above QPA — Documentation Needed",
   },
@@ -152,6 +159,7 @@ export default function NewDispute() {
   });
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [offlineQueued, setOfflineQueued] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const utils = trpc.useUtils();
 
@@ -174,18 +182,53 @@ export default function NewDispute() {
   }, [existingDraft, draftLoaded]);
 
   // ─── Auto-save mutation ─────────────────────────────────────────────────────
+  // Offline-first: when the browser is offline (or the save fails with a
+  // network error) the draft payload is queued in IndexedDB and flushed on
+  // the next `online` event (see lib/offline-drafts.ts).
   const saveDraftMutation = trpc.drafts.save.useMutation({
     onSuccess: () => setLastSaved(new Date()),
-    onError: () => {/* silent — auto-save failures should not interrupt the user */},
+    onError: (err, vars) => {
+      if (!navigator.onLine || isNetworkError(err)) {
+        queueOfflineDraft({ wizardStep: vars.wizardStep, formData: vars.formData }).then(ok => {
+          if (ok) setOfflineQueued(true);
+        });
+      }
+      // otherwise silent — auto-save failures should not interrupt the user
+    },
   });
 
   const deleteDraftMutation = trpc.drafts.delete.useMutation();
+
+  // Flush queued offline drafts back to the server when connectivity returns
+  useEffect(() => {
+    const flush = async () => {
+      const queued = await listOfflineDrafts();
+      if (queued.length === 0) return;
+      for (const d of queued) {
+        try {
+          await saveDraftMutation.mutateAsync({ wizardStep: d.wizardStep, formData: d.formData });
+          await removeOfflineDraft(d.id);
+        } catch {
+          return; // still failing — keep the rest of the queue
+        }
+      }
+      setOfflineQueued(false);
+      toast.success("Offline draft synced to the server", { duration: 3000 });
+    };
+    window.addEventListener("online", flush);
+    return () => window.removeEventListener("online", flush);
+  }, [saveDraftMutation]);
 
   // Debounced auto-save: fires 800ms after the last change
   const scheduleSave = useCallback((step: number, data: FormData) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveDraftMutation.mutate({ wizardStep: step, formData: data as unknown as Record<string, unknown> });
+      const payload = { wizardStep: step, formData: data as unknown as Record<string, unknown> };
+      if (!navigator.onLine) {
+        queueOfflineDraft(payload).then(ok => { if (ok) setOfflineQueued(true); });
+        return;
+      }
+      saveDraftMutation.mutate(payload);
     }, 800);
   }, [saveDraftMutation]);
 
@@ -288,6 +331,8 @@ export default function NewDispute() {
     onSuccess: async (dispute) => {
       // Delete the draft after successful submission
       await deleteDraftMutation.mutateAsync();
+      await clearOfflineDrafts();
+      setOfflineQueued(false);
       utils.drafts.get.invalidate();
       toast.success(`Dispute ${dispute.referenceNumber} initiated successfully`);
       navigate(`/disputes/${dispute.id}`);
@@ -337,12 +382,12 @@ export default function NewDispute() {
     const isExtracted = confPct !== null;
     const confLabel = confPct === null ? '' : confPct >= 90 ? 'High confidence' : confPct >= 70 ? 'Medium confidence — review recommended' : 'Low confidence — manual verification required';
     const ConfIcon = confPct === null ? null : confPct >= 90 ? ShieldCheck : confPct >= 70 ? ShieldAlert : ShieldX;
-    const confColor = confPct === null ? '' : confPct >= 90 ? 'text-green-600' : confPct >= 70 ? 'text-amber-600' : 'text-red-600';
-    const fieldBorder = isExtracted ? (confPct! >= 90 ? 'ring-1 ring-green-300' : confPct! >= 70 ? 'ring-1 ring-amber-300' : 'ring-2 ring-red-300') : '';
+    const confColor = confPct === null ? '' : confPct >= 90 ? 'text-success-foreground' : confPct >= 70 ? 'text-warning-foreground' : 'text-red-600';
+    const fieldBorder = isExtracted ? (confPct! >= 90 ? 'ring-1 ring-success-foreground/40' : confPct! >= 70 ? 'ring-1 ring-warning-foreground/40' : 'ring-2 ring-red-300') : '';
     return (
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <label className="block text-sm font-medium text-slate-600">
+          <label className="block text-sm font-medium text-muted-foreground">
             {label}{required && <span className="text-red-500 ml-0.5">*</span>}
           </label>
           {isExtracted && ConfIcon && (
@@ -366,7 +411,7 @@ export default function NewDispute() {
         <div className={`rounded-lg ${fieldBorder}`}>
           {children}
         </div>
-        {hint && <p className="text-xs text-slate-400 mt-1">{hint}</p>}
+        {hint && <p className="text-xs text-muted-foreground mt-1">{hint}</p>}
         {isExtracted && confPct! < 70 && (
           <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
             <ShieldX className="h-3 w-3" /> Low confidence — please verify this value manually.
@@ -381,7 +426,7 @@ export default function NewDispute() {
     if (!qpaEnabled) return null;
     if (qpaFetching) {
       return (
-        <div className="flex items-center gap-2 text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted rounded-lg p-3 border border-border">
           <Clock size={14} className="animate-spin" />
           Calculating QPA benchmark…
         </div>
@@ -408,30 +453,30 @@ export default function NewDispute() {
         {/* Key metrics */}
         <div className="grid grid-cols-3 gap-3">
           <div className="bg-white/70 rounded-lg p-2.5 text-center">
-            <div className="text-xs text-slate-500 mb-0.5">QPA Estimate</div>
-            <div className="text-base font-bold text-slate-800">
+            <div className="text-xs text-muted-foreground mb-0.5">QPA Estimate</div>
+            <div className="text-base font-bold text-foreground">
               ${qpaResult.qpaEstimate.toLocaleString()}
             </div>
-            <div className="text-xs text-slate-400">
+            <div className="text-xs text-muted-foreground">
               {form.facilityState} adjusted ×{qpaResult.stateAdjustmentFactor.toFixed(2)}
             </div>
           </div>
           <div className="bg-white/70 rounded-lg p-2.5 text-center">
-            <div className="text-xs text-slate-500 mb-0.5">Billed Amount</div>
-            <div className="text-base font-bold text-slate-800">
+            <div className="text-xs text-muted-foreground mb-0.5">Billed Amount</div>
+            <div className="text-base font-bold text-foreground">
               ${parseFloat(form.billedAmount).toLocaleString()}
             </div>
-            <div className="text-xs text-slate-400">as submitted</div>
+            <div className="text-xs text-muted-foreground">as submitted</div>
           </div>
           <div className="bg-white/70 rounded-lg p-2.5 text-center">
-            <div className="text-xs text-slate-500 mb-0.5">% of QPA</div>
+            <div className="text-xs text-muted-foreground mb-0.5">% of QPA</div>
             <div className={`text-base font-bold ${
-              qpaResult.percentageOfQpa <= 100 ? "text-green-700" :
-              qpaResult.percentageOfQpa <= 150 ? "text-amber-700" : "text-red-700"
+              qpaResult.percentageOfQpa <= 100 ? "text-success-foreground" :
+              qpaResult.percentageOfQpa <= 150 ? "text-warning-foreground" : "text-red-700"
             }`}>
               {qpaResult.percentageOfQpa}%
             </div>
-            <div className="text-xs text-slate-400">
+            <div className="text-xs text-muted-foreground">
               Range: ${qpaResult.totalBenchmarkMin.toLocaleString()}–${qpaResult.totalBenchmarkMax.toLocaleString()}
             </div>
           </div>
@@ -440,15 +485,15 @@ export default function NewDispute() {
         {/* CPT benchmarks */}
         {Object.keys(qpaResult.cptBenchmarks).length > 0 && (
           <div>
-            <div className="text-xs font-medium text-slate-600 mb-1.5 flex items-center gap-1">
+            <div className="text-xs font-medium text-muted-foreground mb-1.5 flex items-center gap-1">
               <TrendingUp size={11} /> CPT Code Benchmarks
             </div>
             <div className="space-y-1">
               {Object.entries(qpaResult.cptBenchmarks).map(([cpt, bench]) => (
                 <div key={cpt} className="flex items-center justify-between text-xs bg-white/60 rounded px-2 py-1">
-                  <span className="font-mono font-medium text-slate-700">{cpt}</span>
-                  <span className="text-slate-500 flex-1 mx-2 truncate">{bench.description}</span>
-                  <span className="font-medium text-slate-700">
+                  <span className="font-mono font-medium text-foreground">{cpt}</span>
+                  <span className="text-muted-foreground flex-1 mx-2 truncate">{bench.description}</span>
+                  <span className="font-medium text-foreground">
                     National: ${bench.median.toLocaleString()} → {form.facilityState}: ${bench.adjusted.toLocaleString()}
                   </span>
                 </div>
@@ -463,7 +508,7 @@ export default function NewDispute() {
         </div>
 
         {/* Regulatory note */}
-        <div className="flex items-start gap-1.5 text-xs text-slate-500 bg-white/50 rounded p-2">
+        <div className="flex items-start gap-1.5 text-xs text-muted-foreground bg-white/50 rounded p-2">
           <Info size={11} className="mt-0.5 shrink-0" />
           <span>{qpaResult.regulatoryNote}</span>
         </div>
@@ -472,30 +517,35 @@ export default function NewDispute() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between sticky top-0 z-10">
+    <div className="min-h-screen bg-muted">
+      <header className="bg-white border-b border-border px-6 h-14 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-3">
           <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
-          <span className="text-lg font-bold text-slate-800">{APP_TITLE}</span>
+          <span className="text-lg font-bold text-foreground">{APP_TITLE}</span>
         </div>
         <nav className="flex items-center gap-4">
-          <button onClick={() => navigate("/disputes")} className="text-sm text-slate-600 hover:text-blue-600">
+          <button onClick={() => navigate("/disputes")} className="text-sm text-muted-foreground hover:text-info-foreground">
             ← Disputes
           </button>
           {/* Draft status indicator */}
           {lastSaved && (
-            <span className="flex items-center gap-1 text-xs text-green-600">
+            <span className="flex items-center gap-1 text-xs text-success-foreground">
               <Save size={11} />
               Saved {lastSaved.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
             </span>
           )}
           {saveDraftMutation.isPending && (
-            <span className="flex items-center gap-1 text-xs text-slate-400">
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
               <Save size={11} className="animate-pulse" />
               Saving…
             </span>
           )}
-          <span className="text-sm text-slate-600">{user?.name}</span>
+          {offlineQueued && (
+            <Badge variant="outline" className="text-xs text-warning-foreground border-warning-foreground/30 bg-warning">
+              Offline — draft saved on this device
+            </Badge>
+          )}
+          <span className="text-sm text-muted-foreground">{user?.name}</span>
           <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
         </nav>
       </header>
@@ -503,15 +553,15 @@ export default function NewDispute() {
       <main className="max-w-3xl mx-auto px-6 py-8">
         {/* Page title */}
         <div className="flex items-center gap-3 mb-8">
-          <button onClick={() => navigate("/disputes")} className="text-slate-400 hover:text-slate-600">
+          <button onClick={() => navigate("/disputes")} className="text-muted-foreground hover:text-muted-foreground">
             <ArrowLeft size={20} />
           </button>
           <div>
-            <h1 className="text-2xl font-bold text-slate-800">Initiate IDR Dispute</h1>
-            <p className="text-sm text-slate-500">NSA Federal Independent Dispute Resolution Process</p>
+            <h1 className="text-2xl font-bold text-foreground">Initiate IDR Dispute</h1>
+            <p className="text-sm text-muted-foreground">NSA Federal Independent Dispute Resolution Process</p>
           </div>
           {existingDraft && (
-            <Badge variant="outline" className="ml-auto text-xs text-amber-700 border-amber-300 bg-amber-50">
+            <Badge variant="outline" className="ml-auto text-xs text-warning-foreground border-warning-foreground/30 bg-warning">
               Draft restored
             </Badge>
           )}
@@ -572,11 +622,11 @@ export default function NewDispute() {
                 <p className="text-xs text-teal-700">Select a connected EMR system and provide a patient or claim identifier. The AI extraction agent will populate all available dispute fields automatically via FHIR R4.</p>
                 <div className="grid grid-cols-1 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">EMR System *</label>
+                    <label className="block text-xs font-medium text-muted-foreground mb-1">EMR System *</label>
                     <select
                       value={selectedEMRId}
                       onChange={e => setSelectedEMRId(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
                     >
                       <option value="">Select EMR connection…</option>
                       {activeEMRConnections.map((c: any) => (
@@ -586,7 +636,7 @@ export default function NewDispute() {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="relative">
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Patient ID or Name</label>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1">Patient ID or Name</label>
                       <Input
                         value={patientSearchQuery || emrPatientId}
                         onChange={e => {
@@ -605,27 +655,27 @@ export default function NewDispute() {
                         className="text-sm"
                       />
                       {showPatientDropdown && patientSuggestions.length > 0 && (
-                        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-border rounded-lg shadow-lg max-h-40 overflow-y-auto">
                           {patientSuggestions.map(p => (
                             <button
                               key={p.id}
                               type="button"
-                              className="w-full text-left px-3 py-2 hover:bg-teal-50 text-xs border-b border-slate-100 last:border-0"
+                              className="w-full text-left px-3 py-2 hover:bg-accent text-xs border-b border-border last:border-0"
                               onClick={() => {
                                 setEMRPatientId(p.id);
                                 setPatientSearchQuery(`${p.name} (${p.id})`);
                                 setShowPatientDropdown(false);
                               }}
                             >
-                              <div className="font-medium text-slate-800">{p.name}</div>
-                              <div className="text-slate-500">ID: {p.id} · DOB: {p.dob} · MRN: {p.mrn}</div>
+                              <div className="font-medium text-foreground">{p.name}</div>
+                              <div className="text-muted-foreground">ID: {p.id} · DOB: {p.dob} · MRN: {p.mrn}</div>
                             </button>
                           ))}
                         </div>
                       )}
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Claim ID (optional)</label>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1">Claim ID (optional)</label>
                       <Input
                         value={emrClaimId}
                         onChange={e => setEMRClaimId(e.target.value)}
@@ -658,28 +708,28 @@ export default function NewDispute() {
                 {emrPullResult && (
                   <div className={`rounded-lg border p-3 text-xs space-y-1.5 ${
                     emrPullResult.success && emrPullResult.fieldsExtracted > 0
-                      ? "border-green-200 bg-green-50"
-                      : "border-amber-200 bg-amber-50"
+                      ? "border-success-foreground/30 bg-success"
+                      : "border-warning-foreground/30 bg-warning"
                   }`}>
                     <div className="flex items-center gap-2">
                       <span className={`font-semibold ${
-                        emrPullResult.success && emrPullResult.fieldsExtracted > 0 ? "text-green-700" : "text-amber-700"
+                        emrPullResult.success && emrPullResult.fieldsExtracted > 0 ? "text-success-foreground" : "text-warning-foreground"
                       }`}>
                         {emrPullResult.success && emrPullResult.fieldsExtracted > 0
                           ? `✓ ${emrPullResult.fieldsExtracted} fields extracted`
                           : "⚠ Extraction incomplete"}
                       </span>
                       {emrPullResult.fhirResources.length > 0 && (
-                        <span className="text-slate-500">via {emrPullResult.fhirResources.join(", ")}</span>
+                        <span className="text-muted-foreground">via {emrPullResult.fhirResources.join(", ")}</span>
                       )}
                     </div>
-                    <p className="text-slate-600">{emrPullResult.summary}</p>
+                    <p className="text-muted-foreground">{emrPullResult.summary}</p>
                     {Object.keys(emrPullResult.fieldConfidence).length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {Object.entries(emrPullResult.fieldConfidence).map(([field, conf]) => (
                           <span key={field} className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                            conf >= 0.9 ? "bg-green-100 text-green-700" :
-                            conf >= 0.7 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"
+                            conf >= 0.9 ? "bg-success text-success-foreground" :
+                            conf >= 0.7 ? "bg-warning text-warning-foreground" : "bg-red-100 text-red-700"
                           }`}>
                             {field}: {Math.round(conf * 100)}%
                           </span>
@@ -687,7 +737,7 @@ export default function NewDispute() {
                       </div>
                     )}
                     {emrPullResult.warnings.length > 0 && (
-                      <ul className="text-amber-700 space-y-0.5">
+                      <ul className="text-warning-foreground space-y-0.5">
                         {emrPullResult.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
                       </ul>
                     )}
@@ -703,29 +753,29 @@ export default function NewDispute() {
           {STEPS.map((step, index) => (
             <div key={step.id} className="flex items-center gap-2 flex-1">
               <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-bold shrink-0 transition-colors ${
-                step.id < currentStep ? "bg-green-500 text-white" :
-                step.id === currentStep ? "bg-blue-600 text-white" :
-                "bg-slate-200 text-slate-500"
+                step.id < currentStep ? "bg-success text-success-foreground" :
+                step.id === currentStep ? "bg-primary text-white" :
+                "bg-muted text-muted-foreground"
               }`}>
                 {step.id < currentStep ? <CheckCircle2 size={16} /> : step.id}
               </div>
               <span className={`text-xs font-medium hidden sm:block ${
-                step.id === currentStep ? "text-blue-600" :
-                step.id < currentStep ? "text-green-600" : "text-slate-400"
+                step.id === currentStep ? "text-info-foreground" :
+                step.id < currentStep ? "text-success-foreground" : "text-muted-foreground"
               }`}>
                 {step.title}
               </span>
-              {index < STEPS.length - 1 && <div className="flex-1 h-0.5 bg-slate-200 mx-1" />}
+              {index < STEPS.length - 1 && <div className="flex-1 h-0.5 bg-muted mx-1" />}
             </div>
           ))}
         </div>
 
-        <Card className="border-slate-200">
+        <Card className="border-border">
           <CardHeader className="pb-4">
-            <CardTitle className="text-lg font-semibold text-slate-800">
+            <CardTitle className="text-lg font-semibold text-foreground">
               Step {currentStep}: {STEPS[currentStep - 1].title}
             </CardTitle>
-            <p className="text-sm text-slate-500">{STEPS[currentStep - 1].description}</p>
+            <p className="text-sm text-muted-foreground">{STEPS[currentStep - 1].description}</p>
           </CardHeader>
           <CardContent className="space-y-5">
 
@@ -736,7 +786,7 @@ export default function NewDispute() {
                   <select
                     value={form.initiatingPartyType}
                     onChange={e => update("initiatingPartyType", e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     {PARTY_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
@@ -756,7 +806,7 @@ export default function NewDispute() {
                     maxLength={10}
                   />
                 </Field>
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700">
+                <div className="bg-info border border-info-foreground/30 rounded-lg p-3 text-xs text-info-foreground">
                   <strong>NSA Requirement:</strong> The initiating party must have previously attempted open
                   negotiation with the responding party before filing for federal IDR per 45 CFR §149.510(b).
                 </div>
@@ -770,7 +820,7 @@ export default function NewDispute() {
                   <select
                     value={form.respondingPartyType}
                     onChange={e => update("respondingPartyType", e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     {PARTY_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
@@ -800,7 +850,7 @@ export default function NewDispute() {
                   <select
                     value={form.serviceType}
                     onChange={e => update("serviceType", e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     {SERVICE_TYPES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
@@ -817,7 +867,7 @@ export default function NewDispute() {
                     <select
                       value={form.patientState}
                       onChange={e => update("patientState", e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     >
                       {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
@@ -826,7 +876,7 @@ export default function NewDispute() {
                     <select
                       value={form.facilityState}
                       onChange={e => update("facilityState", e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     >
                       {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
@@ -844,7 +894,7 @@ export default function NewDispute() {
                     step="0.01"
                     min="0"
                     value={form.billedAmount}
-                    onChange={e => update("billedAmount", e.target.value)}
+                    onChange={e => setForm(prev => { const next = { ...prev, billedAmount: e.target.value }; scheduleSave(currentStep, next); return next; })}
                     placeholder="0.00"
                   />
                 </Field>
@@ -873,7 +923,7 @@ export default function NewDispute() {
                     onChange={e => update("notes", e.target.value)}
                     rows={3}
                     placeholder="Any additional context about this dispute..."
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                   />
                 </Field>
 
@@ -885,7 +935,7 @@ export default function NewDispute() {
             {/* ── Step 5: Review & Submit ──────────────────────────────────── */}
             {currentStep === 5 && (
               <div className="space-y-4">
-                <div className="bg-slate-50 rounded-lg p-4 space-y-3 text-sm">
+                <div className="bg-muted rounded-lg p-4 space-y-3 text-sm">
                   <div className="grid grid-cols-2 gap-3">
                     {[
                       { label: "Initiating Party", value: `${form.initiatingPartyName} (${form.initiatingPartyType})` },
@@ -898,8 +948,8 @@ export default function NewDispute() {
                       { label: "CPT Codes", value: form.cptCodes },
                     ].map(item => (
                       <div key={item.label}>
-                        <div className="text-xs text-slate-400">{item.label}</div>
-                        <div className="font-medium text-slate-700">{item.value || "—"}</div>
+                        <div className="text-xs text-muted-foreground">{item.label}</div>
+                        <div className="font-medium text-foreground">{item.value || "—"}</div>
                       </div>
                     ))}
                   </div>
@@ -909,7 +959,7 @@ export default function NewDispute() {
                 {qpaResult && (
                   <div className={`rounded-lg border p-3 text-sm ${SEVERITY_CONFIG[qpaResult.severity as keyof typeof SEVERITY_CONFIG].bg} ${SEVERITY_CONFIG[qpaResult.severity as keyof typeof SEVERITY_CONFIG].border}`}>
                     <div className="flex items-center justify-between">
-                      <span className="font-medium text-slate-700">QPA Benchmark</span>
+                      <span className="font-medium text-foreground">QPA Benchmark</span>
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${SEVERITY_CONFIG[qpaResult.severity as keyof typeof SEVERITY_CONFIG].badge}`}>
                         {qpaResult.percentageOfQpa}% of QPA (${qpaResult.qpaEstimate.toLocaleString()})
                       </span>
@@ -920,7 +970,7 @@ export default function NewDispute() {
                   </div>
                 )}
 
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
+                <div className="bg-warning border border-warning-foreground/30 rounded-lg p-3 text-xs text-warning-foreground">
                   <strong>Important:</strong> By submitting this dispute, you certify that open negotiation was
                   attempted and failed within the required 30-business-day period per 45 CFR §149.510. Submitting
                   a false IDR request may result in penalties.
@@ -929,7 +979,7 @@ export default function NewDispute() {
             )}
 
             {/* Navigation */}
-            <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+            <div className="flex items-center justify-between pt-4 border-t border-border">
               <Button
                 variant="outline"
                 onClick={() => currentStep === 1 ? navigate("/disputes") : handleStepChange(currentStep - 1)}
@@ -949,7 +999,7 @@ export default function NewDispute() {
                 <Button
                   onClick={handleSubmit}
                   disabled={createMutation.isPending}
-                  className="flex items-center gap-2 bg-green-600 hover:bg-green-700"
+                  className="flex items-center gap-2 bg-primary hover:bg-primary/90"
                 >
                   <Scale size={14} />
                   {createMutation.isPending ? "Initiating…" : "Initiate IDR Dispute"}
