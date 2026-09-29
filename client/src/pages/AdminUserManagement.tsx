@@ -14,7 +14,7 @@ import { Users, Search, Shield, UserCheck, UserX, RefreshCw, Crown, Ban, CheckCi
 import { setImpersonationSession } from "@/components/ImpersonationBanner";
 import EmptyState from "@/components/EmptyState";
 
-type ActionType = "role" | "suspend" | "unsuspend" | "offboard" | "delete";
+type ActionType = "role" | "suspend" | "unsuspend" | "offboard" | "delete" | "resetTotp";
 
 export default function AdminUserManagement() {
   const { user: currentUser } = useAuth();
@@ -85,6 +85,18 @@ export default function AdminUserManagement() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Phase15-FA (A3): admin TOTP recovery — disables the user's active TOTP
+  // enrollment and clears backup codes; re-enrollment is forced at next
+  // login when the org mandates MFA. Reason >= 20 chars; audit-logged.
+  const resetTotpMutation = trpc.adminTotp.resetUserTotp.useMutation({
+    onSuccess: (r) => {
+      toast.success(`TOTP reset — enrollment ${r.totpStatus}. The user can sign in without a second factor and will be forced to re-enroll when their org requires MFA.`);
+      setShowDialog(false);
+      setSuspendReason("");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   // Wave W5-6: audited impersonation (15-min token; every request audited).
   const [impersonateUser, setImpersonateUser] = useState<any>(null);
   const [impersonateReason, setImpersonateReason] = useState("");
@@ -123,17 +135,38 @@ export default function AdminUserManagement() {
     } else if (actionType === "delete") {
       if (!suspendReason.trim()) { toast.error("A reason is required for deletion"); return; }
       deleteMutation.mutate({ userId: selectedUser.id, reason: suspendReason.trim() });
+    } else if (actionType === "resetTotp") {
+      if (suspendReason.trim().length < 20) { toast.error("A reason of at least 20 characters is required"); return; }
+      resetTotpMutation.mutate({ userId: selectedUser.id, reason: suspendReason.trim() });
     } else {
       unsuspendMutation.mutate({ userId: selectedUser.id });
     }
   };
 
-  const isPending = updateRoleMutation.isPending || suspendMutation.isPending || unsuspendMutation.isPending || offboardMutation.isPending || deleteMutation.isPending;
+  const isPending = updateRoleMutation.isPending || suspendMutation.isPending || unsuspendMutation.isPending || offboardMutation.isPending || deleteMutation.isPending || resetTotpMutation.isPending;
+
+  // Phase15-FA (A2): one-time bootstrap — callable only while ZERO active
+  // admin users exist (server-enforced); audit-logged as admin.bootstrap.
+  const bootstrapMut = trpc.orgs.claimBootstrapAdmin.useMutation({
+    onSuccess: () => {
+      toast.success("Bootstrap admin claimed — you now have the platform admin role");
+      window.location.reload();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   if (currentUser?.role !== "admin") {
     return (
-      <div className="p-6">
+      <div className="p-6 space-y-4">
         <EmptyState variant="disputes" title="Access Denied" description="You must be an administrator to access this page." />
+        <div className="max-w-md">
+          <p className="text-xs text-muted-foreground mb-2">
+            First-time setup only: if this deployment has no administrator yet, you can claim the initial admin role once. The claim is refused as soon as any active admin exists and is recorded in the audit log.
+          </p>
+          <Button variant="outline" size="sm" disabled={bootstrapMut.isPending} onClick={() => bootstrapMut.mutate()}>
+            <Crown className="h-3 w-3 mr-1" />Claim initial admin
+          </Button>
+        </div>
       </div>
     );
   }
@@ -316,6 +349,15 @@ export default function AdminUserManagement() {
                                   <Ban className="h-3 w-3 mr-1" />Suspend
                                 </Button>
                               )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openAction(u, "resetTotp")}
+                                className="text-xs text-slate-600 border-slate-200 hover:bg-slate-50"
+                                title="Disable the user's TOTP enrollment and clear backup codes (account recovery)"
+                              >
+                                <RefreshCw className="h-3 w-3 mr-1" />Reset 2FA
+                              </Button>
                             </div>
                           )}
                         </td>
@@ -339,6 +381,7 @@ export default function AdminUserManagement() {
               {actionType === "unsuspend" && <><CheckCircle2 className="h-4 w-4 text-green-500" />Restore User Access</>}
               {actionType === "offboard" && <><UserX className="h-4 w-4 text-orange-500" />Offboard User</>}
               {actionType === "delete" && <><UserX className="h-4 w-4 text-red-600" />Delete User (anonymize PII)</>}
+              {actionType === "resetTotp" && <><RefreshCw className="h-4 w-4 text-slate-600" />Reset Two-Factor Authentication</>}
             </DialogTitle>
           </DialogHeader>
 
@@ -421,6 +464,30 @@ export default function AdminUserManagement() {
             </div>
           )}
 
+          {actionType === "resetTotp" && (
+            <div className="space-y-4">
+              <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-950/20 rounded-lg">
+                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                <p className="text-sm text-amber-800 dark:text-amber-300">
+                  <strong>{selectedUser?.name}</strong>'s TOTP enrollment will be disabled and all backup codes cleared.
+                  They will be able to sign in without a second factor, and will be forced to re-enroll at next login
+                  if their organization requires MFA. Fails if the user has no active TOTP enrollment. Audit-logged.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reset-totp-reason">Reason (required, min 20 characters)</Label>
+                <Textarea
+                  id="reset-totp-reason"
+                  placeholder="e.g. User lost their authenticator device and all backup codes; identity verified via ..."
+                  value={suspendReason}
+                  onChange={e => setSuspendReason(e.target.value)}
+                  rows={3}
+                  maxLength={1000}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-3 pt-2">
             <Button variant="outline" className="flex-1" onClick={() => setShowDialog(false)}>Cancel</Button>
             <Button
@@ -429,7 +496,7 @@ export default function AdminUserManagement() {
               onClick={handleConfirm}
               disabled={isPending}
             >
-              {isPending ? "Processing..." : actionType === "role" ? "Confirm" : actionType === "suspend" ? "Suspend User" : actionType === "offboard" ? "Offboard User" : actionType === "delete" ? "Delete User" : "Restore Access"}
+              {isPending ? "Processing..." : actionType === "role" ? "Confirm" : actionType === "suspend" ? "Suspend User" : actionType === "offboard" ? "Offboard User" : actionType === "delete" ? "Delete User" : actionType === "resetTotp" ? "Reset 2FA" : "Restore Access"}
             </Button>
           </div>
         </DialogContent>
