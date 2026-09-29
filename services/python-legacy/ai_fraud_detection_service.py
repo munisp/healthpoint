@@ -680,3 +680,4 @@ async def receive_feedback(feedback: FeedbackData, background_tasks: BackgroundT
                 );
             """)
             logger.info('Database schema created or already exists.')
+
