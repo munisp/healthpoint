@@ -192,7 +192,6 @@ async def detect_fraud(claim: ClaimData, background_tasks: BackgroundTasks):
 
 
 
-
 class FraudPredictor:
     def __init__(self):
         self.models = {}
