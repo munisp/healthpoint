@@ -728,7 +728,7 @@ export function getWorkflowProgress(currentStep: IDRStep): Array<{
     "STEP_17_DISPUTE_CLOSED",
   ];
 
-  const currentIndex = mainPath.indexOf(step);
+  const currentIndex = mainPath.indexOf(currentStep);
 
   return mainPath.map((stepId, index) => ({
     step: IDR_WORKFLOW_STEPS[stepId],
