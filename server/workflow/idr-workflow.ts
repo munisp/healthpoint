@@ -614,6 +614,32 @@ export async function advanceWorkflow(
       { userId, timestamp: new Date().toISOString() }
     );
 
+    // ── Phase 15 FB (B1): Temporal durable-execution dispatch at IDR initiation.
+    // When TEMPORAL_EXECUTION_ENABLED=true, entering STEP_04_IDR_INITIATED starts
+    // the per-dispute durable workflow (idempotent: an existing execution is
+    // reused). The in-process PostgreSQL state machine above remains the system
+    // of record and is the fallback when Temporal is disabled or unreachable —
+    // a failed start NEVER rolls back the step advance; it is logged and
+    // surfaced as a warning honestly.
+    if (targetStep === "STEP_04_IDR_INITIATED") {
+      try {
+        const temporal = await import("../temporal");
+        if (temporal.isTemporalDispatchEnabled()) {
+          const started = await temporal.startDisputeTemporalWorkflow(disputeId, userId);
+          console.warn(
+            `[temporal] STEP_04 dispatch dispute=${disputeId} workflowId=${started.workflowId} ` +
+            `${started.reusedExisting ? "reused-existing" : `runId=${started.runId}`}`
+          );
+        } else {
+          console.warn(`[temporal] TEMPORAL_EXECUTION_ENABLED is not true — dispute ${disputeId} continues on the in-process PostgreSQL state machine (no durable execution started)`);
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.warn(`[temporal] workflow start failed for dispute ${disputeId} (continuing in-process): ${reason}`);
+        warnings.push(`Temporal durable execution could not be started (${reason}); the dispute continues on the in-process PostgreSQL state machine.`);
+      }
+    }
+
     return {
       success: true,
       previousStep: currentStep,
@@ -702,7 +728,7 @@ export function getWorkflowProgress(currentStep: IDRStep): Array<{
     "STEP_17_DISPUTE_CLOSED",
   ];
 
-  const currentIndex = mainPath.indexOf(currentStep);
+  const currentIndex = mainPath.indexOf(step);
 
   return mainPath.map((stepId, index) => ({
     step: IDR_WORKFLOW_STEPS[stepId],
