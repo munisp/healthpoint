@@ -507,7 +507,7 @@
 - [x] Wire OllamaManager into App.tsx routes and DashboardLayout sidebar
 - [x] Add confidence score badges and warning tooltips to all Field components in NewDispute.tsx wizard
 - [x] Install D3 and TopoJSON packages for US choropleth map
-- [x] Create USChoroplethMap.tsx D3 component with hover tooltips and Apache Sedona lakehouse integration
+- [x] Create USChoroplethMap.tsx D3 component with hover tooltips and state-level dispute-density overlay (Phase 15 FB correction: served by the Postgres-native `lakehouse.spatialQuery` tRPC procedure — Apache Sedona was never adopted; the earlier "Apache Sedona lakehouse integration" claim was aspirational and wrong)
 - [x] Add interactive Map tab to StateBalanceBilling.tsx with D3 choropleth
 - [x] Add Request Missing Data button and AI-generated template modal to USCDICompleteness.tsx
 - [x] Add response compression (gzip/brotli) middleware to server
