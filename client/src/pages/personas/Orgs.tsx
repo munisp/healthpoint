@@ -3,11 +3,15 @@
  */
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import PersonaTour from "@/components/PersonaTour";
 
@@ -19,6 +23,8 @@ const TOUR_STEPS = [
 ];
 
 export default function Orgs() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const utils = trpc.useUtils();
   const { data: mine, isLoading } = trpc.orgs.listMine.useQuery();
   const [selectedOrg, setSelectedOrg] = useState<string | null>(null);
@@ -45,6 +51,41 @@ export default function Orgs() {
   });
   const switchCtx = trpc.orgs.switchContext.useMutation({
     onSuccess: r => toast.success(`Context switched to ${r.orgName} (${r.role})`),
+    onError: e => toast.error(e.message),
+  });
+
+  // Phase15-FA (A2): invite by email + admin org suspension, previously
+  // journey/test-only procedures with no UI.
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<"staff" | "viewer">("staff");
+  const [inviteResult, setInviteResult] = useState<{ emailStatus: string; existingUser: boolean } | null>(null);
+  const inviteMember = trpc.orgs.inviteMember.useMutation({
+    onSuccess: r => {
+      setInviteResult({ emailStatus: r.inviteEmailStatus, existingUser: r.existingUser });
+      if (r.inviteEmailStatus === "delivered") {
+        toast.success("Invite email sent — the recipient accepts via the emailed link");
+      } else {
+        toast.warning(`Invite recorded, but the email was not delivered (status: ${r.inviteEmailStatus}). Ask the recipient to sign in and accept from their notifications.`);
+      }
+      setInviteEmail("");
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const [suspendDialog, setSuspendDialog] = useState<{ orgId: string; orgName: string; action: "suspend" | "unsuspend" } | null>(null);
+  const [suspendReason, setSuspendReason] = useState("");
+  const suspendOrg = trpc.orgs.suspendOrg.useMutation({
+    onSuccess: r => {
+      toast.success(r.alreadySuspended ? "Organization was already suspended" : "Organization suspended — member mutations are now blocked");
+      setSuspendDialog(null); setSuspendReason(""); invalidate();
+    },
+    onError: e => toast.error(e.message),
+  });
+  const unsuspendOrg = trpc.orgs.unsuspendOrg.useMutation({
+    onSuccess: r => {
+      toast.success(r.alreadyActive ? "Organization was already active" : "Organization reinstated");
+      setSuspendDialog(null); setSuspendReason(""); invalidate();
+    },
     onError: e => toast.error(e.message),
   });
 
@@ -83,12 +124,24 @@ export default function Orgs() {
                 {o.name}
                 <Badge variant="outline">{o.type}</Badge>
                 <Badge variant="secondary">{o.role}</Badge>
+                {o.status === "suspended" && <Badge variant="destructive">suspended</Badge>}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => setSelectedOrg(o.orgId)}>Manage</Button>
                 <Button size="sm" variant="secondary" onClick={() => switchCtx.mutate({ orgId: o.orgId })}>Switch context</Button>
+                {isAdmin && (o.status === "suspended" ? (
+                  <Button size="sm" variant="outline" className="text-green-700 border-green-300"
+                    onClick={() => { setSuspendDialog({ orgId: o.orgId, orgName: o.name, action: "unsuspend" }); setSuspendReason(""); }}>
+                    Reinstate org
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" className="text-red-700 border-red-300"
+                    onClick={() => { setSuspendDialog({ orgId: o.orgId, orgName: o.name, action: "suspend" }); setSuspendReason(""); }}>
+                    Suspend org
+                  </Button>
+                ))}
               </div>
               {selectedOrg === o.orgId && (
                 <div className="space-y-3 border rounded p-3">
@@ -102,6 +155,22 @@ export default function Orgs() {
                       <Button size="sm" disabled={addMember.isPending || !memberUserId.trim()}
                         onClick={() => addMember.mutate({ orgId: o.orgId, userId: memberUserId, role: "staff" })}>Add member</Button>
                     </div>
+                    {/* Phase15-FA (A2): invite by email (owners only, enforced server-side) */}
+                    <div className="flex flex-wrap gap-2 mt-2 items-center">
+                      <Input className="w-64" type="email" aria-label="Email address to invite" placeholder="invite by email" value={inviteEmail} onChange={e => { setInviteEmail(e.target.value); setInviteResult(null); }} />
+                      <select aria-label="Invite role" className="border rounded px-2 py-1 text-sm bg-background" value={inviteRole} onChange={e => setInviteRole(e.target.value as typeof inviteRole)}>
+                        <option value="staff">staff</option>
+                        <option value="viewer">viewer</option>
+                      </select>
+                      <Button size="sm" variant="secondary" disabled={inviteMember.isPending || !inviteEmail.trim()}
+                        onClick={() => inviteMember.mutate({ orgId: o.orgId, email: inviteEmail.trim(), role: inviteRole })}>Send invite</Button>
+                    </div>
+                    {inviteResult && (
+                      <p className="text-xs text-muted-foreground">
+                        Invite recorded — email delivery: <Badge variant={inviteResult.emailStatus === "delivered" ? "secondary" : "destructive"}>{inviteResult.emailStatus}</Badge>
+                        {inviteResult.existingUser ? " Recipient already has a platform account." : " Recipient will need to register with this email address, then open the accept link."}
+                      </p>
+                    )}
                   </div>
                   {/* W7-4: white-label branding (owners/admins; server enforces) */}
                   <div className="space-y-2">
@@ -168,6 +237,36 @@ export default function Orgs() {
             </CardContent>
           </Card>
         ))}
+
+        {/* Phase15-FA (A2): admin suspend/reinstate dialog — reason >= 10 chars, audit-logged server-side */}
+        <Dialog open={!!suspendDialog} onOpenChange={() => setSuspendDialog(null)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>{suspendDialog?.action === "suspend" ? "Suspend organization" : "Reinstate organization"}</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              {suspendDialog?.action === "suspend"
+                ? <>Suspending <strong>{suspendDialog?.orgName}</strong> blocks all org-scoped member mutations (invites, member adds, branding changes). Reads stay available. This is recorded in the audit log.</>
+                : <>Reinstating <strong>{suspendDialog?.orgName}</strong> restores org-scoped member mutations. This is recorded in the audit log.</>}
+            </p>
+            <div className="space-y-1 mt-2">
+              <Label>Reason (min 10 characters, recorded in the audit log)</Label>
+              <Textarea value={suspendReason} onChange={e => setSuspendReason(e.target.value)} rows={3} maxLength={1000} />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setSuspendDialog(null)}>Cancel</Button>
+              <Button
+                className={`flex-1 ${suspendDialog?.action === "suspend" ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
+                disabled={suspendReason.trim().length < 10 || suspendOrg.isPending || unsuspendOrg.isPending}
+                onClick={() => suspendDialog && (suspendDialog.action === "suspend"
+                  ? suspendOrg.mutate({ orgId: suspendDialog.orgId, reason: suspendReason.trim() })
+                  : unsuspendOrg.mutate({ orgId: suspendDialog.orgId, reason: suspendReason.trim() }))}
+              >
+                {suspendOrg.isPending || unsuspendOrg.isPending ? "Processing…" : suspendDialog?.action === "suspend" ? "Suspend" : "Reinstate"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );
