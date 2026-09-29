@@ -2067,7 +2067,25 @@ export const appRouter = router({
             });
             if (!resp.ok) return [];
             const bundle = await resp.json() as { entry?: { resource: { id: string; name?: { family?: string; given?: string[] }[]; birthDate?: string; identifier?: { value: string }[] } }[] };
-            return (bundle.entry ?? []).map(e => ({
+            // Phase 15 FB (A6): write the FHIR resource cache on the real
+            // EMR fetch path — fhir_resource_cache was read/purge-only
+            // (fhirCache.list, retentionWorker) with no writer.
+            const entries = bundle.entry ?? [];
+            if (entries.length > 0) {
+              const now = new Date();
+              await db.insert(fhirResourceCache).values(
+                entries.map(e => ({
+                  id: crypto.randomUUID(),
+                  emrConnectionId: input.connectionId,
+                  resourceType: "Patient",
+                  resourceId: String(e.resource.id),
+                  fhirVersion: conn[0].fhirVersion ?? "R4",
+                  resourceData: e.resource,
+                  fetchedAt: now,
+                }))
+              ).onConflictDoNothing().catch(err => console.warn("[fhir-cache] cache write failed (non-blocking):", err?.message ?? err));
+            }
+            return entries.map(e => ({
               id: e.resource.id,
               name: e.resource.name?.[0] ? `${e.resource.name[0].family ?? ""}, ${(e.resource.name[0].given ?? []).join(" ")}`.trim() : "Unknown",
               dob: e.resource.birthDate ?? "",
@@ -2832,7 +2850,7 @@ export const appRouter = router({
         // marked, self-attributed note.
         const isAdmin = ctx.user.role === "admin";
         const ip = (ctx.req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? ctx.req.ip ?? null;
-        return createAuditEntry({
+        const entry = await createAuditEntry({
           userId: ctx.user.id,
           action: isAdmin ? input.action : "user.note",
           entityType: input.entityType,
@@ -2842,6 +2860,14 @@ export const appRouter = router({
           ipAddress: ip,
           userAgent: (ctx.req.headers["user-agent"] as string | undefined) ?? null,
         });
+        // Phase 15 FB (A6): project admin-attributed audit actions onto the
+        // changelog stream so changelog_entries is no longer read-never-written.
+        if (isAdmin) {
+          const { projectAdminActionToChangelog } = await import("./changelog");
+          projectAdminActionToChangelog(input.action, input.entityType, input.newValue)
+            .catch(err => console.warn("[changelog] admin-action projection failed (non-blocking):", err?.message ?? err));
+        }
+        return entry;
       }),
   }),
 
@@ -3351,6 +3377,9 @@ Based on NSA IDR historical data and legal precedent, provide:
       }),
     // M2: admin confirmation of an unverified payment report — posts the
     // verified double-entry and marks the report verified (see ledger.ts).
+    // Phase 15 FB (A4): intentional OPS API — zero UI callers by design.
+    // Admin payment confirmation is invoked by ops tooling/reconciliation
+    // scripts, not the ledger page. Retained; do not delete as "dead code".
     confirmPayment: adminProcedure
       .input(z.object({
         disputeId: z.string(),
@@ -3400,6 +3429,9 @@ Based on NSA IDR historical data and legal precedent, provide:
     // Admin-only: rebuild the OpenSearch index from Postgres in bounded
     // batches (500) and drain the indexing-failure retry set. Reads fall back
     // to Fuse.js while OpenSearch is down (see server/search.ts).
+    // Phase 15 FB (A4): intentional OPS API — full OpenSearch reindex is a
+    // recovery/backfill operation invoked manually or from deploy runbooks,
+    // not from a UI button. Retained intentionally.
     reindexAll: adminProcedure
       .mutation(async () => {
         const { reindexAllFromPostgres } = await import("./search");
@@ -3597,6 +3629,9 @@ Based on NSA IDR historical data and legal precedent, provide:
       }),
     // Admin: diff Postgres dispute_access grants vs Permify tuples and repair
     // (bounded to ≤500 grants per call; see server/authz.ts).
+    // Phase 15 FB (A4): intentional OPS API — repairs drift between Postgres
+    // dispute_access grants and the Permify mirror. Called from ops runbooks
+    // after Permify schema/data recovery; no UI surface by design.
     reconcileDisputeAccess: protectedProcedure
       .input(z.object({ limit: z.number().int().min(1).max(500).default(500) }).optional())
       .mutation(async ({ ctx, input }) => {
@@ -3630,8 +3665,43 @@ Based on NSA IDR historical data and legal precedent, provide:
           exportedAt: new Date().toISOString(),
         };
       }),
+
+    /**
+     * Phase 15 FB (B5): replaces the dangling client call from
+     * USChoroplethMap.tsx, which claimed an "Apache Sedona lakehouse"
+     * backend that never existed. This is an HONEST Postgres-native
+     * implementation: Sedona/GeoLibre are NOT adopted (no geo columns, no
+     * spatial extension at this scale — see docs/LAKEHOUSE-SPATIAL.md);
+     * state-level aggregation over the real disputes table is sufficient.
+     *
+     * queryType "dispute_density_by_state" returns
+     * [{ stateCode, count }] aggregated from disputes.facilityState
+     * (fallback: patientState when facilityState is blank).
+     */
+    spatialQuery: protectedProcedure
+      .input(z.object({
+        queryType: z.enum(["dispute_density_by_state"]),
+      }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
+        if (input.queryType === "dispute_density_by_state") {
+          const rows = await db.execute(sql`
+            SELECT COALESCE(NULLIF("facilityState", ''), "patientState") AS "stateCode",
+                   COUNT(*)::int AS count
+            FROM disputes
+            GROUP BY 1
+            HAVING COALESCE(NULLIF("facilityState", ''), "patientState") IS NOT NULL
+            ORDER BY 1
+          `);
+          const list: Array<{ stateCode: string; count: number }> = Array.isArray(rows)
+            ? (rows as any)
+            : (((rows as any)?.rows ?? []) as any);
+          return list;
+        }
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Unsupported queryType: ${input.queryType}` });
+      }),
   }),
-  // ── Dispute Comments ──────────────────────────────────────────────────────
   comments: router({
     list: protectedProcedure
       .input(z.object({ disputeId: z.string() }))
@@ -4610,6 +4680,17 @@ Based on NSA IDR historical data and legal precedent, provide:
   }),
 
   // ─── SMART on FHIR Tokens ─────────────────────────────────────────────────
+  // Phase 15 FB (A7) — smart_tokens issuance status: VERIFIED ABSENT.
+  // No code in server/** inserts into smart_tokens, and that is currently
+  // CORRECT-BY-DESIGN rather than a bug: SMART-on-FHIR access tokens are
+  // issued by the EMR's own authorization server (Epic/Cerner/etc.), never by
+  // this platform. HealthPoint acts as a SMART *client*; rows appear here only
+  // once the SMART client OAuth2 authorization-code callback (token exchange
+  // against the EMR's token endpoint) is implemented. Until then the
+  // SMARTTokenManager UI legitimately shows an empty state and
+  // listTokens/revokeToken remain for forward compatibility. Faking an
+  // issuance path (minting tokens ourselves) would be dishonest — EMRs would
+  // reject them. Tracked as future work: SMART client callback + insert.
   smartAuth: router({
     listTokens: protectedProcedure
       .input(z.object({ emrConnectionId: z.string() }))
@@ -5496,6 +5577,9 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         if (input.availability && input.availability !== "all") filtered = filtered.filter(r => r.availability === input.availability);
         return filtered;
       }),
+    // Phase 15 FB (A4): intentional OPS API — seeds the expert-panel
+    // directory during environment bring-up/demo provisioning. No UI caller
+    // by design; admin-only in practice (role-checked below).
     seed: protectedProcedure.mutation(async ({ ctx }) => {
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN" });
       const db = await getDb();
@@ -5650,6 +5734,9 @@ IMPORTANT: Return ONLY the JSON object, no markdown, no explanation.`;
         reviewedBy: ctx.user.id,
         reviewedByName: ctx.user.name ?? ctx.user.email ?? ctx.user.id,
       })),
+    // Phase 15 FB (A4): intentional OPS API — configures the daily settlement
+    // balance-proof schedule; invoked during environment provisioning, not
+    // from the admin UI. Retained intentionally.
     configureDailySchedule: adminProcedure
       .input(z.object({ cron: z.string().trim().min(11).max(64).default("0 0 2 * * *") }))
       .mutation(async ({ ctx, input }) => {
