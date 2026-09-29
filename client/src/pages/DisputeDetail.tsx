@@ -201,6 +201,13 @@ export default function DisputeDetail() {
   } | null>(null);
   const [showAiSummary, setShowAiSummary] = useState(false);
 
+  // Phase15-FA (A11): patient portal view-link issuance (previously the
+  // /patient/:token page consumed tokens but nothing in the UI issued them).
+  const [patientName, setPatientName] = useState("");
+  const [patientEmail, setPatientEmail] = useState("");
+  const [patientPhone, setPatientPhone] = useState("");
+  const [issuedLink, setIssuedLink] = useState<{ url: string; expiresAt: string } | null>(null);
+
   // Advance state
   const [advanceDescription, setAdvanceDescription] = useState("");
   const [determinationBasis, setDeterminationBasis] = useState("");
@@ -285,6 +292,15 @@ export default function DisputeDetail() {
       setShowAiSummary(true);
     },
     onError: (err) => toast.error(`AI summary failed: ${err.message}`),
+  });
+
+  const issuePatientLinkMutation = trpc.patientPortal.issueViewToken.useMutation({
+    onSuccess: (r) => {
+      const url = `${window.location.origin}${r.path}`;
+      setIssuedLink({ url, expiresAt: new Date(r.expiresAt).toLocaleString() });
+      toast.success("Patient portal link issued — copy it below and share it with the patient");
+    },
+    onError: (err) => toast.error(err.message),
   });
 
   const handleAISummary = () => {
@@ -660,6 +676,70 @@ export default function DisputeDetail() {
                       <div className="font-medium text-slate-700">{dispute.idrEntityName}</div>
                     </div>
                   </>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Phase15-FA (A11): patient portal view-link issuance */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <Users size={14} className="text-teal-500" />Patient Portal Link
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 pt-0">
+                <p className="text-xs text-slate-500">
+                  Issue a secure, expiring view-only link so the patient can follow this dispute at <code>/patient/&lt;token&gt;</code> and upload documents. Only the initiating party or an admin can issue links.
+                </p>
+                <input
+                  className="w-full border rounded px-2 py-1.5 text-sm bg-background"
+                  aria-label="Patient name"
+                  placeholder="Patient name (required)"
+                  value={patientName}
+                  onChange={e => setPatientName(e.target.value)}
+                />
+                <input
+                  className="w-full border rounded px-2 py-1.5 text-sm bg-background"
+                  aria-label="Patient email (optional)"
+                  placeholder="Patient email (optional)"
+                  type="email"
+                  value={patientEmail}
+                  onChange={e => setPatientEmail(e.target.value)}
+                />
+                <input
+                  className="w-full border rounded px-2 py-1.5 text-sm bg-background"
+                  aria-label="Patient phone (optional)"
+                  placeholder="Patient phone (optional)"
+                  value={patientPhone}
+                  onChange={e => setPatientPhone(e.target.value)}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full text-xs"
+                  disabled={issuePatientLinkMutation.isPending || !patientName.trim() || !id}
+                  onClick={() => id && issuePatientLinkMutation.mutate({
+                    disputeId: id,
+                    patientName: patientName.trim(),
+                    email: patientEmail.trim() || undefined,
+                    phone: patientPhone.trim() || undefined,
+                  })}
+                >
+                  {issuePatientLinkMutation.isPending ? "Issuing…" : "Issue patient link"}
+                </Button>
+                {issuedLink && (
+                  <div className="rounded border border-teal-200 bg-teal-50 p-2 space-y-1">
+                    <p className="text-xs text-teal-800 break-all font-mono">{issuedLink.url}</p>
+                    <p className="text-xs text-teal-700">Expires {issuedLink.expiresAt}. The token is shown only here — it is stored hashed server-side.</p>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="text-xs"
+                      onClick={() => { navigator.clipboard?.writeText(issuedLink.url).then(() => toast.success("Link copied")).catch(() => toast.error("Copy failed — select the link manually")); }}
+                    >
+                      Copy link
+                    </Button>
+                  </div>
                 )}
               </CardContent>
             </Card>
