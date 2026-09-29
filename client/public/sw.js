@@ -4,9 +4,23 @@
 // VERSIONING: SW_VERSION is embedded in CACHE_NAME. Bump it on every release
 // that changes precached assets or caching behavior (e.g. -1 → -2) so the
 // activate handler purges stale caches and clients pick up the new version.
-const SW_VERSION = "2026-09-05-2";
+const SW_VERSION = "2026-09-05-3";
 const CACHE_NAME = `healthpoint-idr-${SW_VERSION}`;
 const OFFLINE_URL = "/offline.html";
+
+// Phase15-FA (A8): separate cache for a small whitelist of GET reference-data
+// API responses (stale-while-revalidate). Deliberately NOT version-purged with
+// the shell cache so reference data survives SW upgrades; entries are refreshed
+// on every successful network response. Mutations remain network-only — there
+// is intentionally no offline write queue (future work).
+const API_REF_CACHE = "healthpoint-api-ref";
+const API_REF_PROCEDURES = [
+  "feeSchedules.list",
+  "orgs.getBranding",
+  "orgs.myBranding",
+  "qpaBenchmarks.stateModifiers",
+  "qpaBenchmarks.list",
+];
 
 // Critical assets precached at install time.
 const PRECACHE_ASSETS = [
@@ -55,7 +69,7 @@ self.addEventListener("activate", (event) => {
       .then((cacheNames) =>
         Promise.all(
           cacheNames
-            .filter((name) => name !== CACHE_NAME)
+            .filter((name) => name !== CACHE_NAME && name !== API_REF_CACHE)
             .map((name) => caches.delete(name))
         )
       )
@@ -71,7 +85,29 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // API calls: network-only (never serve cached tRPC/API responses).
+  // API calls: network-only by default — EXCEPT a small whitelist of
+  // reference-data tRPC GET queries (Phase15-FA, A8), served
+  // stale-while-revalidate from the api-ref cache so reference data stays
+  // readable offline. All mutations and all other API traffic hit the network.
+  if (url.pathname.startsWith("/api/trpc/")) {
+    const procs = decodeURIComponent(url.pathname.slice("/api/trpc/".length)).split(",");
+    if (procs.length > 0 && procs.every((p) => API_REF_PROCEDURES.includes(p))) {
+      event.respondWith(
+        caches.open(API_REF_CACHE).then((cache) =>
+          cache.match(request).then((cached) => {
+            const network = fetch(request)
+              .then((response) => {
+                if (response.ok) cache.put(request, response.clone());
+                return response;
+              })
+              .catch(() => cached);
+            return cached || network;
+          })
+        )
+      );
+    }
+    return;
+  }
   if (url.pathname.startsWith("/api/")) return;
 
   // Navigation requests: network-first, then cache, then offline fallback.
