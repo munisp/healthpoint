@@ -206,6 +206,13 @@ export const noticeConsentRouter = router({
   /**
    * W4-F1: compose the full statutory notice & consent document text for a
    * persisted case in the requested language (default: the case language).
+   *
+   * Phase 15 FB (A4) verification: ZERO callers confirmed (client/src,
+   * mobile, journeys grepped). No notice-PDF generation path exists in
+   * server/** to wire this into, so it is documented as a backend-ready API
+   * awaiting the ConsentCenter/signature-link UI (client wave scope). It is
+   * retained because the signature-link flow is incomplete without it:
+   * issueSignatureLink → patientSignConsent need a rendered document.
    */
   renderNoticeDocument: protectedProcedure
     .input(z.object({
@@ -409,6 +416,12 @@ export const noticeConsentRouter = router({
    * (sha256 of {caseId, signerName, timestamp, ip?}) into the case metadata
    * + consent_signatures table, and transitions the case to CONSENT_SIGNED
    * with the full guard suite (waiver, timing, retention).
+   *
+   * Phase 15 FB (A4) verification: the ConsentCenter patient signature-link
+   * UI does NOT exist yet (zero callers confirmed across client/src, mobile,
+   * journeys), so this public endpoint is awaiting its UI. It is the
+   * terminal step of issueSignatureLink and is retained intentionally —
+   * deleting it would orphan issued signature links.
    */
   patientSignConsent: publicProcedure
     .input(z.object({
