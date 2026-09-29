@@ -142,6 +142,7 @@ const OrgsPage = lazy(() => import("./pages/personas/Orgs"));
 const IdreDirectoryAdmin = lazy(() => import("./pages/admin/IdreDirectory"));
 const FeeSchedulesAdmin = lazy(() => import("./pages/admin/FeeSchedules"));
 const Unsubscribe = lazy(() => import("./pages/Unsubscribe"));
+const AcceptInvite = lazy(() => import("./pages/AcceptInvite"));
 
 /** Helper: wraps a component in ProtectedRoute */
 function P({ component: C, admin }: { component: ComponentType; admin?: boolean }) {
@@ -281,6 +282,8 @@ function Router() {
       <Route path="/patient/:token" component={PatientPortal} />
       <Route path="/idre/queue" component={() => <FlagGate flag="personas.idreQueue"><PL component={IdreQueue} /></FlagGate>} />
       <Route path="/orgs" component={() => <FlagGate flag="personas.orgs"><PL component={OrgsPage} /></FlagGate>} />
+      {/* Phase15-FA (A2): landing page for orgs.inviteMember / payer.invite email links */}
+      <Route path="/accept-invite" component={AcceptInvite} />
 
       {/* Admin-only routes */}
       <Route path="/admin/idre-directory" component={() => <PL component={IdreDirectoryAdmin} admin />} />
