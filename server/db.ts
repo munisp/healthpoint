@@ -581,6 +581,20 @@ export async function createNotification(data: Omit<Notification, 'id' | 'create
   const db = await getDb();
   if (!db) return;
   await db.insert(notifications).values({ ...data, id: crypto.randomUUID(), isRead: false });
+  // Phase 15 FB (A1): fan out to registered push devices. Fire-and-forget,
+  // dynamic import to avoid a db.ts ↔ push/dispatcher.ts cycle. Delivery
+  // failures never fail notification creation; the dispatcher reports
+  // 'unconfigured' honestly when VAPID keys are absent.
+  if (data.userId) {
+    const userId = data.userId;
+    import("./push/dispatcher")
+      .then(m => m.dispatchPushToUser(userId, {
+        title: data.title ?? "IDR Platform notification",
+        body: data.message,
+        data: data.disputeId ? { disputeId: data.disputeId } : {},
+      }, { disputeRef: data.disputeId ?? undefined }))
+      .catch(err => console.warn("[push] dispatch failed (non-blocking):", err?.message ?? err));
+  }
 }
 
 export async function listNotifications(userId: string, unreadOnly = false) {
@@ -1218,7 +1232,7 @@ export async function updateDisputeTemplate(id: string, updates: Partial<InsertD
 
 export async function deleteDisputeTemplate(id: string): Promise<void> {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!db) return;
   await db.delete(disputeTemplates).where(eq(disputeTemplates.id, id));
 }
 
