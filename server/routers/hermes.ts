@@ -13,10 +13,19 @@
  * Phase 13 FB (O1.24-27): listRegulatoryEntries, markRegulatoryRead,
  * getChatHistory and getDisputeInsights were REMOVED — zero callers and no
  * corresponding UI surfaces (HermesAssistant has no history/insights panel).
+ *
+ * Phase 15 FB (A5): the persisted tables (hermes_chat_messages,
+ * hermes_insights, hermes_regulatory_entries) were write-never-read sinks.
+ * Backend readers (listChatHistory, listInsights, listRegulatoryEntries) are
+ * re-exposed below with user-scoping + dispute IDOR guards. UI wiring is
+ * PENDING — owned by the client wave (HermesAssistant history/insights
+ * panels). Until a UI consumes them these procedures will show as
+ * NO-CALLER in alignment audits; that is intentional and documented here.
  */
 
 import { router, protectedProcedure } from "../_core/trpc";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { invokeLLM } from "../_core/llm";
 import { getDb } from "../db";
 import { assertDisputeAccess } from "../authz";
@@ -203,9 +212,9 @@ Reference: ${dispute.referenceNumber}
 Service Type: ${dispute.serviceType}
 CPT Codes: ${(dispute.cptCodes as string[]).join(", ")}
 Billed: $${dispute.billedAmount}
-QPA: $${dispute.qpaAmount ?? "Unknown"}
-Provider Offer: $${dispute.initiatingPartyOffer ?? "Not submitted"}
-Payer Offer: $${dispute.respondingPartyOffer ?? "Not submitted"}
+QPA Amount: $${dispute.qpaAmount ?? "Unknown"}
+Provider Offer: ${dispute.initiatingPartyOffer ?? "Not submitted"}
+Payer Offer: ${dispute.respondingPartyOffer ?? "Not submitted"}
 State: ${dispute.patientState}
 Step: ${dispute.currentStep}
 ${input.additionalContext ? `Additional context: ${input.additionalContext}` : ""}`,
@@ -308,7 +317,7 @@ Consider: deadline proximity, billed/QPA ratio, step progression, missing offers
             content: `Score risk for dispute ${dispute.referenceNumber}:
 Status: ${dispute.status} | Step: ${dispute.currentStep}
 Billed: $${dispute.billedAmount} | QPA: $${dispute.qpaAmount ?? "Unknown"}
-Provider offer: $${dispute.initiatingPartyOffer ?? "None"} | Payer offer: $${dispute.respondingPartyOffer ?? "None"}
+Provider offer: ${dispute.initiatingPartyOffer ?? "None"} | Payer offer: ${dispute.respondingPartyOffer ?? "None"}
 Nearest deadline in days: ${nearestDeadlineDays}
 Eligible: ${dispute.isEligible ?? "Unknown"}`,
           },
@@ -340,7 +349,7 @@ Eligible: ${dispute.isEligible ?? "Unknown"}`,
         userId: ctx.user.id,
         disputeId: input.disputeId,
         jobType: "risk_scoring",
-        inputPayload: { disputeId: input.disputeId, nearestDeadlineDays },
+        inputPayload: { disputeId, nearestDeadlineDays },
         outputJson: raw,
         modelUsed: "gpt-5-mini",
         latencyMs,
@@ -596,6 +605,14 @@ Current date context: ${new Date().toISOString().split("T")[0]}`,
         latencyMs,
       });
 
+      // Phase 15 FB (A6): changelog projection for the regulatory-feed ingest.
+      const { writeChangelogEntry } = await import("../changelog");
+      writeChangelogEntry({
+        title: `Regulatory feed ingest: ${entries.length} ${entries.length === 1 ? "entry" : "entries"}`,
+        description: `Topics: ${(input.topics ?? []).join(", ") || "general"}. Sources: ${[...new Set(entries.map((e: { source: string }) => e.source))].join(", ")}`,
+        category: "improvement",
+      }).catch(err => console.warn("[changelog] regulatory-feed projection failed (non-blocking):", err?.message ?? err));
+
       return { entries, latencyMs };
     }),
 
@@ -669,6 +686,8 @@ ${input.cptCodes?.length ? `CPT codes: ${input.cptCodes.join(", ")}` : ""}`,
         inputPayload: { arbitratorName: input.arbitratorName, serviceType: input.serviceType },
         outputJson: raw,
         modelUsed: "gpt-5",
+        promptTokens: res.usage?.prompt_tokens,
+        completionTokens: res.usage?.completion_tokens,
         latencyMs,
       });
 
@@ -776,6 +795,69 @@ Be concise, accurate, and actionable. Cite regulatory references when relevant.$
       });
 
       return { reply, messageId: assistantMsgId, latencyMs };
+    }),
+
+  // ── Phase 15 FB (A5) readers — backend-only; UI wiring pending (client wave) ──
+
+  /** Chat history for one of the caller's own sessions (newest last). */
+  listChatHistory: protectedProcedure
+    .input(z.object({
+      sessionId: z.string().min(1).max(128),
+      limit: z.number().min(1).max(200).default(100),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const rows = await db
+        .select()
+        .from(hermesChatMessages)
+        .where(and(eq(hermesChatMessages.sessionId, input.sessionId), eq(hermesChatMessages.userId, ctx.user.id)))
+        .orderBy(hermesChatMessages.createdAt)
+        .limit(input.limit);
+      return rows;
+    }),
+
+  /** Persisted insights for a dispute (IDOR-guarded) or, for admins, global. */
+  listInsights: protectedProcedure
+    .input(z.object({
+      disputeId: z.string().optional(),
+      insightType: z.string().max(64).optional(),
+      limit: z.number().min(1).max(100).default(50),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      // hermes_insights has no userId column; rows always attach to a dispute.
+      // Non-admins MUST scope by a dispute they can read; admins may list all.
+      if (input.disputeId) {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
+      } else if (ctx.user.role !== "admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "disputeId is required to list insights" });
+      }
+      const conditions = [];
+      if (input.disputeId) conditions.push(eq(hermesInsights.disputeId, input.disputeId));
+      if (input.insightType) conditions.push(eq(hermesInsights.insightType, input.insightType as typeof hermesInsights.$inferSelect["insightType"]));
+      const q = db.select().from(hermesInsights);
+      return (conditions.length ? q.where(and(...conditions)) : q)
+        .orderBy(desc(hermesInsights.generatedAt))
+        .limit(input.limit);
+    }),
+
+  /** Persisted regulatory-feed entries (platform-wide reference data). */
+  listRegulatoryEntries: protectedProcedure
+    .input(z.object({
+      impactLevel: z.enum(["low", "medium", "high", "critical"]).optional(),
+      limit: z.number().min(1).max(100).default(50),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const conditions = [];
+      if (input.impactLevel) conditions.push(eq(hermesRegulatoryEntries.impactLevel, input.impactLevel));
+      const q = db.select().from(hermesRegulatoryEntries);
+      return (conditions.length ? q.where(and(...conditions)) : q)
+        .orderBy(desc(hermesRegulatoryEntries.createdAt))
+        .limit(input.limit);
     }),
 
   // ── Job history ─────────────────────────────────────────────────────────────
