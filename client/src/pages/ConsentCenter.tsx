@@ -96,6 +96,17 @@ export default function ConsentCenter() {
   const [gfeTotal, setGfeTotal] = useState({ convening: "", coProviders: "" });
   const [gfeTotalSubmitted, setGfeTotalSubmitted] = useState<any | null>(null);
 
+  // Phase15-FA (A11): PPDR self-service intake link issuance (patientPortal.issuePpdrIntakeToken)
+  const [intake, setIntake] = useState({ patientName: "", email: "", phone: "" });
+  const [intakeLink, setIntakeLink] = useState<{ url: string; expiresAt: string } | null>(null);
+  const issueIntakeToken = trpc.patientPortal.issuePpdrIntakeToken.useMutation({
+    onSuccess: (r) => {
+      setIntakeLink({ url: `${window.location.origin}${r.path}`, expiresAt: new Date(r.expiresAt).toLocaleString() });
+      toast.success("PPDR intake link issued");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   // Notice & Consent queries
   const waiverQuery = trpc.noticeConsent.evaluateWaiverEligibility.useQuery(
     waiverSubmitted ?? { serviceCategory: category },
@@ -431,6 +442,54 @@ export default function ConsentCenter() {
 
         {/* GFE / PPDR */}
         <TabsContent value="gfe" className="space-y-6 mt-4">
+          {/* Phase15-FA (A11): patient PPDR intake link issuance */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <HeartHandshake size={16} className="text-primary" /> Patient Self-Service Intake Link
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Issue a secure, expiring link so an uninsured/self-pay patient can submit a PPDR intake themselves at <code>/patient/&lt;token&gt;</code> (scope: ppdr_intake).
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Patient name</Label>
+                  <Input value={intake.patientName} onChange={e => setIntake({ ...intake, patientName: e.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Email (optional)</Label>
+                  <Input type="email" value={intake.email} onChange={e => setIntake({ ...intake, email: e.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Phone (optional)</Label>
+                  <Input value={intake.phone} onChange={e => setIntake({ ...intake, phone: e.target.value })} />
+                </div>
+                <Button
+                  disabled={issueIntakeToken.isPending || !intake.patientName.trim()}
+                  onClick={() => issueIntakeToken.mutate({
+                    patientName: intake.patientName.trim(),
+                    email: intake.email.trim() || undefined,
+                    phone: intake.phone.trim() || undefined,
+                  })}
+                >
+                  {issueIntakeToken.isPending ? "Issuing…" : "Issue intake link"}
+                </Button>
+              </div>
+              {intakeLink && (
+                <div className="rounded border border-border bg-muted/40 p-3 space-y-1">
+                  <p className="text-xs break-all font-mono">{intakeLink.url}</p>
+                  <p className="text-xs text-muted-foreground">Expires {intakeLink.expiresAt}. The token is shown only here — stored hashed server-side.</p>
+                  <Button size="sm" variant="secondary" className="text-xs"
+                    onClick={() => { navigator.clipboard?.writeText(intakeLink.url).then(() => toast.success("Link copied")).catch(() => toast.error("Copy failed — select the link manually")); }}>
+                    Copy link
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {/* PPDR eligibility */}
           <Card>
             <CardHeader className="pb-3">
