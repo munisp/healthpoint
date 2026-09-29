@@ -1,96 +1,62 @@
 #!/usr/bin/env python3
 """
 Healthcare Claims Platform - API Gateway Service
-Centralized routing, authentication, rate limiting, and request/response management.
+Intelligent routing, rate limiting, authentication, and load balancing.
 
 Author: Manus AI
-Date: October 7, 2025
+Date: October 5, 2025
 """
 
 from fastapi import FastAPI, HTTPException, Depends, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import JSONResponse, StreamingResponse
-import httpx
-import asyncio
-import aiohttp
-from pydantic import BaseModel, Field, validator
-from typing import List, Optional, Dict, Any, Union, Callable
+from pydantic import BaseModel, validator
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime, timedelta
-from enum import Enum
 import uuid
 import logging
-import json
-import time
-import os
-import hashlib
-import hmac
-import redis.asyncio as aioredis
+from enum import Enum
+import asyncio
+import aioredis
 import asyncpg
+import httpx
+import os
+import json
+import hashlib
+import time
 from contextlib import asynccontextmanager
-import jwt
-from passlib.context import CryptContext
-import uvicorn
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-import prometheus_client
-from prometheus_client import Counter, Histogram, Gauge, generate_latest
-import structlog
-from circuitbreaker import circuit
-import backoff
+import ipaddress
+from urllib.parse import urlparse
 
-# Configure structured logging
-structlog.configure(
-    processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.processors.UnicodeDecoder(),
-        structlog.processors.JSONRenderer()
-    ],
-    context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    wrapper_class=structlog.stdlib.BoundLogger,
-    cache_logger_on_first_use=True,
-)
-
-logger = structlog.get_logger(__name__)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://claimuser:password@localhost/healthcare_platform")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/healthcare_platform")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
+JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 
-# Service URLs
-FRAUD_SERVICE_URL = os.getenv("FRAUD_SERVICE_URL", "http://localhost:8005")
-PRICING_SERVICE_URL = os.getenv("PRICING_SERVICE_URL", "http://localhost:8006")
-COMPLIANCE_SERVICE_URL = os.getenv("COMPLIANCE_SERVICE_URL", "http://localhost:8007")
-ANALYTICS_SERVICE_URL = os.getenv("ANALYTICS_SERVICE_URL", "http://localhost:8008")
-NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://localhost:8009")
-PROVIDER_SERVICE_URL = os.getenv("PROVIDER_SERVICE_URL", "http://localhost:8010")
+# Service endpoints
+SERVICE_ENDPOINTS = {
+    "user-management": os.getenv("USER_MANAGEMENT_URL", "http://localhost:8001"),
+    "provider-management": os.getenv("PROVIDER_MANAGEMENT_URL", "http://localhost:8002"),
+    "authentication": os.getenv("AUTHENTICATION_URL", "http://localhost:8003"),
+    "claims-processing": os.getenv("CLAIMS_PROCESSING_URL", "http://localhost:8004"),
+    "billing": os.getenv("BILLING_URL", "http://localhost:8005"),
+    "reporting": os.getenv("REPORTING_URL", "http://localhost:8006"),
+    "notification": os.getenv("NOTIFICATION_URL", "http://localhost:8007"),
+}
 
-# Prometheus metrics
-REQUEST_COUNT = Counter('gateway_requests_total', 'Total requests', ['method', 'endpoint', 'status'])
-REQUEST_DURATION = Histogram('gateway_request_duration_seconds', 'Request duration', ['method', 'endpoint'])
-ACTIVE_CONNECTIONS = Gauge('gateway_active_connections', 'Active connections')
-SERVICE_HEALTH = Gauge('gateway_service_health', 'Service health status', ['service'])
+# Security
+security = HTTPBearer(auto_error=False)
 
-# Rate limiter
-limiter = Limiter(key_func=get_remote_address)
-
-class ServiceStatus(str, Enum):
-    HEALTHY = "healthy"
-    DEGRADED = "degraded"
-    UNHEALTHY = "unhealthy"
-    UNKNOWN = "unknown"
+class RateLimitType(str, Enum):
+    PER_IP = "per_ip"
+    PER_USER = "per_user"
+    PER_TENANT = "per_tenant"
+    GLOBAL = "global"
 
 class RouteMethod(str, Enum):
     GET = "GET"
@@ -98,644 +64,234 @@ class RouteMethod(str, Enum):
     PUT = "PUT"
     DELETE = "DELETE"
     PATCH = "PATCH"
+    OPTIONS = "OPTIONS"
+    HEAD = "HEAD"
 
-class AuthenticationType(str, Enum):
-    JWT = "jwt"
-    API_KEY = "api_key"
-    OAUTH = "oauth"
-    NONE = "none"
+class LoadBalancingStrategy(str, Enum):
+    ROUND_ROBIN = "round_robin"
+    LEAST_CONNECTIONS = "least_connections"
+    WEIGHTED = "weighted"
+    IP_HASH = "ip_hash"
 
 # Pydantic Models
-class ServiceRoute(BaseModel):
-    id: str
-    path: str
-    methods: List[RouteMethod]
-    service_url: str
-    service_name: str
-    authentication: AuthenticationType = AuthenticationType.JWT
-    rate_limit: Optional[str] = None  # e.g., "100/minute"
-    timeout_seconds: int = 30
-    retry_attempts: int = 3
-    circuit_breaker_enabled: bool = True
-    active: bool = True
-    tenant_specific: bool = False
-    metadata: Dict[str, Any] = {}
+class RateLimitRule(BaseModel):
+    path_pattern: str
+    method: Optional[RouteMethod] = None
+    limit_type: RateLimitType
+    requests_per_minute: int
+    requests_per_hour: int
+    requests_per_day: int
+    burst_limit: Optional[int] = None
 
-class ServiceHealthCheck(BaseModel):
+class RouteRule(BaseModel):
+    path_pattern: str
+    method: Optional[RouteMethod] = None
+    target_service: str
+    target_path: Optional[str] = None
+    requires_auth: bool = True
+    required_permissions: List[str] = []
+    rate_limit_rules: List[str] = []  # Rule IDs
+
+class ServiceEndpoint(BaseModel):
     service_name: str
     url: str
-    status: ServiceStatus
-    response_time_ms: float
-    last_check: datetime
-    error_message: Optional[str] = None
-    metadata: Dict[str, Any] = {}
+    weight: int = 1
+    health_check_path: str = "/health"
+    timeout: int = 30
+    max_connections: int = 100
+    active: bool = True
 
-class RequestLog(BaseModel):
-    request_id: str
-    method: str
-    path: str
-    service_name: Optional[str] = None
-    status_code: int
-    response_time_ms: float
-    client_ip: str
-    user_agent: Optional[str] = None
-    user_id: Optional[str] = None
-    tenant_id: Optional[str] = None
+class CircuitBreakerConfig(BaseModel):
+    failure_threshold: int = 5
+    recovery_timeout: int = 60
+    half_open_max_calls: int = 3
+
+class APIGatewayStats(BaseModel):
+    total_requests: int
+    successful_requests: int
+    failed_requests: int
+    rate_limited_requests: int
+    average_response_time: float
+    active_connections: int
     timestamp: datetime
-    error_message: Optional[str] = None
 
-class CircuitBreakerState(BaseModel):
-    service_name: str
-    state: str  # "closed", "open", "half-open"
-    failure_count: int
-    last_failure: Optional[datetime] = None
-    next_attempt: Optional[datetime] = None
-
-# Database Manager
+# Database connection management
 class DatabaseManager:
     def __init__(self):
         self.pool = None
         self.redis = None
     
     async def connect(self):
+        """Initialize database connections"""
         try:
             self.pool = await asyncpg.create_pool(DATABASE_URL)
             self.redis = await aioredis.from_url(REDIS_URL)
-            logger.info("API Gateway database connections established")
+            logger.info("Database connections established")
         except Exception as e:
-            logger.error("Failed to connect to database", error=str(e))
+            logger.error(f"Failed to connect to database: {e}")
             raise
     
     async def disconnect(self):
+        """Close database connections"""
         if self.pool:
             await self.pool.close()
         if self.redis:
             await self.redis.close()
-        logger.info("API Gateway database connections closed")
+        logger.info("Database connections closed")
 
 db_manager = DatabaseManager()
 
-# Authentication Manager
-class AuthenticationManager:
-    def __init__(self):
-        self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Circuit Breaker implementation
+class CircuitBreaker:
+    def __init__(self, service_name: str, config: CircuitBreakerConfig):
+        self.service_name = service_name
+        self.config = config
+        self.failure_count = 0
+        self.last_failure_time = None
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+        self.half_open_calls = 0
     
-    async def verify_jwt_token(self, token: str) -> Dict[str, Any]:
-        """Verify JWT token and return payload"""
-        try:
-            payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-            
-            # Check if token is blacklisted
-            if await self._is_token_blacklisted(token):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Token has been revoked"
-                )
-            
-            return payload
-            
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token has expired"
-            )
-        except jwt.JWTError:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token"
-            )
-    
-    async def verify_api_key(self, api_key: str) -> Dict[str, Any]:
-        """Verify API key and return associated info"""
-        try:
-            # Hash the API key for lookup
-            key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-            
-            async with db_manager.pool.acquire() as conn:
-                key_info = await conn.fetchrow("""
-                    SELECT user_id, tenant_id, permissions, rate_limit, active
-                    FROM api_keys 
-                    WHERE key_hash = $1 AND active = true
-                    AND (expires_at IS NULL OR expires_at > NOW())
-                """, key_hash)
-                
-                if not key_info:
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Invalid API key"
-                    )
-                
-                return {
-                    "user_id": key_info["user_id"],
-                    "tenant_id": key_info["tenant_id"],
-                    "permissions": json.loads(key_info["permissions"]) if key_info["permissions"] else [],
-                    "rate_limit": key_info["rate_limit"],
-                    "auth_type": "api_key"
-                }
-                
-        except Exception as e:
-            logger.error("API key verification failed", error=str(e))
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="API key verification failed"
-            )
-    
-    async def _is_token_blacklisted(self, token: str) -> bool:
-        """Check if JWT token is blacklisted"""
-        try:
-            token_hash = hashlib.sha256(token.encode()).hexdigest()
-            result = await db_manager.redis.get(f"blacklist:{token_hash}")
-            return result is not None
-        except Exception:
-            return False
-    
-    async def blacklist_token(self, token: str, expiration: datetime):
-        """Add token to blacklist"""
-        try:
-            token_hash = hashlib.sha256(token.encode()).hexdigest()
-            ttl = int((expiration - datetime.utcnow()).total_seconds())
-            if ttl > 0:
-                await db_manager.redis.setex(f"blacklist:{token_hash}", ttl, "1")
-        except Exception as e:
-            logger.error("Failed to blacklist token", error=str(e))
-
-auth_manager = AuthenticationManager()
-
-# Circuit Breaker Manager
-class CircuitBreakerManager:
-    def __init__(self):
-        self.breakers: Dict[str, CircuitBreakerState] = {}
-        self.failure_threshold = 5
-        self.recovery_timeout = 60  # seconds
-    
-    async def can_execute(self, service_name: str) -> bool:
-        """Check if service call can be executed"""
-        breaker = await self._get_breaker_state(service_name)
-        
-        if breaker.state == "closed":
-            return True
-        elif breaker.state == "open":
-            if breaker.next_attempt and datetime.utcnow() >= breaker.next_attempt:
-                await self._set_breaker_state(service_name, "half-open")
-                return True
-            return False
-        elif breaker.state == "half-open":
-            return True
-        
-        return False
-    
-    async def record_success(self, service_name: str):
-        """Record successful service call"""
-        await self._set_breaker_state(service_name, "closed", failure_count=0)
-    
-    async def record_failure(self, service_name: str):
-        """Record failed service call"""
-        breaker = await self._get_breaker_state(service_name)
-        failure_count = breaker.failure_count + 1
-        
-        if failure_count >= self.failure_threshold:
-            next_attempt = datetime.utcnow() + timedelta(seconds=self.recovery_timeout)
-            await self._set_breaker_state(
-                service_name, 
-                "open", 
-                failure_count=failure_count,
-                last_failure=datetime.utcnow(),
-                next_attempt=next_attempt
-            )
-        else:
-            await self._set_breaker_state(
-                service_name,
-                "closed",
-                failure_count=failure_count,
-                last_failure=datetime.utcnow()
-            )
-    
-    async def _get_breaker_state(self, service_name: str) -> CircuitBreakerState:
-        """Get circuit breaker state from Redis"""
-        try:
-            state_data = await db_manager.redis.hgetall(f"circuit_breaker:{service_name}")
-            
-            if not state_data:
-                return CircuitBreakerState(
-                    service_name=service_name,
-                    state="closed",
-                    failure_count=0
-                )
-            
-            return CircuitBreakerState(
-                service_name=service_name,
-                state=state_data.get(b"state", b"closed").decode(),
-                failure_count=int(state_data.get(b"failure_count", b"0")),
-                last_failure=datetime.fromisoformat(state_data[b"last_failure"].decode()) if b"last_failure" in state_data else None,
-                next_attempt=datetime.fromisoformat(state_data[b"next_attempt"].decode()) if b"next_attempt" in state_data else None
-            )
-            
-        except Exception as e:
-            logger.error("Failed to get circuit breaker state", service=service_name, error=str(e))
-            return CircuitBreakerState(
-                service_name=service_name,
-                state="closed",
-                failure_count=0
-            )
-    
-    async def _set_breaker_state(
-        self, 
-        service_name: str, 
-        state: str, 
-        failure_count: int = None,
-        last_failure: datetime = None,
-        next_attempt: datetime = None
-    ):
-        """Set circuit breaker state in Redis"""
-        try:
-            state_data = {"state": state}
-            
-            if failure_count is not None:
-                state_data["failure_count"] = str(failure_count)
-            if last_failure:
-                state_data["last_failure"] = last_failure.isoformat()
-            if next_attempt:
-                state_data["next_attempt"] = next_attempt.isoformat()
-            
-            await db_manager.redis.hset(f"circuit_breaker:{service_name}", mapping=state_data)
-            
-        except Exception as e:
-            logger.error("Failed to set circuit breaker state", service=service_name, error=str(e))
-
-circuit_manager = CircuitBreakerManager()
-
-# Service Router
-class ServiceRouter:
-    def __init__(self):
-        self.routes: Dict[str, ServiceRoute] = {}
-        self.http_client = None
-    
-    async def initialize(self):
-        """Initialize HTTP client and load routes"""
-        self.http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0),
-            limits=httpx.Limits(max_keepalive_connections=100, max_connections=200)
-        )
-        await self._load_routes()
-    
-    async def _load_routes(self):
-        """Load service routes from database"""
-        try:
-            async with db_manager.pool.acquire() as conn:
-                routes_data = await conn.fetch("""
-                    SELECT id, path, methods, service_url, service_name, 
-                           authentication, rate_limit, timeout_seconds, 
-                           retry_attempts, circuit_breaker_enabled, active,
-                           tenant_specific, metadata
-                    FROM api_routes 
-                    WHERE active = true
-                """)
-                
-                for route_data in routes_data:
-                    route = ServiceRoute(
-                        id=route_data["id"],
-                        path=route_data["path"],
-                        methods=[RouteMethod(m) for m in route_data["methods"]],
-                        service_url=route_data["service_url"],
-                        service_name=route_data["service_name"],
-                        authentication=AuthenticationType(route_data["authentication"]),
-                        rate_limit=route_data["rate_limit"],
-                        timeout_seconds=route_data["timeout_seconds"],
-                        retry_attempts=route_data["retry_attempts"],
-                        circuit_breaker_enabled=route_data["circuit_breaker_enabled"],
-                        active=route_data["active"],
-                        tenant_specific=route_data["tenant_specific"],
-                        metadata=json.loads(route_data["metadata"]) if route_data["metadata"] else {}
-                    )
-                    
-                    self.routes[route.path] = route
-                
-                logger.info("Loaded service routes", count=len(self.routes))
-                
-        except Exception as e:
-            logger.error("Failed to load routes", error=str(e))
-            # Load default routes as fallback
-            await self._load_default_routes()
-    
-    async def _load_default_routes(self):
-        """Load default routes as fallback"""
-        default_routes = [
-            ServiceRoute(
-                id="fraud-detection",
-                path="/api/v1/fraud/*",
-                methods=[RouteMethod.GET, RouteMethod.POST],
-                service_url=FRAUD_SERVICE_URL,
-                service_name="fraud-detection"
-            ),
-            ServiceRoute(
-                id="pricing",
-                path="/api/v1/pricing/*",
-                methods=[RouteMethod.GET, RouteMethod.POST],
-                service_url=PRICING_SERVICE_URL,
-                service_name="pricing"
-            ),
-            ServiceRoute(
-                id="compliance",
-                path="/api/v1/compliance/*",
-                methods=[RouteMethod.GET, RouteMethod.POST],
-                service_url=COMPLIANCE_SERVICE_URL,
-                service_name="compliance"
-            ),
-            ServiceRoute(
-                id="analytics",
-                path="/api/v1/analytics/*",
-                methods=[RouteMethod.GET, RouteMethod.POST],
-                service_url=ANALYTICS_SERVICE_URL,
-                service_name="analytics"
-            ),
-            ServiceRoute(
-                id="notifications",
-                path="/api/v1/notifications/*",
-                methods=[RouteMethod.GET, RouteMethod.POST],
-                service_url=NOTIFICATION_SERVICE_URL,
-                service_name="notifications"
-            ),
-            ServiceRoute(
-                id="providers",
-                path="/api/v1/providers/*",
-                methods=[RouteMethod.GET, RouteMethod.POST],
-                service_url=PROVIDER_SERVICE_URL,
-                service_name="providers"
-            )
-        ]
-        
-        for route in default_routes:
-            self.routes[route.path] = route
-        
-        logger.info("Loaded default routes", count=len(default_routes))
-    
-    def find_route(self, path: str, method: str) -> Optional[ServiceRoute]:
-        """Find matching route for path and method"""
-        # Exact match first
-        if path in self.routes:
-            route = self.routes[path]
-            if method in [m.value for m in route.methods]:
-                return route
-        
-        # Pattern matching for wildcard routes
-        for route_path, route in self.routes.items():
-            if route_path.endswith("*"):
-                prefix = route_path[:-1]
-                if path.startswith(prefix) and method in [m.value for m in route.methods]:
-                    return route
-        
-        return None
-    
-    @backoff.on_exception(
-        backoff.expo,
-        (httpx.RequestError, httpx.TimeoutException),
-        max_tries=3,
-        max_time=30
-    )
-    async def forward_request(
-        self, 
-        route: ServiceRoute, 
-        request: Request,
-        path: str,
-        user_context: Dict[str, Any] = None
-    ) -> Response:
-        """Forward request to appropriate service"""
-        
-        # Check circuit breaker
-        if route.circuit_breaker_enabled:
-            if not await circuit_manager.can_execute(route.service_name):
+    async def call(self, func, *args, **kwargs):
+        """Execute function with circuit breaker protection"""
+        if self.state == "OPEN":
+            if time.time() - self.last_failure_time > self.config.recovery_timeout:
+                self.state = "HALF_OPEN"
+                self.half_open_calls = 0
+            else:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail=f"Service {route.service_name} is currently unavailable"
+                    detail=f"Service {self.service_name} is currently unavailable"
                 )
         
-        # Prepare request
-        url = f"{route.service_url}{path}"
-        headers = dict(request.headers)
-        
-        # Remove hop-by-hop headers
-        headers_to_remove = [
-            "host", "connection", "keep-alive", "proxy-authenticate",
-            "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"
-        ]
-        for header in headers_to_remove:
-            headers.pop(header, None)
-        
-        # Add user context headers
-        if user_context:
-            headers["X-User-ID"] = str(user_context.get("user_id", ""))
-            headers["X-Tenant-ID"] = str(user_context.get("tenant_id", ""))
-            headers["X-Auth-Type"] = user_context.get("auth_type", "")
-        
-        # Add request ID for tracing
-        request_id = str(uuid.uuid4())
-        headers["X-Request-ID"] = request_id
-        
         try:
-            # Get request body
-            body = await request.body()
+            if self.state == "HALF_OPEN":
+                if self.half_open_calls >= self.config.half_open_max_calls:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=f"Service {self.service_name} is in recovery mode"
+                    )
+                self.half_open_calls += 1
             
-            # Make request to service
-            start_time = time.time()
+            result = await func(*args, **kwargs)
             
-            response = await self.http_client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                content=body,
-                params=dict(request.query_params),
-                timeout=route.timeout_seconds
-            )
+            # Success - reset failure count
+            if self.state == "HALF_OPEN":
+                self.state = "CLOSED"
+                self.half_open_calls = 0
+            self.failure_count = 0
             
-            response_time = time.time() - start_time
+            return result
             
-            # Record success in circuit breaker
-            if route.circuit_breaker_enabled:
-                await circuit_manager.record_success(route.service_name)
-            
-            # Log request
-            await self._log_request(
-                request_id=request_id,
-                method=request.method,
-                path=path,
-                service_name=route.service_name,
-                status_code=response.status_code,
-                response_time_ms=response_time * 1000,
-                client_ip=request.client.host,
-                user_agent=request.headers.get("user-agent"),
-                user_id=user_context.get("user_id") if user_context else None,
-                tenant_id=user_context.get("tenant_id") if user_context else None
-            )
-            
-            # Return response
-            return Response(
-                content=response.content,
-                status_code=response.status_code,
-                headers=dict(response.headers),
-                media_type=response.headers.get("content-type")
-            )
-            
-        except (httpx.RequestError, httpx.TimeoutException) as e:
-            # Record failure in circuit breaker
-            if route.circuit_breaker_enabled:
-                await circuit_manager.record_failure(route.service_name)
-            
-            # Log error
-            await self._log_request(
-                request_id=request_id,
-                method=request.method,
-                path=path,
-                service_name=route.service_name,
-                status_code=503,
-                response_time_ms=0,
-                client_ip=request.client.host,
-                user_agent=request.headers.get("user-agent"),
-                user_id=user_context.get("user_id") if user_context else None,
-                tenant_id=user_context.get("tenant_id") if user_context else None,
-                error_message=str(e)
-            )
-            
-            logger.error(
-                "Service request failed",
-                service=route.service_name,
-                url=url,
-                error=str(e)
-            )
-            
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Service temporarily unavailable: {route.service_name}"
-            )
-    
-    async def _log_request(self, **kwargs):
-        """Log request to database"""
-        try:
-            async with db_manager.pool.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO request_logs 
-                    (request_id, method, path, service_name, status_code, 
-                     response_time_ms, client_ip, user_agent, user_id, 
-                     tenant_id, timestamp, error_message)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                """, 
-                    kwargs["request_id"],
-                    kwargs["method"],
-                    kwargs["path"],
-                    kwargs.get("service_name"),
-                    kwargs["status_code"],
-                    kwargs["response_time_ms"],
-                    kwargs["client_ip"],
-                    kwargs.get("user_agent"),
-                    kwargs.get("user_id"),
-                    kwargs.get("tenant_id"),
-                    datetime.utcnow(),
-                    kwargs.get("error_message")
-                )
         except Exception as e:
-            logger.error("Failed to log request", error=str(e))
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+            
+            if self.failure_count >= self.config.failure_threshold:
+                self.state = "OPEN"
+            
+            raise e
 
-service_router = ServiceRouter()
-
-# Health Check Manager
-class HealthCheckManager:
-    def __init__(self):
-        self.services = {
-            "fraud-detection": FRAUD_SERVICE_URL,
-            "pricing": PRICING_SERVICE_URL,
-            "compliance": COMPLIANCE_SERVICE_URL,
-            "analytics": ANALYTICS_SERVICE_URL,
-            "notifications": NOTIFICATION_SERVICE_URL,
-            "providers": PROVIDER_SERVICE_URL
+# Rate Limiter implementation
+class RateLimiter:
+    def __init__(self, redis_client):
+        self.redis = redis_client
+    
+    async def check_rate_limit(self, key: str, limit: int, window: int) -> tuple[bool, dict]:
+        """Check if request is within rate limit"""
+        current_time = int(time.time())
+        window_start = current_time - window
+        
+        # Use sliding window log
+        pipe = self.redis.pipeline()
+        pipe.zremrangebyscore(key, 0, window_start)
+        pipe.zcard(key)
+        pipe.zadd(key, {str(uuid.uuid4()): current_time})
+        pipe.expire(key, window)
+        
+        results = await pipe.execute()
+        current_requests = results[1]
+        
+        allowed = current_requests < limit
+        
+        return allowed, {
+            "allowed": allowed,
+            "current_requests": current_requests,
+            "limit": limit,
+            "window": window,
+            "reset_time": current_time + window
         }
-        self.health_status: Dict[str, ServiceHealthCheck] = {}
-    
-    async def check_all_services(self):
-        """Check health of all services"""
-        tasks = []
-        for service_name, url in self.services.items():
-            tasks.append(self._check_service_health(service_name, url))
-        
-        await asyncio.gather(*tasks, return_exceptions=True)
-    
-    async def _check_service_health(self, service_name: str, base_url: str):
-        """Check health of individual service"""
-        start_time = time.time()
-        
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{base_url}/health")
-                response_time = (time.time() - start_time) * 1000
-                
-                if response.status_code == 200:
-                    status = ServiceStatus.HEALTHY
-                    error_message = None
-                else:
-                    status = ServiceStatus.DEGRADED
-                    error_message = f"HTTP {response.status_code}"
-                
-                health_check = ServiceHealthCheck(
-                    service_name=service_name,
-                    url=base_url,
-                    status=status,
-                    response_time_ms=response_time,
-                    last_check=datetime.utcnow(),
-                    error_message=error_message
-                )
-                
-                self.health_status[service_name] = health_check
-                SERVICE_HEALTH.labels(service=service_name).set(1 if status == ServiceStatus.HEALTHY else 0)
-                
-        except Exception as e:
-            response_time = (time.time() - start_time) * 1000
-            
-            health_check = ServiceHealthCheck(
-                service_name=service_name,
-                url=base_url,
-                status=ServiceStatus.UNHEALTHY,
-                response_time_ms=response_time,
-                last_check=datetime.utcnow(),
-                error_message=str(e)
-            )
-            
-            self.health_status[service_name] = health_check
-            SERVICE_HEALTH.labels(service=service_name).set(0)
 
-health_manager = HealthCheckManager()
+# Service Discovery and Load Balancing
+class ServiceRegistry:
+    def __init__(self):
+        self.services = {}
+        self.circuit_breakers = {}
+        self.connection_counts = {}
+    
+    def register_service(self, service: ServiceEndpoint):
+        """Register a service endpoint"""
+        if service.service_name not in self.services:
+            self.services[service.service_name] = []
+        
+        self.services[service.service_name].append(service)
+        self.connection_counts[f"{service.service_name}:{service.url}"] = 0
+        
+        # Initialize circuit breaker
+        cb_config = CircuitBreakerConfig()
+        self.circuit_breakers[f"{service.service_name}:{service.url}"] = CircuitBreaker(
+            service.service_name, cb_config
+        )
+    
+    def get_service_endpoint(self, service_name: str, strategy: LoadBalancingStrategy = LoadBalancingStrategy.ROUND_ROBIN) -> Optional[ServiceEndpoint]:
+        """Get service endpoint using load balancing strategy"""
+        if service_name not in self.services:
+            return None
+        
+        active_services = [s for s in self.services[service_name] if s.active]
+        if not active_services:
+            return None
+        
+        if strategy == LoadBalancingStrategy.ROUND_ROBIN:
+            # Simple round-robin (in production, would use proper round-robin state)
+            return active_services[int(time.time()) % len(active_services)]
+        
+        elif strategy == LoadBalancingStrategy.LEAST_CONNECTIONS:
+            return min(active_services, key=lambda s: self.connection_counts.get(f"{s.service_name}:{s.url}", 0))
+        
+        elif strategy == LoadBalancingStrategy.WEIGHTED:
+            # Weighted random selection
+            import random
+            weights = [s.weight for s in active_services]
+            return random.choices(active_services, weights=weights)[0]
+        
+        return active_services[0]
 
-# Application lifespan
+service_registry = ServiceRegistry()
+rate_limiter = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    global rate_limiter
     await db_manager.connect()
-    await service_router.initialize()
+    await initialize_database()
+    rate_limiter = RateLimiter(db_manager.redis)
     
-    # Start background health checking
-    health_task = asyncio.create_task(periodic_health_check())
+    # Register default services
+    for service_name, url in SERVICE_ENDPOINTS.items():
+        service_registry.register_service(ServiceEndpoint(
+            service_name=service_name,
+            url=url
+        ))
     
     yield
-    
     # Shutdown
-    health_task.cancel()
     await db_manager.disconnect()
-    if service_router.http_client:
-        await service_router.http_client.aclose()
 
-async def periodic_health_check():
-    """Periodic health check of all services"""
-    while True:
-        try:
-            await health_manager.check_all_services()
-            await asyncio.sleep(30)  # Check every 30 seconds
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error("Health check failed", error=str(e))
-            await asyncio.sleep(30)
-
-# FastAPI application
+# FastAPI app
 app = FastAPI(
     title="Healthcare Claims Platform - API Gateway",
-    description="Centralized routing, authentication, rate limiting, and request management.",
+    description="Intelligent routing, rate limiting, authentication, and load balancing",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -749,209 +305,491 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["*"]  # Configure appropriately for production
+)
 
-# Add rate limiting
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+async def initialize_database():
+    """Initialize database tables"""
+    async with db_manager.pool.acquire() as conn:
+        # Create rate limit rules table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS rate_limit_rules (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name VARCHAR(255) NOT NULL,
+                path_pattern VARCHAR(500) NOT NULL,
+                method VARCHAR(10),
+                limit_type VARCHAR(50) NOT NULL,
+                requests_per_minute INTEGER NOT NULL,
+                requests_per_hour INTEGER NOT NULL,
+                requests_per_day INTEGER NOT NULL,
+                burst_limit INTEGER,
+                active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        
+        # Create route rules table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS route_rules (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name VARCHAR(255) NOT NULL,
+                path_pattern VARCHAR(500) NOT NULL,
+                method VARCHAR(10),
+                target_service VARCHAR(100) NOT NULL,
+                target_path VARCHAR(500),
+                requires_auth BOOLEAN DEFAULT true,
+                required_permissions JSONB DEFAULT '[]',
+                rate_limit_rules JSONB DEFAULT '[]',
+                active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        
+        # Create API gateway stats table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_gateway_stats (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                timestamp TIMESTAMP DEFAULT NOW(),
+                total_requests INTEGER DEFAULT 0,
+                successful_requests INTEGER DEFAULT 0,
+                failed_requests INTEGER DEFAULT 0,
+                rate_limited_requests INTEGER DEFAULT 0,
+                average_response_time FLOAT DEFAULT 0,
+                active_connections INTEGER DEFAULT 0
+            )
+        """)
+        
+        # Create request logs table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS request_logs (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                timestamp TIMESTAMP DEFAULT NOW(),
+                method VARCHAR(10) NOT NULL,
+                path VARCHAR(500) NOT NULL,
+                user_id UUID,
+                tenant_id UUID,
+                ip_address INET,
+                user_agent TEXT,
+                status_code INTEGER,
+                response_time FLOAT,
+                target_service VARCHAR(100),
+                error_message TEXT
+            )
+        """)
+        
+        # Insert default rate limit rules
+        await conn.execute("""
+            INSERT INTO rate_limit_rules (name, path_pattern, limit_type, requests_per_minute, requests_per_hour, requests_per_day)
+            VALUES 
+                ('Default API Limit', '/api/*', 'per_ip', 100, 1000, 10000),
+                ('Auth Endpoints', '/auth/*', 'per_ip', 10, 100, 500),
+                ('Upload Endpoints', '/*/upload', 'per_user', 5, 50, 200)
+            ON CONFLICT DO NOTHING
+        """)
+        
+        # Insert default route rules
+        await conn.execute("""
+            INSERT INTO route_rules (name, path_pattern, target_service, requires_auth)
+            VALUES 
+                ('Authentication Routes', '/auth/*', 'authentication', false),
+                ('User Management', '/api/users/*', 'user-management', true),
+                ('Provider Management', '/api/providers/*', 'provider-management', true),
+                ('Claims Processing', '/api/claims/*', 'claims-processing', true),
+                ('Billing', '/api/billing/*', 'billing', true),
+                ('Reports', '/api/reports/*', 'reporting', true)
+            ON CONFLICT DO NOTHING
+        """)
+        
+        logger.info("API Gateway database tables initialized")
 
-# Security
-security = HTTPBearer(auto_error=False)
-
-# Middleware for metrics and logging
-@app.middleware("http")
-async def metrics_middleware(request: Request, call_next):
-    start_time = time.time()
-    
-    # Increment active connections
-    ACTIVE_CONNECTIONS.inc()
-    
-    try:
-        response = await call_next(request)
-        
-        # Record metrics
-        duration = time.time() - start_time
-        REQUEST_DURATION.labels(
-            method=request.method,
-            endpoint=request.url.path
-        ).observe(duration)
-        
-        REQUEST_COUNT.labels(
-            method=request.method,
-            endpoint=request.url.path,
-            status=response.status_code
-        ).inc()
-        
-        return response
-        
-    finally:
-        ACTIVE_CONNECTIONS.dec()
-
-# Authentication dependency
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+# Utility functions
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[dict]:
+    """Get current user from JWT token"""
     if not credentials:
         return None
     
-    if credentials.scheme.lower() == "bearer":
-        return await auth_manager.verify_jwt_token(credentials.credentials)
-    elif credentials.scheme.lower() == "apikey":
-        return await auth_manager.verify_api_key(credentials.credentials)
-    else:
+    try:
+        # Forward to authentication service for token validation
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SERVICE_ENDPOINTS['authentication']}/auth/me",
+                headers={"Authorization": f"Bearer {credentials.credentials}"}
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            return None
+    except Exception as e:
+        logger.error(f"Error validating token: {e}")
+        return None
+
+async def check_permissions(user: dict, required_permissions: List[str]) -> bool:
+    """Check if user has required permissions"""
+    if not required_permissions:
+        return True
+    
+    user_permissions = user.get("permissions", [])
+    return all(perm in user_permissions for perm in required_permissions)
+
+async def get_client_ip(request: Request) -> str:
+    """Get client IP address"""
+    # Check for forwarded headers
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip
+    
+    return request.client.host
+
+async def log_request(request: Request, response_time: float, status_code: int, 
+                     user: Optional[dict] = None, target_service: str = None, 
+                     error_message: str = None):
+    """Log API request"""
+    try:
+        async with db_manager.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO request_logs (
+                    method, path, user_id, tenant_id, ip_address, user_agent,
+                    status_code, response_time, target_service, error_message
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            """, 
+                request.method,
+                str(request.url.path),
+                user.get("id") if user else None,
+                user.get("tenant_id") if user else None,
+                await get_client_ip(request),
+                request.headers.get("user-agent"),
+                status_code,
+                response_time,
+                target_service,
+                error_message
+            )
+    except Exception as e:
+        logger.error(f"Error logging request: {e}")
+
+async def find_route_rule(method: str, path: str) -> Optional[dict]:
+    """Find matching route rule"""
+    async with db_manager.pool.acquire() as conn:
+        rules = await conn.fetch("""
+            SELECT * FROM route_rules 
+            WHERE active = true 
+            ORDER BY LENGTH(path_pattern) DESC
+        """)
+        
+        for rule in rules:
+            # Simple pattern matching (in production, use regex or more sophisticated matching)
+            pattern = rule["path_pattern"].replace("*", "")
+            if path.startswith(pattern):
+                if not rule["method"] or rule["method"] == method:
+                    return dict(rule)
+        
+        return None
+
+async def check_rate_limits(request: Request, user: Optional[dict] = None) -> tuple[bool, dict]:
+    """Check all applicable rate limits"""
+    client_ip = await get_client_ip(request)
+    path = str(request.url.path)
+    method = request.method
+    
+    async with db_manager.pool.acquire() as conn:
+        rules = await conn.fetch("""
+            SELECT * FROM rate_limit_rules 
+            WHERE active = true
+        """)
+        
+        for rule in rules:
+            # Check if rule applies to this request
+            pattern = rule["path_pattern"].replace("*", "")
+            if not path.startswith(pattern):
+                continue
+            
+            if rule["method"] and rule["method"] != method:
+                continue
+            
+            # Determine rate limit key
+            limit_type = rule["limit_type"]
+            if limit_type == "per_ip":
+                key = f"rate_limit:ip:{client_ip}:{rule['id']}"
+            elif limit_type == "per_user" and user:
+                key = f"rate_limit:user:{user['id']}:{rule['id']}"
+            elif limit_type == "per_tenant" and user:
+                key = f"rate_limit:tenant:{user['tenant_id']}:{rule['id']}"
+            elif limit_type == "global":
+                key = f"rate_limit:global:{rule['id']}"
+            else:
+                continue
+            
+            # Check minute limit
+            allowed, info = await rate_limiter.check_rate_limit(
+                f"{key}:minute", rule["requests_per_minute"], 60
+            )
+            
+            if not allowed:
+                return False, {
+                    "rule": rule["name"],
+                    "limit_type": limit_type,
+                    "window": "minute",
+                    **info
+                }
+            
+            # Check hour limit
+            allowed, info = await rate_limiter.check_rate_limit(
+                f"{key}:hour", rule["requests_per_hour"], 3600
+            )
+            
+            if not allowed:
+                return False, {
+                    "rule": rule["name"],
+                    "limit_type": limit_type,
+                    "window": "hour",
+                    **info
+                }
+            
+            # Check day limit
+            allowed, info = await rate_limiter.check_rate_limit(
+                f"{key}:day", rule["requests_per_day"], 86400
+            )
+            
+            if not allowed:
+                return False, {
+                    "rule": rule["name"],
+                    "limit_type": limit_type,
+                    "window": "day",
+                    **info
+                }
+    
+    return True, {}
+
+async def proxy_request(request: Request, target_service: str, target_path: str = None) -> Response:
+    """Proxy request to target service"""
+    service_endpoint = service_registry.get_service_endpoint(target_service)
+    
+    if not service_endpoint:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unsupported authentication scheme"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Service {target_service} not available"
+        )
+    
+    # Build target URL
+    if target_path:
+        target_url = f"{service_endpoint.url}{target_path}"
+    else:
+        target_url = f"{service_endpoint.url}{request.url.path}"
+    
+    # Add query parameters
+    if request.url.query:
+        target_url += f"?{request.url.query}"
+    
+    # Get circuit breaker
+    cb_key = f"{service_endpoint.service_name}:{service_endpoint.url}"
+    circuit_breaker = service_registry.circuit_breakers.get(cb_key)
+    
+    async def make_request():
+        # Increment connection count
+        service_registry.connection_counts[cb_key] += 1
+        
+        try:
+            async with httpx.AsyncClient(timeout=service_endpoint.timeout) as client:
+                # Forward headers (excluding hop-by-hop headers)
+                headers = dict(request.headers)
+                headers.pop("host", None)
+                headers.pop("content-length", None)
+                
+                # Get request body
+                body = await request.body()
+                
+                response = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers,
+                    content=body
+                )
+                
+                # Create response
+                return Response(
+                    content=response.content,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    media_type=response.headers.get("content-type")
+                )
+        finally:
+            # Decrement connection count
+            service_registry.connection_counts[cb_key] -= 1
+    
+    if circuit_breaker:
+        return await circuit_breaker.call(make_request)
+    else:
+        return await make_request()
+
+# Main request handler
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
+async def gateway_handler(request: Request, path: str):
+    """Main gateway request handler"""
+    start_time = time.time()
+    user = None
+    target_service = None
+    
+    try:
+        # Get current user if authenticated
+        try:
+            credentials = await security(request)
+            if credentials:
+                user = await get_current_user(credentials)
+        except Exception:
+            pass  # Continue without authentication
+        
+        # Check rate limits
+        allowed, rate_limit_info = await check_rate_limits(request, user)
+        if not allowed:
+            response_time = time.time() - start_time
+            await log_request(request, response_time, 429, user, error_message="Rate limit exceeded")
+            
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded",
+                headers={
+                    "X-RateLimit-Limit": str(rate_limit_info.get("limit", 0)),
+                    "X-RateLimit-Remaining": str(max(0, rate_limit_info.get("limit", 0) - rate_limit_info.get("current_requests", 0))),
+                    "X-RateLimit-Reset": str(rate_limit_info.get("reset_time", 0))
+                }
+            )
+        
+        # Find route rule
+        route_rule = await find_route_rule(request.method, f"/{path}")
+        
+        if not route_rule:
+            response_time = time.time() - start_time
+            await log_request(request, response_time, 404, user, error_message="Route not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Route not found"
+            )
+        
+        target_service = route_rule["target_service"]
+        
+        # Check authentication requirement
+        if route_rule["requires_auth"] and not user:
+            response_time = time.time() - start_time
+            await log_request(request, response_time, 401, user, target_service, "Authentication required")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required"
+            )
+        
+        # Check permissions
+        required_permissions = route_rule.get("required_permissions", [])
+        if user and required_permissions and not await check_permissions(user, required_permissions):
+            response_time = time.time() - start_time
+            await log_request(request, response_time, 403, user, target_service, "Insufficient permissions")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions"
+            )
+        
+        # Proxy request
+        response = await proxy_request(request, target_service, route_rule.get("target_path"))
+        
+        # Log successful request
+        response_time = time.time() - start_time
+        await log_request(request, response_time, response.status_code, user, target_service)
+        
+        # Add gateway headers
+        response.headers["X-Gateway-Service"] = target_service
+        response.headers["X-Response-Time"] = str(response_time)
+        
+        return response
+        
+    except HTTPException as e:
+        # Log HTTP exceptions
+        response_time = time.time() - start_time
+        await log_request(request, response_time, e.status_code, user, target_service, str(e.detail))
+        raise e
+        
+    except Exception as e:
+        # Log unexpected errors
+        response_time = time.time() - start_time
+        await log_request(request, response_time, 500, user, target_service, str(e))
+        logger.error(f"Unexpected error in gateway: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
         )
 
-# Routes
-@app.get("/health")
-async def health_check():
-    """Gateway health check"""
+# Admin endpoints
+@app.get("/gateway/stats", response_model=APIGatewayStats)
+async def get_gateway_stats():
+    """Get API gateway statistics"""
+    async with db_manager.pool.acquire() as conn:
+        # Get recent stats
+        stats = await conn.fetchrow("""
+            SELECT 
+                COUNT(*) as total_requests,
+                COUNT(*) FILTER (WHERE status_code < 400) as successful_requests,
+                COUNT(*) FILTER (WHERE status_code >= 400) as failed_requests,
+                COUNT(*) FILTER (WHERE status_code = 429) as rate_limited_requests,
+                AVG(response_time) as average_response_time
+            FROM request_logs 
+            WHERE timestamp > NOW() - INTERVAL '1 hour'
+        """)
+        
+        # Get active connections (simplified)
+        active_connections = sum(service_registry.connection_counts.values())
+        
+        return APIGatewayStats(
+            total_requests=stats["total_requests"] or 0,
+            successful_requests=stats["successful_requests"] or 0,
+            failed_requests=stats["failed_requests"] or 0,
+            rate_limited_requests=stats["rate_limited_requests"] or 0,
+            average_response_time=float(stats["average_response_time"] or 0),
+            active_connections=active_connections,
+            timestamp=datetime.utcnow()
+        )
+
+@app.get("/gateway/services")
+async def list_services():
+    """List registered services"""
     return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow(),
-        "services": health_manager.health_status
+        service_name: [
+            {
+                "url": endpoint.url,
+                "weight": endpoint.weight,
+                "active": endpoint.active,
+                "connections": service_registry.connection_counts.get(f"{service_name}:{endpoint.url}", 0)
+            }
+            for endpoint in endpoints
+        ]
+        for service_name, endpoints in service_registry.services.items()
     }
 
-@app.get("/metrics")
-async def metrics():
-    """Prometheus metrics endpoint"""
-    return Response(generate_latest(), media_type="text/plain")
-
-@app.get("/admin/routes", response_model=List[ServiceRoute])
-async def get_routes(user: Dict = Depends(get_current_user)):
-    """Get all configured routes"""
-    if not user or "admin" not in user.get("permissions", []):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    return list(service_router.routes.values())
-
-@app.post("/admin/routes", response_model=ServiceRoute)
-async def create_route(route: ServiceRoute, user: Dict = Depends(get_current_user)):
-    """Create new route"""
-    if not user or "admin" not in user.get("permissions", []):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    # Store in database
-    async with db_manager.pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO api_routes 
-            (id, path, methods, service_url, service_name, authentication,
-             rate_limit, timeout_seconds, retry_attempts, circuit_breaker_enabled,
-             active, tenant_specific, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        """,
-            route.id, route.path, [m.value for m in route.methods],
-            route.service_url, route.service_name, route.authentication.value,
-            route.rate_limit, route.timeout_seconds, route.retry_attempts,
-            route.circuit_breaker_enabled, route.active, route.tenant_specific,
-            json.dumps(route.metadata)
-        )
-    
-    # Update in-memory routes
-    service_router.routes[route.path] = route
-    
-    return route
-
-@app.get("/admin/health", response_model=Dict[str, ServiceHealthCheck])
-async def get_service_health(user: Dict = Depends(get_current_user)):
-    """Get health status of all services"""
-    if not user or "admin" not in user.get("permissions", []):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    return health_manager.health_status
-
-@app.post("/admin/health/check")
-async def trigger_health_check(user: Dict = Depends(get_current_user)):
-    """Trigger immediate health check of all services"""
-    if not user or "admin" not in user.get("permissions", []):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    await health_manager.check_all_services()
-    return {"message": "Health check completed"}
-
-# Main proxy route - catch all
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-@limiter.limit("1000/minute")
-async def proxy_request(
-    request: Request,
-    path: str,
-    user: Dict = Depends(get_current_user)
-):
-    """Proxy requests to appropriate services"""
-    full_path = f"/{path}"
-    
-    # Find matching route
-    route = service_router.find_route(full_path, request.method)
-    
-    if not route:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Route not found"
-        )
-    
-    # Check authentication requirements
-    if route.authentication != AuthenticationType.NONE and not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required"
-        )
-    
-    # Forward request to service
-    return await service_router.forward_request(route, request, full_path, user)
-
-# Request logging endpoint
-@app.get("/admin/logs", response_model=List[RequestLog])
-async def get_request_logs(
-    limit: int = 100,
-    offset: int = 0,
-    service_name: Optional[str] = None,
-    user: Dict = Depends(get_current_user)
-):
-    """Get request logs"""
-    if not user or "admin" not in user.get("permissions", []):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    query = """
-        SELECT request_id, method, path, service_name, status_code,
-               response_time_ms, client_ip, user_agent, user_id,
-               tenant_id, timestamp, error_message
-        FROM request_logs
-    """
-    params = []
-    
-    if service_name:
-        query += " WHERE service_name = $1"
-        params.append(service_name)
-    
-    query += " ORDER BY timestamp DESC LIMIT $" + str(len(params) + 1) + " OFFSET $" + str(len(params) + 2)
-    params.extend([limit, offset])
-    
-    async with db_manager.pool.acquire() as conn:
-        logs = await conn.fetch(query, *params)
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        async with db_manager.pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
         
-        return [
-            RequestLog(
-                request_id=log["request_id"],
-                method=log["method"],
-                path=log["path"],
-                service_name=log["service_name"],
-                status_code=log["status_code"],
-                response_time_ms=log["response_time_ms"],
-                client_ip=log["client_ip"],
-                user_agent=log["user_agent"],
-                user_id=log["user_id"],
-                tenant_id=log["tenant_id"],
-                timestamp=log["timestamp"],
-                error_message=log["error_message"]
-            )
-            for log in logs
-        ]
+        await db_manager.redis.ping()
+        
+        return {
+            "status": "healthy",
+            "timestamp": datetime.utcnow().isoformat(),
+            "service": "api-gateway-service",
+            "version": "1.0.0",
+            "registered_services": len(service_registry.services)
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service unhealthy"
+        )
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
