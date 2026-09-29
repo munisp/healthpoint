@@ -26,8 +26,14 @@ import { disputes, disputeAccess } from "../drizzle/schema";
 
 // ── Permify REST client (optional — falls back to PostgreSQL when PERMIFY_URL not set) ──
 
-const PERMIFY_URL = process.env.PERMIFY_URL;
-const PERMIFY_TENANT = process.env.PERMIFY_TENANT || "t1";
+// Read at call time (not module load) so env-gated behavior is testable and
+// runtime reconfiguration is reflected without a process restart.
+function permifyUrl(): string | undefined {
+  return process.env.PERMIFY_URL;
+}
+function permifyTenant(): string {
+  return process.env.PERMIFY_TENANT || "t1";
+}
 
 async function checkPermify(
   entity: string,
@@ -35,9 +41,9 @@ async function checkPermify(
   permission: string,
   subjectId: string
 ): Promise<boolean | null> {
-  if (!PERMIFY_URL) return null;
+  if (!permifyUrl()) return null;
   try {
-    const res = await fetch(`${PERMIFY_URL}/v1/tenants/${PERMIFY_TENANT}/permissions/check`, {
+    const res = await fetch(`${permifyUrl()}/v1/tenants/${permifyTenant()}/permissions/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -60,9 +66,9 @@ async function checkPermify(
 export async function writePermifyRelationship(
   entity: string, entityId: string, relation: string, subjectId: string
 ): Promise<void> {
-  if (!PERMIFY_URL) return;
+  if (!permifyUrl()) return;
   try {
-    await fetch(`${PERMIFY_URL}/v1/tenants/${PERMIFY_TENANT}/relationships/write`, {
+    await fetch(`${permifyUrl()}/v1/tenants/${permifyTenant()}/relationships/write`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -83,9 +89,9 @@ export async function registerDisputeOwner(disputeId: string, ownerId: string): 
 async function deletePermifyRelationship(
   entity: string, entityId: string, relation: string, subjectId: string
 ): Promise<void> {
-  if (!PERMIFY_URL) return;
+  if (!permifyUrl()) return;
   try {
-    await fetch(`${PERMIFY_URL}/v1/tenants/${PERMIFY_TENANT}/relationships/delete`, {
+    await fetch(`${permifyUrl()}/v1/tenants/${permifyTenant()}/relationships/delete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -104,9 +110,9 @@ async function deletePermifyRelationship(
 async function readPermifyRelationships(
   entity: string, entityId: string
 ): Promise<Array<{ relation: string; subjectId: string }>> {
-  if (!PERMIFY_URL) return [];
+  if (!permifyUrl()) return [];
   try {
-    const res = await fetch(`${PERMIFY_URL}/v1/tenants/${PERMIFY_TENANT}/relationships/read`, {
+    const res = await fetch(`${permifyUrl()}/v1/tenants/${permifyTenant()}/relationships/read`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -229,6 +235,17 @@ export async function canAccessDispute(
   // Admins have full access
   if (userRole === "admin") return true;
 
+  // Phase 15 FB (B2): PERMIFY_ENFORCE=true turns Permify from a mirror-only
+  // consult into the hard authorization gate for dispute reads/writes.
+  // Fail-closed: when enforcement is on, an unreachable/unconfigured Permify
+  // DENIES access rather than silently falling back to PostgreSQL.
+  // Default (unset) preserves the pre-existing mirror + PG-fallback behavior.
+  const enforcePermify = process.env.PERMIFY_ENFORCE === "true";
+  if (enforcePermify && !permifyUrl()) {
+    console.error("[authz] PERMIFY_ENFORCE=true but PERMIFY_URL is unset — failing closed (deny)");
+    return false;
+  }
+
   // Try Permify first
   // Permission names must exist in the canonical mounted schema
   // (infra/permify/schema.perm): "read", "write", and "admin" are defined
@@ -236,6 +253,10 @@ export async function canAccessDispute(
   const permifyPermission = permission;
   const permifyResult = await checkPermify("dispute", disputeId, permifyPermission, userId);
   if (permifyResult !== null) return permifyResult;
+  if (enforcePermify) {
+    console.error(`[authz] Permify unreachable while PERMIFY_ENFORCE=true — denying ${permission} on dispute ${disputeId} for user ${userId} (fail-closed)`);
+    return false;
+  }
 
   // Fall back to PostgreSQL
   const db = await getDb();
@@ -513,12 +534,12 @@ entity payment {
  * Safe to call repeatedly — Permify is idempotent on schema writes.
  */
 export async function bootstrapPermifySchema(): Promise<void> {
-  if (!PERMIFY_URL) {
+  if (!permifyUrl()) {
     console.info("[authz] PERMIFY_URL not set — schema bootstrap skipped");
     return;
   }
   try {
-    const res = await fetch(`${PERMIFY_URL}/v1/tenants/${PERMIFY_TENANT}/schemas/write`, {
+    const res = await fetch(`${permifyUrl()}/v1/tenants/${permifyTenant()}/schemas/write`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ schema: PERMIFY_SCHEMA }),
