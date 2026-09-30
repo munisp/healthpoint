@@ -43,6 +43,7 @@ import { eventBus } from "./events/bus";
 import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, getStatusForStep, addBusinessDays, daysUntilDeadline, validateWorkflowTransition, getStepNumber, isDeadlinePassed } from "./workflow/idr-workflow";
 import { addBusinessDays as addIdrBusinessDays, businessDaysBetween } from "./idr/deadlines";
 import { checkIdrInitiationWindow, checkCoolingOffForNewDispute, validateConflictCheck, checkDelegationAttestation } from "./idr/initiation-guards";
+import { assertDisputeCreateComplete, assertOpenNegotiationComplete, assertIdrInitiationComplete, assertBatchingComplete, projectDisputeCompleteness } from "./completeness/gates";
 import { idrAttestations, disputeEvents, settlementTransfers } from "../drizzle/schema";
 import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, recordUnverifiedPaymentReport, hasApprovedSettlementEvidence, confirmPaymentReport, dollarsToCents, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
 import { dispatchOutboxBatch } from "./outbox";
@@ -135,6 +136,19 @@ const advanceStepSchema = z.object({
   // 4-business-day window, 45 CFR § 149.510(b)(2)(i)). When supplied, the
   // transition is allowed and a compliance note is recorded instead.
   overrideReason: z.string().min(1).optional(),
+  // Phase 17-CE completeness gates (fail-closed, dictionary-driven per
+  // server/eligibility/required-fields.ts). Required at the STEP_04
+  // (IDR initiation) gate; recorded as a completeness_gate dispute event.
+  planType: z.enum(["FULLY_INSURED", "SELF_FUNDED", "FEHB"]).optional(),
+  noticeConsentStatus: z.enum(["none", "signed", "waived_exception"]).optional(),
+  conflictCheckAttested: z.boolean().optional(),
+  // Batched-dispute validation (CMS-9897-F, 45 CFR 149.510(c)(4)(i)).
+  batched: z.boolean().optional(),
+  batchedLineItems: z.array(z.object({
+    payerId: z.string().optional(),
+    renderingNpi: z.string().optional(),
+    cptCodes: z.array(z.string()).optional(),
+  })).max(50).optional(),
 });
 
 const submitOfferSchema = z.object({
@@ -160,6 +174,51 @@ function decryptTotpSecret(stored: string): string {
   const creds = decryptCredentials(stored);
   if (typeof creds.s !== "string") throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Corrupt TOTP secret" });
   return creds.s;
+}
+
+// ── Phase 17-CE: completeness-gate evidence readback ─────────────────────────
+interface GateEvidence {
+  planType?: string | null;
+  noticeConsentStatus?: string | null;
+  conflictCheckAttested?: boolean | null;
+  openNegotiationEndDate?: string | null;
+}
+
+function gateEvidenceFromMetadata(metadata: unknown): GateEvidence | null {
+  const m = metadata as { context?: string; values?: Record<string, unknown> } | null | undefined;
+  if (!m || m.context !== "idr_initiation" || !m.values) return null;
+  const v = m.values;
+  return {
+    planType: (v.planType as string | null) ?? null,
+    noticeConsentStatus: (v.noticeConsentStatus as string | null) ?? null,
+    conflictCheckAttested: v.conflictCheck === "attested" || v.conflictCheckAttested === true,
+    openNegotiationEndDate: v.openNegotiationEndDate ? String(v.openNegotiationEndDate) : null,
+  };
+}
+
+/** Latest completeness_gate evidence from an already-loaded event list. */
+function extractGateEvidence(events: Array<{ eventType: string; metadata?: unknown; createdAt?: Date | string | null }> | undefined): GateEvidence | null {
+  if (!events) return null;
+  const gates = events.filter(e => e.eventType === "completeness_gate");
+  if (!gates.length) return null;
+  gates.sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
+  return gateEvidenceFromMetadata(gates[0].metadata);
+}
+
+/** Batched evidence lookup for list projections (single query, no N+1). */
+async function loadGateEvidenceByDispute(disputeIds: string[]): Promise<Map<string, GateEvidence>> {
+  const map = new Map<string, GateEvidence>();
+  const db = await getDb();
+  if (!db || !disputeIds.length) return map;
+  const { inArray } = await import("drizzle-orm");
+  const rows = await db.select().from(disputeEvents)
+    .where(and(inArray(disputeEvents.disputeId, disputeIds), eq(disputeEvents.eventType, "completeness_gate")));
+  rows.sort((a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime());
+  for (const r of rows) {
+    const ev = gateEvidenceFromMetadata(r.metadata);
+    if (ev) map.set(r.disputeId, ev); // ascending order → latest wins
+  }
+  return map;
 }
 
 // ── PHI read auditing ─────────────────────────────────────────────────────────
@@ -446,7 +505,15 @@ export const appRouter = router({
         offset: z.number().min(0).default(0),
       }))
       .query(async ({ ctx, input }) => {
-        return listDisputes({ userId: ctx.user.id, ...input });
+        const result = await listDisputes({ userId: ctx.user.id, ...input });
+        // Phase 17-CE: attach the computed completeness projection to each
+        // row (one batched read of completeness_gate events — no N+1).
+        const ids = result.items.map(d => d.id);
+        const evidenceById = ids.length ? await loadGateEvidenceByDispute(ids) : new Map<string, GateEvidence>();
+        return {
+          ...result,
+          items: result.items.map(d => ({ ...d, completeness: projectDisputeCompleteness(d, evidenceById.get(d.id) ?? null) })),
+        };
       }),
 
     getById: protectedProcedure
@@ -456,12 +523,23 @@ export const appRouter = router({
         const dispute = await getDisputeById(input.id);
         if (!dispute) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
         auditPhiRead(ctx, "dispute", input.id);
-        return dispute;
+        // Phase 17-CE: computed completeness projection (dictionary-driven;
+        // no schema change). Gate-only IDR fields are read back from the
+        // completeness_gate event recorded at the STEP_04 transition.
+        return { ...dispute, completeness: projectDisputeCompleteness(dispute, extractGateEvidence(dispute.events)) };
       }),
 
     create: protectedProcedure
       .input(createDisputeSchema)
       .mutation(async ({ ctx, input }) => {
+        // Phase 17-CE: fail-closed completeness gate at intake. Evaluates the
+        // dictionary contexts claim_ingestion (identity subset) +
+        // open_negotiation_initiation against the POST-DEFAULT record
+        // (initialPaymentDate defaults to creation; the ON notice is
+        // initiated at creation). No draft status exists in DISPUTE_STATUS,
+        // so incomplete intakes are BLOCKED with structured missingFields
+        // (PRECONDITION_FAILED) — never created in a half-populated state.
+        assertDisputeCreateComplete({ ...input, now: new Date() });
         // S4: cooling-off screen (45 CFR 149.510(c)(4)(vii)(B)) — reject a new
         // dispute against the same other party for the same/similar item or
         // service when a prior determination's 90-calendar-day suspension
@@ -552,6 +630,13 @@ export const appRouter = router({
               `(${current.ineligibilityReason ?? "eligibility screen"}); it cannot advance past STEP_03.`,
           });
         }
+        // Phase 17-CE: leaving STEP_01 (entering the open negotiation period)
+        // requires the ON-initiation dictionary context to be complete on the
+        // dispute row (fail-closed; the notice was initiated at creation).
+        if (newStep === "STEP_02_OPEN_NEGOTIATION_PERIOD") {
+          assertOpenNegotiationComplete(current);
+        }
+        let idrGateEvidence: Record<string, unknown> | null = null;
         if (newStep === "STEP_04_IDR_INITIATED") {
           // S3: reject late IDR initiation — more than 4 business days past
           // the end of the 30-BD open negotiation period anchored on
@@ -610,6 +695,24 @@ export const appRouter = router({
               throw new TRPCError({ code: "BAD_REQUEST", message: delegation.detail });
             }
           }
+          // Phase 17-CE: fail-closed idr_initiation completeness gate,
+          // composed AFTER the S9 delegation guard. Gate-only fields
+          // (planType, noticeConsentStatus, conflictCheck attestation) must
+          // accompany the transition; they become the evidence of record via
+          // a completeness_gate dispute event. Air ambulance: the
+          // notice-and-consent field is satisfied by the explicit
+          // not-applicable sentinel (45 CFR 149.410-430 does not apply).
+          idrGateEvidence = assertIdrInitiationComplete(current, {
+            openNegotiationEndDate: late.openNegotiationEnd ?? null,
+            planType: additionalData.planType ?? null,
+            noticeConsentStatus: additionalData.noticeConsentStatus ?? null,
+            conflictCheckAttested: additionalData.conflictCheckAttested ?? null,
+          });
+          // CMS-9897-F batching validation for batched disputes.
+          if (additionalData.batched) {
+            assertBatchingComplete(additionalData.batchedLineItems ?? [], current.createdAt ?? null);
+            idrGateEvidence = { ...idrGateEvidence, batched: true, batchedLineItemCount: (additionalData.batchedLineItems ?? []).length };
+          }
         }
         try {
           validateWorkflowTransition(current.currentStep, newStep, { ...current, ...additionalData });
@@ -633,6 +736,25 @@ export const appRouter = router({
             determinationWinner: additionalData.determinationWinner ?? undefined,
           }
         ));
+        // Phase 17-CE: persist the IDR-initiation gate evidence as a dispute
+        // event (the values of record for gate-only fields; read back by the
+        // completeness projection on getById/list).
+        if (idrGateEvidence) {
+          const db = await getDb();
+          if (db) {
+            await db.insert(disputeEvents).values({
+              id: crypto.randomUUID(),
+              disputeId,
+              step: newStep,
+              eventType: "completeness_gate",
+              description: "IDR-initiation completeness gate PASSED (fail-closed, 45 CFR 149.510 dictionary)",
+              performedBy: ctx.user.id,
+              performedByName: ctx.user.name ?? "Unknown",
+              metadata: { context: "idr_initiation", gate: "passed", values: idrGateEvidence },
+              createdAt: new Date(),
+            });
+          }
+        }
         // M1: record the IDR determination on the ledger when the dispute
         // reaches the determination step. Delta-based (see recordDetermination):
         // re-issue of the same amount is a no-op; a reduced determination books
