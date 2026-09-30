@@ -267,7 +267,12 @@ export const authzCheckers: Record<string, AuthzChecker> = {
   "ai.analyzeDocument": disputeCheck("disputeId", "read", { optional: true }),
   "ai.generateCMSSubmission": disputeCheck("disputeId", "read"),
   "ai.askAssistant": disputeCheck("disputeId", "read", { optional: true }),
-  "ai.pullDisputeData": emrConnectionCheck("connectionId"),
+  // pullDisputeData owns the EMR connection AND merges extracted fields into a
+  // dispute — so it must ALSO hold write access to that dispute. Checking only
+  // the connection let any user overwrite any dispute's fields by passing its
+  // id (billed amount, CPT/ICD codes, payer name). disputeId is optional (a
+  // pull without a merge target only reads the caller's own EMR connection).
+  "ai.pullDisputeData": allOf(emrConnectionCheck("connectionId"), disputeCheck("disputeId", "write", { optional: true })),
   "ai.searchPatients": emrConnectionCheck("connectionId"),
 
   // ── Dispute-linked analysis / compliance reads ───────────────────────────
