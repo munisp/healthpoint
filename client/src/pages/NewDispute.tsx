@@ -14,6 +14,7 @@ import {
   ShieldCheck, ShieldAlert, ShieldX,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import DisputeCompleteness, { parseGateMissingFields } from "@/components/DisputeCompleteness";
 import SmartFormPanel from "@/components/SmartFormPanel";
 import {
   clearOfflineDrafts,
@@ -132,6 +133,8 @@ export default function NewDispute() {
   const [, navigate] = useLocation();
   const { user, logout } = useAuth();
   const [currentStep, setCurrentStep] = useState(1);
+  // Phase 17-FE: PRECONDITION_FAILED gate errors from submit attempts (exact gaps from server).
+  const [gateErrors, setGateErrors] = useState<unknown[]>([]);
   // Pre-fill from template query params (e.g., /disputes/new?serviceType=emergency_medicine&billedAmount=5000)
   const [form, setForm] = useState<FormData>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -333,12 +336,24 @@ export default function NewDispute() {
       await deleteDraftMutation.mutateAsync();
       await clearOfflineDrafts();
       setOfflineQueued(false);
+      setGateErrors([]);
       utils.drafts.get.invalidate();
       toast.success(`Dispute ${dispute.referenceNumber} initiated successfully`);
       navigate(`/disputes/${dispute.id}`);
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => {
+      toast.error(err.message);
+      // Phase 17-FE: surface PRECONDITION_FAILED gate gaps in the completeness panel.
+      if (err.data?.code === "PRECONDITION_FAILED") setGateErrors(prev => [...prev, err]);
+    },
   });
+
+  // Exact gaps reported by server gate errors; editing the form clears the block.
+  const gateMissingFields = Array.from(new Set(gateErrors.flatMap(parseGateMissingFields)));
+  useEffect(() => {
+    if (gateErrors.length > 0) setGateErrors([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form]);
 
   const canProceed = () => {
     if (currentStep === 1) return form.initiatingPartyName.trim().length > 0;
@@ -975,6 +990,22 @@ export default function NewDispute() {
                   attempted and failed within the required 30-business-day period per 45 CFR §149.510. Submitting
                   a false IDR request may result in penalties.
                 </div>
+
+                {/* Phase 17-FE: completeness checklist + exact server gate gaps.
+                    Client-computed (advisory) — the backend disputes completeness
+                    projection has not landed yet (phase17-ce). */}
+                <DisputeCompleteness
+                  context="idr_initiation"
+                  values={{
+                    serviceState: form.facilityState || form.patientState,
+                    serviceCategory: form.serviceType,
+                    planType: (form as { planType?: string }).planType,
+                    noticeConsentStatus: (form as { noticeConsentStatus?: string }).noticeConsentStatus,
+                    initialPaymentDate: (form as { initialPaymentDate?: string }).initialPaymentDate,
+                  }}
+                  gateErrors={gateErrors}
+                  title="IDR completeness (advisory)"
+                />
               </div>
             )}
 
@@ -996,14 +1027,25 @@ export default function NewDispute() {
                   Next <ArrowRight size={14} />
                 </Button>
               ) : (
-                <Button
-                  onClick={handleSubmit}
-                  disabled={createMutation.isPending}
-                  className="flex items-center gap-2 bg-primary hover:bg-primary/90"
-                >
-                  <Scale size={14} />
-                  {createMutation.isPending ? "Initiating…" : "Initiate IDR Dispute"}
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <Button
+                        onClick={handleSubmit}
+                        disabled={createMutation.isPending || gateMissingFields.length > 0}
+                        className="flex items-center gap-2 bg-primary hover:bg-primary/90"
+                      >
+                        <Scale size={14} />
+                        {createMutation.isPending ? "Initiating…" : "Initiate IDR Dispute"}
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {gateMissingFields.length > 0 && (
+                    <TooltipContent side="top" className="max-w-xs">
+                      <p className="text-xs">Server gate reported missing fields — correct: {gateMissingFields.join(", ")}</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
               )}
             </div>
           </CardContent>
