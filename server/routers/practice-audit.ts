@@ -31,10 +31,11 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray } from "drizzle-orm";
-import { router, protectedProcedure } from "../_core/trpc";
+import { and, eq, inArray, isNull } from "drizzle-orm";
+import { router, protectedProcedure, publicProcedure } from "../_core/trpc";
+import { createAuditEntry } from "../db";
 import { organizations, orgMemberships } from "../../drizzle/schema-personas";
-import { practiceClaims, practiceClaimScores } from "../../drizzle/schema-practice-claims";
+import { practiceClaims, practiceClaimScores, auditShareTokens } from "../../drizzle/schema-practice-claims";
 import { parse837p, claim837ToNormalized, Claim837ParseError } from "../edi/claim837";
 import { importBulkNdjson, stageClaims, type NormalizedPracticeClaim } from "../emr/bulk-import";
 import { evaluateClaimEligibility, ELIGIBILITY_ENGINE_META } from "../eligibility/engine";
@@ -82,6 +83,10 @@ function toEngineInput(c: typeof practiceClaims.$inferSelect) {
 }
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
+
+function sha256Hex(s: string): string {
+  return crypto.createHash("sha256").update(s, "utf8").digest("hex");
+}
 
 /**
  * OutcomeNet P(provider-favorable determination) for a claim — STATISTICAL
@@ -478,6 +483,133 @@ export const practiceAuditRouter = router({
         verdictSemantics:
           "QUALIFIES/BLOCKED/NEEDS_REVIEW are deterministic rule verdicts about federal IDR ELIGIBILITY with CFR citations. They assert nothing about the probability or certainty of winning a determination.",
         citations: [...params.citations],
+      };
+    }),
+
+  // ── Phase 18: audit-as-leadgen share links ─────────────────────────────────
+  /**
+   * Create a tokenized READ-ONLY share link for this org's practice audit
+   * report (the three-lane scorecard = scoreAndSummarize rollup). The raw
+   * bearer token is returned ONCE; only its sha256 persists
+   * (patient-token pattern). Default expiry 30 days (max 90); revocable.
+   */
+  createAuditShareToken: protectedProcedure
+    .input(z.object({
+      orgId: z.string().min(1),
+      label: z.string().max(255).optional(),
+      expiresInDays: z.number().int().min(1).max(90).default(30),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      await assertOrgMember(db, ctx.user.id, input.orgId);
+      const rawToken = crypto.randomBytes(32).toString("base64url");
+      const id = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000);
+      await db.insert(auditShareTokens).values({
+        id,
+        tokenHash: sha256Hex(rawToken),
+        orgId: input.orgId,
+        scope: "practice_audit_read",
+        label: input.label ?? null,
+        expiresAt,
+        createdByUserId: ctx.user.id,
+      });
+      await createAuditEntry({
+        userId: ctx.user.id,
+        action: "practiceAudit.createAuditShareToken",
+        entityType: "audit_share_token",
+        entityId: id,
+        oldValue: null,
+        newValue: JSON.stringify({ orgId: input.orgId, label: input.label ?? null, expiresInDays: input.expiresInDays }),
+        ipAddress: null,
+        userAgent: null,
+      });
+      return { shareTokenId: id, shareToken: rawToken, expiresAt, scope: "practice_audit_read" as const };
+    }),
+
+  /** List share tokens for an org (hashes never returned). */
+  listAuditShareTokens: protectedProcedure
+    .input(z.object({ orgId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      await assertOrgMember(db, ctx.user.id, input.orgId, ["owner", "staff", "viewer"]);
+      const rows = await db.select().from(auditShareTokens).where(eq(auditShareTokens.orgId, input.orgId));
+      return rows.map(t => ({
+        id: t.id, orgId: t.orgId, scope: t.scope, label: t.label,
+        expiresAt: t.expiresAt, revokedAt: t.revokedAt,
+        lastAccessedAt: t.lastAccessedAt, accessCount: t.accessCount, createdAt: t.createdAt,
+      }));
+    }),
+
+  /** Revoke a share token (owner/staff of the org). */
+  revokeAuditShareToken: protectedProcedure
+    .input(z.object({ shareTokenId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const row = (await db.select().from(auditShareTokens).where(eq(auditShareTokens.id, input.shareTokenId)).limit(1))[0];
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Share token not found" });
+      await assertOrgMember(db, ctx.user.id, row.orgId);
+      if (row.revokedAt) throw new TRPCError({ code: "CONFLICT", message: "Share token already revoked" });
+      await db.update(auditShareTokens).set({ revokedAt: new Date(), revokedByUserId: ctx.user.id })
+        .where(eq(auditShareTokens.id, row.id));
+      await createAuditEntry({
+        userId: ctx.user.id,
+        action: "practiceAudit.revokeAuditShareToken",
+        entityType: "audit_share_token",
+        entityId: row.id,
+        oldValue: null,
+        newValue: JSON.stringify({ revoked: true }),
+        ipAddress: null,
+        userAgent: null,
+      });
+      return { shareTokenId: row.id, revoked: true as const };
+    }),
+
+  /**
+   * PUBLIC read-only resolution of a share token: returns the org's audit
+   * scorecard rollup (verdict breakdown + counts — no claim-level rows, no
+   * PII) when the token is valid (sha256 match, unexpired, unrevoked).
+   * Fail-closed: invalid/expired/revoked tokens all return UNAUTHORIZED
+   * without distinguishing which check failed.
+   */
+  resolveAuditShareToken: publicProcedure
+    .input(z.object({ token: z.string().min(1).max(256) }))
+    .query(async ({ input }) => {
+      const db = await requireDb();
+      const hash = sha256Hex(input.token);
+      const rows = await db.select().from(auditShareTokens)
+        .where(and(eq(auditShareTokens.tokenHash, hash), isNull(auditShareTokens.revokedAt)))
+        .limit(1);
+      const token = rows[0];
+      if (!token || token.expiresAt <= new Date()) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid, expired, or revoked share token" });
+      }
+      await db.update(auditShareTokens)
+        .set({ lastAccessedAt: new Date(), accessCount: token.accessCount + 1 })
+        .where(eq(auditShareTokens.id, token.id));
+      const claims = await db.select().from(practiceClaims).where(eq(practiceClaims.orgId, token.orgId));
+      const scores = claims.length
+        ? await db.select().from(practiceClaimScores).where(inArray(practiceClaimScores.claimId, claims.map(c => c.id)))
+        : [];
+      const breakdown = { QUALIFIES: 0, BLOCKED: 0, NEEDS_REVIEW: 0, UNSCORED: 0 };
+      for (const c of claims) {
+        const s = scores.find(sc => sc.claimId === c.id);
+        if (!s) breakdown.UNSCORED++;
+        else breakdown[s.verdict as keyof typeof breakdown]++;
+      }
+      const org = (await db.select().from(organizations).where(eq(organizations.id, token.orgId)).limit(1))[0];
+      return {
+        scope: token.scope,
+        label: token.label,
+        organizationName: org?.name ?? null,
+        report: {
+          totalClaims: claims.length,
+          verdicts: breakdown,
+          qualifyingClaims: breakdown.QUALIFIES,
+          generatedAt: new Date().toISOString(),
+        },
+        readOnly: true as const,
+        note: "Read-only shared audit scorecard. Verdicts are deterministic federal IDR ELIGIBILITY determinations (see practiceAudit.scoreAndSummarize semantics) — not assurances of outcome.",
       };
     }),
 });
