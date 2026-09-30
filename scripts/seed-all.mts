@@ -287,6 +287,7 @@ function sqlEsc(s: string): string {
 
 // FK-safe truncation order: children first, then parents.
 const TRUNCATE_ORDER = [
+  "practice_claim_scores","practice_claims",
   "remittance_lines","remittance_835_files","delegation_attestations","submitter_clients",
   "org_memberships","organizations",
   "webhook_deliveries","settlement_exception_reviews","settlement_reconciliations","settlement_provider_reports",
@@ -1053,6 +1054,49 @@ async function main() {
       return [`rrn_${String(i).padStart(3, "0")}`, runKey, drift ? "drift" : "passed", false, randInt(50, 500), drift ? 1 : 0, JSON.stringify(drift ? [{ accountId: "lac_dsp_00001_paid", expected: 120000, actual: 119000 }] : []), null, "scheduler", started, new Date(started.getTime() + randInt(2, 20) * 1000), started];
     }),
     `("runKey")`);
+
+  // ═══ Phase 17: practice claims staging + eligibility scores ═══════════════
+  // Deterministic eligibility verdicts over normalized staged claims for the
+  // provider client org. Verdicts are rule outcomes with CFR citations — NOT
+  // outcome assurances. winProbabilityStatisticalEstimate stays NULL here
+  // (OutcomeNet is a synthetic-data model; no fabricated probabilities).
+  const pcRows: Array<[string, string, string, string, number, string, string]> = [
+    // [id, claimId, cpt, dx, billedCents, source, serviceDate]
+    ["pclm_001", "PCN-SEED-001", "99285", "R07.9", 420000, "x12_837", daysBefore(20).toISOString().slice(0, 10)],
+    ["pclm_002", "PCN-SEED-002", "99284", "M25.561", 310000, "fhir_bulk", daysBefore(18).toISOString().slice(0, 10)],
+    ["pclm_003", "PCN-SEED-003", "99283", "S06.0X0A", 180000, "csv", daysBefore(60).toISOString().slice(0, 10)],
+  ];
+  await seedTable("practice_claims",
+    ["id","orgId","source","sourceRef","contentSha256","claimId","patientRef","planType","serviceCategory","patientState","facilityState","serviceDate","networkStatus","noticeConsentStatus","initialPaymentDate","cptCodes","diagnoses","payerId","payerName","renderingNpi","billingNpi","tin","billedCents","paidCents","sourceProvenance","sourceResourceRefs","createdAt","updatedAt"],
+    pcRows.map(([id, claimId, cpt, dx, billed, source, dos], i) => [
+      id, clientOrgId, source, `seed-${source}`, sha256(`pclm:${claimId}:${SEED}`), claimId, `pat_seed_${i}`,
+      i < 2 ? "SELF_FUNDED" : null, i < 2 ? "EMERGENCY" : null, "TX", "TX", dos,
+      i < 2 ? "out_of_network" : null, i < 2 ? "none" : null,
+      i < 2 ? daysBefore(6).toISOString().slice(0, 10) : null,
+      [cpt], [dx], "60054", "AETNA HEALTH", "1234567893", "1234567893", "461234567",
+      billed, i < 2 ? Math.round(billed * 0.22) : null,
+      { claimId: { source: source === "csv" ? "manual" : source === "x12_837" ? "edi" : "emr" } },
+      [`seed:${claimId}`], daysBefore(19), daysBefore(19),
+    ]),
+    `("orgId", "contentSha256")`);
+  await seedTable("practice_claim_scores",
+    ["id","claimId","verdict","rulesFired","missingFields","evidenceChecklist","completenessPct","jurisdiction","winProbabilityStatisticalEstimate","scoredAt"],
+    [
+      ["pcs_001", "pclm_001", "BLOCKED",
+        [{ rule: "jurisdiction", citation: "45 CFR 149.140", detail: "FULLY_INSURED/self-funded resolved against TX registered program; see resolver rationale.", effect: "pass" }],
+        [], [{ key: "planType", label: "Plan type", present: true, citation: "45 CFR 149.140" }], 100, "FEDERAL", null, daysBefore(1)],
+      ["pcs_002", "pclm_002", "QUALIFIES",
+        [
+          { rule: "jurisdiction", citation: "45 CFR 149.140", detail: "Self-funded plan → federal floor.", effect: "pass" },
+          { rule: "idr_initiation_window", citation: "45 CFR 149.510(b)(2)(i)", detail: "Within the 4-business-day window.", effect: "pass" },
+        ],
+        [], [], 100, "FEDERAL", null, daysBefore(1)],
+      ["pcs_003", "pclm_003", "NEEDS_REVIEW",
+        [{ rule: "field_completeness", citation: "45 CFR 149.140; 45 CFR 149.510(b)(2)(i)", detail: "Missing required fields: planType, serviceCategory, networkStatus, noticeConsentStatus, initialPaymentDate", effect: "review" }],
+        ["planType","serviceCategory","networkStatus","noticeConsentStatus","initialPaymentDate"],
+        [], 52, null, null, daysBefore(1)],
+    ],
+    `("claimId")`);
 
   // ═══ Summary ══════════════════════════════════════════════════════════════
   const dbCounts = await sql`

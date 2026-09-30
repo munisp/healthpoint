@@ -1961,28 +1961,22 @@ export const appRouter = router({
         const startMs = Date.now();
         const { withEmrRetry, persistSyncLogWithRetry } = await import("./emr/retry");
         try {
-          // Transient EMR/AI failures (5xx, timeouts, network resets) are
-          // retried up to 3 attempts with exponential backoff; 4xx fails fast.
-          const result = await withEmrRetry(() => aiPost<{
-            success: boolean;
-            emrSystem: string;
-            vendor: string;
-            fhirVersion: string;
-            authMethod: string;
-            fieldsExtracted: number;
-            fieldConfidence: Record<string, number>;
-            extractedData: Record<string, unknown>;
-            fhirResources: string[];
-            summary: string;
-            warnings: string[];
-            processingTimeSeconds: number;
-          }>("/extract-emr-data", {
-            emr_system: input.emrSystem,
-            patient_id: input.patientId,
-            encounter_id: input.encounterId,
-            claim_id: input.claimId,
-            date_of_service: input.dateOfService,
-            connection_id: input.connectionId,
+          // Phase 17 (E1): the dead AI-service /extract-emr-data proxy (which
+          // fail-closed 503) is replaced by the real TypeScript-side
+          // extraction path in server/emr/bulk-import.ts — authenticated FHIR
+          // R4 reads (SMART Backend Services when configured) mapped to the
+          // EMR_FILLABLE_FIELDS dispute shape. Honest errors propagate when
+          // the connection is unconfigured or the endpoint rejects the call.
+          // Transient failures (5xx, timeouts, network resets) are retried up
+          // to 3 attempts with exponential backoff; 4xx fails fast.
+          const { extractEmrData } = await import("./emr/bulk-import");
+          const result = await withEmrRetry(() => extractEmrData({
+            connectionId: input.connectionId,
+            emrSystem: input.emrSystem,
+            patientId: input.patientId,
+            encounterId: input.encounterId,
+            claimId: input.claimId,
+            dateOfService: input.dateOfService,
           }), { attempts: 3 });
           // Provenance-aware merge: a re-pull only fills dispute fields that
           // were NOT manually edited (manual edits are never overwritten).
