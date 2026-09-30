@@ -30,6 +30,8 @@ import { unsubscribeRouter } from "./routers/unsubscribe";
 import { identityRouter } from "./auth/nppes";
 import { adminTotpRouter } from "./auth/totp-admin";
 import { submitterRouter } from "./routers/submitter";
+// phase17 additions (EHR extraction staging + eligibility scoring)
+import { practiceAuditRouter } from "./routers/practice-audit";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -51,7 +53,9 @@ export const rootRouter = mergeRouters(
   router({ identity: identityRouter }),
   router({ adminTotp: adminTotpRouter }),
   // phase16 additions (third-party submitter / delegated representative)
-  router({ submitter: submitterRouter })
+  router({ submitter: submitterRouter }),
+  // phase17 additions (practice claims staging + deterministic eligibility scoring)
+  router({ practiceAudit: practiceAuditRouter })
 );
 
 export type RootRouter = typeof rootRouter;
