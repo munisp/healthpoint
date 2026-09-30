@@ -8,6 +8,7 @@ import {
   advanceToNegotiationFailed,
   advanceToEntitySelection,
   expectTrpcError,
+  JOURNEY_STEP04_GATE_FIELDS,
 } from "./helpers";
 
 export const j01: Journey = {
@@ -63,6 +64,7 @@ export const j01: Journey = {
         await ctx.provider.disputes.advance({
           disputeId, newStep: "STEP_04_IDR_INITIATED", newStatus: "idr_initiated",
           description: "IDR initiated within 4 business days",
+          ...JOURNEY_STEP04_GATE_FIELDS,
         });
         await ctx.provider.disputes.advance({
           disputeId, newStep: "STEP_05_IDR_NOTICE_SENT", newStatus: "idr_initiated",
