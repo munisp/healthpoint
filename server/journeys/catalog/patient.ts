@@ -151,6 +151,7 @@ export const j17: Journey = {
         const dispute = await ctx.provider.disputes.create({
           initiatingPartyType: "provider",
           initiatingPartyName: String(form.initiatingPartyName),
+          initiatingPartyNpi: "1234567893", // Phase 17-CE: intake gate requires rendering/billing NPI
           respondingPartyType: "payer",
           respondingPartyName: "Journey Payer",
           serviceType: "emergency_medicine",
