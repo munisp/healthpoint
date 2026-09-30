@@ -82,6 +82,7 @@ import {
   Receipt,
   RotateCcw,
   Scale,
+  Send,
   ScanLine,
   Search,
   Settings,
@@ -307,6 +308,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { icon: Building2, label: "Payer Cases", path: "/payer/cases" },
       { icon: Scale, label: "IDRE Queue", path: "/idre/queue" },
+      { icon: Send, label: "Submitter Console", path: "/submitter" },
       { icon: Users, label: "Organizations", path: "/orgs" },
     ],
   },
@@ -970,10 +972,10 @@ function DarkModeToggle() {
       title={label}
       aria-label={label}
     >
-      {theme === "dark" ? (
-        <Sun className="h-4 w-4" />
-      ) : (
+      {label === "Switch to dark mode" ? (
         <Moon className="h-4 w-4" />
+      ) : (
+        <Sun className="h-4 w-4" />
       )}
     </Button>
   );
