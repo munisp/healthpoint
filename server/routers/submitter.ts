@@ -35,6 +35,7 @@ import { parse835, hashRemittanceContent, Remittance835ParseError } from "../edi
 import { getAdminFeeFromDb } from "../fee-schedule";
 import { getEffectiveIDRParameters } from "../idr/clocks-2026/params-2026";
 import { requireDb } from "../personas/guards";
+import { assertDisputeCreateComplete, assertDelegationAttestationComplete } from "../completeness/gates";
 
 /** Phase13-FA invite policy: delegation invite links live 14 days. */
 const DELEGATION_INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -464,6 +465,26 @@ export const submitterRouter = router({
             "before a representative may submit on a party's behalf.",
         });
       }
+      // Phase 17-CE: fail-closed completeness gates — dispute intake
+      // dictionary contexts (claim_ingestion identity subset +
+      // open_negotiation_initiation) AND the delegation_attestation context
+      // mapped from the resolved attestation. Delegation scope ("idr") is
+      // enforced above by resolveValidAttestation; here the attestation
+      // CONTENT must be complete (representative identity + authority text).
+      assertDisputeCreateComplete({
+        initiatingPartyName: input.initiatingPartyName,
+        initiatingPartyNpi: input.initiatingPartyNpi,
+        respondingPartyName: input.respondingPartyName,
+        serviceType: input.serviceType,
+        serviceDate: input.serviceDate,
+        facilityState: input.facilityState,
+        cptCodes: input.cptCodes,
+        billedAmount: input.billedAmount,
+        initialPaymentDate: input.initialPaymentDate,
+        initiatingPartyNonparticipating: true,
+        now: new Date(),
+      });
+      assertDelegationAttestationComplete(attestation);
       // NPI roster enforcement: when the link declares NPIs, the dispute's NPI
       // must be on the roster (eligibility-integrity control).
       const npis = Array.isArray(link.npis) ? (link.npis as string[]) : [];
