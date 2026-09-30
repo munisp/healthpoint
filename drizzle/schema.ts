@@ -157,6 +157,11 @@ export const disputes = pgTable(
     submitterClientId: varchar("submitterClientId", { length: 64 }),
     delegationAttestationId: varchar("delegationAttestationId", { length: 64 }),
     eligibilityAttestedAt: timestamp("eligibilityAttestedAt"),
+    // Phase 18: auto-batcher confirmation trail. batchId groups the batched
+    // dispute with the source disputes folded into it; batchedLineItemCount
+    // is set on the batched dispute itself (null for single disputes).
+    batchId: varchar("batchId", { length: 64 }),
+    batchedLineItemCount: integer("batchedLineItemCount"),
     createdBy: varchar("createdBy", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow(),
     updatedAt: timestamp("updatedAt").defaultNow(),
@@ -172,6 +177,7 @@ export const disputes = pgTable(
     index("disputes_billedAmount_idx").on(t.billedAmount),
     index("disputes_respondingName_idx").on(t.respondingPartyName),
     index("disputes_submitterClient_idx").on(t.submitterClientId),
+    index("disputes_batch_idx").on(t.batchId),
   ]
 );
 export type Dispute = typeof disputes.$inferSelect;
