@@ -14,7 +14,7 @@
  * criteria for ONPs on/after 2026-11-01), RARC N830 eligibility signaling.
  */
 import type { Journey } from "../framework";
-import { expectTrpcError } from "./helpers";
+import { expectTrpcError, JOURNEY_STEP04_GATE_FIELDS } from "./helpers";
 import { evaluateBatchEligibility } from "../../idr/batching/batching";
 
 function sample835(claimId: string): string {
@@ -192,7 +192,7 @@ export const j26: Journey = {
     {
       name: "batching-and-fsm-guard",
       async run(ctx) {
-        const { _sc: scId, _att: attId, _d: disputeId } = ctx as unknown as { _sc: string; _att: string; _d: string };
+        const { _sc: scId, _att: attId, _d: disputeId } = ctx as unknown as { _sc: string; _att: attId; _d: string };
         // CMS-9897-F regime: ONP 2026-11-15 → cap 50, anesthesia CPT range relatedness.
         const res = evaluateBatchEligibility(
           [
@@ -216,7 +216,7 @@ export const j26: Journey = {
         await ctx.provider.disputes.submitOffer({ disputeId, offerType: "qpa", amount: "2600.00", rationale: "QPA (journey)" });
         await ctx.provider.disputes.advance({ disputeId, newStep: "STEP_02_OPEN_NEGOTIATION_PERIOD", newStatus: "open_negotiation", description: "ON started (journey)" });
         await ctx.provider.disputes.advance({ disputeId, newStep: "STEP_03_OPEN_NEGOTIATION_FAILED", newStatus: "idr_initiated", description: "ON failed (journey)" });
-        await ctx.provider.disputes.advance({ disputeId, newStep: "STEP_04_IDR_INITIATED", newStatus: "idr_initiated", description: "IDR initiated with valid delegation attestation (journey)" });
+        await ctx.provider.disputes.advance({ disputeId, newStep: "STEP_04_IDR_INITIATED", newStatus: "idr_initiated", description: "IDR initiated with valid delegation attestation (journey)", ...JOURNEY_STEP04_GATE_FIELDS });
         // FSM guard evidence (negative): create a second delegated dispute
         // while the attestation is still valid, walk it to STEP_03, then
         // revoke the attestation and assert STEP_04 is blocked by the
