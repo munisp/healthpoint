@@ -23,6 +23,7 @@ import DisputeComments from "@/components/DisputeComments";
 import { useRecentDisputes } from "@/hooks/useRecentDisputes";
 import { usePinnedDisputes } from "@/hooks/usePinnedDisputes";
 import ComplianceRail from "@/components/ComplianceRail";
+import DisputeCompleteness from "@/components/DisputeCompleteness";
 
 /**
  * SettlementChips — Mojaloop settlement transfer status chips for this
@@ -169,6 +170,8 @@ export default function DisputeDetail() {
   const [showCounterOfferModal, setShowCounterOfferModal] = useState(false);
   const [showArbitratorModal, setShowArbitratorModal] = useState(false);
   const [showDocModal, setShowDocModal] = useState(false);
+  // Phase 17-FE: PRECONDITION_FAILED gate errors from advance/submit attempts (exact gaps from server).
+  const [gateErrors, setGateErrors] = useState<unknown[]>([]);
 
   // Offer form state
   const [offerAmount, setOfferAmount] = useState("");
@@ -234,8 +237,11 @@ export default function DisputeDetail() {
 
   // Mutations
   const advanceMutation = trpc.disputes.advance.useMutation({
-    onSuccess: () => { utils.disputes.getTimeline.invalidate(); utils.dashboard.stats.invalidate(); toast.success("Dispute advanced to next step"); },
-    onError: (err) => toast.error(err.message),
+    onSuccess: () => { setGateErrors([]); utils.disputes.getTimeline.invalidate(); utils.dashboard.stats.invalidate(); toast.success("Dispute advanced to next step"); },
+    onError: (err) => {
+      toast.error(err.message);
+      if (err.data?.code === "PRECONDITION_FAILED") setGateErrors(prev => [...prev, err]);
+    },
   });
 
   const submitOfferMutation = trpc.disputes.submitOffer.useMutation({
@@ -581,6 +587,24 @@ export default function DisputeDetail() {
                 <ComplianceRail disputeId={dispute.id} />
               </CardContent>
             </Card>
+
+            {/* Phase 17-FE: IDR completeness checklist (client-computed from the
+                CMS data dictionary) + server gate gaps (PRECONDITION_FAILED). */}
+            <DisputeCompleteness
+              context="idr_initiation"
+              values={(() => {
+                const d = dispute as unknown as Record<string, unknown>;
+                return {
+                  serviceState: d.facilityState ?? d.patientState,
+                  serviceCategory: d.serviceType,
+                  planType: d.planType,
+                  noticeConsentStatus: d.noticeConsentStatus,
+                  initialPaymentDate: d.initialPaymentDate,
+                  openNegotiationEndDate: d.openNegotiationDeadline,
+                };
+              })()}
+              gateErrors={gateErrors}
+            />
 
             {/* Outcome Prediction */}
             <OutcomePredictionGauge
