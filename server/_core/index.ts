@@ -376,6 +376,22 @@ async function startServer() {
     }
   });
 
+  // ── Phase 19: raw bulk-upload chunk endpoint ──────────────────────────────
+  // Raw routes that need exact request bytes MUST stay before express.json
+  // (precedent: /api/settlement/callbacks above). The Phase 20 Stripe webhook
+  // (POST /api/billing/stripe-webhook) will follow the same convention and be
+  // registered in this block. Chunk bodies are opaque octet-streams; auth is
+  // the session cookie / Bearer token via the same createContext as tRPC.
+  app.use("/api/bulk-upload", apiRateLimiter());
+  app.put(
+    "/api/bulk-upload/:sessionId/chunks/:chunkIndex",
+    express.raw({ type: () => true, limit: "10mb" }),
+    async (req: Request, res: Response) => {
+      const { handleChunkUpload } = await import("../ingest/chunk-handler");
+      await handleChunkUpload(req, res);
+    }
+  );
+
   // ── Body parsers ──────────────────────────────────────────────────────────
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -753,6 +769,22 @@ async function startServer() {
   startKafkaConsumer().catch(err =>
     console.warn("[startup] Kafka consumer failed to start (non-fatal):", err)
   );
+
+  // ── Phase 19: bulk-ingest resume + drop-folder poller (env-gated) ─────────
+  if (process.env.BULK_INGEST_ENABLED !== "false") {
+    import("../ingest/bulk-ingest").then(({ resumePendingSessions }) =>
+      resumePendingSessions().catch(err =>
+        console.warn("[startup] bulk-ingest resume failed (non-fatal):", err)
+      )
+    ).catch(() => undefined);
+  }
+  if (process.env.DROP_FOLDER_ENABLED === "true") {
+    import("../ingest/drop-folder").then(({ startDropFolderPoller }) =>
+      startDropFolderPoller()
+    ).catch(err =>
+      console.warn("[startup] drop-folder poller failed to start (non-fatal):", err)
+    );
+  }
 
   // ── Port binding ──────────────────────────────────────────────────────────
   const preferredPort = parseInt(process.env.PORT || "3000");
