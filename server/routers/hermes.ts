@@ -349,7 +349,7 @@ Eligible: ${dispute.isEligible ?? "Unknown"}`,
         userId: ctx.user.id,
         disputeId: input.disputeId,
         jobType: "risk_scoring",
-        inputPayload: { disputeId, nearestDeadlineDays },
+        inputPayload: { disputeId: input.disputeId, nearestDeadlineDays },
         outputJson: raw,
         modelUsed: "gpt-5-mini",
         latencyMs,
@@ -733,7 +733,7 @@ Reference: ${dispute.referenceNumber}
 Provider: ${dispute.initiatingPartyName}
 Payer: ${dispute.respondingPartyName ?? "Unknown"}
 Service: ${dispute.serviceType} | CPTs: ${(dispute.cptCodes as string[]).join(", ")}
-Billed: $${dispute.billedAmount} | QPA: $${dispute.qpaAmount ?? "N/A"}
+Billed: $${dispute.billedAmount} | QPA: ${dispute.qpaAmount ?? "N/A"}
 Step: ${dispute.currentStep} | Status: ${dispute.status}`;
         }
       }
