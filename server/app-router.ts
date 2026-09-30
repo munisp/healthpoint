@@ -29,6 +29,7 @@ import { unsubscribeRouter } from "./routers/unsubscribe";
 // phase13-fc additions (G6 identity verification, G14b admin TOTP reset)
 import { identityRouter } from "./auth/nppes";
 import { adminTotpRouter } from "./auth/totp-admin";
+import { submitterRouter } from "./routers/submitter";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -48,7 +49,9 @@ export const rootRouter = mergeRouters(
   router({ unsubscribe: unsubscribeRouter }),
   // phase13-fc additions
   router({ identity: identityRouter }),
-  router({ adminTotp: adminTotpRouter })
+  router({ adminTotp: adminTotpRouter }),
+  // phase16 additions (third-party submitter / delegated representative)
+  router({ submitter: submitterRouter })
 );
 
 export type RootRouter = typeof rootRouter;
