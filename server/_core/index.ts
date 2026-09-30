@@ -21,6 +21,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { deadlineCheckHandler } from "../scheduled/deadlineCheck";
 import { idrDeadlineCheckHandler } from "../scheduled/idrDeadlineCheck";
+import { deadlineAutopilotHandler } from "../scheduled/deadlineAutopilot";
 import { weeklyDigestHandler } from "../scheduled/weeklyDigest";
 import { settlementBalanceProofHandler } from "../scheduled/settlementBalanceProof";
 import { ledgerReconciliationHandler } from "../scheduled/ledgerReconciliation";
@@ -105,8 +106,10 @@ function isPortAvailable(port: number): Promise<boolean> {
 }
 
 async function findAvailablePort(startPort = 3000): Promise<number> {
-  for (let port = startPort; port < startPort + 20; port++) {
+  let port = startPort;
+  while (port < startPort + 20) {
     if (await isPortAvailable(port)) return port;
+    port++;
   }
   throw new Error(`No available port found starting from ${startPort}`);
 }
@@ -583,6 +586,7 @@ async function startServer() {
   app.post("/api/scheduled/regulatory-feed-poll", scheduledAuth, regulatoryFeedPollHandler);
   app.post("/api/scheduled/bulk-fhir-worker", scheduledAuth, bulkFhirWorkerHandler);
   app.post("/api/scheduled/retention-purge", scheduledAuth, retentionWorkerHandler);
+  app.post("/api/scheduled/deadline-autopilot", scheduledAuth, deadlineAutopilotHandler);
 
   // PHI retention purge (fhir_resource_cache, smart_form_extractions) on an
   // env-configurable cadence (RETENTION_SWEEP_INTERVAL_MS, default daily; 0
