@@ -379,7 +379,8 @@ async function startServer() {
         url: tokens.url(req, res),
         status: tokens.status(req, res),
         responseTimeMs: parseFloat(tokens["response-time"](req, res) ?? "0"),
-        contentLength: parseFloat(tokens["content-length"](req, res) ?? "-"),
+        // morgan has no "content-length" token of its own — read the response header via tokens.res().
+        contentLength: Number(tokens.res(req, res, "content-length")) || null,
         userId: tokens["user-id"](req, res),
         userAgent: tokens["user-agent"](req, res),
         remoteAddr: tokens["remote-addr"](req, res),

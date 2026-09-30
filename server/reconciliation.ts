@@ -108,7 +108,7 @@ export async function runLedgerReconciliation(input: {
         (id, "runKey", status, "tigerBeetleEnabled", "accountsCompared", "driftCount", drifts, "errorMessage", "triggeredBy", "startedAt", "completedAt", "createdAt")
       VALUES
         (${crypto.randomUUID()}, ${runKey}, ${run.status}, ${config.enabled}, ${run.accountsCompared}, ${run.drifts.length},
-         ${JSON.stringify(run.drifts)}::jsonb, ${run.errorMessage ?? null}, ${triggeredBy}, ${startedAt}, ${now}, ${now})
+         ${JSON.stringify(run.drifts)}::jsonb, ${run.errorMessage ?? null}, ${triggeredBy}, ${startedAt.toISOString()}::timestamp, ${now.toISOString()}::timestamp, ${now.toISOString()}::timestamp)
       ON CONFLICT ("runKey") DO NOTHING
       RETURNING *`);
     const row = (inserted as unknown as RawRunRow[])[0];
