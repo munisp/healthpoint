@@ -134,6 +134,14 @@ async function startServer() {
   }
 
   const app = express();
+  // Behind the ingress (and Cloudflare) every request arrives from a private
+  // cluster IP with X-Forwarded-For set. Without trust proxy, req.ip is the
+  // ingress for every user, so express-rate-limit keyed all clients into one
+  // bucket (and warned ERR_ERL_UNEXPECTED_X_FORWARDED_FOR). Trust only
+  // private-range hops by default; override with TRUST_PROXY (an Express
+  // trust-proxy value, e.g. "1" or "loopback, 10.0.0.0/8").
+  const trustProxy = process.env.TRUST_PROXY?.trim();
+  app.set("trust proxy", trustProxy ? (/^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy) : "loopback, linklocal, uniquelocal");
   const server = createServer(app);
 
   // ── Security headers ────────────────────────────────────────────────────────

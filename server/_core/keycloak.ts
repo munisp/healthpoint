@@ -495,7 +495,8 @@ export function registerKeycloakRoutes(app: Express) {
 
   // GET /api/auth/session — returns session TTL info for the frontend expiry warning
   app.get("/api/auth/session", async (req: Request, res: Response) => {
-    const cookies = req.cookies as Record<string, string>;
+    // No cookie-parser middleware is installed, so req.cookies is undefined — parse the header like resolveSession does.
+    const cookies = parseCookieHeader(req.headers.cookie || "");
     const sessionCookie = cookies[COOKIE_NAME];
     if (!sessionCookie) {
       res.status(401).json({ authenticated: false });
@@ -527,7 +528,8 @@ export function registerKeycloakRoutes(app: Express) {
 
   // GET /api/auth/refresh — silently re-issue a fresh session cookie if current one is valid
   app.get("/api/auth/refresh", async (req: Request, res: Response) => {
-    const cookies = req.cookies as Record<string, string>;
+    // No cookie-parser middleware is installed, so req.cookies is undefined — parse the header like resolveSession does.
+    const cookies = parseCookieHeader(req.headers.cookie || "");
     const sessionCookie = cookies[COOKIE_NAME];
     if (!sessionCookie) {
       res.status(401).json({ refreshed: false, reason: "no_session" });

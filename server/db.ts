@@ -1061,8 +1061,10 @@ export async function getDisputesByMonth(months = 12, userId?: string): Promise<
     })
     .from(disputes)
     .where(userId
-      ? and(sql`${disputes.createdAt} >= ${cutoff}`, eq(disputes.initiatingPartyId, userId))
-      : sql`${disputes.createdAt} >= ${cutoff}`)
+      // Column-bound gte binds the Date through the timestamp column type; raw
+      // sql`${date}` interpolation 500s with drizzle-orm@0.45.2 + postgres@3.4.9.
+      ? and(gte(disputes.createdAt, cutoff), eq(disputes.initiatingPartyId, userId))
+      : gte(disputes.createdAt, cutoff))
     .orderBy(disputes.createdAt);
 
   // Group in JS — avoids DB-specific date_trunc syntax differences

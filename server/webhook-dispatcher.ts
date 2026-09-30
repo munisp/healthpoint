@@ -21,7 +21,7 @@
 import crypto from "crypto";
 import { getDb } from "./db";
 import { webhooks, webhookDeliveries } from "../drizzle/schema";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, lte, sql } from "drizzle-orm";
 
 type WebhookRow = {
   id: string;
@@ -250,7 +250,11 @@ export async function processWebhookRetries(limit = 100): Promise<{ attempted: n
   const due = (await db
     .select({ id: webhookDeliveries.id })
     .from(webhookDeliveries)
-    .where(sql`${webhookDeliveries.status} = 'pending' AND ${webhookDeliveries.nextRetryAt} IS NOT NULL AND ${webhookDeliveries.nextRetryAt} <= ${now}`)
+    // lte binds `now` through the timestamp column (raw sql`${date}` 500s — see db.ts getDisputesByMonth).
+    .where(and(
+      sql`${webhookDeliveries.status} = 'pending' AND ${webhookDeliveries.nextRetryAt} IS NOT NULL`,
+      lte(webhookDeliveries.nextRetryAt, now),
+    ))
     .limit(limit)) as Array<{ id: string }>;
 
   let attempted = 0;
