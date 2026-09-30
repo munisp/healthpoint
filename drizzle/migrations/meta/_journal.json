@@ -330,6 +330,13 @@
       "when": 1788660000000,
       "tag": "0050_wave_p17",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1789005600000,
+      "tag": "0052_wave_p18",
+      "breakpoints": true
     }
   ]
 }
