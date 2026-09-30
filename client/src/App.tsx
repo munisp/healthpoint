@@ -138,6 +138,7 @@ const OutcomeSimulatorShell = lazy(() => import("./pages/OutcomeSimulatorShell")
 const PayerCases = lazy(() => import("./pages/personas/PayerCases"));
 const PatientPortal = lazy(() => import("./pages/personas/PatientPortal"));
 const IdreQueue = lazy(() => import("./pages/personas/IdreQueue"));
+const SubmitterConsole = lazy(() => import("./pages/submitter/SubmitterConsole"));
 const OrgsPage = lazy(() => import("./pages/personas/Orgs"));
 const IdreDirectoryAdmin = lazy(() => import("./pages/admin/IdreDirectory"));
 const FeeSchedulesAdmin = lazy(() => import("./pages/admin/FeeSchedules"));
@@ -281,6 +282,7 @@ function Router() {
       <Route path="/payer/cases" component={() => <FlagGate flag="personas.payerCases"><PL component={PayerCases} /></FlagGate>} />
       <Route path="/patient/:token" component={PatientPortal} />
       <Route path="/idre/queue" component={() => <FlagGate flag="personas.idreQueue"><PL component={IdreQueue} /></FlagGate>} />
+      <Route path="/submitter" component={() => <FlagGate flag="personas.submitterConsole"><PL component={SubmitterConsole} /></FlagGate>} />
       <Route path="/orgs" component={() => <FlagGate flag="personas.orgs"><PL component={OrgsPage} /></FlagGate>} />
       {/* Phase15-FA (A2): landing page for orgs.inviteMember / payer.invite email links */}
       <Route path="/accept-invite" component={AcceptInvite} />
