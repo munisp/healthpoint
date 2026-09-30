@@ -222,6 +222,7 @@ describe("disputes.create contract", () => {
   const valid = {
     initiatingPartyType: "provider" as const,
     initiatingPartyName: "Contract Test Provider",
+    initiatingPartyNpi: "1234567893",
     respondingPartyType: "payer" as const,
     respondingPartyName: "Contract Test Payer",
     serviceType: "emergency_medicine" as const,
