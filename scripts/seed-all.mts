@@ -287,6 +287,7 @@ function sqlEsc(s: string): string {
 
 // FK-safe truncation order: children first, then parents.
 const TRUNCATE_ORDER = [
+  "claim_quarantine","bulk_upload_chunks","bulk_upload_sessions",
   "practice_claim_scores","practice_claims",
   "submitter_invoice_lines","submitter_invoices","audit_share_tokens",
   "remittance_lines","remittance_835_files","delegation_attestations","submitter_clients",
@@ -400,6 +401,25 @@ async function main() {
   await seedTable("audit_share_tokens", ["id","tokenHash","orgId","scope","label","expiresAt","revokedAt","revokedByUserId","createdByUserId","lastAccessedAt","accessCount","createdAt"],
     [
       ["ast_001", sha256("p18-seed-audit-share-token"), subOrgId, "practice_audit_read", "Seed demo share link (revoked fixture)", daysAfter(30), daysBefore(2), users[0].id, users[0].id, daysBefore(3), 4, daysBefore(10)],
+    ],
+    `("id")`);
+
+  // ═══ Phase 19: chunked bulk ingestion demo ════════════════════════════════
+  // One small COMPLETED bulk_upload_session for the provider client org plus
+  // two quarantined rows awaiting repair (dev/demo data only; the real
+  // pipeline is exercised by journey J30).
+  const p19SessionId = "00000000-0000-4000-8000-000000000019";
+  await seedTable("bulk_upload_sessions",
+    ["id","org_id","created_by_user_id","file_name","file_type","declared_size_bytes","chunk_size_bytes","total_chunks","chunks_received","assembled_sha256","status","watermark_chunk","watermark_offset","rows_processed","rows_accepted","rows_quarantined","error_message","created_at","updated_at","finalized_at","completed_at"],
+    [
+      [p19SessionId, clientOrgId, users[1 % users.length].id, "seed-demo.ndjson", "ndjson", 1204, 8388608, 1, 1, sha256("p19-seed-demo-payload"), "completed", 1, 0, 12, 10, 2, null, daysBefore(3), daysBefore(3), daysBefore(3), daysBefore(3)],
+    ],
+    `("id")`);
+  await seedTable("claim_quarantine",
+    ["id","session_id","org_id","row_number","raw_payload","error_reason","missing_fields","status","repaired_claim_id","created_at","resolved_at"],
+    [
+      ["00000000-0000-4000-8000-0000000000a1", p19SessionId, clientOrgId, 3, '{"resourceType":"Claim","id":"seed-broken-1"', "ndjson line 3 is not valid JSON", JSON.stringify([]), "quarantined", null, daysBefore(3), null],
+      ["00000000-0000-4000-8000-0000000000a2", p19SessionId, clientOrgId, 9, '{"resourceType":"Claim","id":"seed-broken-2"', "ndjson line 9 is not valid JSON", JSON.stringify([]), "quarantined", null, daysBefore(3), null],
     ],
     `("id")`);
   // Hash-chained attestation artifact (same canonical form as the router).
