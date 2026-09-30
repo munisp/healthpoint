@@ -28,6 +28,7 @@
  * Applied by the hand-written migration drizzle/migrations/0050_wave_p17.sql.
  */
 
+import crypto from "node:crypto";
 import {
   pgTable,
   varchar,
@@ -161,3 +162,37 @@ export const practiceClaimScores = pgTable(
   ]
 );
 export type PracticeClaimScore = typeof practiceClaimScores.$inferSelect;
+
+// ─── Phase 18: audit share tokens (audit-as-leadgen) ─────────────────────────
+/**
+ * Tokenized read-only share links for a practice audit report (the
+ * three-lane scorecard). Same pattern as patient_access_tokens: the raw
+ * bearer token is returned ONCE at creation; only its sha256 persists.
+ * Expiry + explicit revocation + use tracking.
+ */
+export const AUDIT_SHARE_SCOPE = ["practice_audit_read"] as const;
+export type AuditShareScope = (typeof AUDIT_SHARE_SCOPE)[number];
+
+export const auditShareTokens = pgTable(
+  "audit_share_tokens",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    /** sha256 hex of the bearer token; the raw token is never stored. */
+    tokenHash: varchar("tokenHash", { length: 128 }).notNull(),
+    orgId: varchar("orgId", { length: 64 }).notNull(),
+    scope: varchar("scope", { length: 32 }).notNull().default("practice_audit_read"),
+    label: varchar("label", { length: 255 }),
+    expiresAt: timestamp("expiresAt").notNull(),
+    revokedAt: timestamp("revokedAt"),
+    revokedByUserId: varchar("revokedByUserId", { length: 64 }),
+    createdByUserId: varchar("createdByUserId", { length: 64 }).notNull(),
+    lastAccessedAt: timestamp("lastAccessedAt"),
+    accessCount: integer("accessCount").notNull().default(0),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("audit_share_tokens_hash_idx").on(t.tokenHash),
+    index("audit_share_tokens_org_idx").on(t.orgId),
+  ]
+);
+export type AuditShareToken = typeof auditShareTokens.$inferSelect;
