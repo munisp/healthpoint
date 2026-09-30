@@ -36,6 +36,8 @@ import { submitterBillingRouter } from "./routers/submitter-billing";
 import { practiceAuditRouter } from "./routers/practice-audit";
 // phase17-lh addition (lakehouse read-back analytics with honest postgres fallback)
 import { lakehouseAnalyticsRouter } from "./routers/lakehouse-analytics";
+// phase19 addition (chunked resumable bulk claim ingestion)
+import { bulkUploadRouter } from "./routers/bulk-upload";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -63,7 +65,9 @@ export const rootRouter = mergeRouters(
   // phase17 additions (practice claims staging + deterministic eligibility scoring)
   router({ practiceAudit: practiceAuditRouter }),
   // phase17-lh addition (lakehouse analytics: lakehouse when configured, honest postgres_fallback otherwise)
-  router({ lakehouseAnalytics: lakehouseAnalyticsRouter })
+  router({ lakehouseAnalytics: lakehouseAnalyticsRouter }),
+  // phase19 addition (chunked resumable bulk claim ingestion)
+  router({ bulkUpload: bulkUploadRouter })
 );
 
 export type RootRouter = typeof rootRouter;
