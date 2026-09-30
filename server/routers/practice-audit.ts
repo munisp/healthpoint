@@ -64,6 +64,111 @@ async function assertOrgMember(db: Db, userId: string, orgId: string, roles: str
   return { membership: m, org };
 }
 
+/**
+ * Zod schema for manually-supplied claim fields (shared by
+ * practiceAudit.bulkCompleteClaims and bulkUpload.repairQuarantinedRows).
+ * Fail-closed: unknown field keys are rejected by the schema's strictness.
+ */
+export const manualClaimFieldsSchema = z.object({
+  planType: z.enum(["FULLY_INSURED", "SELF_FUNDED", "FEHB"]).optional(),
+  serviceCategory: z.enum(["EMERGENCY", "NON_EMERGENCY", "POST_STABILIZATION", "AIR_AMBULANCE"]).optional(),
+  networkStatus: z.enum(["out_of_network", "in_network"]).optional(),
+  noticeConsentStatus: z.enum(["none", "signed", "waived_exception"]).optional(),
+  serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  initialPaymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  priorPaymentDeterminationDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  denialDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  facilityState: z.string().length(2).optional(),
+  patientState: z.string().length(2).optional(),
+  payerId: z.string().min(1).max(64).optional(),
+  payerName: z.string().min(1).max(255).optional(),
+  planIdentifier: z.string().min(1).max(128).optional(),
+  renderingNpi: z.string().regex(/^\d{10}$/).optional(),
+  billingNpi: z.string().regex(/^\d{10}$/).optional(),
+  tin: z.string().regex(/^\d{9}$/).optional(),
+  claimId: z.string().min(1).max(128).optional(),
+  cptCodes: z.array(z.string().min(1)).min(1).optional(),
+  billedCents: z.number().int().nonnegative().optional(),
+  allowedCents: z.number().int().nonnegative().optional(),
+  paidCents: z.number().int().nonnegative().optional(),
+});
+export type ManualClaimFields = z.infer<typeof manualClaimFieldsSchema>;
+
+export interface ApplyManualClaimFieldsResult {
+  claimDbId: string;
+  claimRef: string | null;
+  appliedFields: string[];
+  previousVerdict: string | null;
+  verdict: string;
+  missingFields: ReturnType<typeof evaluateClaimEligibility>["missingFields"];
+  completenessPct: number;
+  transition: string;
+}
+
+/**
+ * Phase 19 extraction (no behavior change): the per-claim apply+rescore
+ * body of bulkCompleteClaims, exported so bulkUpload.repairQuarantinedRows
+ * reuses the exact same logic. Applies manual field values with provenance
+ * `{ source: "manual" }`, re-scores via evaluateClaimEligibility, and
+ * upserts the verdict row. Throws NOT_FOUND for claims outside the org and
+ * BAD_REQUEST when no field values are supplied.
+ */
+export async function applyManualClaimFields(
+  db: Db,
+  orgId: string,
+  claimDbId: string,
+  fields: ManualClaimFields,
+): Promise<ApplyManualClaimFieldsResult> {
+  const claim = (await db.select().from(practiceClaims)
+    .where(and(eq(practiceClaims.id, claimDbId), eq(practiceClaims.orgId, orgId)))
+    .limit(1))[0];
+  if (!claim) throw new TRPCError({ code: "NOT_FOUND", message: `Claim ${claimDbId} not found in this org` });
+  const applied = Object.entries(fields).filter(([, v]) => v !== undefined).map(([k]) => k);
+  if (applied.length === 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `No field values supplied for claim ${claimDbId}` });
+  }
+  const provenance = { ...(claim.sourceProvenance ?? {}) };
+  for (const k of applied) {
+    provenance[k] = { source: "manual" as const, detail: `bulk-complete ${new Date().toISOString().slice(0, 10)}` };
+  }
+  await db.update(practiceClaims)
+    .set({ ...(fields as Record<string, unknown>), sourceProvenance: provenance })
+    .where(eq(practiceClaims.id, claim.id));
+  // Re-score through the real engine path.
+  const fresh = (await db.select().from(practiceClaims).where(eq(practiceClaims.id, claim.id)).limit(1))[0];
+  const prior = (await db.select().from(practiceClaimScores).where(eq(practiceClaimScores.claimId, claim.id)).limit(1))[0];
+  const r = evaluateClaimEligibility(toEngineInput(fresh));
+  await db.insert(practiceClaimScores).values({
+    id: crypto.randomUUID(),
+    claimId: claim.id,
+    verdict: r.verdict,
+    rulesFired: r.rulesFired,
+    missingFields: r.missingFields,
+    evidenceChecklist: r.evidenceChecklist,
+    completenessPct: r.completenessPct,
+    jurisdiction: r.jurisdiction,
+    winProbabilityStatisticalEstimate: null as string | null,
+    scoredAt: new Date(),
+  }).onConflictDoUpdate({
+    target: practiceClaimScores.claimId,
+    set: {
+      verdict: r.verdict, rulesFired: r.rulesFired, missingFields: r.missingFields,
+      evidenceChecklist: r.evidenceChecklist, completenessPct: r.completenessPct,
+      jurisdiction: r.jurisdiction, scoredAt: new Date(),
+    },
+  });
+  return {
+    claimDbId: claim.id,
+    claimRef: fresh.claimId,
+    appliedFields: applied,
+    previousVerdict: prior?.verdict ?? null,
+    verdict: r.verdict,
+    missingFields: r.missingFields,
+    completenessPct: r.completenessPct,
+    transition: `${prior?.verdict ?? "UNSCORED"} -> ${r.verdict}`,
+  };
+}
+
 function toEngineInput(c: typeof practiceClaims.$inferSelect) {
   return {
     claimId: c.claimId,
@@ -332,29 +437,7 @@ export const practiceAuditRouter = router({
       orgId: z.string(),
       updates: z.array(z.object({
         claimDbId: z.string(),
-        fields: z.object({
-          planType: z.enum(["FULLY_INSURED", "SELF_FUNDED", "FEHB"]).optional(),
-          serviceCategory: z.enum(["EMERGENCY", "NON_EMERGENCY", "POST_STABILIZATION", "AIR_AMBULANCE"]).optional(),
-          networkStatus: z.enum(["out_of_network", "in_network"]).optional(),
-          noticeConsentStatus: z.enum(["none", "signed", "waived_exception"]).optional(),
-          serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-          initialPaymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-          priorPaymentDeterminationDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-          denialDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-          facilityState: z.string().length(2).optional(),
-          patientState: z.string().length(2).optional(),
-          payerId: z.string().min(1).max(64).optional(),
-          payerName: z.string().min(1).max(255).optional(),
-          planIdentifier: z.string().min(1).max(128).optional(),
-          renderingNpi: z.string().regex(/^\d{10}$/).optional(),
-          billingNpi: z.string().regex(/^\d{10}$/).optional(),
-          tin: z.string().regex(/^\d{9}$/).optional(),
-          claimId: z.string().min(1).max(128).optional(),
-          cptCodes: z.array(z.string().min(1)).min(1).optional(),
-          billedCents: z.number().int().nonnegative().optional(),
-          allowedCents: z.number().int().nonnegative().optional(),
-          paidCents: z.number().int().nonnegative().optional(),
-        }),
+        fields: manualClaimFieldsSchema,
       })).min(1).max(500),
     }))
     .mutation(async ({ ctx, input }) => {
@@ -362,54 +445,7 @@ export const practiceAuditRouter = router({
       await assertOrgMember(db, ctx.user.id, input.orgId);
       const results = [];
       for (const u of input.updates) {
-        const claim = (await db.select().from(practiceClaims)
-          .where(and(eq(practiceClaims.id, u.claimDbId), eq(practiceClaims.orgId, input.orgId)))
-          .limit(1))[0];
-        if (!claim) throw new TRPCError({ code: "NOT_FOUND", message: `Claim ${u.claimDbId} not found in this org` });
-        const applied = Object.entries(u.fields).filter(([, v]) => v !== undefined).map(([k]) => k);
-        if (applied.length === 0) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: `No field values supplied for claim ${u.claimDbId}` });
-        }
-        const provenance = { ...(claim.sourceProvenance ?? {}) };
-        for (const k of applied) {
-          provenance[k] = { source: "manual" as const, detail: `bulk-complete ${new Date().toISOString().slice(0, 10)}` };
-        }
-        await db.update(practiceClaims)
-          .set({ ...(u.fields as Record<string, unknown>), sourceProvenance: provenance })
-          .where(eq(practiceClaims.id, claim.id));
-        // Re-score through the real engine path.
-        const fresh = (await db.select().from(practiceClaims).where(eq(practiceClaims.id, claim.id)).limit(1))[0];
-        const prior = (await db.select().from(practiceClaimScores).where(eq(practiceClaimScores.claimId, claim.id)).limit(1))[0];
-        const r = evaluateClaimEligibility(toEngineInput(fresh));
-        await db.insert(practiceClaimScores).values({
-          id: crypto.randomUUID(),
-          claimId: claim.id,
-          verdict: r.verdict,
-          rulesFired: r.rulesFired,
-          missingFields: r.missingFields,
-          evidenceChecklist: r.evidenceChecklist,
-          completenessPct: r.completenessPct,
-          jurisdiction: r.jurisdiction,
-          winProbabilityStatisticalEstimate: null as string | null,
-          scoredAt: new Date(),
-        }).onConflictDoUpdate({
-          target: practiceClaimScores.claimId,
-          set: {
-            verdict: r.verdict, rulesFired: r.rulesFired, missingFields: r.missingFields,
-            evidenceChecklist: r.evidenceChecklist, completenessPct: r.completenessPct,
-            jurisdiction: r.jurisdiction, scoredAt: new Date(),
-          },
-        });
-        results.push({
-          claimDbId: claim.id,
-          claimRef: fresh.claimId,
-          appliedFields: applied,
-          previousVerdict: prior?.verdict ?? null,
-          verdict: r.verdict,
-          missingFields: r.missingFields,
-          completenessPct: r.completenessPct,
-          transition: `${prior?.verdict ?? "UNSCORED"} -> ${r.verdict}`,
-        });
+        results.push(await applyManualClaimFields(db, input.orgId, u.claimDbId, u.fields));
       }
       return { updated: results.length, results, engineNote: ELIGIBILITY_ENGINE_META.honestyNote };
     }),
