@@ -106,10 +106,8 @@ function isPortAvailable(port: number): Promise<boolean> {
 }
 
 async function findAvailablePort(startPort = 3000): Promise<number> {
-  let port = startPort;
-  while (port < startPort + 20) {
+  for (let port = startPort; port < startPort + 20; port++) {
     if (await isPortAvailable(port)) return port;
-    port++;
   }
   throw new Error(`No available port found starting from ${startPort}`);
 }
