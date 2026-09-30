@@ -1,6 +1,14 @@
 """
 HealthPoint IDR — Lakehouse pipeline scheduler stub (Phase 15 FB / audit B6).
 
+DEPRECATED AS SCHEDULER (phase17-lh): the CANONICAL scheduler for recurring
+lakehouse exports is the Temporal Schedule registered by
+server/temporal/lakehouse-schedule.ts (workflow: lakehouseExportWorkflow,
+gated by LAKEHOUSE_EXPORT_ENABLED / LAKEHOUSE_EXPORT_CRON). This module is
+retained as a LEGACY/DEV one-shot runner for pipeline.py — use it for local
+Spark/Iceberg development only, not for production scheduling. See
+docs/LAKEHOUSE.md § "Schedulers".
+
 STATUS: the PySpark → Iceberg-on-MinIO pipeline (pipeline.py) is real code,
 but NOTHING schedules it: docker-compose.yml has no Spark service and no cron
 entry. This module is the honest scheduling entrypoint.
