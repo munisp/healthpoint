@@ -145,6 +145,7 @@ describe.skipIf(!HAS_DB)("Phase16 submitter (live PG)", () => {
       submitterClientId: invite.submitterClientId,
       initiatingPartyType: "provider",
       initiatingPartyName: `P16 835 Provider ${RUN}`,
+      initiatingPartyNpi: "1234567893", // Phase 17-CE intake gate requires rendering/billing NPI
       respondingPartyName: `P16 Payer ${RUN}`,
       serviceType: "emergency_medicine",
       serviceDate: new Date(Date.now() - 3 * 86400_000).toISOString(),
