@@ -22,7 +22,9 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { NativeConnection, Worker } from "@temporalio/worker";
 import * as activities from "./journeys.activities";
+import * as lakehouseActivities from "./lakehouse.activities";
 import { JOURNEYS_TASK_QUEUE } from "./journeys.shared";
+import { registerLakehouseExportSchedule } from "./lakehouse-schedule";
 import { startLlmStub } from "../journeys/context";
 
 function resolveTls() {
@@ -56,8 +58,26 @@ async function main(): Promise<void> {
     workflowsPath: path.resolve(import.meta.dirname, "journeys.workflows.ts"),
     activities,
   });
-  console.log(`[temporal-worker] polling taskQueue=${taskQueue} namespace=${namespace} address=${address}`);
-  await worker.run();
+
+  // Lakehouse export pipeline (phase17-lh): a second worker on the SAME task
+  // queue bundles the lakehouse export workflow + activities. A separate
+  // bundle keeps the journeys workflow bundle byte-identical (deterministic
+  // replay of in-flight executions).
+  const lakehouseWorker = await Worker.create({
+    connection,
+    namespace,
+    taskQueue,
+    workflowsPath: path.resolve(import.meta.dirname, "lakehouse.workflows.ts"),
+    activities: lakehouseActivities,
+  });
+
+  // Canonical scheduler: register the Temporal Schedule for recurring
+  // incremental exports (env-gated; logs honestly when disabled).
+  await registerLakehouseExportSchedule().catch(err =>
+    console.warn("[temporal-worker] lakehouse schedule registration failed (non-fatal):", err instanceof Error ? err.message : err));
+
+  console.log(`[temporal-worker] polling taskQueue=${taskQueue} namespace=${namespace} address=${address} (journeys + lakehouse-export)`);
+  await Promise.all([worker.run(), lakehouseWorker.run()]);
 }
 
 main().catch(err => {
