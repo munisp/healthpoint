@@ -161,6 +161,9 @@ export async function cleanPriorRuns(sql: postgres.Sql): Promise<void> {
   await sql`DELETE FROM submission_automation_idempotency WHERE "tenantId" = ${JOURNEY_TENANT}`.catch(() => undefined);
   await sql`DELETE FROM submission_automation_submissions WHERE "tenantId" = ${JOURNEY_TENANT}`.catch(() => undefined);
   await sql`DELETE FROM emr_connections WHERE "createdBy" = ANY(${fixtureIds})`.catch(() => undefined);
+  // Phase 17 (J27): practice-audit staging rows for journey-created orgs.
+  await sql`DELETE FROM practice_claim_scores WHERE "claimId" IN (SELECT id FROM practice_claims WHERE "orgId" IN (SELECT id FROM organizations WHERE name LIKE 'Journey %'))`.catch(() => undefined);
+  await sql`DELETE FROM practice_claims WHERE "orgId" IN (SELECT id FROM organizations WHERE name LIKE 'Journey %')`.catch(() => undefined);
   console.log("[clean] prior journey run data deleted");
 }
 
