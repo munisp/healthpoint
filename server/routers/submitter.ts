@@ -19,7 +19,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { router, protectedProcedure } from "../_core/trpc";
 import { createAuditEntry, createDispute } from "../db";
 import { disputes } from "../../drizzle/schema";
@@ -36,6 +36,9 @@ import { getAdminFeeFromDb } from "../fee-schedule";
 import { getEffectiveIDRParameters } from "../idr/clocks-2026/params-2026";
 import { requireDb } from "../personas/guards";
 import { assertDisputeCreateComplete, assertDelegationAttestationComplete } from "../completeness/gates";
+import { proposeBatches, type AutoBatchCandidate } from "../idr/auto-batch";
+import { evaluateBatchEligibility, type LineItemInput } from "../idr/batching/batching";
+import { recommendOffer as recommendOfferEngine } from "../idr/offer-strategy";
 
 /** Phase13-FA invite policy: delegation invite links live 14 days. */
 const DELEGATION_INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -726,6 +729,223 @@ export const submitterRouter = router({
         ],
         citations: [...params.citations],
       };
+    }),
+
+  // ── Phase 18: auto-batcher (preview-first) ─────────────────────────────────
+  /**
+   * Propose CMS-9897-F-compliant batched disputes for a submitter client's
+   * open-dispute pool. PURE PREVIEW: no disputes are created or modified —
+   * call confirmBatches to materialize. Grouping reuses the regulatory
+   * evaluator (server/idr/batching/batching.ts) via server/idr/auto-batch.ts;
+   * economics are arithmetic on published fee ranges, labeled projections.
+   */
+  autoBatch: protectedProcedure
+    .input(z.object({
+      submitterClientId: z.string().min(1),
+      /** ONP start date driving the cap/relatedness regime (fail-closed when absent). */
+      openNegotiationNoticeDate: z.coerce.date().optional(),
+      /** Clock injection for tests/journeys (only with useNowFallback). */
+      now: z.coerce.date().optional(),
+      useNowFallback: z.boolean().default(false),
+      /** Restrict to these dispute ids (default: the client's open pool). */
+      disputeIds: z.array(z.string().min(1)).max(500).optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const link = await loadClientLink(db, input.submitterClientId);
+      await assertOrgMember(db, ctx.user.id, link.submitterOrgId, ["owner", "staff", "viewer"]);
+      const pool = await db.select().from(disputes).where(and(
+        eq(disputes.submitterClientId, link.id),
+        sql`${disputes.status} IN ('open_negotiation','idr_initiated')`,
+        sql`${disputes.batchId} IS NULL`,
+      ));
+      const filtered = input.disputeIds?.length ? pool.filter(d => input.disputeIds!.includes(d.id)) : pool;
+      const candidates: AutoBatchCandidate[] = filtered.map(d => ({
+        lineItemId: d.id,
+        disputeId: d.id,
+        referenceNumber: d.referenceNumber,
+        serviceCode: (Array.isArray(d.cptCodes) ? d.cptCodes[0] : "") ?? "",
+        providerNpi: d.initiatingPartyNpi ?? undefined,
+        payerId: d.respondingPartyName ?? "",
+        qualifiedIdrItem: d.isEligible !== false,
+        dateOfService: d.serviceDate,
+      }));
+      const asOf = input.now ?? new Date();
+      const params = getEffectiveIDRParameters(asOf);
+      const dbFee = await getAdminFeeFromDb("batched", asOf);
+      const adminFeeUsd = dbFee ? Number(dbFee.amountUsd) : params.adminFeeUsd;
+      const result = proposeBatches(candidates, {
+        openNegotiationNoticeDate: input.openNegotiationNoticeDate,
+        now: input.now,
+        useNowFallback: input.useNowFallback,
+        adminFeeUsd,
+      });
+      return {
+        ...result,
+        adminFeeUsd,
+        previewOnly: true,
+        previewNote:
+          "Preview only: no disputes are created or modified until submitter.confirmBatches is called. " +
+          "Fee savings are projections from published IDRE fee ranges and the per-dispute administrative fee — not guarantees.",
+      };
+    }),
+
+  /**
+   * Materialize confirmed batches: validates each proposed batch against the
+   * batching evaluator, then creates ONE batched dispute per batch (line
+   * items aggregated) and links the source disputes via batchId. Delegation
+   * attestation (IDR scope) is required, exactly as createDelegatedDispute.
+   */
+  confirmBatches: protectedProcedure
+    .input(z.object({
+      submitterClientId: z.string().min(1),
+      openNegotiationNoticeDate: z.coerce.date().optional(),
+      eligibilityAttested: z.literal(true),
+      batches: z.array(z.object({
+        disputeIds: z.array(z.string().min(1)).min(2).max(50),
+      })).min(1).max(100),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const link = await loadClientLink(db, input.submitterClientId);
+      if (link.status !== "active") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Submitter client link is ${link.status}` });
+      }
+      await assertOrgMember(db, ctx.user.id, link.submitterOrgId);
+      const attestation = await resolveValidAttestation(db, link.id, "idr");
+      if (!attestation) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No valid IDR-scope delegation attestation (45 CFR 149.510(b)(2)(ii)(A)(3))." });
+      }
+      const created: Array<{ batchId: string; disputeId: string; referenceNumber: string; lineItemCount: number }> = [];
+      for (const batch of input.batches) {
+        const sources = await db.select().from(disputes).where(and(
+          eq(disputes.submitterClientId, link.id),
+          inArray(disputes.id, batch.disputeIds),
+          sql`${disputes.batchId} IS NULL`,
+        ));
+        if (sources.length !== batch.disputeIds.length) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `Some disputes are missing, not owned by this client, or already batched: ${batch.disputeIds.join(", ")}` });
+        }
+        // Re-validate against the regulatory evaluator (fail-closed).
+        const items: LineItemInput[] = sources.map(d => ({
+          lineItemId: d.id,
+          serviceCode: (Array.isArray(d.cptCodes) ? d.cptCodes[0] : "") ?? "",
+          providerNpi: d.initiatingPartyNpi ?? undefined,
+          payerId: d.respondingPartyName ?? "",
+          qualifiedIdrItem: d.isEligible !== false,
+          dateOfService: d.serviceDate,
+        }));
+        const evalRes = evaluateBatchEligibility(items, { openNegotiationNoticeDate: input.openNegotiationNoticeDate });
+        if (!evalRes.eligible) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `Batch failed CMS-9897-F eligibility: ${evalRes.failures.join("; ")}` });
+        }
+        const batchId = crypto.randomUUID();
+        const totalBilled = sources.reduce((s, d) => s + Number(d.billedAmount ?? 0), 0);
+        const first = sources[0];
+        const dispute = await createDispute({
+          initiatingPartyType: first.initiatingPartyType,
+          initiatingPartyName: first.initiatingPartyName,
+          initiatingPartyNpi: first.initiatingPartyNpi,
+          initiatingPartyId: ctx.user.id,
+          respondingPartyType: first.respondingPartyType,
+          respondingPartyName: first.respondingPartyName,
+          serviceType: first.serviceType,
+          serviceDate: new Date(Math.min(...sources.map(d => new Date(d.serviceDate).getTime()))),
+          patientState: first.patientState,
+          facilityState: first.facilityState,
+          cptCodes: [...new Set(sources.flatMap(d => (Array.isArray(d.cptCodes) ? d.cptCodes : [])))],
+          billedAmount: totalBilled.toFixed(2),
+          notes: JSON.stringify({
+            autoBatched: true,
+            batchId,
+            sourceDisputeIds: sources.map(d => d.id),
+            rationale: evalRes.appliedCriteria,
+          }),
+          createdBy: ctx.user.id,
+          submitterClientId: link.id,
+          delegationAttestationId: attestation.id,
+          eligibilityAttestedAt: new Date(),
+          batchId,
+          batchedLineItemCount: sources.length,
+        } as Parameters<typeof createDispute>[0]);
+        await db.update(disputes).set({ batchId }).where(inArray(disputes.id, sources.map(d => d.id)));
+        await createAuditEntry({
+          userId: ctx.user.id,
+          action: "submitter.confirmBatches",
+          entityType: "dispute",
+          entityId: dispute.id,
+          oldValue: null,
+          newValue: JSON.stringify({ batchId, sourceDisputeIds: sources.map(d => d.id), capApplied: evalRes.capApplied }),
+          ipAddress: null,
+          userAgent: null,
+        });
+        created.push({ batchId, disputeId: dispute.id, referenceNumber: dispute.referenceNumber, lineItemCount: sources.length });
+      }
+      return { confirmed: created.length, batches: created };
+    }),
+
+  // ── Phase 18: offer-strategy engine ────────────────────────────────────────
+  /**
+   * Recommend an offer amount for a dispute. Output is LABELED
+   * statistical_estimate with a full feature breakdown; the ML fallback
+   * (OutcomeNet, synthetic training data) is MOCK-VERIFIED only and carries
+   * its model card. See server/idr/offer-strategy.ts.
+   */
+  recommendOffer: protectedProcedure
+    .input(z.object({ disputeId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const d = (await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1))[0];
+      if (!d) throw new TRPCError({ code: "NOT_FOUND", message: "Dispute not found" });
+      // AuthZ: dispute creator, or member of the owning submitter org.
+      if (d.createdBy !== ctx.user.id && ctx.user.role !== "admin") {
+        if (!d.submitterClientId) throw new TRPCError({ code: "FORBIDDEN", message: "No access to this dispute" });
+        const link = await loadClientLink(db, d.submitterClientId);
+        await assertOrgMember(db, ctx.user.id, link.submitterOrgId, ["owner", "staff", "viewer"]);
+      }
+      // Segment stats: this IDRE entity × service type, from determinations.
+      const seg = d.idrEntityId
+        ? await db.execute(sql`
+            SELECT COUNT(*)::int AS total,
+                   SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END)::int AS wins
+            FROM disputes
+            WHERE "idrEntityId" = ${d.idrEntityId} AND "serviceType" = ${d.serviceType}
+              AND "determinationWinner" IS NOT NULL
+          `)
+        : null;
+      const segRow = seg
+        ? (((Array.isArray(seg) ? seg : (seg as { rows?: unknown[] }).rows ?? []) as Array<Record<string, unknown>>)[0] ?? { total: 0, wins: 0 })
+        : { total: 0, wins: 0 };
+      const plat = await db.execute(sql`
+        SELECT COUNT(*)::int AS total,
+               SUM(CASE WHEN "determinationWinner" = 'initiating_party' THEN 1 ELSE 0 END)::int AS wins
+        FROM disputes WHERE "determinationWinner" IS NOT NULL
+      `);
+      const platRow = ((Array.isArray(plat) ? plat : (plat as { rows?: unknown[] }).rows ?? []) as Array<Record<string, unknown>>)[0] ?? { total: 0, wins: 0 };
+      const asOf = new Date();
+      const params = getEffectiveIDRParameters(asOf);
+      const dbFee = await getAdminFeeFromDb("single", asOf);
+      const adminFeeUsd = dbFee ? Number(dbFee.amountUsd) : params.adminFeeUsd;
+      const segTotal = Number(segRow.total ?? 0);
+      const platTotal = Number(platRow.total ?? 0);
+      const result = recommendOfferEngine({
+        qpaUsd: d.qpaAmount !== null ? Number(d.qpaAmount) : null,
+        initialPaymentUsd: d.respondingPartyOffer !== null ? Number(d.respondingPartyOffer) : null,
+        billedUsd: Number(d.billedAmount),
+        segmentStats: {
+          winRate: segTotal > 0 ? Number(segRow.wins ?? 0) / segTotal : null,
+          sampleSize: segTotal,
+          wins: Number(segRow.wins ?? 0),
+        },
+        platformStats: {
+          winRate: platTotal > 0 ? Number(platRow.wins ?? 0) / platTotal : null,
+          sampleSize: platTotal,
+          wins: Number(platRow.wins ?? 0),
+        },
+        adminFeeUsd,
+        outcomeNetProbability: null, // MOCK-VERIFIED path not exercised here; see practiceAudit.scoreAndSummarize
+      });
+      return { disputeId: d.id, referenceNumber: d.referenceNumber, ...result };
     }),
 });
 
