@@ -1,5 +1,5 @@
 /**
- * Catalog barrel: the 29 stakeholder journeys in execution order.
+ * Catalog barrel: the 30 stakeholder journeys in execution order.
  */
 import type { Journey } from "../framework";
 import { j01, j02, j03, j04, j05, j06 } from "./provider";
@@ -12,9 +12,10 @@ import { j25, j26 } from "./submitter";
 import { j27 } from "./practice-audit";
 import { j28 } from "./completeness";
 import { j29 } from "./submitter-one-stop";
+import { j30 } from "./bulk-upload";
 
 export const ALL_JOURNEYS: Journey[] = [
   j01, j02, j03, j04, j05, j06, j07, j08, j09, j10,
   j11, j12, j13, j14, j15, j16, j17, j18, j19, j20,
-  j21, j22, j23, j24, j25, j26, j27, j28, j29,
+  j21, j22, j23, j24, j25, j26, j27, j28, j29, j30,
 ];
