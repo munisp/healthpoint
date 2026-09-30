@@ -7,6 +7,9 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../../_core/trpc";
 import { evaluateBatchEligibility } from "./batching";
+import { proposeBatches } from "../auto-batch";
+import { getAdminFeeFromDb } from "../../fee-schedule";
+import { getEffectiveIDRParameters } from "../clocks-2026/params-2026";
 
 const lineItemSchema = z.object({
   lineItemId: z.string().min(1).max(128),
@@ -34,6 +37,34 @@ export const batchedDisputesRouter = router({
       return evaluateBatchEligibility(input.items, {
         openNegotiationNoticeDate: input.openNegotiationNoticeDate,
       });
+    }),
+
+  /**
+   * Phase 18: auto-batcher preview over a CALLER-SUPPLIED pool of line items
+   * (org-scoped pool variant lives at submitter.autoBatch). Pure preview —
+   * proposes batches with per-batch rationale and projected fee savings vs
+   * single filings; no mutation.
+   */
+  suggestBatches: protectedProcedure
+    .input(z.object({
+      items: z.array(lineItemSchema).min(1).max(500),
+      openNegotiationNoticeDate: z.coerce.date().optional(),
+      adminFeeUsd: z.number().positive().optional(),
+    }))
+    .query(async ({ input }) => {
+      const asOf = new Date();
+      const adminFeeUsd = input.adminFeeUsd
+        ?? Number((await getAdminFeeFromDb("batched", asOf))?.amountUsd ?? getEffectiveIDRParameters(asOf).adminFeeUsd);
+      const result = proposeBatches(input.items, {
+        openNegotiationNoticeDate: input.openNegotiationNoticeDate,
+        adminFeeUsd,
+      });
+      return {
+        ...result,
+        adminFeeUsd,
+        previewOnly: true,
+        previewNote: "Preview only: projected savings are arithmetic on published IDRE fee ranges, not guarantees.",
+      };
     }),
 });
 
