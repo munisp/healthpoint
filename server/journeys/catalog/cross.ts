@@ -3,7 +3,7 @@
  * settlement transfers, IDR compliance deadlines/fees/attestation/reporting).
  */
 import type { Journey } from "../framework";
-import { createJourneyDispute, advanceToNegotiationFailed, expectTrpcError } from "./helpers";
+import { createJourneyDispute, advanceToNegotiationFailed, expectTrpcError, JOURNEY_STEP04_GATE_FIELDS } from "./helpers";
 
 export const j12: Journey = {
   id: "J12",
@@ -357,6 +357,7 @@ export const j15: Journey = {
         await ctx.provider.disputes.advance({
           disputeId: d.id, newStep: "STEP_04_IDR_INITIATED", newStatus: "idr_initiated",
           description: "IDR initiated (journey J15)",
+          ...JOURNEY_STEP04_GATE_FIELDS,
         });
         const computed = await ctx.provider.idrCompliance["deadlines.computeForDispute"]({
           disputeId: d.id,
