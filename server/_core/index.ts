@@ -54,6 +54,7 @@ import { startLedgerReconciliationScheduler } from "../reconciliation-scheduler"
 import { isTigerBeetleEnabled, startTigerBeetleTunnel, stopTigerBeetleTunnel } from "../tigerbeetle";
 import { createScheduledAuth } from "../scheduled-auth";
 import { securityHeaders } from "./security-headers";
+import { isOriginAllowed } from "./cors-policy";
 import { apiRateLimiter, authRateLimiter, sensitiveRateLimiter } from "../auth/ratelimit";
 import { requireApiAdmin, requireApiAuth } from "../auth/bearer";
 
@@ -142,22 +143,25 @@ async function startServer() {
 
   // ── CORS ──────────────────────────────────────────────────────────────────
   // Configure via ALLOWED_ORIGINS env var (comma-separated list of origins).
-  // In development all origins are allowed; in production only the listed ones.
+  // Policy in server/_core/cors-policy.ts: the app's own origin is always
+  // allowed; in production other origins must be listed. A disallowed origin
+  // gets a 403 here — never an error thrown into the 500 handler.
   const configuredOrigins = [ENV.appUrl, ...ENV.allowedOrigins].filter(Boolean);
   // Export for testing
   (app as any).__allowedOrigins = configuredOrigins;
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const allowed = isOriginAllowed(
+      { origin: req.headers.origin, host: req.headers.host },
+      { isProduction: ENV.isProduction, configuredOrigins },
+    );
+    if (allowed) return next();
+    console.warn(`[cors] rejected origin ${req.headers.origin} for ${req.method} ${req.path} — add it to ALLOWED_ORIGINS if it is legitimate`);
+    res.status(403).json({ error: "Origin not allowed" });
+  });
   app.use(
     cors({
-      origin: (origin, callback) => {
-        // Allow requests with no origin (mobile apps, curl, server-to-server)
-        if (!origin) return callback(null, true);
-        // In dev, allow all origins
-        if (!ENV.isProduction) return callback(null, true);
-        // Exact match only — prefix matching would admit evil-suffix origins
-        // such as https://app.example.com.evil.tld
-        if (configuredOrigins.some(o => origin === o)) return callback(null, true);
-        callback(new Error(`CORS: origin ${origin} not allowed. Add it to ALLOWED_ORIGINS env var.`));
-      },
+      // Only origins that passed the gate above reach here, so reflect them.
+      origin: true,
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
