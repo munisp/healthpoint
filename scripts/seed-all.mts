@@ -287,6 +287,8 @@ function sqlEsc(s: string): string {
 
 // FK-safe truncation order: children first, then parents.
 const TRUNCATE_ORDER = [
+  "remittance_lines","remittance_835_files","delegation_attestations","submitter_clients",
+  "org_memberships","organizations",
   "webhook_deliveries","settlement_exception_reviews","settlement_reconciliations","settlement_provider_reports",
   "settlement_callbacks","settlement_approvals","settlement_transfers","settlement_balance_proofs","settlement_job_configs",
   "ledger_entries","ledger_accounts","event_log","idr_fee_assessments","idr_deadline_events","idr_attestations",
@@ -353,6 +355,61 @@ async function main() {
   await seedTable("push_subscriptions", ["id","userId","endpoint","p256dh","auth","createdAt","updatedAt"],
     users.filter((_, i) => i % 3 === 0).map((u, i) => [`push_${String(i).padStart(4, "0")}`, u.id, `https://fcm.googleapis.com/fcm/send/${sha256(u.id + "ep").slice(0, 22)}`, "B" + Buffer.from(sha256(u.id + "p256"), "hex").toString("base64").replace(/[^A-Za-z0-9]/g, "").slice(0, 87), Buffer.from(sha256(u.id + "auth"), "hex").toString("base64").slice(0, 22), daysBefore(60), daysBefore(1)]),
     `("userId", "endpoint")`);
+
+  // ═══ Phase 16: third-party submitter (delegated representative) ═══════════
+  // Deterministic org pair (submitter + provider client), one active link
+  // with a hash-chained attestation, one pending link, and one parsed 835
+  // remittance file with NSA-eligibility-flagged lines.
+  const subOrgId = "org_submitter_001";
+  const subOrg2Id = "org_submitter_002";
+  const clientOrgId = "org_provider_client_001";
+  await seedTable("organizations", ["id","name","type","status","createdAt"],
+    [
+      [subOrgId, "Meridian RCM Partners (Submitter)", "biller", "active", daysBefore(200)],
+      [subOrg2Id, "Clearline Filing Agents", "biller", "active", daysBefore(120)],
+      [clientOrgId, "Lakeshore Emergency Physicians (Client)", "provider", "active", daysBefore(190)],
+    ],
+    `("id")`);
+  await seedTable("org_memberships", ["id","orgId","userId","role","createdAt"],
+    [
+      ["om_sub_001", subOrgId, users[0].id, "owner", daysBefore(200)],
+      ["om_sub_002", clientOrgId, users[1 % users.length].id, "owner", daysBefore(190)],
+    ],
+    `("id")`);
+  const scActiveId = "sc_001";
+  await seedTable("submitter_clients", ["id","submitterOrgId","clientOrgId","label","npis","tins","status","inviteTokenHash","createdAt","updatedAt"],
+    [
+      [scActiveId, subOrgId, clientOrgId, "Lakeshore EP — full IDR delegation", JSON.stringify(["1234567893","1987654321"]), JSON.stringify(["461234567"]), "active", null, daysBefore(150), daysBefore(10)],
+      ["sc_002", subOrg2Id, null, "Prospect — invite outstanding", JSON.stringify([]), JSON.stringify([]), "pending", sha256("p16-seed-pending-invite"), daysBefore(7), daysBefore(7)],
+    ],
+    `("id")`);
+  // Hash-chained attestation artifact (same canonical form as the router).
+  const attAuthorityText = "Lakeshore Emergency Physicians delegates authority to Meridian RCM Partners to submit open-negotiation notices and Federal IDR initiation notices on its behalf under 45 CFR 149.510(b)(2)(ii)(A)(3), including acceptance of administrative-fee debt allocation.";
+  const attArtifact = JSON.stringify({
+    id: "da_001", submitterClientId: scActiveId, scope: "both",
+    authorityText: attAuthorityText,
+    attestedByUserId: users[1 % users.length].id,
+    attestedAt: new Date(daysBefore(140)).toISOString(),
+    effectiveFrom: new Date(daysBefore(140)).toISOString(),
+    expiresAt: new Date(daysAfter(365)).toISOString(),
+    adminFeeDebtAccepted: true,
+  });
+  const attHash = sha256(attArtifact + "0".repeat(64));
+  await seedTable("delegation_attestations", ["id","submitterClientId","scope","authorityText","attestedByUserId","attestedAt","effectiveFrom","expiresAt","adminFeeDebtAccepted","artifactSha256","prevHash","revokedAt","revokedByUserId","status","createdAt"],
+    [
+      ["da_001", scActiveId, "both", attAuthorityText, users[1 % users.length].id, daysBefore(140), daysBefore(140), daysAfter(365), true, attHash, "0".repeat(64), null, null, "active", daysBefore(140)],
+    ],
+    `("id")`);
+  const r835 = "835-seed-001";
+  await seedTable("remittance_835_files", ["id","orgId","fileName","contentSha256","receivedAt","lineCount","status","parseError"],
+    [[r835, subOrgId, "remit-2026-08-era1.835", sha256("p16-seed-835:" + r835), daysBefore(5), 2, "parsed", null]],
+    `("id")`);
+  await seedTable("remittance_lines", ["id","fileId","claimId","payerId","npi","cptCode","billedCents","allowedCents","carcCodes","rarcCodes","idrEligibleFlag","mappedDisputeId","createdAt"],
+    [
+      ["rl_001", r835, "CLM-1001", "AETNA", "1234567893", "99285", 420000, 90000, "{45}", "{N830}", true, null, daysBefore(5)],
+      ["rl_002", r835, "CLM-1002", "AETNA", "1234567893", "99284", 260000, 110000, "{131}", "{}", false, null, daysBefore(5)],
+    ],
+    `("id")`);
 
   // ═══ IDR Entities ════════════════════════════════════════════════════════
   const idres = IDRE_NAMES.map((name, i) => ({

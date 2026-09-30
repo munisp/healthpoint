@@ -42,7 +42,7 @@ import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDispu
 import { eventBus } from "./events/bus";
 import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, getStatusForStep, addBusinessDays, daysUntilDeadline, validateWorkflowTransition, getStepNumber, isDeadlinePassed } from "./workflow/idr-workflow";
 import { addBusinessDays as addIdrBusinessDays, businessDaysBetween } from "./idr/deadlines";
-import { checkIdrInitiationWindow, checkCoolingOffForNewDispute, validateConflictCheck } from "./idr/initiation-guards";
+import { checkIdrInitiationWindow, checkCoolingOffForNewDispute, validateConflictCheck, checkDelegationAttestation } from "./idr/initiation-guards";
 import { idrAttestations, disputeEvents, settlementTransfers } from "../drizzle/schema";
 import { initializeDisputeLedger, recordBilledAmount, recordAllowedAmount, recordDetermination, recordPayment, recordUnverifiedPaymentReport, hasApprovedSettlementEvidence, confirmPaymentReport, dollarsToCents, getDisputeBalances, getDisputeLedgerHistory, getDisputeFinancialSummary } from "./ledger";
 import { dispatchOutboxBatch } from "./outbox";
@@ -600,6 +600,14 @@ export const appRouter = router({
             });
             if (cooling.blocked) {
               throw new TRPCError({ code: "BAD_REQUEST", message: cooling.detail });
+            }
+            // S9 (Phase 16): delegated-submitter attestation gate —
+            // 45 CFR 149.510(b)(2)(ii)(A)(3) as amended by CMS-9897-F. A
+            // dispute created via a submitter client link cannot advance to
+            // IDR initiation without a valid delegation attestation.
+            const delegation = await checkDelegationAttestation(db, current);
+            if (delegation.blocked) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: delegation.detail });
             }
           }
         }

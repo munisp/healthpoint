@@ -151,6 +151,12 @@ export const disputes = pgTable(
     determinationBasis: text("determinationBasis"),
     determinationWinner: varchar("determinationWinner", { length: 32 }), // "initiating_party" | "responding_party" | null
     notes: text("notes"),
+    // Phase 16: delegated-submitter linkage. Set when the dispute was
+    // created by a third-party submitter on behalf of a provider client
+    // (45 CFR 149.510(b)(2)(ii)(A)(3) representative attestation).
+    submitterClientId: varchar("submitterClientId", { length: 64 }),
+    delegationAttestationId: varchar("delegationAttestationId", { length: 64 }),
+    eligibilityAttestedAt: timestamp("eligibilityAttestedAt"),
     createdBy: varchar("createdBy", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow(),
     updatedAt: timestamp("updatedAt").defaultNow(),
@@ -165,6 +171,7 @@ export const disputes = pgTable(
     index("disputes_createdAt_idx").on(t.createdAt),
     index("disputes_billedAmount_idx").on(t.billedAmount),
     index("disputes_respondingName_idx").on(t.respondingPartyName),
+    index("disputes_submitterClient_idx").on(t.submitterClientId),
   ]
 );
 export type Dispute = typeof disputes.$inferSelect;
