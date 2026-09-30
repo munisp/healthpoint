@@ -288,6 +288,7 @@ function sqlEsc(s: string): string {
 // FK-safe truncation order: children first, then parents.
 const TRUNCATE_ORDER = [
   "practice_claim_scores","practice_claims",
+  "submitter_invoice_lines","submitter_invoices","audit_share_tokens",
   "remittance_lines","remittance_835_files","delegation_attestations","submitter_clients",
   "org_memberships","organizations",
   "webhook_deliveries","settlement_exception_reviews","settlement_reconciliations","settlement_provider_reports",
@@ -378,10 +379,27 @@ async function main() {
     ],
     `("id")`);
   const scActiveId = "sc_001";
-  await seedTable("submitter_clients", ["id","submitterOrgId","clientOrgId","label","npis","tins","status","inviteTokenHash","createdAt","updatedAt"],
+  await seedTable("submitter_clients", ["id","submitterOrgId","clientOrgId","label","npis","tins","status","inviteTokenHash","billingModel","contingencyPct","flatFeeUsd","createdAt","updatedAt"],
     [
-      [scActiveId, subOrgId, clientOrgId, "Lakeshore EP — full IDR delegation", JSON.stringify(["1234567893","1987654321"]), JSON.stringify(["461234567"]), "active", null, daysBefore(150), daysBefore(10)],
-      ["sc_002", subOrg2Id, null, "Prospect — invite outstanding", JSON.stringify([]), JSON.stringify([]), "pending", sha256("p16-seed-pending-invite"), daysBefore(7), daysBefore(7)],
+      [scActiveId, subOrgId, clientOrgId, "Lakeshore EP — full IDR delegation", JSON.stringify(["1234567893","1987654321"]), JSON.stringify(["461234567"]), "active", null, "contingency", "20.00", null, daysBefore(150), daysBefore(10)],
+      ["sc_002", subOrg2Id, null, "Prospect — invite outstanding", JSON.stringify([]), JSON.stringify([]), "pending", sha256("p16-seed-pending-invite"), "flat", null, "250.00", daysBefore(7), daysBefore(7)],
+    ],
+    `("id")`);
+  // Phase 18: one sent invoice against the active link (lifecycle demo; no
+  // payment processing) + one audit share token for the submitter org.
+  await seedTable("submitter_invoices", ["id","submitterClientId","invoiceNumber","billingModel","status","periodStart","periodEnd","totalUsd","lineCount","computationNotes","issuedAt","paidAt","voidedAt","createdByUserId","createdAt","updatedAt"],
+    [
+      ["sinv_001", scActiveId, "INV-SEED-001", "contingency", "sent", daysBefore(45), daysBefore(15), "640.00", 1, JSON.stringify(["Seed demo invoice: 20% contingency × $3,200 award (fixture).","No payment processing: lifecycle record only."]), daysBefore(14), null, null, users[0].id, daysBefore(14), daysBefore(14)],
+    ],
+    `("id")`);
+  await seedTable("submitter_invoice_lines", ["id","invoiceId","disputeId","referenceNumber","awardUsd","chargeUsd","description","createdAt"],
+    [
+      ["sinl_001", "sinv_001", "seed_disp_001", "IDR-SEED-0001", "3200.00", "640.00", "Contingency fee 20% × $3200.00 award — IDR-SEED-0001 (seed fixture)", daysBefore(14)],
+    ],
+    `("id")`);
+  await seedTable("audit_share_tokens", ["id","tokenHash","orgId","scope","label","expiresAt","revokedAt","revokedByUserId","createdByUserId","lastAccessedAt","accessCount","createdAt"],
+    [
+      ["ast_001", sha256("p18-seed-audit-share-token"), subOrgId, "practice_audit_read", "Seed demo share link (revoked fixture)", daysAfter(30), daysBefore(2), users[0].id, users[0].id, daysBefore(3), 4, daysBefore(10)],
     ],
     `("id")`);
   // Hash-chained attestation artifact (same canonical form as the router).
