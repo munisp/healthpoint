@@ -1,4 +1,5 @@
 import { eq, desc, and, or, like, count, sql, inArray, gte, lt, lte, isNotNull, notInArray } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { existsSync, readFileSync } from "node:fs";
@@ -491,44 +492,67 @@ export async function submitOffer(data: Omit<DisputeOffer, 'id' | 'submittedAt' 
   return id;
 }
 
+/** Statuses in which a dispute is already resolved — no further offer may be accepted. */
+const RESOLVED_DISPUTE_STATUSES = ["determination_issued", "payment_pending", "closed", "withdrawn"] as const;
+
 export async function acceptOffer(disputeId: string, offerId: string, performedBy: string, performedByName: string): Promise<Dispute> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const existing = await db.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
-  if (existing.length === 0) throw new Error("Dispute not found");
-  // Try to find the specific offer, or fall back to the latest responding offer
-  let offer = await db.select().from(disputeOffers).where(eq(disputeOffers.id, offerId)).limit(1);
-  if (offer.length === 0) {
-    // Fall back: find the latest responding party offer for this dispute
-    offer = await db.select().from(disputeOffers)
-      .where(and(eq(disputeOffers.disputeId, disputeId), eq(disputeOffers.offerType, "responding_party")))
-      .orderBy(disputeOffers.submittedAt)
-      .limit(1);
-  }
-  const now = new Date();
-  const determinationAmount = offer.length > 0 ? offer[0].amount : existing[0].respondingPartyOffer ?? existing[0].billedAmount;
-  // Mark offer as accepted if found
-  if (offer.length > 0) {
-    await db.update(disputeOffers).set({ isAccepted: true }).where(eq(disputeOffers.id, offer[0].id));
-  }
-  // Advance dispute to determination issued
-  await db.update(disputes).set({
-    currentStep: "STEP_13_DETERMINATION_ISSUED",
-    status: "determination_issued",
-    determinationAmount,
-    updatedAt: now,
-  }).where(eq(disputes.id, disputeId));
-  // Record timeline event
+  // Single-winner: a per-dispute advisory lock + a status re-check inside the
+  // transaction stop two concurrent (or double-fired) acceptances from each
+  // marking a different offer accepted and racing the determination amount.
+  // Mirrors the ledger's pg_advisory_xact_lock pattern (server/ledger.ts).
+  const previousStep = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${disputeId}))`);
+    const existing = await tx.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
+    if (existing.length === 0) throw new Error("Dispute not found");
+    if ((RESOLVED_DISPUTE_STATUSES as readonly string[]).includes(existing[0].status)) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `This dispute is already ${existing[0].status.replace(/_/g, " ")}; no further offer can be accepted`,
+      });
+    }
+    // Also fail closed if any offer on this dispute is already accepted.
+    const alreadyAccepted = await tx.select({ id: disputeOffers.id }).from(disputeOffers)
+      .where(and(eq(disputeOffers.disputeId, disputeId), eq(disputeOffers.isAccepted, true))).limit(1);
+    if (alreadyAccepted.length > 0) {
+      throw new TRPCError({ code: "CONFLICT", message: "An offer has already been accepted on this dispute" });
+    }
+    // Try to find the specific offer, or fall back to the latest responding offer
+    let offer = await tx.select().from(disputeOffers).where(eq(disputeOffers.id, offerId)).limit(1);
+    if (offer.length === 0) {
+      offer = await tx.select().from(disputeOffers)
+        .where(and(eq(disputeOffers.disputeId, disputeId), eq(disputeOffers.offerType, "responding_party")))
+        .orderBy(disputeOffers.submittedAt)
+        .limit(1);
+    }
+    const now = new Date();
+    const determinationAmount = offer.length > 0 ? offer[0].amount : existing[0].respondingPartyOffer ?? existing[0].billedAmount;
+    if (offer.length > 0) {
+      await tx.update(disputeOffers).set({ isAccepted: true }).where(eq(disputeOffers.id, offer[0].id));
+    }
+    await tx.update(disputes).set({
+      currentStep: "STEP_13_DETERMINATION_ISSUED",
+      status: "determination_issued",
+      determinationAmount,
+      updatedAt: now,
+    }).where(eq(disputes.id, disputeId));
+    // Guard the description/metadata against a missing offer (no responding
+    // offer on the dispute) — previously this threw on offer[0].amount.
+    const acceptedAmount = offer.length > 0 ? offer[0].amount : determinationAmount;
+    return { previousStep: existing[0].currentStep as IDRStep, acceptedAmount };
+  });
+  // Timeline event (outside the write txn; not part of the single-winner invariant).
   await createDisputeEvent({
     id: crypto.randomUUID(),
     disputeId,
     step: "STEP_13_DETERMINATION_ISSUED",
-    previousStep: existing[0].currentStep as IDRStep,
+    previousStep: previousStep.previousStep,
     eventType: "offer_accepted",
-    description: `Offer of $${Number(offer[0].amount).toLocaleString()} accepted — determination issued`,
+    description: `Offer of $${Number(previousStep.acceptedAmount).toLocaleString()} accepted — determination issued`,
     performedBy,
     performedByName,
-    metadata: { offerId, acceptedAmount: offer[0].amount },
+    metadata: { offerId, acceptedAmount: previousStep.acceptedAmount },
   });
   const updated = await db.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
   return updated[0];
