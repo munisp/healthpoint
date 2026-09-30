@@ -62,6 +62,19 @@ export async function advanceToNegotiationFailed(
   });
 }
 
+/**
+ * Phase 17-CE: gate-only fields required at the STEP_04 (IDR initiation)
+ * completeness gate — plan type (45 CFR 149.140), notice-and-consent status
+ * (45 CFR 149.410-430), and the conflict-of-interest attestation
+ * (45 CFR 149.510(c)(1)(iv)-(v)). Shared so every journey exercises the real
+ * fail-closed gate with complete data.
+ */
+export const JOURNEY_STEP04_GATE_FIELDS = {
+  planType: "SELF_FUNDED" as const,
+  noticeConsentStatus: "none" as const,
+  conflictCheckAttested: true,
+};
+
 /** STEP_03 → STEP_06 (IDR initiated, notice sent, entity selection). */
 export async function advanceToEntitySelection(
   ctx: JourneyContext,
@@ -72,6 +85,7 @@ export async function advanceToEntitySelection(
     newStep: "STEP_04_IDR_INITIATED",
     newStatus: "idr_initiated",
     description: "IDR initiated within 4 business days (journey)",
+    ...JOURNEY_STEP04_GATE_FIELDS,
   });
   await ctx.provider.disputes.advance({
     disputeId,
