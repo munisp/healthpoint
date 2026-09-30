@@ -33,6 +33,7 @@ import {
   text,
   integer,
   boolean,
+  numeric,
   timestamp,
   jsonb,
   index,
@@ -59,6 +60,13 @@ export const submitterClients = pgTable(
     status: varchar("status", { length: 16 }).notNull().default("pending"),
     /** sha256 of the invite token that created this link (accept audit). */
     inviteTokenHash: varchar("inviteTokenHash", { length: 128 }),
+    // ── Phase 18: per-client billing configuration (submitter invoicing) ──
+    /** "flat" (per-determined-dispute flat fee) or "contingency" (pct of awards). */
+    billingModel: varchar("billingModel", { length: 16 }).notNull().default("flat"),
+    /** Contingency percentage of awards (0–100) when billingModel=contingency. */
+    contingencyPct: numeric("contingencyPct", { precision: 5, scale: 2 }),
+    /** Flat per-dispute fee in USD when billingModel=flat. */
+    flatFeeUsd: numeric("flatFeeUsd", { precision: 12, scale: 2 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   },
@@ -169,3 +177,64 @@ export const remittanceLines = pgTable(
   ]
 );
 export type RemittanceLine = typeof remittanceLines.$inferSelect;
+
+// ─── Phase 18: submitter invoicing ───────────────────────────────────────────
+export const SUBMITTER_BILLING_MODEL = ["flat", "contingency"] as const;
+export type SubmitterBillingModel = (typeof SUBMITTER_BILLING_MODEL)[number];
+export const SUBMITTER_INVOICE_STATUS = ["draft", "sent", "paid", "void"] as const;
+export type SubmitterInvoiceStatus = (typeof SUBMITTER_INVOICE_STATUS)[number];
+
+/**
+ * Per-client invoices generated FROM platform determination data
+ * (disputes.determinationWinner/determinationAmount). No payment processing:
+ * the lifecycle is draft -> sent -> paid (or void) and nothing here moves
+ * money — paid status is recorded manually by the submitter.
+ */
+export const submitterInvoices = pgTable(
+  "submitter_invoices",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    submitterClientId: varchar("submitterClientId", { length: 64 }).notNull(),
+    invoiceNumber: varchar("invoiceNumber", { length: 48 }).notNull(),
+    billingModel: varchar("billingModel", { length: 16 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull().default("draft"),
+    periodStart: timestamp("periodStart").notNull(),
+    periodEnd: timestamp("periodEnd").notNull(),
+    totalUsd: numeric("totalUsd", { precision: 12, scale: 2 }).notNull().default("0"),
+    lineCount: integer("lineCount").notNull().default(0),
+    /** Snapshot of computation inputs/notes (honesty + audit trail). */
+    computationNotes: jsonb("computationNotes").$type<string[]>().notNull().default([]),
+    issuedAt: timestamp("issuedAt"),
+    paidAt: timestamp("paidAt"),
+    voidedAt: timestamp("voidedAt"),
+    createdByUserId: varchar("createdByUserId", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("submitter_invoices_number_idx").on(t.submitterClientId, t.invoiceNumber),
+    index("submitter_invoices_client_idx").on(t.submitterClientId),
+    index("submitter_invoices_status_idx").on(t.status),
+  ]
+);
+export type SubmitterInvoice = typeof submitterInvoices.$inferSelect;
+
+export const submitterInvoiceLines = pgTable(
+  "submitter_invoice_lines",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    invoiceId: varchar("invoiceId", { length: 64 }).notNull(),
+    disputeId: varchar("disputeId", { length: 64 }).notNull(),
+    referenceNumber: varchar("referenceNumber", { length: 32 }),
+    /** Award (determinationAmount) the charge was computed from, when known. */
+    awardUsd: numeric("awardUsd", { precision: 12, scale: 2 }),
+    chargeUsd: numeric("chargeUsd", { precision: 12, scale: 2 }).notNull(),
+    description: text("description").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("submitter_invoice_lines_invoice_idx").on(t.invoiceId),
+    uniqueIndex("submitter_invoice_lines_dispute_idx").on(t.invoiceId, t.disputeId),
+  ]
+);
+export type SubmitterInvoiceLine = typeof submitterInvoiceLines.$inferSelect;
