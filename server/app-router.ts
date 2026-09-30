@@ -30,6 +30,8 @@ import { unsubscribeRouter } from "./routers/unsubscribe";
 import { identityRouter } from "./auth/nppes";
 import { adminTotpRouter } from "./auth/totp-admin";
 import { submitterRouter } from "./routers/submitter";
+// phase18 additions (one-stop submitter: billing)
+import { submitterBillingRouter } from "./routers/submitter-billing";
 // phase17 additions (EHR extraction staging + eligibility scoring)
 import { practiceAuditRouter } from "./routers/practice-audit";
 // phase17-lh addition (lakehouse read-back analytics with honest postgres fallback)
@@ -56,6 +58,8 @@ export const rootRouter = mergeRouters(
   router({ adminTotp: adminTotpRouter }),
   // phase16 additions (third-party submitter / delegated representative)
   router({ submitter: submitterRouter }),
+  // phase18 additions (submitter invoicing — lifecycle only, no payment processing)
+  router({ submitterBilling: submitterBillingRouter }),
   // phase17 additions (practice claims staging + deterministic eligibility scoring)
   router({ practiceAudit: practiceAuditRouter }),
   // phase17-lh addition (lakehouse analytics: lakehouse when configured, honest postgres_fallback otherwise)
