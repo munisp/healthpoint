@@ -13,8 +13,11 @@
  *    against the same other party for the same or similar item/service during
  *    the 90-calendar-day suspension period (30 business days for batched
  *    disputes under CMS-9897-F — see cooling-off.ts).
+ *  - S9 delegated-submitter attestation gate (45 CFR 149.510(b)(2)(ii)(A)(3)
+ *    as amended by CMS-9897-F): disputes created via a submitter client link
+ *    require a valid delegation attestation before IDR initiation.
  *
- * Both guards return structured results; the router layer decides whether to
+ * All guards return structured results; the router layer decides whether to
  * reject (HTTP 400) or record an admin-override compliance note.
  */
 
@@ -275,4 +278,119 @@ export function validateConflictCheck(input: ConflictCheckInput | undefined | nu
     );
   }
   return null;
+}
+
+// ── S9: delegated-submitter attestation gate (Phase 16) ─────────────────────
+// 45 CFR 149.510(b)(2)(ii)(A)(3) as amended by CMS-9897-F: a notice of IDR
+// initiation filed by a third-party representative must be accompanied by an
+// attestation of the representative's authority. Platform rule (fail-closed):
+// a dispute created via a submitter client link may not advance to
+// STEP_04_IDR_INITIATED without a valid (active, unexpired, scope-covering)
+// delegation attestation bound to the dispute.
+
+export interface DelegationGuardCheck {
+  /** True when the dispute is blocked from IDR initiation. */
+  blocked: boolean;
+  detail: string;
+  attestationId: string | null;
+}
+
+/**
+ * Evaluate the delegation gate for a dispute row. Fail-closed: any dispute
+ * carrying submitterClientId MUST have a matching valid attestation.
+ */
+export async function checkDelegationAttestation(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  dispute: {
+    id: string;
+    referenceNumber?: string | null;
+    submitterClientId?: string | null;
+    delegationAttestationId?: string | null;
+  },
+  now: Date = new Date()
+): Promise<DelegationGuardCheck> {
+  if (!dispute.submitterClientId) {
+    return { blocked: false, detail: "Not a delegated-submitter dispute; attestation gate not applicable.", attestationId: null };
+  }
+  if (!dispute.delegationAttestationId) {
+    return {
+      blocked: true,
+      detail:
+        `Dispute ${dispute.referenceNumber ?? dispute.id} was created by a delegated third-party ` +
+        `submitter but has no delegation attestation bound to it. 45 CFR 149.510(b)(2)(ii)(A)(3) ` +
+        `(as amended by CMS-9897-F) requires an attestation of the representative's authority ` +
+        `before IDR initiation.`,
+      attestationId: null,
+    };
+  }
+  const { delegationAttestations, submitterClients } = await import("../../drizzle/schema-submitter");
+  const rows = await db
+    .select()
+    .from(delegationAttestations)
+    .where(eq(delegationAttestations.id, dispute.delegationAttestationId))
+    .limit(1);
+  const att = rows[0];
+  if (!att) {
+    return {
+      blocked: true,
+      detail: `Bound delegation attestation ${dispute.delegationAttestationId} does not exist (fail-closed).`,
+      attestationId: dispute.delegationAttestationId,
+    };
+  }
+  if (att.submitterClientId !== dispute.submitterClientId) {
+    return {
+      blocked: true,
+      detail: `Bound attestation ${att.id} belongs to submitter client ${att.submitterClientId}, not ${dispute.submitterClientId} (fail-closed).`,
+      attestationId: att.id,
+    };
+  }
+  // Scope must cover IDR submission.
+  if (att.scope !== "idr" && att.scope !== "both") {
+    return {
+      blocked: true,
+      detail: `Attestation ${att.id} scope "${att.scope}" does not cover IDR submission.`,
+      attestationId: att.id,
+    };
+  }
+  if (att.status !== "active" || att.revokedAt) {
+    return {
+      blocked: true,
+      detail: `Attestation ${att.id} is ${att.revokedAt ? "revoked" : att.status}; IDR initiation blocked.`,
+      attestationId: att.id,
+    };
+  }
+  if (att.effectiveFrom && now < new Date(att.effectiveFrom)) {
+    return {
+      blocked: true,
+      detail: `Attestation ${att.id} is not yet effective (effectiveFrom ${new Date(att.effectiveFrom).toISOString().slice(0, 10)}).`,
+      attestationId: att.id,
+    };
+  }
+  if (att.expiresAt && now > new Date(att.expiresAt)) {
+    return {
+      blocked: true,
+      detail: `Attestation ${att.id} expired ${new Date(att.expiresAt).toISOString().slice(0, 10)}; IDR initiation blocked.`,
+      attestationId: att.id,
+    };
+  }
+  // The client link itself must still be active.
+  const links = await db
+    .select()
+    .from(submitterClients)
+    .where(eq(submitterClients.id, dispute.submitterClientId))
+    .limit(1);
+  const link = links[0];
+  if (!link || link.status !== "active") {
+    return {
+      blocked: true,
+      detail: `Submitter client link ${dispute.submitterClientId} is ${link ? link.status : "missing"}; delegation is not active.`,
+      attestationId: att.id,
+    };
+  }
+  return {
+    blocked: false,
+    detail: `Valid delegation attestation ${att.id} (scope ${att.scope}) covers IDR initiation.`,
+    attestationId: att.id,
+  };
 }
