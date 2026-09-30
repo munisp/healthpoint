@@ -32,6 +32,8 @@ import { adminTotpRouter } from "./auth/totp-admin";
 import { submitterRouter } from "./routers/submitter";
 // phase17 additions (EHR extraction staging + eligibility scoring)
 import { practiceAuditRouter } from "./routers/practice-audit";
+// phase17-lh addition (lakehouse read-back analytics with honest postgres fallback)
+import { lakehouseAnalyticsRouter } from "./routers/lakehouse-analytics";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -55,7 +57,9 @@ export const rootRouter = mergeRouters(
   // phase16 additions (third-party submitter / delegated representative)
   router({ submitter: submitterRouter }),
   // phase17 additions (practice claims staging + deterministic eligibility scoring)
-  router({ practiceAudit: practiceAuditRouter })
+  router({ practiceAudit: practiceAuditRouter }),
+  // phase17-lh addition (lakehouse analytics: lakehouse when configured, honest postgres_fallback otherwise)
+  router({ lakehouseAnalytics: lakehouseAnalyticsRouter })
 );
 
 export type RootRouter = typeof rootRouter;
