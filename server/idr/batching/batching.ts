@@ -26,6 +26,12 @@
  *    Sources:
  *      https://www.cms.gov/files/document/federal-idr-operations-implementation-timeline.pdf
  *      https://www.cms.gov/nosurprises/notices
+ *  - Phase 16: CMS-9897-F RELATEDNESS criteria for ONPs beginning on/after
+ *    2026-11-01 — items are batchable when related via (1) a single patient
+ *    encounter billed on the same claim form, (2) the same or a comparable
+ *    service code, or (3) for anesthesiology/radiology/pathology/laboratory,
+ *    service codes in the same Category I CPT code range. Pre-effective-date
+ *    behavior (identical service code) is unchanged.
  *
  * FAIL-CLOSED: unknown/ambiguous input (missing provider/payer/service-code
  * identifiers, missing dates of service, or a missing ONP start date) resolves
@@ -51,15 +57,35 @@ export interface LineItemInput {
   qualifiedIdrItem: boolean;
   /** Date of service (UTC). Required for criterion (D). */
   dateOfService?: Date;
+  /**
+   * CMS-9897-F relatedness criterion (1): items furnished to a single patient
+   * during a single patient encounter (on one or more consecutive dates of
+   * service) and billed on the same claim form. Optional; only evaluated for
+   * ONPs beginning on/after 2026-11-01.
+   */
+  patientEncounterId?: string;
+  /** Claim form identifier the item was billed on (with patientEncounterId). */
+  claimFormId?: string;
 }
 
 export interface BatchEligibilityOptions {
   /**
    * Date the open negotiation period for this dispute begins. Drives which
-   * line-item cap applies (25 before 2026-11-01, 50 on/after). If omitted,
-   * fail-closed to the legacy 25-item cap.
+   * line-item cap applies (25 before 2026-11-01, 50 on/after) AND which
+   * relatedness regime applies (legacy identical-service-code before
+   * 2026-11-01; the three CMS-9897-F relatedness criteria on/after). If
+   * omitted, fail-closed to the legacy 25-item cap and legacy relatedness.
    */
   openNegotiationNoticeDate?: Date;
+  /**
+   * Configurable "today" injection for tests/clock control. Only consulted
+   * when openNegotiationNoticeDate is omitted; the regime still fails closed
+   * to legacy behavior unless `now` itself is on/after 2026-11-01 AND the
+   * caller explicitly opts in via useNowFallback.
+   */
+  now?: Date;
+  /** When true and ONP date omitted, use `now` for regime determination. */
+  useNowFallback?: boolean;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -82,6 +108,90 @@ export const BATCHING_CITATIONS = [
 export const BATCH_CAP_50_EFFECTIVE = "2026-11-01";
 export const LEGACY_BATCH_CAP = 25;
 export const AMENDED_BATCH_CAP = 50;
+
+/**
+ * CMS-9897-F Category I CPT code ranges for anesthesiology, radiology,
+ * pathology, and laboratory services — relatedness criterion (3) for ONPs
+ * beginning on/after 2026-11-01.
+ * Source: AMA CPT Category I section ranges as applied by CMS-9897-F.
+ */
+export const CPT_CATEGORY_I_RELATEDNESS_RANGES: Array<{ name: string; from: number; to: number }> = [
+  { name: "anesthesiology", from: 100, to: 1999 },       // 00100–01999
+  { name: "radiology", from: 70010, to: 79999 },         // 70010–79999
+  { name: "pathology_laboratory", from: 80047, to: 89398 }, // 80047–89398
+];
+
+/** True when `code` is a numeric Category I CPT code inside one of the ranges. */
+export function cptRelatednessRangeName(code: string): string | null {
+  const m = /^(\d{5})/.exec((code ?? "").trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  const hit = CPT_CATEGORY_I_RELATEDNESS_RANGES.find(r => n >= r.from && n <= r.to);
+  return hit ? hit.name : null;
+}
+
+/** Regime for an ONP date (or injected fallback clock): amended on/after 2026-11-01. */
+export function batchingRegime(
+  openNegotiationNoticeDate: Date | undefined,
+  opts?: { now?: Date; useNowFallback?: boolean }
+): { amended: boolean; basis: string } {
+  if (openNegotiationNoticeDate) {
+    const day = isoDay(openNegotiationNoticeDate);
+    return {
+      amended: day >= BATCH_CAP_50_EFFECTIVE,
+      basis: `ONP begins ${day} (${day >= BATCH_CAP_50_EFFECTIVE ? "on/after" : "before"} ${BATCH_CAP_50_EFFECTIVE}).`,
+    };
+  }
+  if (opts?.useNowFallback) {
+    const now = opts.now ?? new Date();
+    const day = isoDay(now);
+    return {
+      amended: day >= BATCH_CAP_50_EFFECTIVE,
+      basis: `No ONP start date supplied; caller opted into injected clock ${day} (${day >= BATCH_CAP_50_EFFECTIVE ? "on/after" : "before"} ${BATCH_CAP_50_EFFECTIVE}).`,
+    };
+  }
+  return {
+    amended: false,
+    basis: `No ONP start date supplied; failing closed to the legacy (pre-CMS-9897-F) batching regime.`,
+  };
+}
+
+/**
+ * CMS-9897-F relatedness (45 CFR 149.510(c)(4) as amended): line items are
+ * batchable when related via ANY of —
+ *  (1) single patient encounter, consecutive dates of service, same claim form;
+ *  (2) same service code or a comparable code under a different procedural
+ *      code system (comparable cross-system codes are NOT inferable from the
+ *      codes alone and must be resolved upstream — fail closed);
+ *  (3) anesthesiology/radiology/pathology/laboratory items in the same
+ *      Category I CPT code range.
+ * Returns the satisfied criterion labels; empty when unrelated.
+ */
+export function relatednessSatisfiedBy(items: LineItemInput[]): string[] {
+  const satisfied: string[] = [];
+  // (1) same patient encounter on the same claim form.
+  const encounterKeys = new Set(
+    items.map(i =>
+      i.patientEncounterId && i.claimFormId
+        ? `${i.patientEncounterId}|${i.claimFormId}`
+        : i.patientEncounterId ?? null
+    )
+  );
+  if (!encounterKeys.has(null) && encounterKeys.size === 1) {
+    satisfied.push("(1) same patient encounter on the same claim form");
+  }
+  // (2) same service code.
+  const codes = new Set(items.map(i => (i.serviceCode ?? "").trim().toUpperCase()));
+  if (!codes.has("") && codes.size === 1) {
+    satisfied.push("(2) same service code");
+  }
+  // (3) same Category I CPT range for anesthesia/radiology/pathology/lab.
+  const ranges = new Set(items.map(i => cptRelatednessRangeName(i.serviceCode)));
+  if (!ranges.has(null) && ranges.size === 1) {
+    satisfied.push(`(3) same Category I CPT range (${[...ranges][0]}) — 45 CFR 149.510(c)(4) as amended by CMS-9897-F`);
+  }
+  return satisfied;
+}
 
 /** Criterion (D): batched items must be furnished within a 30-business-day period. */
 export const BATCH_SERVICE_WINDOW_BUSINESS_DAYS = 30;
@@ -148,7 +258,10 @@ export function evaluateBatchEligibility(
   }
 
   // ── Cap check (fail closed; effective-dated) ────────────────────────────
-  const { cap, basis } = applicableBatchCap(opts.openNegotiationNoticeDate, opts.env ?? process.env);
+  const effectiveOnpDate =
+    opts.openNegotiationNoticeDate ??
+    (opts.useNowFallback ? opts.now ?? new Date() : undefined);
+  const { cap, basis } = applicableBatchCap(effectiveOnpDate, opts.env ?? process.env);
   appliedCriteria.push(basis);
   if (items.length > cap) {
     failures.push(
@@ -184,17 +297,38 @@ export function evaluateBatchEligibility(
   }
   appliedCriteria.push("(B) Same group health plan or health insurance issuer (or FEHB carrier) — 45 CFR 149.510(c)(4)(i)(B).");
 
-  // ── Criterion (C): same or similar item or service by service code ──────
-  const codeKeys = new Set(items.map(i => (i.serviceCode ?? "").trim().toUpperCase()));
-  if (codeKeys.has("")) {
-    failures.push("Criterion (C) fail-closed: at least one line item lacks a service code.");
-  } else if (codeKeys.size > 1) {
-    failures.push(
-      "Criterion (C) failed: line items are not billed under the same service code. " +
-        "(Comparable codes / same Category I CPT code range are not inferable from codes alone and must be resolved upstream.)"
+  // ── Criterion (C): relatedness — legacy identical-code pre-2026-11-01;
+  //    CMS-9897-F three-criteria regime on/after ────────────────────────────
+  const regime = batchingRegime(opts.openNegotiationNoticeDate, {
+    now: opts.now,
+    useNowFallback: opts.useNowFallback,
+  });
+  if (regime.amended) {
+    const satisfied = relatednessSatisfiedBy(items);
+    if (satisfied.length === 0) {
+      failures.push(
+        "Relatedness failed (CMS-9897-F regime): line items are related by none of " +
+          "(1) single patient encounter on the same claim form, (2) same/comparable " +
+          "service code, or (3) same Category I CPT range for anesthesiology, " +
+          "radiology, pathology, or laboratory services (45 CFR 149.510(c)(4) as amended). " +
+          regime.basis
+      );
+    }
+    appliedCriteria.push(
+      `CMS-9897-F relatedness (any of (1) patient encounter / (2) same or comparable code / (3) same Category I CPT range) — 45 CFR 149.510(c)(4) as amended. ${regime.basis} Satisfied: ${satisfied.length ? satisfied.join("; ") : "none"}.`
     );
+  } else {
+    const codeKeys = new Set(items.map(i => (i.serviceCode ?? "").trim().toUpperCase()));
+    if (codeKeys.has("")) {
+      failures.push("Criterion (C) fail-closed: at least one line item lacks a service code.");
+    } else if (codeKeys.size > 1) {
+      failures.push(
+        "Criterion (C) failed: line items are not billed under the same service code. " +
+          "(Comparable codes / same Category I CPT code range are not inferable from codes alone and must be resolved upstream.)"
+      );
+    }
+    appliedCriteria.push(`(C) Same or similar item or service by service code — 45 CFR 149.510(c)(4)(i)(C) (legacy regime). ${regime.basis}`);
   }
-  appliedCriteria.push("(C) Same or similar item or service by service code — 45 CFR 149.510(c)(4)(i)(C).");
 
   // ── Criterion (D): furnished within the same 30-business-day period ─────
   if (items.some(i => !(i.dateOfService instanceof Date) || Number.isNaN(i.dateOfService.getTime()))) {
