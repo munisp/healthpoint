@@ -49,6 +49,23 @@ export interface DisputeInput {
    * SUBMISSION_STRICT=1; warnings remain non-blocking otherwise.
    */
   strictMode?: boolean;
+  /**
+   * Phase 16 / CMS-9897-F: third-party representative block (45 CFR
+   * 149.510(b)(2)(ii)(A)(3)). When ANY representative field is supplied, the
+   * package requires the complete set (fail-closed honesty: a partial
+   * representative block is incomplete, not silently dropped).
+   */
+  representative?: {
+    legalBusinessName?: string;
+    contactName?: string;
+    email?: string;
+    phone?: string;
+    mailingAddress?: string;
+    /** Reference to the stored delegation attestation artifact (sha256). */
+    attestationRef?: string;
+    /** True when the attestation allocates admin-fee debt to the representative. */
+    adminFeeDebtAccepted?: boolean;
+  };
   now?: Date;
 }
 
@@ -130,6 +147,35 @@ export function buildSubmissionPackage(input: DisputeInput): SubmissionPackage {
   });
 
   const missing = checklist.filter((c) => c.required && !c.present).map((c) => c.label);
+
+  // ── Phase 16: third-party representative block (45 CFR 149.510(b)(2)(ii)(A)(3))
+  // When the dispute was filed by a delegated representative, the notice must
+  // name the representative and carry the authority attestation. Fail-closed:
+  // any supplied representative field makes the whole block required.
+  const rep = input.representative;
+  const repElements: Array<{ key: string; label: string; value: string | null }> = rep
+    ? [
+        { key: "representativeLegalBusinessName", label: "Representative legal business name", value: fmt(rep.legalBusinessName) },
+        { key: "representativeContactName", label: "Representative contact name", value: fmt(rep.contactName) },
+        { key: "representativeEmail", label: "Representative email", value: fmt(rep.email) },
+        { key: "representativePhone", label: "Representative phone", value: fmt(rep.phone) },
+        { key: "representativeMailingAddress", label: "Representative mailing address", value: fmt(rep.mailingAddress) },
+        { key: "representativeAttestationRef", label: "Representative authority attestation reference", value: fmt(rep.attestationRef) },
+      ]
+    : [];
+  for (const e of repElements) {
+    checklist.push({ key: e.key, label: e.label, required: true, present: e.value !== null, value: e.value });
+    if (e.value === null) missing.push(e.label);
+  }
+  if (rep && typeof rep.adminFeeDebtAccepted === "boolean") {
+    checklist.push({
+      key: "representativeAdminFeeDebtAccepted",
+      label: "Representative admin-fee debt allocation (45 CFR 149.510(b)(2)(ii)(A)(3))",
+      required: true,
+      present: true,
+      value: String(rep.adminFeeDebtAccepted),
+    });
+  }
 
   const warnings: string[] = [];
 
