@@ -392,6 +392,21 @@ async function startServer() {
     }
   );
 
+  // ── Stripe billing webhook (Phase 20-C) ───────────────────────────────────
+  // Must stay BEFORE express.json so the HMAC signature covers the exact
+  // bytes received (settlement-callback precedent; coexists with the Phase 19
+  // bulk-upload raw mount above). Raw only; no auth cookies — Stripe is the
+  // caller and the signature IS the authentication. Fail-closed: 503 when
+  // STRIPE_* env is absent, 401 on any signature failure.
+  app.post(
+    "/api/billing/stripe-webhook",
+    express.raw({ type: "application/json", limit: "256kb" }),
+    async (req: Request, res: Response) => {
+      const { stripeWebhookHandler } = await import("../billing/stripe-webhook");
+      await stripeWebhookHandler(req, res);
+    }
+  );
+
   // ── Body parsers ──────────────────────────────────────────────────────────
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
