@@ -80,3 +80,102 @@ describe("parse835", () => {
     expect(x12AmountToCents("abc")).toBeNull();
   });
 });
+
+// ── Phase 20: BPR/TRN payment-instrument header capture ─────────────────────
+import { parse835Full } from "./remittance835";
+
+const CLP_BLOCK = [
+  "N1*PR*AETNA HEALTH~",
+  "CLP*CLM-1*2*4200.00*900.00**MB*PCN1*11*1~",
+  "SVC*HC:99285*4200.00*900.00**1~",
+  "SE*10*0001~",
+].join("\n");
+
+function withHeader(...headerSegs: string[]): string {
+  return ["ISA*00*          *00*          *ZZ*A*ZZ*B*260901*1200*^*00501*000000905*1*T*:~",
+    "ST*835*0001*005010X221A1~", ...headerSegs, CLP_BLOCK].join("\n");
+}
+
+describe("parse835Full (Phase 20 header)", () => {
+  it("captures BPR CHK + TRN and propagates trace/method to lines", () => {
+    const r = parse835Full(withHeader(
+      "BPR*I*900.00*C*CHK*CCP*01*999999999*DA*123456*1999999999**01*111111111*DA*987654*20260905~",
+      "TRN*1*CHK-778812*1999999999~",
+    ));
+    expect(r.header.totalPaymentCents).toBe(90000);
+    expect(r.header.paymentMethodCode).toBe("CHK");
+    expect(r.header.paymentMethod).toBe("check");
+    expect(r.header.paymentEffectiveDate).toBe("2026-09-05");
+    expect(r.header.paymentTraceNumber).toBe("CHK-778812");
+    expect(r.header.traceOriginatorId).toBe("1999999999");
+    expect(r.lines[0].paymentTraceNumber).toBe("CHK-778812");
+    expect(r.lines[0].paymentMethodCode).toBe("CHK");
+  });
+
+  it("maps ACH → ach, NON → nonpayment, unknown (FWT) → other", () => {
+    const ach = parse835Full(withHeader("BPR*I*10.00*C*ACH*CCP*01*1*DA*1*1**01*1*DA*1*20260901~"));
+    expect(ach.header.paymentMethod).toBe("ach");
+    const non = parse835Full(withHeader("BPR*I*0*C*NON*CCP*01*1*DA*1*1**01*1*DA*1*20260901~"));
+    expect(non.header.paymentMethod).toBe("nonpayment");
+    expect(non.header.totalPaymentCents).toBe(0);
+    const fwt = parse835Full(withHeader("BPR*I*10.00*C*FWT*CCP*01*1*DA*1*1**01*1*DA*1*20260901~"));
+    expect(fwt.header.paymentMethodCode).toBe("FWT");
+    expect(fwt.header.paymentMethod).toBe("other");
+  });
+
+  it("returns all-null header when BPR/TRN absent; lines still parse", () => {
+    const r = parse835Full(withHeader());
+    expect(r.header.totalPaymentCents).toBeNull();
+    expect(r.header.paymentMethodCode).toBeNull();
+    expect(r.header.paymentMethod).toBeNull();
+    expect(r.header.paymentTraceNumber).toBeNull();
+    expect(r.header.paymentEffectiveDate).toBeNull();
+    expect(r.lines).toHaveLength(1);
+    expect(r.lines[0].paymentTraceNumber).toBeNull();
+    expect(r.lines[0].paymentMethodCode).toBeNull();
+  });
+
+  it("malformed BPR02 ('ABC') → null total, no throw", () => {
+    const r = parse835Full(withHeader("BPR*I*ABC*C*CHK*CCP*01*1*DA*1*1**01*1*DA*1*20260901~"));
+    expect(r.header.totalPaymentCents).toBeNull();
+    expect(r.header.paymentMethod).toBe("check");
+    expect(r.lines).toHaveLength(1);
+  });
+
+  it("multiple BPR segments → first wins, later tolerated-ignored", () => {
+    const r = parse835Full(withHeader(
+      "BPR*I*100.00*C*CHK*CCP*01*1*DA*1*1**01*1*DA*1*20260901~",
+      "BPR*I*999.00*C*ACH*CCP*01*1*DA*1*1**01*1*DA*1*20260902~",
+    ));
+    expect(r.header.totalPaymentCents).toBe(10000);
+    expect(r.header.paymentMethod).toBe("check");
+    expect(r.header.paymentEffectiveDate).toBe("2026-09-01");
+  });
+
+  it("TRN with empty TRN02 → trace null, parse continues", () => {
+    const r = parse835Full(withHeader("TRN*1~"));
+    expect(r.header.paymentTraceNumber).toBeNull();
+    expect(r.lines).toHaveLength(1);
+  });
+
+  it("invalid BPR16 date → null (never throws)", () => {
+    const r = parse835Full(withHeader("BPR*I*100.00*C*CHK*CCP*01*1*DA*1*1**01*1*DA*1*NOTADATE~"));
+    expect(r.header.paymentEffectiveDate).toBeNull();
+  });
+
+  it("fuzz: random BPR/TRN element content never throws on otherwise-valid 835", () => {
+    const junk = ["", "*", "~~~", "ABC!@#", "9".repeat(500), "20261399", "0.0.0.0"];
+    for (let i = 0; i < 40; i++) {
+      const a = junk[i % junk.length], b = junk[(i * 3 + 1) % junk.length], c = junk[(i * 7 + 2) % junk.length];
+      const r = parse835Full(withHeader(`BPR*I*${a}*C*${b}*CCP*01*1*DA*1*1**01*1*DA*1*${c}~`, `TRN*1*${a}*${b}~`));
+      expect(r.lines.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("parse835 delegates to parse835Full().lines (backward compat)", () => {
+    const viaFull = parse835Full(FIXTURE_835);
+    expect(parse835(FIXTURE_835)).toEqual(viaFull.lines);
+    expect(viaFull.header.paymentMethod).toBe("ach");
+    expect(viaFull.header.paymentTraceNumber).toBe("835TRACE001");
+  });
+});
