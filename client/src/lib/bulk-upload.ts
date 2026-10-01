@@ -1,0 +1,1 @@
+$(cat /mnt/agents/output/wave-fe/client/src/lib/bulk-upload.ts)
