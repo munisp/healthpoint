@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import type { SubmitterClient } from "./SubmitterConsole";
+import { stashProposals, type CheckMatchProposal } from "./ChecksTab";
 
 const SERVICE_TYPES = [
   "emergency_medicine", "anesthesiology", "pathology", "radiology", "neonatology",
@@ -217,6 +218,7 @@ function Remittance835({ submitterOrgId }: { submitterOrgId: string }) {
   const [content, setContent] = useState("");
   const [fileId, setFileId] = useState<string | null>(null);
   const [onlyEligible, setOnlyEligible] = useState(false);
+  const [proposalNotice, setProposalNotice] = useState<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const ingest = trpc.submitter.ingest835.useMutation({
@@ -224,6 +226,15 @@ function Remittance835({ submitterOrgId }: { submitterOrgId: string }) {
       setFileId(r.fileId);
       if (r.duplicate) toast.info(`Duplicate content — reusing existing file (${r.lineCount} lines)`);
       else toast.success(`Parsed ${r.lineCount} remittance lines, ${r.mapped} mapped to disputes`);
+      // Phase 20-FE: proposals to match already-posted checks against this
+      // file (advisory; confirmed by a human on the Check Payments tab).
+      const proposals = (r as { proposedCheckMatches?: CheckMatchProposal[] }).proposedCheckMatches ?? [];
+      if (proposals.length) {
+        stashProposals(submitterOrgId, proposals);
+        setProposalNotice(proposals.length);
+      } else {
+        setProposalNotice(null);
+      }
     },
     onError: e => toast.error(e.message),
   });
@@ -256,6 +267,14 @@ function Remittance835({ submitterOrgId }: { submitterOrgId: string }) {
           onClick={() => ingest.mutate({ orgId: submitterOrgId, fileName: fileName.trim(), content })}>
           Ingest 835
         </Button>
+
+        {proposalNotice !== null && (
+          <p className="text-xs rounded border border-blue-200 bg-blue-50 text-blue-800 p-2" role="status">
+            This file produced {proposalNotice} proposal{proposalNotice === 1 ? "" : "s"} to match previously
+            recorded check payments. Review and confirm them on the <strong>Check Payments</strong> tab — matches
+            are never applied automatically.
+          </p>
+        )}
 
         {fileId && (
           <div className="space-y-2">
