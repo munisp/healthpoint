@@ -136,6 +136,17 @@ export const remittance835Files = pgTable(
     lineCount: integer("lineCount").notNull().default(0),
     status: varchar("status", { length: 16 }).notNull().default("received"),
     parseError: text("parseError"),
+    // ── Phase 20: BPR/TRN payment-instrument header capture ──
+    /** BPR04 raw payment method code (CHK/ACH/NON/...). */
+    paymentMethodCode: varchar("paymentMethodCode", { length: 8 }),
+    /** Normalized bucket: check | ach | other | nonpayment. */
+    paymentMethod: varchar("paymentMethod", { length: 16 }),
+    /** BPR02 total actual provider payment, integer cents. */
+    totalPaymentCents: integer("totalPaymentCents"),
+    /** TRN02 check/EFT trace number (payer's payment reference). */
+    paymentTraceNumber: varchar("paymentTraceNumber", { length: 64 }),
+    /** BPR16 payment effective date (YYYY-MM-DD). */
+    paymentEffectiveDate: varchar("paymentEffectiveDate", { length: 10 }),
   },
   (t) => [
     uniqueIndex("remittance_835_files_org_hash_idx").on(t.orgId, t.contentSha256),
@@ -168,12 +179,16 @@ export const remittanceLines = pgTable(
     idrEligibleFlag: boolean("idrEligibleFlag").notNull().default(false),
     /** Dispute this line was mapped to (claimId match), when applicable. */
     mappedDisputeId: varchar("mappedDisputeId", { length: 64 }),
+    // ── Phase 20: propagated header payment context ──
+    paymentMethodCode: varchar("paymentMethodCode", { length: 8 }),
+    paymentTraceNumber: varchar("paymentTraceNumber", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => [
     index("remittance_lines_file_idx").on(t.fileId),
     index("remittance_lines_claim_idx").on(t.claimId),
     index("remittance_lines_mapped_idx").on(t.mappedDisputeId),
+    index("remittance_lines_trace_idx").on(t.paymentTraceNumber),
   ]
 );
 export type RemittanceLine = typeof remittanceLines.$inferSelect;
@@ -207,6 +222,18 @@ export const submitterInvoices = pgTable(
     issuedAt: timestamp("issuedAt"),
     paidAt: timestamp("paidAt"),
     voidedAt: timestamp("voidedAt"),
+    // ── Phase 20-C: Stripe Checkout collection (additive) ──
+    // paidAt above already exists (Phase 18-BE); the verified Stripe webhook
+    // WRITES to it — this phase does not re-add it.
+    /** Stripe Checkout Session id (cs_…) when Stripe collection was used. */
+    stripeSessionId: varchar("stripeSessionId", { length: 128 }),
+    /** Reserved/null under the Checkout design (stripeInvoiceId, in_…) — kept
+     *  so a future Stripe-Invoicing transport needs no schema change. */
+    stripeInvoiceId: varchar("stripeInvoiceId", { length: 128 }),
+    /** Last VERIFIED Stripe payment state: unpaid | paid | expired | canceled.
+     *  Set ONLY from signature-verified webhooks or a live session retrieve —
+     *  never inferred locally. Null when Stripe collection was never used. */
+    stripeStatus: varchar("stripeStatus", { length: 24 }),
     createdByUserId: varchar("createdByUserId", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
@@ -215,6 +242,7 @@ export const submitterInvoices = pgTable(
     uniqueIndex("submitter_invoices_number_idx").on(t.submitterClientId, t.invoiceNumber),
     index("submitter_invoices_client_idx").on(t.submitterClientId),
     index("submitter_invoices_status_idx").on(t.status),
+    index("submitter_invoices_stripe_session_idx").on(t.stripeSessionId),
   ]
 );
 export type SubmitterInvoice = typeof submitterInvoices.$inferSelect;
@@ -238,3 +266,66 @@ export const submitterInvoiceLines = pgTable(
   ]
 );
 export type SubmitterInvoiceLine = typeof submitterInvoiceLines.$inferSelect;
+
+// ─── Phase 20-A: manual check postings (paper check bookkeeping) ─────────────
+/**
+ * Manual check postings are BOOKKEEPING RECORDS ONLY (honesty label 5.3.4):
+ * PAYMENT_EXECUTION_MODE remains disabled/sandbox — no payment is initiated
+ * and no TigerBeetle ledger entry is written. Lifecycle:
+ * posted → matched → deposited → reconciled. The "reconciled" state is
+ * reserved for a later back-office close-out (bank statement confirmation);
+ * Phase 20 exposes it in the enum but NO public procedure transitions to it.
+ */
+export const CHECK_POSTING_STATUS = ["posted", "matched", "deposited", "reconciled"] as const;
+export type CheckPostingStatus = (typeof CHECK_POSTING_STATUS)[number];
+
+export const manualCheckPostings = pgTable(
+  "manual_check_postings",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    orgId: varchar("orgId", { length: 64 }).notNull(),
+    checkNumber: varchar("checkNumber", { length: 64 }).notNull(),
+    amountCents: integer("amountCents").notNull(),
+    payerName: varchar("payerName", { length: 255 }).notNull(),
+    /** YYYY-MM-DD — paper artifact date. */
+    receivedDate: varchar("receivedDate", { length: 10 }).notNull(),
+    /** Set by markCheckDeposited. */
+    depositDate: varchar("depositDate", { length: 10 }),
+    matchedRemittanceLineIds: jsonb("matchedRemittanceLineIds").$type<string[]>().notNull().default([]),
+    /** Set when matched against an 835 carrying TRN02 — links paper to ERA. */
+    matchedPaymentTraceNumber: varchar("matchedPaymentTraceNumber", { length: 64 }),
+    status: varchar("status", { length: 16 }).notNull().default("posted"),
+    createdBy: varchar("createdBy", { length: 64 }).notNull(),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("manual_check_postings_org_idx").on(t.orgId),
+    uniqueIndex("manual_check_postings_org_check_idx").on(t.orgId, t.checkNumber, t.payerName),
+  ]
+);
+export type ManualCheckPosting = typeof manualCheckPostings.$inferSelect;
+
+// ─── Phase 20-C: Stripe Checkout collection for platform invoices ────────────
+/**
+ * Fee policy (user-locked): the platform ABSORBS Stripe processing fees;
+ * ACH (us_bank_account) is the preferred rail; there is deliberately NO
+ * surcharge/pass-through flag anywhere in this schema or API.
+ */
+
+export const stripeWebhookEvents = pgTable(
+  "stripe_webhook_events",
+  {
+    /** Stripe event id (evt_…) — primary key, the idempotency key. */
+    id: varchar("id", { length: 128 }).primaryKey(),
+    type: varchar("type", { length: 64 }).notNull(),
+    /** Full verified event payload for audit/replay forensics. */
+    payload: jsonb("payload").notNull(),
+    /** Null until the handler committed; duplicate deliveries no-op. */
+    processedAt: timestamp("processedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [index("stripe_webhook_events_type_idx").on(t.type)]
+);
+export type StripeWebhookEvent = typeof stripeWebhookEvents.$inferSelect;
