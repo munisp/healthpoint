@@ -162,6 +162,12 @@ export const disputes = pgTable(
     // is set on the batched dispute itself (null for single disputes).
     batchId: varchar("batchId", { length: 64 }),
     batchedLineItemCount: integer("batchedLineItemCount"),
+    // Phase 20-B: CMS IDR Gateway connector bookkeeping. The connector is an
+    // ASSUMPTION-based scaffold (CMS has published no M2M Gateway API spec as
+    // of 2026-09); both columns stay null unless a configured connector
+    // submits/polls — the assisted-manual portal-package flow is unchanged.
+    gatewaySubmissionId: varchar("gateway_submission_id", { length: 128 }),
+    gatewayStatus: varchar("gateway_status", { length: 32 }),
     createdBy: varchar("createdBy", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow(),
     updatedAt: timestamp("updatedAt").defaultNow(),
