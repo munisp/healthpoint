@@ -1,6 +1,7 @@
 /**
  * /submitter — Phase16-FE third-party-submitter (delegated representative)
- * console. Tabs: Clients, Attestations, Submit, Analytics.
+ * console. Tabs: Clients, Attestations, Submit, Bulk Upload, Quarantine,
+ * Check Payments, Billing, Analytics.
  *
  * Statutory basis surfaced in the UI (matching server/routers/submitter.ts):
  * CMS-9897-F / 45 CFR 149.510(b)(2)(ii)(A)(3) — a third party representing a
@@ -23,6 +24,10 @@ import ClientsTab from "./ClientsTab";
 import AttestationsTab from "./AttestationsTab";
 import SubmitTab from "./SubmitTab";
 import AnalyticsTab from "./AnalyticsTab";
+import BulkUploadTab from "./BulkUploadTab";
+import QuarantineTab from "./QuarantineTab";
+import ChecksTab from "./ChecksTab";
+import BillingTab from "./BillingTab";
 
 /** W7-3 first-run hints (dismissal persisted in localStorage). */
 const TOUR_STEPS = [
@@ -30,6 +35,8 @@ const TOUR_STEPS = [
   { title: "Clients", body: "Invite provider orgs to delegate submission authority, and track each delegation link's status." },
   { title: "Attestations", body: "Issue the authority attestation required by 45 CFR 149.510(b)(2)(ii)(A)(3), verify its tamper-evident hash, or revoke it." },
   { title: "Submit & Analytics", body: "Create delegated disputes, ingest 835 remittances to find IDR-eligible lines, and review per-client economics." },
+  { title: "Bulk Upload & Quarantine", body: "Upload large 837/835/CSV/NDJSON files in resumable chunks; rows that fail validation wait in Quarantine for your repair — nothing is silently dropped." },
+  { title: "Check Payments & Billing", body: "Record incoming payer checks (bookkeeping only — no money moves here), confirm server-proposed matches to 835 remittances, and send invoices with fee-free ACH payment links." },
 ];
 
 export type SubmitterClient = {
@@ -108,6 +115,10 @@ export default function SubmitterConsole() {
               <TabsTrigger value="clients">Clients</TabsTrigger>
               <TabsTrigger value="attestations">Attestations</TabsTrigger>
               <TabsTrigger value="submit">Submit</TabsTrigger>
+              <TabsTrigger value="bulk-upload">Bulk Upload</TabsTrigger>
+              <TabsTrigger value="quarantine">Quarantine</TabsTrigger>
+              <TabsTrigger value="checks">Check Payments</TabsTrigger>
+              <TabsTrigger value="billing">Billing</TabsTrigger>
               <TabsTrigger value="analytics">Analytics</TabsTrigger>
             </TabsList>
             <TabsContent value="clients">
@@ -118,6 +129,18 @@ export default function SubmitterConsole() {
             </TabsContent>
             <TabsContent value="submit">
               <SubmitTab submitterOrgId={selectedOrgId} clients={clients} />
+            </TabsContent>
+            <TabsContent value="bulk-upload">
+              <BulkUploadTab orgId={selectedOrgId} />
+            </TabsContent>
+            <TabsContent value="quarantine">
+              <QuarantineTab orgId={selectedOrgId} />
+            </TabsContent>
+            <TabsContent value="checks">
+              <ChecksTab orgId={selectedOrgId} />
+            </TabsContent>
+            <TabsContent value="billing">
+              <BillingTab clients={clients} />
             </TabsContent>
             <TabsContent value="analytics">
               <AnalyticsTab clients={clients} />
