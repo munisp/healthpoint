@@ -84,7 +84,7 @@ const NEXT_STEP_MAP: Record<string, { step: string; status: string; label: strin
   STEP_06_IDR_ENTITY_SELECTION: { step: "STEP_07_IDR_ENTITY_SELECTED", status: "idr_entity_selection", label: "Confirm Entity Selected" },
   STEP_07_IDR_ENTITY_SELECTED: { step: "STEP_08_ELIGIBILITY_REVIEW", status: "eligibility_review", label: "Begin Eligibility Review" },
   STEP_08_ELIGIBILITY_REVIEW: { step: "STEP_09_OFFER_SUBMISSION", status: "offer_submission", label: "Open Offer Submission" },
-  STEP_09_OFFER_SUBMISSION: { step: "STEP_10_QPA_DISCLOSURE", status: "offer_submission", label: "Disclose QPA" },
+  STEP_09_OFFER_SUBMISSION: { step: "STEP_10_QPA_DISCLOSURE", status: "qpa_disclosure", label: "Disclose QPA" },
   STEP_10_QPA_DISCLOSURE: { step: "STEP_11_ADDITIONAL_INFORMATION", status: "offer_submission", label: "Open Additional Info Period" },
   STEP_11_ADDITIONAL_INFORMATION: { step: "STEP_12_ARBITRATION_REVIEW", status: "under_arbitration", label: "Begin Arbitration Review" },
   STEP_12_ARBITRATION_REVIEW: { step: "STEP_13_DETERMINATION_ISSUED", status: "determination_issued", label: "Issue Determination" },
@@ -585,6 +585,38 @@ export default function DisputeDetail() {
               </CardHeader>
               <CardContent className="pt-0">
                 <ComplianceRail disputeId={dispute.id} />
+              </CardContent>
+            </Card>
+
+            {/* Phase 20-FE: CMS Gateway submission status. The gateway
+                columns (gateway_submission_id / gateway_status) are populated
+                only once the CMS Gateway integration delivers; until then the
+                card states that honestly instead of implying submission. */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <FileText size={14} className="text-indigo-500" />CMS Gateway Submission
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {(dispute as any).gatewaySubmissionId ? (
+                  <div className="space-y-1 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">Status</span>
+                      <span className="font-medium text-slate-700 capitalize">
+                        {String((dispute as any).gatewayStatus ?? "submitted").replace(/_/g, " ")}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-400 break-all">
+                      Submission ID: <code>{String((dispute as any).gatewaySubmissionId)}</code>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500">
+                    Not submitted via the CMS Gateway yet — pending CMS Gateway integration. This dispute is
+                    tracked on-platform; no federal portal submission has been recorded.
+                  </p>
+                )}
               </CardContent>
             </Card>
 
