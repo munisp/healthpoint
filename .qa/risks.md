@@ -29,3 +29,22 @@
   anything that writes/mutates shared state (provisioning Kafka topics,
   writing Permify relationships, creating real Keycloak realm data) needs
   explicit confirmation first.
+
+## Architecture observation: the "central" object-level authz registry is currently inert
+`server/authz-registry.ts` / `enforceObjectLevelAuthz` middleware
+(`server/_core/trpc.ts`) is documented as the central IDOR-protection
+layer, consulting a path→checker registry, with "unmapped paths
+default-allow with a once-per-path audit log line." Live testing this
+pass logged that exact default-allow line for EVERY protected path
+exercised (`disputes.getById`, `disputes.advance`, `authz.grantAccess`,
+`impersonation.start`, `admin.updateUserRole`, `apiKeys.create`,
+`admin.allDisputes`) — meaning this registry currently has ZERO
+checkers registered for any of them. Not currently exploitable: every
+path tested has its OWN inline authz check (e.g. `assertDisputeAccess`
+called directly in the procedure body), which is what's actually
+enforcing access — confirmed via extensive live testing this pass. But
+it means the "central" layer is doing nothing right now, and anyone
+relying on its existence as a safety net (rather than the per-procedure
+inline checks) would be wrong. Worth a follow-up decision: either
+populate the registry for real, or remove the apparatus so it stops
+looking like active protection.
