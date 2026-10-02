@@ -113,6 +113,15 @@ created two jobs with different `initiatedBy` owners.
 - Owner cancels their own job → **`{success: true}`**.
 Fixtures deleted and the test user's role restored afterward.
 
+## docIntelligence.get — PHI document-analysis IDOR, verified LIVE
+Same no-inline-fallback pattern as `bulkFhir.cancelJob`: `docIntelligence.get`
+reads a `document_analyses` row (containing OCR text/extracted fields —
+real PHI) with zero ownership check in the procedure itself; the
+registry's `nestedOwnerCheck` is the only protection. Live test: created
+two analysis rows with different owners, confirmed a non-owner is denied
+(`FORBIDDEN — "You do not own this document analysis"`) and the real
+owner succeeds. Fixtures deleted afterward.
+
 ## Code-reviewed only (not live-tested) — cdsHooksRouter.toggleStatus / fhirCache.list
 - `cdsHooksRouter.toggleStatus` — resolves through a nested ownership
   chain (hook→emrConnection→createdBy) before allowing the mutation.
@@ -120,7 +129,7 @@ Fixtures deleted and the test user's role restored afterward.
   a `disputeId` nor `emrConnectionId` filter, specifically to prevent an
   unscoped query from dumping every tenant's cached PHI at once.
 Both read as correct, fail-closed-by-construction from the source,
-following the same pattern just confirmed live twice now. Marking
+following the same pattern just confirmed live three times now. Marking
 UNVERIFIED-BY-EXECUTION rather than PASS since they weren't individually
 exercised this pass.
 
