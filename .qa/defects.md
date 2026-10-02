@@ -292,3 +292,78 @@ function in a catch for `LedgerIntegrityError` specifically, and on catch,
 write the same `settlement_reconciliations`/`settlement_exception_reviews`
 rows the amount/provider/transition-mismatch path already writes, with
 the ledger error's message as the `exceptionReason`.
+
+## DEFECT-008 — FOUND, NOT FIXED (P1 — SSRF, CWE-918)
+**Severity:** P1 (critical — server-side request forgery, exploitable by
+ANY authenticated user, not just admin)
+**Title:** Webhook URLs are never validated against internal/private
+targets; the server will fetch whatever URL a user registers, both
+on-demand (`webhooks.test`) and automatically on every matching dispute
+event (the real delivery path)
+**Evidence (live, both directions):**
+1. Registered a webhook as a plain authenticated user with
+   `url: "http://127.0.0.1:6379/"` (the local Redis port) — `Zod`'s
+   `z.string().url()` is the ONLY validation (`webhooks.create`,
+   `server/routers.ts` ~line 3066), which only checks URL *syntax*, not
+   destination. Creation succeeded with no warning. `webhooks.test`
+   then performed a real TCP connection to that internal port
+   (`statusCode: 0`, protocol mismatch — proof the connection was
+   actually attempted and reached, not rejected upfront).
+2. Registered a second webhook with
+   `url: "http://127.0.0.1:3000/api/health"` (the app's own internal
+   health endpoint) — `webhooks.test` returned **`{success: true,
+   statusCode: 200}`**: conclusive proof the server made a real,
+   successful internal HTTP request on the caller's behalf and reported
+   the live result back to them.
+3. Confirmed this is NOT limited to the on-demand `.test` button:
+   `server/webhook-dispatcher.ts`'s `dispatchWebhooksForEvent` — the
+   real, automatic delivery path triggered by every matching dispute
+   event — calls `fetch(webhook.url, ...)` (line 168) with the
+   identical absence of any URL validation. Worse than `.test`: this
+   path retries up to 5 times over an hour
+   (`WEBHOOK_RETRY_SCHEDULE_MS`) per event, automatically, for as long
+   as the webhook stays active — a persistent, recurring SSRF primitive
+   triggered by ordinary application activity (any dispute event the
+   registering user can see), not a one-shot action.
+**Root cause:** `webhooks.create`/`webhooks.update`'s Zod schema
+(`url: z.string().url()`) validates URL *syntax* only — scheme, host,
+and path well-formedness — with zero check against the URL's actual
+network destination (private/loopback/link-local ranges, cloud
+metadata endpoints, internal cluster service DNS names).
+**Impact:** Any authenticated user (the procedure is plain
+`protectedProcedure`, no admin gate) can make the server issue
+arbitrary HTTP requests to internal-only targets. Concretely, since
+this app deploys to DigitalOcean
+(`registry.digitalocean.com/talentgraph-auth/healthpoint`), a webhook
+pointed at DigitalOcean's metadata endpoint
+(`http://169.254.169.254/metadata/v1/...`) could potentially expose
+instance metadata; a webhook pointed at another in-cluster service's
+ClusterIP or `*.svc.cluster.local` name could reach internal
+APIs/admin endpoints that assume network-level isolation is their only
+protection (several of this cluster's own services — Keycloak admin
+API, Permify, internal DB ports — fall in that category per this
+session's own infrastructure notes). The response body/status/timing
+is echoed straight back to the requesting user via `webhooks.test`,
+making this a usable oracle, not just a blind probe.
+**Why not fixed:** Found via live SSRF testing enabled by the broader
+testing authorization this round; a correct fix needs a real allowlist/
+denylist design decision (block RFC 1918 + loopback + link-local +
+cloud metadata ranges at minimum, likely also DNS-rebinding protection
+if the check only happens once at creation time rather than at each
+fetch) rather than a quick patch, and should be applied consistently to
+both `webhooks.create`/`update`'s validation AND
+`webhook-dispatcher.ts`'s actual fetch call (validating only one would
+leave the other exploitable). Flagging for an explicit decision and
+fix rather than rushing a partial patch.
+**Suggested fix:** Add a shared `assertNotInternalUrl(url: string)`
+helper — resolve the hostname, reject if the resolved IP falls in any
+private/loopback/link-local/cloud-metadata range (and reject redirects
+to such ranges during actual delivery, not just the initial check) —
+called from `webhooks.create`, `webhooks.update`, AND as a final guard
+immediately before both `fetch()` call sites (`webhooks.test` and
+`webhook-dispatcher.ts`), since a TOCTOU gap between create-time
+validation and delivery-time DNS resolution (DNS rebinding) would
+otherwise still be exploitable even with create-time-only validation.
+**Cleanup:** Both test webhooks deleted from the local test DB after
+confirming; this was tested against the local dev server only, never
+the live cluster.

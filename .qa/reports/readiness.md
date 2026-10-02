@@ -7,14 +7,16 @@ concurrency, and a first slice of security testing.
 
 ## Can this platform be safely rolled out tomorrow?
 
-**Decision: GO WITH CONDITIONS**
+**Decision: GO WITH CONDITIONS — one condition is urgent, not optional**
 
 It already *is* rolled out — `healthpoint:20261002-1321` is live on
 `kind-newwave-dev`, serving real traffic, 2 replicas, zero downtime during
-this pass's deploy. The question that matters now is whether to keep
-treating it as production without further work. The answer is: yes for
-the paths this pass actually exercised with live evidence; no blanket
-claim beyond that.
+this pass's deploy. Everything below this point was true until this
+round of testing found **DEFECT-008**, a live, currently-exploitable P1
+SSRF (full writeup in `defects.md` and the "Critical: one open,
+currently-live vulnerability" section below) that changes the urgency
+of the "conditions" in this decision. This is not a "schedule it for next
+sprint" condition — it needs attention now.
 
 ### Evidence (what's actually been proven, not assumed)
 - **6 real defects found and fixed**, all verified live with before/after
@@ -72,21 +74,54 @@ claim beyond that.
   token) was tested end to end for the first time: redaction contract
   holds against a planted internal-notes marker, single-use and
   revocation are both really enforced, not just documented (4/4 PASS).
+- **Infrastructure failure modes (local) and performance baseline**:
+  Redis and Postgres outages both fail safe (no crash, no improper
+  access), with real, automatic, fast recovery. Redis outage carries a
+  real 10-13s latency penalty per request (not a defect, worth
+  knowing); Postgres outage surfaces as `401` rather than a 5xx
+  (misleading for incident response, not insecure). Load tested at a
+  sustainable rate: 100% success, single-digit-ms p50 on both a light
+  and a DB-reading endpoint; confirmed the app already correctly
+  handles the IP-based-rate-limit-behind-a-reverse-proxy problem via
+  Express `trust proxy` config.
 
-### Critical blockers: none found
-No P0s. No broken tenant isolation, no financial-integrity failure, no
-unrecoverable state found in anything actually tested.
+### Critical: one open, currently-live vulnerability
+**DEFECT-008 (P1 — SSRF, CWE-918) is open, unfixed, and live in
+production right now.** Any authenticated user — not admin-gated — can
+register a webhook URL and the server will fetch it with zero
+destination validation (Zod checks syntax only). Confirmed live, twice:
+a webhook pointed at an internal port triggered a real connection
+attempt; a second pointed at the app's own health endpoint got a real
+`200` back, proving the server made a genuine internal HTTP request on
+the caller's behalf. The real automatic delivery path
+(`webhook-dispatcher.ts`) has the identical gap — not just the
+on-demand `.test` button — with up to 5 automatic retries per event, so
+this is a persistent primitive, not a one-shot probe. **Checked for a
+compensating control and found none**: `kubectl get networkpolicy -n
+healthpoint` returns no resources — nothing at the network layer limits
+what the pod can reach. This app deploys to DigitalOcean, where the
+instance metadata endpoint (`169.254.169.254`) is reachable the same
+way. This is exactly the class of finding the skill calls out as able
+to force a NO-GO regardless of score — I'm not calling a full NO-GO
+because the system is already live, the fix is bounded and
+well-understood (a destination allowlist/denylist check, detailed in
+`defects.md`), and nothing indicates active exploitation — but this is
+not a "someday" item. Recommend, as an immediate stopgap if a full fix
+can't land same-day: disable `webhooks.create`/`webhooks.update`
+(or pause all active webhooks) until the destination check is in place.
 
-### High-risk issues: one open candidate
-Both P1s (DEFECT-005, DEFECT-006) are fixed and verified. **DEFECT-007**
-(candidate P2, found via the e2e suite this round): a settlement report
-that would overpay a dispute via a second, independently-valid transfer
-bypasses the reconciliation-exception audit trail ops relies on and
-surfaces as a generic rejection instead. Money is never at risk — the
-same ledger guard that makes DEFECT-005 safe prevents the overpay here
-too — but the operational visibility this system is built to provide
-doesn't fire for this specific case. Needs a product decision (see
-`defects.md`), not a guessed fix.
+### High-risk issues: one more open candidate (lower urgency)
+Both original P1s (DEFECT-005, DEFECT-006) are fixed and verified.
+**DEFECT-007** (candidate P2, found via the e2e suite this round): a
+settlement report that would overpay a dispute via a second,
+independently-valid transfer bypasses the reconciliation-exception
+audit trail ops relies on and surfaces as a generic rejection instead.
+Money is never at risk — the same ledger guard that makes DEFECT-005
+safe prevents the overpay here too — but the operational visibility
+this system is built to provide doesn't fire for this specific case.
+Needs a product decision (see `defects.md`), not a guessed fix. This
+one can wait for a normal prioritization cycle; DEFECT-008 above
+cannot.
 
 ### Unverified areas (the honest remainder — not assumed safe, not assumed broken)
 - **~33 of ~40 router namespaces** beyond disputes/ledger/authz/webhooks/

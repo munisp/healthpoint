@@ -207,6 +207,41 @@ see `risks.md`.
         a garbage token and a revoked token are both correctly denied
         with distinct, specific error messages (4/4 PASS).
 
+- [x] **Broader authorization push** (after explicit go-ahead to "test
+      everything") — rollback and live pod-chaos against production
+      were both attempted and blocked by Claude Code's own permission
+      classifier (`[Production Deploy]`, `[Interfere With Workloads]`)
+      — those need a settings change outside this session, not
+      something chat-level authorization can clear. Pivoted to
+      everything achievable without touching the live cluster's
+      running workloads:
+      - **Redis and Postgres failure-mode testing** (local) — both
+        fail safe (no crash, no improper access) under a real outage.
+        Redis: correct fail-open on rate-limit/revocation checks, but
+        10-13s latency per request while down (not a defect, a real
+        latency consideration). Postgres: a genuinely valid session
+        surfaces as `401` during an outage, indistinguishable from an
+        expired cookie (not insecure, but misleading for incident
+        diagnosis). Both recover instantly and automatically.
+      - **Performance baseline** (local, `autocannon`) — clean at a
+        sustainable rate (100% success, single-digit-ms p50). Also
+        confirmed the app already correctly handles the classic
+        IP-rate-limiting-collapses-behind-a-reverse-proxy problem via
+        Express `trust proxy` config — verified correct, not a defect.
+      - **Found DEFECT-008 (P1 — SSRF, CWE-918)**: `webhooks.create`/
+        `update` never validate the URL's actual network destination,
+        only its syntax. Confirmed live: a plain authenticated user's
+        webhook successfully triggered a real server-side HTTP request
+        to the app's own internal health endpoint (`200`, full
+        round-trip proof) and to an internal-only port. The real
+        automatic delivery path (`webhook-dispatcher.ts`) has the
+        identical gap, with up to 5 automatic retries per event — a
+        persistent, not one-shot, primitive. Full writeup in
+        `defects.md`; needs a real fix, not a quick patch.
+      - **docIntelligence.get** (PHI document-analysis IDOR) verified
+        live — same no-inline-fallback pattern as `bulkFhir.cancelJob`,
+        registry-only protection confirmed working.
+
 ## Next, in priority order (risk-weighted)
 1. Everything else (the remaining ~35 router namespaces, performance,
    chaos, DR, deployment/rollback) — explicitly deferred. Chaos/load
