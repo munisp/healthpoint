@@ -39,7 +39,7 @@ const RECENT_KEY = "healthpoint:pa-recent-requests";
 function useNow(intervalMs = 1000) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), intervalMs);
+    const t = setInterval(() => setNow(Date.now(), intervalMs);
     return () => clearInterval(t);
   }, [intervalMs]);
   return now;
@@ -59,6 +59,48 @@ function loadRecent(): { requestId: string; tenantId: string }[] {
   } catch {
     return [];
   }
+}
+
+/** auditfix-b: request event timeline (priorAuth.getEvents) with chain verification badge. */
+function PaRequestEvents({ tenantId, requestId }: { tenantId: string; requestId: string }) {
+  const q = trpc.priorAuth.getEvents.useQuery(
+    { tenantId, requestId },
+    { enabled: !!requestId, retry: false },
+  );
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Timer size={16} className="text-primary" /> Request Events
+          {q.data && (
+            <Badge variant={q.data.verification.ok ? "secondary" : "destructive"}>
+              {q.data.verification.ok ? "event chain verified" : "event chain FAILED verification"}
+            </Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="text-sm">
+        {q.isLoading && <p className="text-muted-foreground">Loading events…</p>}
+        {q.isError && <p role="alert" className="text-destructive">{q.error.message}</p>}
+        {q.data && q.data.events.length === 0 && (
+          <p className="text-muted-foreground">No events recorded for this request yet.</p>
+        )}
+        {q.data && q.data.events.length > 0 && (
+          <ol className="border-l pl-4 space-y-1.5 text-xs">
+            {q.data.events.map((e, i) => (
+              <li key={i}>
+                <span className="font-medium">
+                  {String(e.eventType ?? `${e.fromState ?? "?"} → ${e.toState ?? "?"}`).replace(/_/g, " ")}
+                </span>
+                <span className="text-muted-foreground"> — {new Date(e.at).toLocaleString()}</span>
+                {e.detail && <span className="text-muted-foreground block">{e.detail}</span>}
+              </li>
+            ))}
+          </ol>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function PriorAuthClocks() {
@@ -295,7 +337,7 @@ export default function PriorAuthClocks() {
                 {(ALLOWED[request.state as PaState] ?? []).map(to => (
                   <Button key={to} size="sm" variant="outline" disabled={transitionMutation.isPending}
                     onClick={() => doTransition(to)}>
-                    {"\u2192 "}{to.replace(/_/g, " ")}
+                    {"→ "}{to.replace(/_/g, " ")}
                   </Button>
                 ))}
                 {(ALLOWED[request.state as PaState] ?? []).length === 0 && (
@@ -313,6 +355,7 @@ export default function PriorAuthClocks() {
               </CardContent>
             </Card>
           )}
+          {request && <PaRequestEvents tenantId={tenantId} requestId={requestId} />}
         </>
       )}
 

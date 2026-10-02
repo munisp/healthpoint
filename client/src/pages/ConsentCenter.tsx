@@ -61,6 +61,156 @@ function ElementPicker({ elements, selected, onChange }: {
   );
 }
 
+/** auditfix-b: notice-consent case detail — rendered notice preview, case snapshot, event timeline. */
+function NcCaseDetail({ tenantId, caseId }: { tenantId: string; caseId: string }) {
+  const [providerName, setProviderName] = useState("");
+  const [renderRequested, setRenderRequested] = useState(false);
+  const caseQuery = trpc.noticeConsent.getCase.useQuery(
+    { tenantId, caseId },
+    { enabled: !!caseId, retry: 1 },
+  );
+  const eventsQuery = trpc.noticeConsent.getEvents.useQuery(
+    { tenantId, caseId },
+    { enabled: !!caseId, retry: 1 },
+  );
+  const renderQuery = trpc.noticeConsent.renderNoticeDocument.useQuery(
+    { caseId, providerName: providerName.trim() },
+    { enabled: renderRequested && !!providerName.trim(), retry: 1 },
+  );
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <FileSignature size={16} className="text-primary" /> Case Detail, Notice Preview &amp; Events
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 text-sm">
+        {!caseId && <p className="text-xs text-muted-foreground">Enter or create a case id above to load its detail.</p>}
+        {caseId && (
+          <>
+            {caseQuery.isLoading && <p className="text-muted-foreground">Loading case…</p>}
+            {caseQuery.isError && <p role="alert" className="text-destructive">{caseQuery.error.message}</p>}
+            {caseQuery.data && (
+              <div className="border rounded p-3 space-y-1">
+                <p className="font-medium">Case {caseId}</p>
+                <p className="text-xs text-muted-foreground">
+                  State: <Badge variant="secondary">{String(caseQuery.data.state ?? "unknown").replace(/_/g, " ")}</Badge>
+                </p>
+              </div>
+            )}
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Provider name (for notice preview)</Label>
+                <Input value={providerName} onChange={e => { setProviderName(e.target.value); setRenderRequested(false); }} placeholder="e.g. Riverside Emergency Group" />
+              </div>
+              <Button size="sm" variant="outline" disabled={!providerName.trim()} onClick={() => setRenderRequested(true)}>
+                Render notice preview
+              </Button>
+            </div>
+            {renderQuery.isFetching && <p className="text-muted-foreground">Rendering…</p>}
+            {renderQuery.isError && <p role="alert" className="text-destructive">{renderQuery.error.message}</p>}
+            {renderQuery.data && !renderQuery.isFetching && (
+              <pre className="whitespace-pre-wrap border rounded p-3 text-xs bg-muted/30 max-h-96 overflow-y-auto">
+                {typeof renderQuery.data.document === "string"
+                  ? renderQuery.data.document
+                  : JSON.stringify(renderQuery.data.document, null, 2)}
+              </pre>
+            )}
+            <div>
+              <p className="text-xs font-medium mb-1.5">Event timeline
+                {eventsQuery.data && (
+                  <Badge variant={eventsQuery.data.verification.ok ? "secondary" : "destructive"} className="ml-2">
+                    {eventsQuery.data.verification.ok ? "event chain verified" : "event chain FAILED verification"}
+                  </Badge>
+                )}
+              </p>
+              {eventsQuery.isLoading && <p className="text-muted-foreground">Loading events…</p>}
+              {eventsQuery.isError && <p role="alert" className="text-destructive">{eventsQuery.error.message}</p>}
+              {eventsQuery.data && eventsQuery.data.events.length === 0 && (
+                <p className="text-muted-foreground">No events recorded for this case yet.</p>
+              )}
+              {eventsQuery.data && eventsQuery.data.events.length > 0 && (
+                <ol className="border-l pl-4 space-y-1.5 text-xs">
+                  {eventsQuery.data.events.map((e, i) => (
+                    <li key={i}>
+                      <span className="font-medium">{String(e.eventType ?? `${e.fromState ?? "?"} → ${e.toState ?? "?"}`).replace(/_/g, " ")}</span>
+                      <span className="text-muted-foreground"> — {new Date(e.at).toLocaleString()}</span>
+                      {e.detail && <span className="text-muted-foreground block">{e.detail}</span>}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** auditfix-b: PPDR dispute detail + event timeline (gfePpdr.getDispute / getEvents). */
+function PpdrDisputeDetail({ tenantId, disputeId }: { tenantId: string; disputeId: string }) {
+  const disputeQuery = trpc.gfePpdr.getDispute.useQuery(
+    { tenantId, disputeId },
+    { enabled: !!disputeId, retry: 1 },
+  );
+  const eventsQuery = trpc.gfePpdr.getEvents.useQuery(
+    { tenantId, disputeId },
+    { enabled: !!disputeId, retry: 1 },
+  );
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <HeartHandshake size={16} className="text-primary" /> PPDR Dispute Detail &amp; Events
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 text-sm">
+        {!disputeId && <p className="text-xs text-muted-foreground">Enter or create a PPDR dispute id above to load its detail.</p>}
+        {disputeId && (
+          <>
+            {disputeQuery.isLoading && <p className="text-muted-foreground">Loading dispute…</p>}
+            {disputeQuery.isError && <p role="alert" className="text-destructive">{disputeQuery.error.message}</p>}
+            {disputeQuery.data && (
+              <div className="border rounded p-3 space-y-1">
+                <p className="font-medium">Dispute {disputeId}</p>
+                <p className="text-xs text-muted-foreground">
+                  State: <Badge variant="secondary">{String(disputeQuery.data.state ?? "unknown").replace(/_/g, " ")}</Badge>
+                </p>
+              </div>
+            )}
+            <div>
+              <p className="text-xs font-medium mb-1.5">Event timeline
+                {eventsQuery.data && (
+                  <Badge variant={eventsQuery.data.verification.ok ? "secondary" : "destructive"} className="ml-2">
+                    {eventsQuery.data.verification.ok ? "event chain verified" : "event chain FAILED verification"}
+                  </Badge>
+                )}
+              </p>
+              {eventsQuery.isLoading && <p className="text-muted-foreground">Loading events…</p>}
+              {eventsQuery.isError && <p role="alert" className="text-destructive">{eventsQuery.error.message}</p>}
+              {eventsQuery.data && eventsQuery.data.events.length === 0 && (
+                <p className="text-muted-foreground">No events recorded for this dispute yet.</p>
+              )}
+              {eventsQuery.data && eventsQuery.data.events.length > 0 && (
+                <ol className="border-l pl-4 space-y-1.5 text-xs">
+                  {eventsQuery.data.events.map((e, i) => (
+                    <li key={i}>
+                      <span className="font-medium">{String(e.eventType ?? `${e.fromState ?? "?"} → ${e.toState ?? "?"}`).replace(/_/g, " ")}</span>
+                      <span className="text-muted-foreground"> — {new Date(e.at).toLocaleString()}</span>
+                      {e.detail && <span className="text-muted-foreground block">{e.detail}</span>}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ConsentCenter() {
   const [tenantId, setTenantId] = useState("default");
 
@@ -438,6 +588,7 @@ export default function ConsentCenter() {
               </div>
             </CardContent>
           </Card>
+          <NcCaseDetail tenantId={tenantId} caseId={caseId} />
         </TabsContent>
 
         {/* GFE / PPDR */}
@@ -733,6 +884,7 @@ export default function ConsentCenter() {
               </div>
             </CardContent>
           </Card>
+          <PpdrDisputeDetail tenantId={tenantId} disputeId={ppdrDisputeId} />
         </TabsContent>
       </Tabs>
     </div>
