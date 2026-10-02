@@ -82,13 +82,15 @@ see `risks.md`.
       API key. Verified live (before/after), confirmed no regression on
       legitimately admin-scoped keys. Full regression clean.
 
+- [x] **Bootstrap-admin-claim flow** — `test-cases/bootstrap-admin-claim.md`.
+      3/3 PASS, with a genuine zero-active-admin precondition (not
+      bypassed this time): claim succeeds exactly once, audit-logged,
+      correctly denied for a second user once an admin exists again.
+
 ## Next, in priority order (risk-weighted)
-1. The real bootstrap-admin-claim flow (`orgs.claimBootstrapAdmin`) —
-   bypassed via direct DB role promotion in every admin-related test
-   this pass; the flow itself is still unverified.
-2. Decide and act on the inert authz-registry (see risks.md) — populate
+1. Decide and act on the inert authz-registry (see risks.md) — populate
    it for real or remove it so it stops looking like active protection.
-3. Everything else (the remaining ~35 router namespaces, performance,
+2. Everything else (the remaining ~35 router namespaces, performance,
    chaos, DR, deployment/rollback) — explicitly deferred. Chaos/load
    testing in particular should NOT target shared cluster infra
    (Kafka, Permify's real endpoint) without a separate, explicit go-ahead
