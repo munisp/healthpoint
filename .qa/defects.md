@@ -293,7 +293,7 @@ write the same `settlement_reconciliations`/`settlement_exception_reviews`
 rows the amount/provider/transition-mismatch path already writes, with
 the ledger error's message as the `exceptionReason`.
 
-## DEFECT-008 — FOUND, NOT FIXED (P1 — SSRF, CWE-918)
+## DEFECT-008 — FIXED (P1 — SSRF, CWE-918)
 **Severity:** P1 (critical — server-side request forgery, exploitable by
 ANY authenticated user, not just admin)
 **Title:** Webhook URLs are never validated against internal/private
@@ -345,25 +345,36 @@ API, Permify, internal DB ports — fall in that category per this
 session's own infrastructure notes). The response body/status/timing
 is echoed straight back to the requesting user via `webhooks.test`,
 making this a usable oracle, not just a blind probe.
-**Why not fixed:** Found via live SSRF testing enabled by the broader
-testing authorization this round; a correct fix needs a real allowlist/
-denylist design decision (block RFC 1918 + loopback + link-local +
-cloud metadata ranges at minimum, likely also DNS-rebinding protection
-if the check only happens once at creation time rather than at each
-fetch) rather than a quick patch, and should be applied consistently to
-both `webhooks.create`/`update`'s validation AND
-`webhook-dispatcher.ts`'s actual fetch call (validating only one would
-leave the other exploitable). Flagging for an explicit decision and
-fix rather than rushing a partial patch.
-**Suggested fix:** Add a shared `assertNotInternalUrl(url: string)`
-helper — resolve the hostname, reject if the resolved IP falls in any
-private/loopback/link-local/cloud-metadata range (and reject redirects
-to such ranges during actual delivery, not just the initial check) —
-called from `webhooks.create`, `webhooks.update`, AND as a final guard
-immediately before both `fetch()` call sites (`webhooks.test` and
-`webhook-dispatcher.ts`), since a TOCTOU gap between create-time
-validation and delivery-time DNS resolution (DNS rebinding) would
-otherwise still be exploitable even with create-time-only validation.
-**Cleanup:** Both test webhooks deleted from the local test DB after
-confirming; this was tested against the local dev server only, never
-the live cluster.
+**Fix:** Added `assertWebhookUrlSafe` (`server/webhook-url-guard.ts`):
+resolves the hostname via real DNS (or validates a literal IP directly)
+and rejects loopback, RFC 1918, link-local/cloud-metadata (169.254.0.0/16,
+covers the DO/AWS/GCP metadata address), CGNAT, and the IPv6 equivalents
+(`::1`, `fe80::/10`, `fc00::/7`, and IPv4-mapped IPv6 forms — including
+the hex-group form Node's URL parser actually normalizes to, a real bug
+caught by the new unit tests before this shipped). Only `http`/`https`
+schemes are accepted. Called from `webhooks.create` and `webhooks.update`
+for fast feedback, AND again immediately before both real `fetch()` call
+sites (`webhooks.test` in `routers.ts`, and the automatic delivery path
+in `webhook-dispatcher.ts`) — the fetch-time check is the actual security
+boundary, closing the DNS-rebinding gap a create-time-only check would
+leave open. Both fetch call sites also set `redirect: "error"` so a
+malicious server can't bounce the request to an internal target via an
+HTTP redirect.
+**Verification:** Reproduced both original live exploits against the
+fixed code — the internal-port webhook and the self-fetch-to-200 webhook
+are now both rejected at creation (`BAD_REQUEST`). Separately confirmed
+the fetch-time guard is an independent layer (not just create-time): a
+URL inserted directly into the DB to simulate a pre-existing record or a
+post-creation DNS change was still blocked by `webhooks.test`, in 31ms
+against an address that would otherwise hang ~5s on a real connection
+attempt — conclusive proof the guard intercepts before any network call.
+Also tested the cloud-metadata IP, a `localhost` hostname (DNS-resolution
+path, not just literal-IP matching), and confirmed a real external URL
+still succeeds (no false positive). 26 new unit tests
+(`server/tests/webhook-url-guard.test.ts`) cover both IP families, literal
+and DNS-resolved. Full regression clean: 1397 passing, same 1
+pre-existing/deliberately-unconfigured Kafka failure as the whole
+session, no new regressions.
+**Cleanup:** All test webhooks deleted from the local test DB; this was
+tested and fixed against the local dev server/repo, never the live
+cluster directly — deployment to production is the next step.
