@@ -97,7 +97,7 @@ export const patientPortalRouter = router({
         expiresAt: new Date(Date.now() + PATIENT_LINK_TTL_MS),
         createdByUserId: ctx.user.id,
       });
-      return { token, expiresAt: new Date(Date.now() + PATIENT_LINK_TTL_MS), path: `/patient/${token}` };
+      return { token, tokenId: id, expiresAt: new Date(Date.now() + PATIENT_LINK_TTL_MS), path: `/patient/${token}` };
     }),
 
   /** Issue a public PPDR self-service intake link (scope ppdr_intake). */
@@ -110,8 +110,9 @@ export const patientPortalRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const token = crypto.randomBytes(32).toString("base64url");
+      const id = crypto.randomUUID();
       await db.insert(patientAccessTokens).values({
-        id: crypto.randomUUID(),
+        id,
         tokenHash: hashPatientToken(token),
         disputeId: null,
         patientName: input.patientName,
@@ -121,7 +122,7 @@ export const patientPortalRouter = router({
         expiresAt: new Date(Date.now() + PATIENT_LINK_TTL_MS),
         createdByUserId: ctx.user.id,
       });
-      return { token, expiresAt: new Date(Date.now() + PATIENT_LINK_TTL_MS), path: `/patient/${token}` };
+      return { token, tokenId: id, expiresAt: new Date(Date.now() + PATIENT_LINK_TTL_MS), path: `/patient/${token}` };
     }),
 
   /**
