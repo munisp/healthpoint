@@ -396,8 +396,9 @@ export const noticeConsentRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const token = crypto.randomBytes(32).toString("base64url");
       const expiresAt = new Date(Date.now() + CONSENT_SIGNATURE_LINK_TTL_MS);
+      const tokenId = crypto.randomUUID();
       await db.insert(patientAccessTokens).values({
-        id: crypto.randomUUID(),
+        id: tokenId,
         tokenHash: hashPatientToken(token),
         disputeId: tokenCaseRef(input.caseId),
         patientName: input.patientName,
@@ -407,7 +408,7 @@ export const noticeConsentRouter = router({
         expiresAt,
         createdByUserId: ctx.user.id,
       });
-      return { token, expiresAt, path: `/patient/consent-sign/${token}` };
+      return { token, tokenId, expiresAt, path: `/patient/consent-sign/${token}` };
     }),
 
   /**
