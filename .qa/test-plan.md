@@ -159,6 +159,31 @@ see `risks.md`.
       Run against local dev server + local Postgres only; zero impact
       on the live cluster.
 
+- [x] **UI/E2E testing — a real gap this whole pass was missing until now.**
+      Ran the repo's existing Playwright suite (`e2e/*.spec.ts`, 13 tests,
+      never executed before this point). See `defects.md` for full
+      writeups.
+      - Fixed a real local-environment bug (`SETTLEMENT_CALLBACK_KEYRING`
+        wasn't valid JSON) that had silently blocked all 10
+        `settlement-callback.spec.ts` tests from ever running — not
+        caused by this session, but closed now. 9 now run, 6 pass.
+      - `operations-pages.visual.spec.ts`: 3 of 4 tests pass clean,
+        with real evidence — the Heartbeat/balance-proof dashboard, the
+        provider dispute workspace (search, CSV export), and the
+        provider sandbox acceptance page all render correctly with real
+        headings, controls, and text, screenshotted. The 4th
+        (Temporal Dispatch Operations) is a test-setup gap, not an app
+        bug: the page itself renders correctly ("0 of 3 alert-threshold
+        failures", "Last failure: Not recorded" — a real, honest empty
+        state), but the test asserts a conditional "repeated failures"
+        banner is visible without seeding the 3+ failures needed to
+        trigger it.
+      - Found **DEFECT-007** (candidate, needs product judgment): a
+        settlement report that would overpay a dispute via a second
+        transfer bypasses the reconciliation-exception audit trail
+        ops relies on, surfacing as a generic error instead. Money is
+        never at risk; operational visibility is.
+
 ## Next, in priority order (risk-weighted)
 1. Everything else (the remaining ~35 router namespaces, performance,
    chaos, DR, deployment/rollback) — explicitly deferred. Chaos/load

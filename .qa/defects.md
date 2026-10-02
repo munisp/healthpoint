@@ -218,3 +218,77 @@ ephemeral-server startup timeout under post-restart system load,
 confirmed unrelated to this change — both pass cleanly, 6/6, on a
 clean re-run) + the 1 pre-existing/deliberately-unconfigured
 kafka-connectivity failure. No new regressions.
+
+## UI/E2E testing — a real gap in this pass, now partially closed
+
+No browser-based testing had happened at all until this point. The repo
+has a real Playwright e2e suite (`e2e/*.spec.ts`, 2 files, 13 tests
+total) that had never been run this pass. Running it surfaced both a
+pre-existing local-environment bug and a real candidate application
+defect.
+
+**Local environment bug found and fixed**: `SETTLEMENT_CALLBACK_KEYRING`
+in `.env` was the plain string `dev-settlement-callback-keyring` —
+`parseSettlementCallbackKeyring` (`server/settlement-auth.ts`) requires
+valid JSON (`{"keyId": "secret(>=32 chars)"}`), so this value has always
+silently resolved to "no keyring configured," and
+`SETTLEMENT_MTLS_CLIENT_FINGERPRINTS` wasn't valid hex either. Together
+these caused ALL 10 `settlement-callback.spec.ts` tests to fail their
+`beforeAll` precondition check and never run — this has apparently been
+broken in this local setup since whenever `.env` was created, not
+something this session caused. Fixed both values to valid formats in
+`.env` (local dev file only); this unblocked 9 of the 10 tests to
+actually execute, 6 of which pass.
+
+## DEFECT-007 — CANDIDATE, NOT YET CONFIRMED (needs product judgment)
+**Severity:** P2 (likely — reconciliation visibility gap, not a financial
+correctness bug; money is never misplaced, but ops loses visibility into
+*why* a report was rejected)
+**Title:** A settlement provider report that would overpay a dispute via
+a DIFFERENT transfer than the one already fully covered it bypasses the
+reconciliation-exception audit trail and surfaces as a generic error
+instead
+**Evidence:** `e2e/settlement-callback.spec.ts`'s lifecycle tests seed one
+dispute with TWO settlement transfers (`lifecycleTransferId` = $80,
+`exceptionTransferId` = $40). After the first transfer's report settles
+and fully covers the dispute's $80 determination, the second transfer's
+own report — which matches ITS OWN transfer's amount/provider/status
+correctly — expected `{reconciliationStatus: "exception", transferStatus:
+"submitted"}` with a 409. Actual response: `{"error": "Settlement report
+was not reconciled", "message": "No remaining determined amount to pay:
+determination 80.00 USD is already covered..."}`, same 409 status but a
+different, non-reconciliation-tracked error shape.
+**Root cause:** `reportSettlementOutcome` (`server/settlement-lifecycle.ts`
+~line 400) only classifies a report as a tracked `reconciliationStatus:
+"exception"` (written to `settlement_reconciliations` +
+`settlement_exception_reviews` for ops review) when the report's amount/
+provider/transition doesn't match its OWN transfer row. When those all
+match but the report would still overpay the DISPUTE overall (because a
+different transfer already consumed the determination), it instead calls
+`recordPaymentInTransaction`, which throws `LedgerIntegrityError` from
+`assertPaymentAcceptable` — a correct, necessary guard (this is the exact
+invariant DEFECT-005 fixed the idempotency-ordering around) — but that
+throw isn't caught and reclassified into the exception-review workflow;
+it just propagates as a generic rejection.
+**Impact:** Ops has a dedicated review queue
+(`settlement_exception_reviews`) specifically for "a provider report
+didn't reconcile cleanly, someone needs to look at this" — this failure
+mode produces exactly that situation (a real provider report that can't
+be applied) but skips the queue entirely. The money is safe (the ledger
+guard correctly prevents overpayment either way), but the operational
+visibility this system is clearly designed to provide for reconciliation
+problems doesn't fire here.
+**Why not fixed yet:** This needs a product decision, not just a code
+change — is this scenario (two transfers against one dispute, second one
+arriving after the first already fully paid) something that should
+always route to exception-review, or is today's hard-reject the
+intentional, simpler behavior and the test's expectation is what's wrong?
+Both are defensible; picking the wrong one risks masking real double-
+transfer situations OR flooding the exception queue with normal
+already-settled noise. Flagging for the repo owner rather than guessing.
+**Suggested fix (if exception-routing is the right call):** wrap the
+`recordPaymentInTransaction`/`reversePaymentInTransaction` calls in this
+function in a catch for `LedgerIntegrityError` specifically, and on catch,
+write the same `settlement_reconciliations`/`settlement_exception_reviews`
+rows the amount/provider/transition-mismatch path already writes, with
+the ledger error's message as the `exceptionReason`.
