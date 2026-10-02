@@ -35,14 +35,19 @@ see `risks.md`.
       means that path is still unverified; needs walking a dispute
       through its full lifecycle first (next item below).
 
+- [x] **Real money-moving payment idempotency** — fast-forwarded the test
+      dispute directly to STEP_14_PAYMENT_DETERMINATION via a DB write
+      (the repo's own `payment-flow.test.ts` uses the identical fixture
+      pattern, so this is consistent with existing practice, not a
+      shortcut invented for this pass). Found and fixed a real P1 bug:
+      DEFECT-005 — a genuine idempotent retry of a payment that had
+      already fully covered the determination amount was rejected with
+      a confusing error instead of returning its original result,
+      because the balance check ran before the idempotency-key lookup.
+      Fixed, verified live, zero regressions (1378/1393).
+
 ## Next, in priority order (risk-weighted)
-1. **Walk one dispute through its full IDR lifecycle** (open negotiation
-   → IDR initiation → `idrEntityId` assignment → `submitOffer` both
-   sides → `advanceStep` to determination) far enough to retest payment
-   idempotency on the REAL money-moving admin/settlement-linked path —
-   the one path not yet exercised. Bigger, multi-step setup; worth doing
-   properly rather than rushing.
-2. **Authz follow-ups** (see test-cases/authz-dispute-isolation.md's
+1. **Authz follow-ups** (see test-cases/authz-dispute-isolation.md's
    "Not yet tested"): granted-relation path (reviewer/arbitrator/
    org_admin actually working, not just the no-relation deny case),
    mutation-side authz (e.g. advanceStep on a dispute you don't own),

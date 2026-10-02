@@ -54,3 +54,22 @@ full IDR lifecycle first — open negotiation → IDR initiation →
 via `disputes.advanceStep`. That's a materially bigger, multi-step setup
 than this test, and is the natural next piece of work rather than
 something to rush through.
+
+## UPDATE: admin/verified path tested — found and fixed DEFECT-005
+
+Fast-forwarded the test dispute directly to
+`STEP_14_PAYMENT_DETERMINATION` / `determination_issued` via a direct
+DB write (mirrors the exact fixture pattern already used in the repo's
+own `server/tests/integration/payment-flow.test.ts`, not a shortcut
+invented for this pass).
+
+Recorded a real $390 admin-verified payment (fully covering the $390
+determination), then retried the identical call with the identical
+`idempotencyKey`. **Before the fix:** rejected with "No remaining
+determined amount to pay" instead of returning the original entry — a
+real P1 idempotency ordering bug (see defects.md DEFECT-005).
+**After the fix:** retry returns the exact original entry (same `id`,
+same `createdAt`). Ledger balance confirmed correct: `paid: $390`
+exactly once.
+
+## RESULT: PASS (after fix)
