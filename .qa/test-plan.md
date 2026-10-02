@@ -142,6 +142,23 @@ see `risks.md`.
       cluster has headroom (worker2 was at 23% memory / 7% CPU). Pushed
       and live.
 
+- [x] **Concurrency testing on the payment ledger** —
+      `test-cases/concurrency-payment-ledger.md`. 2/2 PASS, against real
+      genuinely-simultaneous HTTP requests (backgrounded + `wait`, not
+      sequential), not just sequential retries like the earlier
+      idempotency test:
+      - 10 concurrent requests, 10 distinct idempotency keys, same
+        dispute, each for the full determined amount: exactly 1 of 10
+        succeeded, the other 9 correctly rejected, final `paidAmount`
+        exactly right — no overspend under a real race.
+      - 10 concurrent requests, 1 shared idempotency key: all 10
+        converged to the identical ledger entry ID — the
+        `pg_advisory_xact_lock`-then-idempotency-check ordering holds
+        under a genuine double-click-style race, not just sequential
+        replay.
+      Run against local dev server + local Postgres only; zero impact
+      on the live cluster.
+
 ## Next, in priority order (risk-weighted)
 1. Everything else (the remaining ~35 router namespaces, performance,
    chaos, DR, deployment/rollback) — explicitly deferred. Chaos/load
