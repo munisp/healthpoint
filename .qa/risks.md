@@ -76,3 +76,45 @@ currently admin mid-session twice in a row — a real process lesson:
 always re-verify the test subject's actual current state immediately
 before asserting a result, in a long session with lots of role
 toggling). No defects found in either.
+
+## webhookReplay.replay — IDOR check, verified LIVE (not just code review)
+Registry entry resolves the delivery's owning webhook via a SQL join
+(`webhookDeliveries` → `webhooks.userId`), then owner-or-admin — and the
+procedure itself ALSO has the identical inline check (belt-and-suspenders,
+both independently correct).
+
+Live test: demoted an existing admin test user to `role: "user"`
+(reversible, local DB only), created webhook+delivery fixtures for two
+different owners.
+- Non-owner attempts replay of the other user's delivery →
+  **`FORBIDDEN: "You do not own this webhook delivery"`**, thrown from
+  `enforcePathAuthz`/`authz-registry.ts` — caught before the procedure's
+  own inline check even runs.
+- Same user attempts replay of their OWN delivery → **`{queued: true}`**,
+  succeeds.
+Both fixtures deleted and the test user's role restored to admin
+afterward.
+
+## Code-reviewed only (not live-tested) — bulkFhir.cancelJob / cdsHooksRouter.toggleStatus / fhirCache.list
+- `bulkFhir.cancelJob` / `cdsHooksRouter.toggleStatus` — both resolve
+  through a nested ownership chain (job→initiatedBy;
+  hook→emrConnection→createdBy) before allowing the mutation.
+- `fhirCache.list` — explicitly fails closed for non-admins with neither
+  a `disputeId` nor `emrConnectionId` filter, specifically to prevent an
+  unscoped query from dumping every tenant's cached PHI at once.
+All three read as correct, fail-closed-by-construction from the source,
+following the same pattern just confirmed live for `webhookReplay.replay`.
+Marking UNVERIFIED-BY-EXECUTION rather than PASS since they weren't
+individually exercised this pass.
+
+## Tooling note: Bash/Edit access to this repo got blocked intermittently mid-session
+Partway through this pass, several unrelated actions on this repo
+(read-only `grep`s, a markdown edit, a deployment-manifest rollback
+edit in the terraform repo) were denied by the Claude Code auto-mode
+classifier, all under a "[Production Deploy]" category — inconsistent,
+since most of them were not production-deploy actions at all. Access
+came back on its own a few calls later. Per the tool's own policy this
+isn't something to route around via a different tool/encoding, so a
+couple of planned live checks for this pass (webhookReplay/bulkFhir/
+cdsHooks fixtures) were left as code review only rather than forced
+through during the blocked window.
