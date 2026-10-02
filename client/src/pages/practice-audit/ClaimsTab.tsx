@@ -4,13 +4,12 @@
  * Data: trpc.practiceAudit.listClaims + scoreClaims (both EXECUTED-VERIFIED
  * server-side). Verdicts are deterministic rule outputs with CFR citations.
  *
- * Bulk-complete drawer (NEEDS_REVIEW): the phase17-ce bulk-complete /
- * listIncompleteClaims endpoints are NOT yet on the server as of branch
- * a7428296 — this tab codes defensively: it derives the incomplete set from
- * listClaims + score.missingFields, and on save it attempts the bulk-complete
- * mutation via the vanilla client; if the procedure is absent the error is
- * surfaced honestly and the user is offered rescore-only (scoreClaims), which
- * DOES exist. No client-side persistence is faked.
+ * Bulk-complete drawer (NEEDS_REVIEW): wired to the real server procedures
+ * practiceAudit.listIncompleteClaims (server-side incomplete checklist,
+ * including on-the-fly evaluation of unscored claims) and
+ * practiceAudit.bulkCompleteClaims (manualClaimFieldsSchema updates).
+ * auditfix-b corrected the previous stale comment claiming these endpoints
+ * were absent — they exist on the server and are now called directly.
  */
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -47,7 +46,10 @@ export default function ClaimsTab({ orgId }: { orgId: string }) {
   const [dateTo, setDateTo] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [edits, setEdits] = useState<Record<string, Record<string, string>>>({});
-  const [bulkSaving, setBulkSaving] = useState(false);
+  const incompleteQuery = trpc.practiceAudit.listIncompleteClaims.useQuery(
+    { orgId, limit: 500 },
+    { enabled: drawerOpen },
+  );
 
   const scoreClaims = trpc.practiceAudit.scoreClaims.useMutation({
     onSuccess: (r) => {
@@ -70,40 +72,37 @@ export default function ClaimsTab({ orgId }: { orgId: string }) {
   const needsReview = claims.filter(c => c.score?.verdict === "NEEDS_REVIEW");
 
   /**
-   * Defensive bulk-complete: attempts the phase17-ce endpoint via the vanilla
-   * client. If the procedure does not exist yet, surface the real server
-   * error — never pretend the edits were saved.
+   * Bulk-complete via the real server endpoint (practiceAudit.bulkCompleteClaims).
+   * Edits are keyed by claim DB id; allowedCents is coerced to integer cents.
+   * On success the affected claims are rescored with the deterministic engine.
    */
-  const saveBulkComplete = async () => {
-    setBulkSaving(true);
-    const payload = Object.entries(edits)
-      .map(([claimId, fields]) => ({ claimId, fields }))
-      .filter(e => Object.values(e.fields).some(v => v.trim() !== ""));
-    if (payload.length === 0) {
-      toast.info("No edits to save.");
-      setBulkSaving(false);
-      return;
-    }
-    try {
-      const client = utils.client.practiceAudit as unknown as Record<string, { mutate: (input: unknown) => Promise<unknown> }>;
-      if (typeof client.bulkComplete?.mutate !== "function" && typeof client.updateClaimFields?.mutate !== "function") {
-        throw new Error("bulk-complete procedure not present on the server (phase17-ce pending)");
-      }
-      const fn = client.bulkComplete ?? client.updateClaimFields;
-      await fn.mutate({ orgId, updates: payload });
-      toast.success("Bulk field updates saved (server endpoint). Rescoring…");
-      scoreClaims.mutate({ orgId, claimIds: payload.map(p => p.claimId) });
+  const bulkComplete = trpc.practiceAudit.bulkCompleteClaims.useMutation({
+    onSuccess: (r, vars) => {
+      toast.success(`Saved field updates for ${r.updated} claim(s). Rescoring…`);
+      scoreClaims.mutate({ orgId, claimIds: vars.updates.map(u => u.claimDbId) });
       setEdits({});
       setDrawerOpen(false);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast.warning(
-        `Bulk-complete endpoint unavailable — edits were NOT saved (${msg}). ` +
-        `This endpoint lands with phase17-ce. Re-ingest corrected source files or rescore after backend lands.`,
-      );
-    } finally {
-      setBulkSaving(false);
+      incompleteQuery.refetch();
+    },
+    onError: e => toast.error(`Edits were NOT saved: ${e.message}`),
+  });
+
+  const saveBulkComplete = () => {
+    const updates = Object.entries(edits)
+      .map(([claimDbId, fields]) => {
+        const clean: Record<string, string | number> = {};
+        for (const [k, v] of Object.entries(fields)) {
+          if (v.trim() === "") continue;
+          clean[k] = k === "allowedCents" ? Math.round(Number(v)) : v.trim();
+        }
+        return { claimDbId, fields: clean };
+      })
+      .filter(u => Object.keys(u.fields).length > 0);
+    if (updates.length === 0) {
+      toast.info("No edits to save.");
+      return;
     }
+    bulkComplete.mutate({ orgId, updates });
   };
 
   return (
@@ -271,9 +270,15 @@ export default function ClaimsTab({ orgId }: { orgId: string }) {
           <div className="space-y-4 mt-4">
             <p className="text-xs text-muted-foreground">
               Fill the fields the eligibility engine flagged as missing, then save &amp; rescore.
-              The server-side bulk-complete endpoint is a phase17-ce deliverable: if it is not yet deployed,
-              saving fails loudly and nothing is persisted. Rescoring itself (deterministic engine) is available today.
+              Saves go to the server's bulk-complete endpoint; rescoring uses the deterministic
+              eligibility engine (rule outputs with CFR citations — not ML).
             </p>
+            {incompleteQuery.data && (
+              <p className="text-xs text-muted-foreground">
+                Server checklist: {incompleteQuery.data.incompleteCount} claim(s) incomplete
+                (includes unscored claims evaluated on the fly).
+              </p>
+            )}
             {needsReview.map(c => (
               <Card key={c.id}>
                 <CardHeader className="py-3">
@@ -300,8 +305,8 @@ export default function ClaimsTab({ orgId }: { orgId: string }) {
               </Card>
             ))}
             <div className="flex gap-2">
-              <Button disabled={bulkSaving} onClick={saveBulkComplete}>
-                {bulkSaving && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              <Button disabled={bulkComplete.isPending} onClick={saveBulkComplete}>
+                {bulkComplete.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
                 Save edits &amp; rescore
               </Button>
               <Button

@@ -24,6 +24,7 @@ import ClientsTab from "./ClientsTab";
 import AttestationsTab from "./AttestationsTab";
 import SubmitTab from "./SubmitTab";
 import AnalyticsTab from "./AnalyticsTab";
+import BatchingTab from "./BatchingTab";
 import BulkUploadTab from "./BulkUploadTab";
 import QuarantineTab from "./QuarantineTab";
 import ChecksTab from "./ChecksTab";
@@ -47,6 +48,9 @@ export type SubmitterClient = {
   npis: string[];
   tins: string[];
   status: string;
+  billingModel?: string | null;
+  contingencyPct?: string | null;
+  flatFeeUsd?: string | null;
   createdAt: string | Date;
   updatedAt: string | Date;
 };
@@ -120,6 +124,7 @@ export default function SubmitterConsole() {
               <TabsTrigger value="checks">Check Payments</TabsTrigger>
               <TabsTrigger value="billing">Billing</TabsTrigger>
               <TabsTrigger value="analytics">Analytics</TabsTrigger>
+              <TabsTrigger value="batching">Batching</TabsTrigger>
             </TabsList>
             <TabsContent value="clients">
               <ClientsTab submitterOrgId={selectedOrgId} clients={clients} />
@@ -144,6 +149,9 @@ export default function SubmitterConsole() {
             </TabsContent>
             <TabsContent value="analytics">
               <AnalyticsTab clients={clients} />
+            </TabsContent>
+            <TabsContent value="batching">
+              <BatchingTab clients={clients} />
             </TabsContent>
           </Tabs>
         )}
