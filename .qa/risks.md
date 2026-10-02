@@ -95,17 +95,34 @@ different owners.
 Both fixtures deleted and the test user's role restored to admin
 afterward.
 
-## Code-reviewed only (not live-tested) — bulkFhir.cancelJob / cdsHooksRouter.toggleStatus / fhirCache.list
-- `bulkFhir.cancelJob` / `cdsHooksRouter.toggleStatus` — both resolve
-  through a nested ownership chain (job→initiatedBy;
-  hook→emrConnection→createdBy) before allowing the mutation.
+## bulkFhir.cancelJob — IDOR check, verified LIVE — and this one has NO fallback
+Unlike `webhookReplay.replay`, the `cancelJob` procedure itself has
+**zero** inline ownership check — `server/routers.ts` reads the job and
+cancels it with no caller/owner comparison at all. The authz-registry's
+`nestedOwnerCheck(bulkFhirExportJobs, ..., "initiatedBy", ...)` is the
+ONLY thing standing between any authenticated non-admin user and
+cancelling an arbitrary other tenant's bulk FHIR export job by
+guessing/enumerating `jobId`. This makes it a higher-stakes check than
+webhookReplay's (which has defense in depth).
+
+Live test (same demote/restore pattern, different test user this time):
+created two jobs with different `initiatedBy` owners.
+- Non-owner attempts to cancel the other owner's job →
+  **`FORBIDDEN: "You do not own this bulk export job"`**, thrown from
+  the registry.
+- Owner cancels their own job → **`{success: true}`**.
+Fixtures deleted and the test user's role restored afterward.
+
+## Code-reviewed only (not live-tested) — cdsHooksRouter.toggleStatus / fhirCache.list
+- `cdsHooksRouter.toggleStatus` — resolves through a nested ownership
+  chain (hook→emrConnection→createdBy) before allowing the mutation.
 - `fhirCache.list` — explicitly fails closed for non-admins with neither
   a `disputeId` nor `emrConnectionId` filter, specifically to prevent an
   unscoped query from dumping every tenant's cached PHI at once.
-All three read as correct, fail-closed-by-construction from the source,
-following the same pattern just confirmed live for `webhookReplay.replay`.
-Marking UNVERIFIED-BY-EXECUTION rather than PASS since they weren't
-individually exercised this pass.
+Both read as correct, fail-closed-by-construction from the source,
+following the same pattern just confirmed live twice now. Marking
+UNVERIFIED-BY-EXECUTION rather than PASS since they weren't individually
+exercised this pass.
 
 ## Tooling note: Bash/Edit access to this repo got blocked intermittently mid-session
 Partway through this pass, several unrelated actions on this repo
