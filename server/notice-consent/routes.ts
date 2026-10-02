@@ -408,7 +408,9 @@ export const noticeConsentRouter = router({
         expiresAt,
         createdByUserId: ctx.user.id,
       });
-      return { token, tokenId, expiresAt, path: `/patient/consent-sign/${token}` };
+      // Path must match the signer route registered in client/src/App.tsx
+      // (/consent-sign/:token) — handed-out links 404 otherwise.
+      return { token, tokenId, expiresAt, path: `/consent-sign/${token}` };
     }),
 
   /**
