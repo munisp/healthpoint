@@ -292,7 +292,7 @@ export default function ConsentCenter() {
   const [sigLink, setSigLink] = useState<string | null>(null);
   const issueSignatureLinkMutation = trpc.noticeConsent.issueSignatureLink.useMutation({
     onSuccess: (r) => {
-      setSigLink(r.path);
+      setSigLink(`${window.location.origin}${r.path}`);
       toast.success("Signature link issued — share it with the patient (single-use, 14-day expiry)");
     },
     onError: (e) => toast.error(e.message),
@@ -387,7 +387,7 @@ export default function ConsentCenter() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Provider specialty (optional)</Label>
-                  <Input value={specialty} onChange={e => setSpecialty(e.target.value)} placeholder="e.g. ANESTHESIOLOGY" />
+                  <Input value={specialty} onChange={e => setSpecialty(e.target.value)} placeholder="e.g. ANESTHESIOLOGIST" />
                 </div>
                 <div className="space-y-2 pt-5">
                   <label className="flex items-center gap-2 text-xs text-foreground">
