@@ -4,7 +4,13 @@
 - Authz/IDOR enforcement under real multi-user, multi-role conditions
   (code reviewed, not yet exercised live).
 - Financial correctness of `ledger`/`qpa` calculations.
-- TigerBeetle integration (feature-flagged off locally; untested).
+- TigerBeetle integration: resolved, not a gap. `TB_LEDGER_ENABLED`
+  (the real ledger sidecar) is off both locally and in production
+  (unset in `deployment.yaml`, defaults false) — deliberate, and the
+  reconciliation job correctly self-reports `status: "skipped"` when
+  off. The `TIGERBEETLE_ENABLED` flag that IS on in production only
+  gates a read-only connectivity probe, unrelated to real fund
+  movement. See test-plan.md's "TigerBeetle reconciliation" entry.
 - Kafka event bus topic provisioning / consumer correctness (real creds
   work for a bare connectivity check; the app's actual topics aren't
   provisioned on the shared cluster — untested end to end).

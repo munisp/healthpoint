@@ -95,6 +95,53 @@ see `risks.md`.
       confirmed genuinely active; most of its ~80 individual entries are
       still unverified beyond this one.
 
+- [x] **Real production deploy** — shipped `20261002-1321` (DEFECT-004,
+      -005, -006 fixes + email-OTP MFA) to the live cluster via the real
+      Flux pipeline. Rolling update completed with zero downtime; new
+      pod's startup checks (Permify schema bootstrap, Postgres pool,
+      Kafka consumer subscriptions) all passed clean.
+
+- [x] **TigerBeetle reconciliation — investigated, resolved as a non-issue.**
+      `risks.md` previously said TigerBeetle was "feature-flagged off
+      locally; untested," which read as a gap once the live pod's
+      startup log showed `TigerBeetle mTLS tunnel is ready`. Traced the
+      actual code: that log is from `server/tigerbeetle.ts`, a read-only
+      connectivity probe (`TIGERBEETLE_ENABLED`) that only ever calls
+      `lookupAccounts([0n])` — never a real financial operation. The
+      REAL ledger integration (`server/tigerbeetle-ledger.ts`, the Go
+      sidecar) is gated separately by `TB_LEDGER_ENABLED`, which is not
+      set anywhere in `deployment.yaml` and therefore defaults to
+      `false` in production. Confirmed via the live reconciliation job's
+      own log line: `status: "skipped"`, `errorMessage: "TB_LEDGER_ENABLED
+      is not true"` — correct, designed fail-safe behavior, not a bug.
+      Settlement fund truth is Postgres-only in production right now, by
+      deliberate design, and that path was already tested this pass
+      (ledger-qpa-financial.md, DEFECT-005). No action needed here.
+
+- [x] **Multi-replica — found and fixed a real availability gap.**
+      Production was running `replicas: 1`, a genuine single point of
+      failure. Tested live at 2 replicas before persisting:
+      - Both pods started clean, scheduled onto different nodes.
+      - Kafka consumer group (`idr-app-consumer`) is a fixed shared
+        value, not generated per-pod — confirmed both replicas join the
+        same group, so partitions split correctly instead of every pod
+        double-processing every event.
+      - The hourly reconciliation scheduler coordinates safely across
+        replicas via a Postgres unique constraint on `runKey` (`INSERT
+        ... ON CONFLICT DO NOTHING`) — observed a real `duplicate: true`
+        vs `duplicate: false` pair of log lines proving this, not just
+        reading the code.
+      - Sessions/OTP/rate-limiting are Redis-backed (`sessionSet`/
+        `sessionGet`/`rateLimitIncr`), architecturally multi-replica-safe
+        by design — NOT behaviorally proven live across replicas this
+        pass, since doing so would require creating real session/test
+        data in the live production system, which wasn't authorized.
+        Marked UNVERIFIED (architecturally sound, not behaviorally
+        proven) rather than claimed as tested.
+      User confirmed persisting `replicas: 2` to the manifest given the
+      cluster has headroom (worker2 was at 23% memory / 7% CPU). Pushed
+      and live.
+
 ## Next, in priority order (risk-weighted)
 1. Everything else (the remaining ~35 router namespaces, performance,
    chaos, DR, deployment/rollback) — explicitly deferred. Chaos/load
