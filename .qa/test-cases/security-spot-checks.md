@@ -49,6 +49,56 @@ endpoint returns `stack: null` on an unauthorized request — the fix is
 effective in the actual deployed environment, not just reasoned about from
 the code.
 
+## SQL injection — app code audited clean; a real incident in MY OWN test tooling (not the app)
+Enumerated every `sql.raw`/`sql.unsafe` call site in the non-test server
+code (there are 5):
+- `server/emr/provenance.ts` — raw identifier is always one of the
+  hardcoded `EMR_FILLABLE_FIELDS` array entries; values are always bound
+  parameters. Not attacker-reachable.
+- `server/routers.ts` (`cohortAnalysis`) — `groupBy` is a closed
+  `z.enum(["serviceType","state","month"])`; only 3 fixed, developer-written
+  SQL fragments can ever be produced regardless of input. Dates are
+  regex-validated AND bound as parameters (defense in depth).
+- `server/scheduled/emailDigest.ts` — cron-only, not reachable from any
+  HTTP route.
+- `server/journeys/context.ts` (`cleanPriorRuns`) — dev CLI tooling only,
+  iterates a hardcoded table-name array, not reachable from any HTTP route.
+No injectable raw-SQL surface found in the application code.
+
+**Real incident during this check (full transparency):** attempted a live
+SQL injection probe by inserting a classic payload
+(`Robert'); DROP TABLE disputes; --`) as a dispute field value, using
+`psql -v name=value` / `:name` substitution to build the INSERT. That
+substitution mechanism is **plain text interpolation, not a parameterized
+bind** — unlike anything the app itself does. The payload broke out of the
+intended string literal and executed as written, actually dropping the
+`disputes` table in the **local test Postgres container only**
+(`healthpoint-test-postgres`/`idr_demo` — never the live cluster, never
+production). This is the inverse of a false negative: it's proof the
+underlying attack pattern is real and dangerous against naive string
+interpolation, while also being a mistake in my own test harness, not a
+finding about the application.
+
+**Recovery:** confirmed exactly one table was affected (108 others intact,
+no cascade failures — meaning nothing else has an enforced FK into
+`disputes`), spun up a disposable fresh Postgres container, ran this
+repo's own Drizzle migrations against it cleanly, `pg_dump --schema-only
+-t disputes` from that known-good instance, and applied the resulting DDL
+(full column set, primary key, unique constraint, all 14 indexes) to the
+damaged local database. Verified recovery: `disputes.list` returns a
+clean, correctly-empty result afterward. No data of lasting value was
+lost (the table was already legitimately empty of test fixtures at the
+time — the standing practice this whole pass was to delete each test's
+fixtures immediately after asserting on them). Temporary container and
+scratch files cleaned up.
+
+**Lesson for future SQL injection probes against this app**: construct the
+test payload as an actual HTTP request through the application's own API
+(as every other test in this pass did), never via `psql`'s own `-v`/`:var`
+substitution — that mechanism has no bearing on whether the *application*
+is vulnerable and can trivially stage a real accident against whichever
+database happens to be connected.
+
 ## Mass assignment — architectural spot check, not exhaustively tested
 Every mutation input reviewed uses explicit `z.object({ ...named fields })`
 Zod schemas (tRPC's default behavior strips unrecognized keys rather than
@@ -72,5 +122,8 @@ not a check of all ~40 namespaces' input schemas individually.
 - Dependency vulnerability scanning (`npm audit` or similar) — not run this
   pass.
 
-## RESULT: PASS on everything tested (4/4); broad security section still
-has real remaining scope (see above).
+## RESULT: PASS on everything tested (5/5 — cookies, JWT tampering,
+alg:none forgery, stack-trace leak, SQL injection code audit); broad
+security section still has real remaining scope (see above). The IDOR/
+ownership-chain checks for `webhookReplay.replay` and `bulkFhir.cancelJob`
+are documented separately in `risks.md` (both PASS, live-verified).
