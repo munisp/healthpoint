@@ -387,7 +387,7 @@ export default function ConsentCenter() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Provider specialty (optional)</Label>
-                  <Input value={specialty} onChange={e => setSpecialty(e.target.value)} placeholder="e.g. ANESTHESIOLOGIST" />
+                  <Input value={specialty} onChange={e => setSpecialty(e.target.value)} placeholder="e.g. ANESTHESIOLOGY" />
                 </div>
                 <div className="space-y-2 pt-5">
                   <label className="flex items-center gap-2 text-xs text-foreground">
