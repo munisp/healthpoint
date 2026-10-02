@@ -144,6 +144,8 @@ const OrgsPage = lazy(() => import("./pages/personas/Orgs"));
 const IdreDirectoryAdmin = lazy(() => import("./pages/admin/IdreDirectory"));
 const FeeSchedulesAdmin = lazy(() => import("./pages/admin/FeeSchedules"));
 const Unsubscribe = lazy(() => import("./pages/Unsubscribe"));
+const AuditShareLanding = lazy(() => import("./pages/AuditShareLanding"));
+const ConsentSignLanding = lazy(() => import("./pages/ConsentSignLanding"));
 const AcceptInvite = lazy(() => import("./pages/AcceptInvite"));
 
 /** Helper: wraps a component in ProtectedRoute */
@@ -176,6 +178,8 @@ function Router() {
       <Route path={"/changelog"} component={Changelog} />
       <Route path={"/help"} component={HelpCenter} />
       <Route path={"/unsubscribe/:token"} component={Unsubscribe} />
+      <Route path={"/audit-share/:token"} component={AuditShareLanding} />
+      <Route path={"/consent-sign/:token"} component={ConsentSignLanding} />
       <Route path="/state-laws" component={StateBalanceBilling} />
 
       {/* Auth-required routes */}
