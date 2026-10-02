@@ -80,7 +80,11 @@ describe("lakehouseExportWorkflow (time-skipping test server)", () => {
     expect(summary.runId).toBe("test-run-1");
     expect(summaries).toHaveLength(1);
     expect(summaries[0].failures).toEqual([]);
-  });
+  // Starting a Worker + running a real workflow against the test server
+  // (gRPC roundtrips, worker polling) takes longer than vitest's 5s default,
+  // even though the server itself is time-skipping - only simulated timers
+  // skip ahead, not the real network/process overhead of each test run.
+  }, 30_000);
 
   it("captures a dataset failure honestly and still records a summary", async () => {
     exported.length = 0;
@@ -93,5 +97,5 @@ describe("lakehouseExportWorkflow (time-skipping test server)", () => {
     expect(summary.failures).toHaveLength(1);
     expect(summary.failures[0]).toContain("documents");
     expect(summaries).toHaveLength(1);
-  });
+  }, 30_000);
 });
