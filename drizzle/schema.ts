@@ -53,6 +53,7 @@ export const IDR_STEP = [
   "STEP_17_DISPUTE_CLOSED",
   "STEP_18_APPEAL_FILED",
   "STEP_19_APPEAL_RESOLVED",
+  "STEP_20_DISPUTE_WITHDRAWN",
 ] as const;
 export type IDRStep = (typeof IDR_STEP)[number];
 
@@ -68,6 +69,7 @@ export const DISPUTE_STATUS = [
   "closed",
   "appealed",
   "ineligible",
+  "withdrawn",
 ] as const;
 export type DisputeStatus = (typeof DISPUTE_STATUS)[number];
 
@@ -131,6 +133,10 @@ export const disputes = pgTable(
     idrEntityId: varchar("idrEntityId", { length: 64 }),
     idrEntityName: varchar("idrEntityName", { length: 255 }),
     // Deadlines
+    // Date of the initial payment (or notice of denial) for the claim — the
+    // statutory anchor for the 30-business-day open negotiation window
+    // (45 CFR § 149.510(b)(1)). Nullable; defaults to createdAt at creation.
+    initialPaymentDate: timestamp("initialPaymentDate"),
     openNegotiationDeadline: timestamp("openNegotiationDeadline"),
     idrInitiationDeadline: timestamp("idrInitiationDeadline"),
     entitySelectionDeadline: timestamp("entitySelectionDeadline"),
@@ -145,6 +151,23 @@ export const disputes = pgTable(
     determinationBasis: text("determinationBasis"),
     determinationWinner: varchar("determinationWinner", { length: 32 }), // "initiating_party" | "responding_party" | null
     notes: text("notes"),
+    // Phase 16: delegated-submitter linkage. Set when the dispute was
+    // created by a third-party submitter on behalf of a provider client
+    // (45 CFR 149.510(b)(2)(ii)(A)(3) representative attestation).
+    submitterClientId: varchar("submitterClientId", { length: 64 }),
+    delegationAttestationId: varchar("delegationAttestationId", { length: 64 }),
+    eligibilityAttestedAt: timestamp("eligibilityAttestedAt"),
+    // Phase 18: auto-batcher confirmation trail. batchId groups the batched
+    // dispute with the source disputes folded into it; batchedLineItemCount
+    // is set on the batched dispute itself (null for single disputes).
+    batchId: varchar("batchId", { length: 64 }),
+    batchedLineItemCount: integer("batchedLineItemCount"),
+    // Phase 20-B: CMS IDR Gateway connector bookkeeping. The connector is an
+    // ASSUMPTION-based scaffold (CMS has published no M2M Gateway API spec as
+    // of 2026-09); both columns stay null unless a configured connector
+    // submits/polls — the assisted-manual portal-package flow is unchanged.
+    gatewaySubmissionId: varchar("gateway_submission_id", { length: 128 }),
+    gatewayStatus: varchar("gateway_status", { length: 32 }),
     createdBy: varchar("createdBy", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow(),
     updatedAt: timestamp("updatedAt").defaultNow(),
@@ -159,6 +182,8 @@ export const disputes = pgTable(
     index("disputes_createdAt_idx").on(t.createdAt),
     index("disputes_billedAmount_idx").on(t.billedAmount),
     index("disputes_respondingName_idx").on(t.respondingPartyName),
+    index("disputes_submitterClient_idx").on(t.submitterClientId),
+    index("disputes_batch_idx").on(t.batchId),
   ]
 );
 export type Dispute = typeof disputes.$inferSelect;
@@ -235,6 +260,17 @@ export const idrEntities = pgTable(
     name: varchar("name", { length: 255 }).notNull(),
     certificationNumber: varchar("certificationNumber", { length: 64 }).unique(),
     certificationExpiry: timestamp("certificationExpiry"),
+    /**
+     * Phase13-FC (G6): IDRE certification admin-verify workflow. No public
+     * registry exists for CMS IDR-entity certification numbers, so
+     * verification is administrative: an admin reviews evidence and marks
+     * the entity verified (audit-logged, identity.verifyIdreCertification in
+     * server/auth/nppes.ts). Statuses: 'submitted' (default) | 'verified'.
+     */
+    certificationStatus: varchar("certificationStatus", { length: 16 }).notNull().default("submitted"),
+    certificationVerifiedAt: timestamp("certificationVerifiedAt"),
+    certificationVerifiedBy: varchar("certificationVerifiedBy", { length: 64 }),
+    certificationEvidenceNote: text("certificationEvidenceNote"),
     specialties: jsonb("specialties").$type<string[]>(),
     states: jsonb("states").$type<string[]>(),
     contactEmail: varchar("contactEmail", { length: 320 }),
@@ -459,6 +495,14 @@ export const userProfiles = pgTable(
     orgType: varchar("orgType", { length: 128 }),
     stakeholderRole: stakeholderRoleEnum("stakeholderRole").default("provider"),
     npi: varchar("npi", { length: 32 }),
+    /**
+     * Phase13-FC (G6): NPPES registry verification outcome for `npi`:
+     * 'verified' | 'unverified' | 'mismatch' (null = never checked).
+     * 'unverified' also covers the fail-open case where the NPPES registry
+     * was unreachable — verification is NEVER faked on outage. Set by
+     * server/auth/nppes.ts (identity.verifyNpi).
+     */
+    npiVerified: varchar("npiVerified", { length: 16 }),
     taxId: varchar("taxId", { length: 32 }),
     phone: varchar("phone", { length: 32 }),
     preferredContact: varchar("preferredContact", { length: 64 }),
@@ -1057,11 +1101,20 @@ export const apiKeys = pgTable(
     lastUsedAt: timestamp("lastUsedAt"),
     expiresAt: timestamp("expiresAt"),
     revokedAt: timestamp("revokedAt"),
+    /**
+     * Phase13-FC (G9): org binding. NULL for legacy keys minted before this
+     * column existed (backfill note in drizzle/migrations/0046_wave_fc.sql);
+     * new keys must be created with an org context. Key-authenticated
+     * requests are tenant-scoped to this org — a request that presents a
+     * different org/tenant id is rejected (server/auth/bearer.ts).
+     */
+    orgId: varchar("orgId", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => [
     index("api_keys_userId_idx").on(t.userId),
     index("api_keys_keyHash_idx").on(t.keyHash),
+    index("api_keys_orgId_idx").on(t.orgId),
   ]
 );
 export type ApiKey = typeof apiKeys.$inferSelect;
@@ -1867,3 +1920,6 @@ export const documentVersions = pgTable(
 );
 export type DocumentVersion = typeof documentVersions.$inferSelect;
 export type InsertDocumentVersion = typeof documentVersions.$inferInsert;
+export * from "./schema-idr-compliance";
+export * from "./schema-reconciliation";
+export * from "./schema-portal-rpa";

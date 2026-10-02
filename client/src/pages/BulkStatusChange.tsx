@@ -32,6 +32,8 @@ export default function BulkStatusChange() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [targetStatus, setTargetStatus] = useState<DisputeStatus | "">("")
   const [showConfirm, setShowConfirm] = useState(false);
+  const [showNoteDialog, setShowNoteDialog] = useState(false);
+  const [bulkNote, setBulkNote] = useState("");
 
   const { data: disputes, isLoading, refetch } = trpc.disputes.list.useQuery({ limit: 200 });
   const bulkMutation = trpc.bulkActions.changeStatus.useMutation({
@@ -41,6 +43,15 @@ export default function BulkStatusChange() {
       setShowConfirm(false);
       setTargetStatus("");
       refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const noteMutation = trpc.bulkActions.addNote.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Added note to ${data.updated} dispute${data.updated !== 1 ? "s" : ""}`);
+      setSelected(new Set());
+      setShowNoteDialog(false);
+      setBulkNote("");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -106,6 +117,9 @@ export default function BulkStatusChange() {
           </Select>
           <Button size="sm" disabled={!targetStatus || bulkMutation.isPending} onClick={() => setShowConfirm(true)}>
             Apply to {selected.size} disputes
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowNoteDialog(true)}>
+            Add note to {selected.size} dispute{selected.size !== 1 ? "s" : ""}
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>Clear selection</Button>
         </div>
@@ -196,6 +210,35 @@ export default function BulkStatusChange() {
             <Button variant="outline" onClick={() => setShowConfirm(false)}>Cancel</Button>
             <Button onClick={handleBulkUpdate} disabled={bulkMutation.isPending}>
               {bulkMutation.isPending ? "Updating..." : `Update ${selected.size} disputes`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk note dialog */}
+      <Dialog open={showNoteDialog} onOpenChange={setShowNoteDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Note to Selected Disputes</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            The note will be added as a comment on <strong>{selected.size} dispute{selected.size !== 1 ? "s" : ""}</strong>.
+          </p>
+          <textarea
+            value={bulkNote}
+            onChange={e => setBulkNote(e.target.value)}
+            rows={4}
+            maxLength={1000}
+            placeholder="Note text (visible on each selected dispute)…"
+            className="w-full px-3 py-2 border rounded-md text-sm bg-background resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNoteDialog(false)}>Cancel</Button>
+            <Button
+              disabled={!bulkNote.trim() || noteMutation.isPending}
+              onClick={() => noteMutation.mutate({ ids: Array.from(selected), note: bulkNote.trim() })}
+            >
+              {noteMutation.isPending ? "Adding..." : `Add note to ${selected.size} dispute${selected.size !== 1 ? "s" : ""}`}
             </Button>
           </DialogFooter>
         </DialogContent>

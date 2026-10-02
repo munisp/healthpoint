@@ -1,0 +1,65 @@
+{{/*
+  Internal CA bootstrap (cert-manager v1).
+  Audit P1 (2026-09-05): templates/certificates.yaml renders the CA Issuer
+  and the per-service Certificates, but it ASSUMES the internal CA key pair
+  already exists as a Secret (caddy.internalCaSecret, default
+  `caddy-internal-ca` — the CA the Caddy layer-4 mTLS listeners trust).
+  This template bootstraps that CA when none exists:
+    1. a self-signed ClusterIssuer (root-of-trust for exactly one cert),
+    2. the internal root CA Certificate (isCA: true) -> Secret
+       $caSecret (default caddy-internal-ca),
+    3. nothing else — certificates.yaml then consumes the CA Secret via its
+       CA Issuer.
+  Bring-your-own-CA path: create the CA Secret out-of-band (Vault, KMS,
+  sealed-secrets) and set internalMtls.bootstrap=false; the bootstrap below
+  is then skipped and certificates.yaml uses your CA.
+  Prerequisites: cert-manager v1 CRDs installed in the cluster.
+  STATIC-ONLY: rendered shape reviewed, not applied to a live cluster.
+*/}}
+{{- if and .Values.internalMtls.enabled .Values.internalMtls.bootstrap }}
+{{- $ns := .Values.global.namespace }}
+{{- $caSecret := default .Values.caddy.internalCaSecret .Values.internalMtls.caSecretName }}
+{{- $fullname := include "idr-platform.fullname" . }}
+---
+# One-shot root of trust: self-signs ONLY the internal CA certificate below.
+# ClusterIssuer (not Issuer) so it is referenceable regardless of the
+# release namespace; it signs exactly one cert and is never used by
+# certificates.yaml (which uses the namespaced CA Issuer).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ $fullname }}-internal-selfsigned
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: internal-mtls
+spec:
+  selfSigned: {}
+---
+# Internal root CA. commonName is informational; the trust anchor is the
+# Secret itself (mounted by Caddy as its layer-4 client-auth trust pool and
+# referenced by the CA Issuer in certificates.yaml). 10-year lifetime with
+# renewal 30 days before expiry — rotate-by-renewal is safe because Caddy
+# trusts the Secret contents, not a pinned fingerprint.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-internal-root-ca
+  namespace: {{ $ns }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: internal-mtls
+spec:
+  secretName: {{ $caSecret }}
+  isCA: true
+  commonName: {{ $fullname }}-internal-ca
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  duration: 87600h   # ~10 years
+  renewBefore: 720h  # 30 days
+  issuerRef:
+    name: {{ $fullname }}-internal-selfsigned
+    kind: ClusterIssuer
+    group: cert-manager.io
+{{- end }}

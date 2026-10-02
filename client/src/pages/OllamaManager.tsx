@@ -57,6 +57,24 @@ export default function OllamaManager() {
     onError: (err) => toast.error(`Generation failed: ${err.message}`),
   });
 
+  // Non-streaming pull fallback (O1.18): used when the SSE pull-stream
+  // endpoint is unreachable (e.g. EventSource blocked by a proxy).
+  const pullModelMutation = trpc.ollama.pullModel.useMutation({
+    onSuccess: (_data, vars) => {
+      setPullProgress(null);
+      toast.success(`${vars.model} is ready to use!`, {
+        description: "The model has been downloaded (non-streaming pull).",
+        duration: 6000,
+      });
+      modelsQuery.refetch();
+      setPullModel("");
+    },
+    onError: (err) => {
+      setPullProgress(null);
+      toast.error(`Failed to download model`, { description: err.message, duration: 12000 });
+    },
+  });
+
   const handlePull = (modelName?: string) => {
     const target = (modelName ?? pullModel).trim();
     if (!target) return;
@@ -131,14 +149,14 @@ export default function OllamaManager() {
     es.onerror = () => {
       if (cancelled) return;
       es.close();
-      setPullProgress(prev => prev ? { ...prev, error: "Connection lost", active: false } : null);
-      toast.error(`Connection to Ollama lost`, {
-        description: `Download of ${target} was interrupted. Ensure Ollama is running and try again.`,
-        duration: 12000,
-        action: {
-          label: "Retry",
-          onClick: () => handlePull(target),
-        },
+      // If the stream never delivered a progress event, the SSE endpoint is
+      // likely unreachable — fall back to the plain pullModel mutation.
+      setPullProgress(prev => {
+        if (prev && prev.completed === 0 && !prev.pct) {
+          pullModelMutation.mutate({ model: target });
+          return { ...prev, status: "Stream unavailable — pulling via API...", active: true };
+        }
+        return prev ? { ...prev, error: "Connection lost", active: false } : null;
       });
     };
   };

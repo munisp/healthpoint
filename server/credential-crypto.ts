@@ -29,3 +29,38 @@ export function decryptCredentials(envelope: string): Record<string, string> {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Credential envelope did not contain an object");
   return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
+
+// ─── SMART-on-FHIR access/refresh token encryption at rest ─────────────────
+// Same AES-256-GCM envelope scheme as EMR credentials, but for a single
+// opaque token string. Envelope prefix `v1t` distinguishes token envelopes
+// from credential-JSON envelopes (`v1`). Legacy rows written before this
+// remediation hold plaintext; decryptToken falls back to returning the value
+// unchanged when it is not an envelope (plaintext fallback read).
+
+const TOKEN_VERSION = "v1t";
+
+/** Encrypt a single token string for at-rest storage. */
+export function encryptToken(token: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  const ciphertext = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
+  return [TOKEN_VERSION, iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ciphertext.toString("base64url")].join(".");
+}
+
+/** True when the stored value is an encrypted token envelope (not legacy plaintext). */
+export function isEncryptedToken(value: string): boolean {
+  return value.startsWith(`${TOKEN_VERSION}.`) && value.split(".").length === 4;
+}
+
+/**
+ * Decrypt a stored token. Plaintext fallback: legacy rows (pre-encryption)
+ * are returned unchanged so existing tokens keep working until rotated.
+ */
+export function decryptToken(value: string): string {
+  if (!isEncryptedToken(value)) return value;
+  const [version, ivRaw, tagRaw, ciphertextRaw] = value.split(".");
+  if (version !== TOKEN_VERSION || !ivRaw || !tagRaw || !ciphertextRaw) throw new Error("Unsupported encrypted token envelope");
+  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(ivRaw, "base64url"));
+  decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
+  return Buffer.concat([decipher.update(Buffer.from(ciphertextRaw, "base64url")), decipher.final()]).toString("utf8");
+}

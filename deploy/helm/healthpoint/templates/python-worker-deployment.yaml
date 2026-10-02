@@ -1,0 +1,49 @@
+{{- if .Values.pythonWorker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "healthpoint.fullname" . }}-python-worker
+  labels:
+    {{- include "healthpoint.labels" . | nindent 4 }}
+    app.kubernetes.io/component: python-worker
+spec:
+  replicas: {{ .Values.pythonWorker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "healthpoint.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: python-worker
+  template:
+    metadata:
+      labels:
+        {{- include "healthpoint.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: python-worker
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ include "healthpoint.image" (dict "image" .Values.pythonWorker.image "root" .) | quote }}
+          imagePullPolicy: {{ .Values.imageDefaults.pullPolicy }}
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: {{ .Values.config.temporalAddress | quote }}
+            - name: TEMPORAL_HOST
+              value: {{ .Values.config.temporalAddress | quote }}
+            - name: TEMPORAL_NAMESPACE
+              value: {{ .Values.config.temporalNamespace | quote }}
+            - name: TEMPORAL_TASK_QUEUE
+              value: {{ .Values.config.temporalTaskQueue | quote }}
+            - name: KAFKA_BROKERS
+              value: {{ .Values.config.kafkaBrokers | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: database-url }
+          resources:
+            {{- toYaml .Values.pythonWorker.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+{{- end }}

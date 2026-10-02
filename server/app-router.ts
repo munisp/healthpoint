@@ -1,0 +1,75 @@
+/**
+ * server/app-router.ts
+ *
+ * Root tRPC router barrel.
+ *
+ * server/routers.ts is owned by another workstream on this branch (and too
+ * large to edit through API-based merges), so the idr-compliance router
+ * (server/routers/idr-compliance.ts) and the push-subscriptions router
+ * (server/routers/push-subscriptions.ts) are merged into the app router HERE
+ * instead of inside routers.ts. server/_core/index.ts mounts `rootRouter`
+ * at /api/trpc; `mergeRouters` is re-exported from server/_core/trpc.ts.
+ *
+ * Type compatibility: the client keeps importing
+ * `import type { AppRouter } from "../../../server/routers"` — that type
+ * remains valid because rootRouter is a superset of appRouter. The superset
+ * type is additionally exported here for any consumer that needs the
+ * idrCompliance / pushSubscriptions paths.
+ */
+import { appRouter } from "./routers";
+import { idrComplianceRouter } from "./routers/idr-compliance";
+import { pushSubscriptionsRouter } from "./routers/push-subscriptions";
+import { payerRouter, idreRouter, orgsRouter } from "./routers/personas";
+import { patientPortalRouter } from "./routers/patient-portal";
+import { idreDirectoryRouter } from "./routers/idre-directory";
+import { feeSchedulesRouter } from "./routers/fee-schedules";
+import { featureFlagsRouter } from "./feature-flags";
+import { impersonationRouter } from "./impersonation";
+import { unsubscribeRouter } from "./routers/unsubscribe";
+// phase13-fc additions (G6 identity verification, G14b admin TOTP reset)
+import { identityRouter } from "./auth/nppes";
+import { adminTotpRouter } from "./auth/totp-admin";
+import { submitterRouter } from "./routers/submitter";
+// phase18 additions (one-stop submitter: billing)
+import { submitterBillingRouter } from "./routers/submitter-billing";
+// phase17 additions (EHR extraction staging + eligibility scoring)
+import { practiceAuditRouter } from "./routers/practice-audit";
+// phase17-lh addition (lakehouse read-back analytics with honest postgres fallback)
+import { lakehouseAnalyticsRouter } from "./routers/lakehouse-analytics";
+// phase19 addition (chunked resumable bulk claim ingestion)
+import { bulkUploadRouter } from "./routers/bulk-upload";
+import { mergeRouters, router } from "./_core/trpc";
+
+export const rootRouter = mergeRouters(
+  appRouter,
+  router({ idrCompliance: idrComplianceRouter }),
+  router({ pushSubscriptions: pushSubscriptionsRouter }),
+  router({ payer: payerRouter }),
+  router({ patientPortal: patientPortalRouter }),
+  router({ idre: idreRouter }),
+  router({ orgs: orgsRouter }),
+  // wave-w5 additions
+  router({ idreDirectory: idreDirectoryRouter }),
+  router({ feeSchedules: feeSchedulesRouter }),
+  router({ featureFlags: featureFlagsRouter }),
+  router({ impersonation: impersonationRouter }),
+  // wave-w7 additions
+  router({ unsubscribe: unsubscribeRouter }),
+  // phase13-fc additions
+  router({ identity: identityRouter }),
+  router({ adminTotp: adminTotpRouter }),
+  // phase16 additions (third-party submitter / delegated representative)
+  router({ submitter: submitterRouter }),
+  // phase18 additions (submitter invoicing — lifecycle only, no payment processing)
+  router({ submitterBilling: submitterBillingRouter }),
+  // phase17 additions (practice claims staging + deterministic eligibility scoring)
+  router({ practiceAudit: practiceAuditRouter }),
+  // phase17-lh addition (lakehouse analytics: lakehouse when configured, honest postgres_fallback otherwise)
+  router({ lakehouseAnalytics: lakehouseAnalyticsRouter }),
+  // phase19 addition (chunked resumable bulk claim ingestion)
+  router({ bulkUpload: bulkUploadRouter })
+);
+
+export type RootRouter = typeof rootRouter;
+/** Superset of the `AppRouter` type exported by server/routers. */
+export type AppRouter = RootRouter;

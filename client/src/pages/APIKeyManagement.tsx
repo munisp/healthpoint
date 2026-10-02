@@ -18,8 +18,12 @@ export default function APIKeyManagement() {
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [showCreatedKey, setShowCreatedKey] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<any>(null);
+  // Phase13-FC (G9): keys are org-bound — the creator picks which of their
+  // orgs the key is scoped to.
+  const [newKeyOrgId, setNewKeyOrgId] = useState("");
 
   const { data: keys, isLoading, refetch } = trpc.apiKeys.list.useQuery();
+  const { data: myOrgs } = trpc.orgs.listMine.useQuery();
 
   const createMutation = trpc.apiKeys.create.useMutation({
     onSuccess: (data) => {
@@ -198,9 +202,26 @@ export default function APIKeyManagement() {
               <Label>Expiry Date (optional)</Label>
               <Input type="date" value={newKeyExpiry} onChange={e => setNewKeyExpiry(e.target.value)} min={new Date().toISOString().split("T")[0]} />
             </div>
+            <div className="space-y-1">
+              <Label htmlFor="key-org">Organization (required — the key is scoped to this org)</Label>
+              <select
+                id="key-org"
+                value={newKeyOrgId}
+                onChange={e => setNewKeyOrgId(e.target.value)}
+                className="w-full border border-input rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="">Select organization...</option>
+                {(myOrgs ?? []).map(o => (
+                  <option key={o.orgId} value={o.orgId}>{o.name} ({o.type})</option>
+                ))}
+              </select>
+              {(myOrgs ?? []).length === 0 && (
+                <p className="text-xs text-muted-foreground">You must belong to an organization before creating an API key.</p>
+              )}
+            </div>
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowCreate(false)}>Cancel</Button>
-              <Button className="flex-1" onClick={() => createMutation.mutate({ name: newKeyName, scopes: newKeyScopes as any, expiresAt: newKeyExpiry ? new Date(newKeyExpiry).toISOString() : undefined })} disabled={createMutation.isPending || !newKeyName.trim() || newKeyScopes.length === 0}>
+              <Button className="flex-1" onClick={() => createMutation.mutate({ name: newKeyName, scopes: newKeyScopes as any, orgId: newKeyOrgId, expiresAt: newKeyExpiry ? new Date(newKeyExpiry).toISOString() : undefined })} disabled={createMutation.isPending || !newKeyName.trim() || newKeyScopes.length === 0 || !newKeyOrgId}>
                 {createMutation.isPending ? "Creating..." : "Create Key"}
               </Button>
             </div>

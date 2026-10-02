@@ -9,8 +9,8 @@ import { getLoginUrl } from "@/const";
 const WARN_BEFORE_MS = 2 * 60 * 1000;
 // Poll the /me endpoint every 60 seconds to detect session state
 const POLL_INTERVAL_MS = 60 * 1000;
-// Default session length if we can't determine it (30 minutes)
-const DEFAULT_SESSION_MS = 30 * 60 * 1000;
+// Default session length if org settings don't override it (30 minutes)
+const DEFAULT_SESSION_MINUTES = 30;
 
 export default function SessionTimeoutWarning() {
   const [showWarning, setShowWarning] = useState(false);
@@ -23,6 +23,14 @@ export default function SessionTimeoutWarning() {
     refetchInterval: POLL_INTERVAL_MS,
     refetchIntervalInBackground: false,
   });
+
+  // Idle window comes from org settings (sessionTimeoutMinutes, W2), falling
+  // back to the 30-minute default.
+  const settingsQuery = trpc.orgSettings.get.useQuery(undefined, {
+    enabled: !!meQuery.data,
+    refetchInterval: 5 * 60 * 1000,
+  });
+  const sessionMs = (settingsQuery.data?.sessionTimeoutMinutes ?? DEFAULT_SESSION_MINUTES) * 60 * 1000;
 
   // Track user activity to reset the idle timer
   useEffect(() => {
@@ -41,7 +49,7 @@ export default function SessionTimeoutWarning() {
 
     function checkIdle() {
       const idleMs = Date.now() - lastActivityRef.current;
-      const remaining = DEFAULT_SESSION_MS - idleMs;
+      const remaining = sessionMs - idleMs;
 
       if (remaining <= WARN_BEFORE_MS && remaining > 0 && !showWarning) {
         setShowWarning(true);
@@ -53,7 +61,7 @@ export default function SessionTimeoutWarning() {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [meQuery.data, showWarning]);
+  }, [meQuery.data, showWarning, sessionMs]);
 
   // Countdown ticker when warning is visible
   useEffect(() => {

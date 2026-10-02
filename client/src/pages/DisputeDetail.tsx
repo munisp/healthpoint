@@ -13,14 +13,46 @@ import {
   AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock,
   DollarSign, FileText, Gavel, LogOut, Scale, Upload, Users,
   TrendingUp, CheckCircle, XCircle, RefreshCw, Download, Bell,
-  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp, Pin, PinOff
+  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp, Pin, PinOff, CalendarClock,
+  Star, StarOff, MailPlus
 } from "lucide-react";
 import WorkflowTimeline from "@/components/WorkflowTimeline";
 import DeadlineCountdownBanner from "@/components/DeadlineCountdownBanner";
+import DuplicateDetectionBanner from "@/components/DuplicateDetectionBanner";
 import OutcomePredictionGauge from "@/components/OutcomePredictionGauge";
 import DisputeComments from "@/components/DisputeComments";
 import { useRecentDisputes } from "@/hooks/useRecentDisputes";
 import { usePinnedDisputes } from "@/hooks/usePinnedDisputes";
+import ComplianceRail from "@/components/ComplianceRail";
+import DisputeCompleteness from "@/components/DisputeCompleteness";
+
+/**
+ * SettlementChips — Mojaloop settlement transfer status chips for this
+ * dispute (trpc.mojaloop.listByDispute: ledger entries with ML- reference
+ * IDs). Hidden while loading, on error, or when no transfers exist.
+ */
+function SettlementChips({ disputeId }: { disputeId: string }) {
+  const q = trpc.mojaloop.listByDispute.useQuery(
+    { disputeId },
+    { enabled: !!disputeId, retry: false, staleTime: 30_000 }
+  );
+  const entries = (q.data ?? []) as Array<Record<string, any>>;
+  if (q.isLoading || q.isError || entries.length === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 flex-wrap" aria-label="Settlement transfers">
+      {entries.map((e, i) => (
+        <span
+          key={e.referenceId ?? i}
+          title={e.entryType ? `Settlement ledger entry: ${e.entryType}` : "Settlement transfer (Mojaloop)"}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-info-foreground/30 text-info-foreground bg-info"
+        >
+          ⇄ {e.referenceId ?? "ML-transfer"}
+          {e.status ? ` · ${String(e.status).replace(/_/g, " ")}` : ""}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 const IDR_STEPS = [
   { key: "STEP_01_OPEN_NEGOTIATION_INITIATED", label: "Open Negotiation Initiated", description: "Party sends open negotiation notice per NSA §2799A-1", days: "Day 0" },
@@ -53,7 +85,7 @@ const NEXT_STEP_MAP: Record<string, { step: string; status: string; label: strin
   STEP_06_IDR_ENTITY_SELECTION: { step: "STEP_07_IDR_ENTITY_SELECTED", status: "idr_entity_selection", label: "Confirm Entity Selected" },
   STEP_07_IDR_ENTITY_SELECTED: { step: "STEP_08_ELIGIBILITY_REVIEW", status: "eligibility_review", label: "Begin Eligibility Review" },
   STEP_08_ELIGIBILITY_REVIEW: { step: "STEP_09_OFFER_SUBMISSION", status: "offer_submission", label: "Open Offer Submission" },
-  STEP_09_OFFER_SUBMISSION: { step: "STEP_10_QPA_DISCLOSURE", status: "offer_submission", label: "Disclose QPA" },
+  STEP_09_OFFER_SUBMISSION: { step: "STEP_10_QPA_DISCLOSURE", status: "qpa_disclosure", label: "Disclose QPA" },
   STEP_10_QPA_DISCLOSURE: { step: "STEP_11_ADDITIONAL_INFORMATION", status: "offer_submission", label: "Open Additional Info Period" },
   STEP_11_ADDITIONAL_INFORMATION: { step: "STEP_12_ARBITRATION_REVIEW", status: "under_arbitration", label: "Begin Arbitration Review" },
   STEP_12_ARBITRATION_REVIEW: { step: "STEP_13_DETERMINATION_ISSUED", status: "determination_issued", label: "Issue Determination" },
@@ -80,10 +112,30 @@ const OFFER_TYPE_COLORS: Record<string, string> = {
 // ─── Document Version Row ─────────────────────────────────────────────────────
 function DocumentVersionRow({ doc, disputeId }: { doc: any; disputeId: string }) {
   const [showVersions, setShowVersions] = useState(false);
+  const versionFileRef = useRef<HTMLInputElement>(null);
+  const utils = trpc.useUtils();
   const { data: versions } = trpc.documents.listVersions.useQuery(
     { documentId: doc.id },
     { enabled: showVersions }
   );
+  const uploadVersionMutation = trpc.documents.uploadVersion.useMutation({
+    onSuccess: () => {
+      utils.documents.listVersions.invalidate({ documentId: doc.id });
+      utils.documents.list.invalidate({ disputeId });
+      toast.success("New document version uploaded");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const handleVersionFile = (f: File) => {
+    uploadVersionMutation.mutate({
+      documentId: doc.id,
+      disputeId,
+      fileName: f.name,
+      fileType: f.type || "application/octet-stream",
+      fileSize: f.size,
+      storageKey: `disputes/${disputeId}/${Date.now()}-${f.name}`,
+    });
+  };
   return (
     <div className="rounded-lg bg-slate-50 border border-slate-100">
       <div className="flex items-start gap-2 p-2">
@@ -103,6 +155,27 @@ function DocumentVersionRow({ doc, disputeId }: { doc: any; disputeId: string })
         >
           {showVersions ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           History
+        </button>
+        <input
+          ref={versionFileRef}
+          type="file"
+          className="hidden"
+          accept=".pdf,.docx,.xlsx,.png,.jpg"
+          aria-label={`Upload new version of ${doc.fileName || doc.title}`}
+          onChange={e => {
+            const f = e.target.files?.[0];
+            if (f) handleVersionFile(f);
+            e.target.value = "";
+          }}
+        />
+        <button
+          onClick={() => versionFileRef.current?.click()}
+          disabled={uploadVersionMutation.isPending}
+          className="text-xs text-blue-500 hover:underline shrink-0 flex items-center gap-0.5 disabled:opacity-50"
+          title="Upload a new version of this document"
+        >
+          <Upload size={12} />
+          {uploadVersionMutation.isPending ? "Uploading…" : "New version"}
         </button>
       </div>
       {showVersions && (
@@ -139,6 +212,8 @@ export default function DisputeDetail() {
   const [showCounterOfferModal, setShowCounterOfferModal] = useState(false);
   const [showArbitratorModal, setShowArbitratorModal] = useState(false);
   const [showDocModal, setShowDocModal] = useState(false);
+  // Phase 17-FE: PRECONDITION_FAILED gate errors from advance/submit attempts (exact gaps from server).
+  const [gateErrors, setGateErrors] = useState<unknown[]>([]);
 
   // Offer form state
   const [offerAmount, setOfferAmount] = useState("");
@@ -171,6 +246,20 @@ export default function DisputeDetail() {
   } | null>(null);
   const [showAiSummary, setShowAiSummary] = useState(false);
 
+  // Phase15-FA (A11): patient portal view-link issuance (previously the
+  // /patient/:token page consumed tokens but nothing in the UI issued them).
+  const [patientName, setPatientName] = useState("");
+  const [patientEmail, setPatientEmail] = useState("");
+  const [patientPhone, setPatientPhone] = useState("");
+  const [issuedLink, setIssuedLink] = useState<{ url: string; expiresAt: string } | null>(null);
+  // Tokens issued during THIS session only (wave A added tokenId to the
+  // issueViewToken response, enabling patientPortal.revokeToken). The server
+  // exposes no list of historical tokens, so this list is session-scoped by
+  // design and the copy below must say so.
+  const [sessionTokens, setSessionTokens] = useState<
+    { tokenId: string; patientName: string; url: string; expiresAt: string }[]
+  >([]);
+
   // Advance state
   const [advanceDescription, setAdvanceDescription] = useState("");
   const [determinationBasis, setDeterminationBasis] = useState("");
@@ -197,8 +286,11 @@ export default function DisputeDetail() {
 
   // Mutations
   const advanceMutation = trpc.disputes.advance.useMutation({
-    onSuccess: () => { utils.disputes.getTimeline.invalidate(); utils.dashboard.stats.invalidate(); toast.success("Dispute advanced to next step"); },
-    onError: (err) => toast.error(err.message),
+    onSuccess: () => { setGateErrors([]); utils.disputes.getTimeline.invalidate(); utils.dashboard.stats.invalidate(); toast.success("Dispute advanced to next step"); },
+    onError: (err) => {
+      toast.error(err.message);
+      if (err.data?.code === "PRECONDITION_FAILED") setGateErrors(prev => [...prev, err]);
+    },
   });
 
   const submitOfferMutation = trpc.disputes.submitOffer.useMutation({
@@ -255,6 +347,72 @@ export default function DisputeDetail() {
       setShowAiSummary(true);
     },
     onError: (err) => toast.error(`AI summary failed: ${err.message}`),
+  });
+
+  // Watchlist toggle (server-side watchlist: watchlist.add / watchlist.remove / watchlist.isWatching)
+  const { data: isWatching } = trpc.watchlist.isWatching.useQuery(
+    { disputeId: id! },
+    { enabled: !!id }
+  );
+  const watchlistAddMutation = trpc.watchlist.add.useMutation({
+    onSuccess: () => { utils.watchlist.isWatching.invalidate({ disputeId: id! }); utils.watchlist.list.invalidate(); toast.success("Added to your watchlist"); },
+    onError: (err) => toast.error(err.message),
+  });
+  const watchlistRemoveMutation = trpc.watchlist.remove.useMutation({
+    onSuccess: () => { utils.watchlist.isWatching.invalidate({ disputeId: id! }); utils.watchlist.list.invalidate(); toast.success("Removed from your watchlist"); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Manual notification dispatch (disputes.sendNotification)
+  const [showNotifyModal, setShowNotifyModal] = useState(false);
+  const [notifyType, setNotifyType] = useState<"deadline_warning" | "step_advanced" | "determination_issued" | "offer_received" | "document_uploaded" | "system_alert">("system_alert");
+  const [notifyTitle, setNotifyTitle] = useState("");
+  const [notifyMessage, setNotifyMessage] = useState("");
+  const [notifyEmail, setNotifyEmail] = useState("");
+  const sendNotificationMutation = trpc.disputes.sendNotification.useMutation({
+    onSuccess: () => {
+      setShowNotifyModal(false);
+      setNotifyTitle(""); setNotifyMessage(""); setNotifyEmail(""); setNotifyType("system_alert");
+      toast.success("Notification sent");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Payer invite issuance (payer.invite): the acceptance landing page at
+  // /accept-invite already exists; this is the missing issuing side.
+  const [showInvitePayerModal, setShowInvitePayerModal] = useState(false);
+  const [invitePayerName, setInvitePayerName] = useState("");
+  const [invitePayerEmail, setInvitePayerEmail] = useState("");
+  const invitePayerMutation = trpc.payer.invite.useMutation({
+    onSuccess: () => {
+      setShowInvitePayerModal(false);
+      setInvitePayerName(""); setInvitePayerEmail("");
+      utils.disputes.getTimeline.invalidate();
+      toast.success("Payer invited — an invite email is sent when SMTP is configured on this deployment");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const issuePatientLinkMutation = trpc.patientPortal.issueViewToken.useMutation({
+    onSuccess: (r) => {
+      const url = `${window.location.origin}${r.path}`;
+      const expiresAt = new Date(r.expiresAt).toLocaleString();
+      setIssuedLink({ url, expiresAt });
+      setSessionTokens(prev => [
+        ...prev,
+        { tokenId: r.tokenId, patientName: patientName.trim(), url, expiresAt },
+      ]);
+      toast.success("Patient portal link issued — copy it below and share it with the patient");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const revokePatientTokenMutation = trpc.patientPortal.revokeToken.useMutation({
+    onSuccess: (_r, variables) => {
+      setSessionTokens(prev => prev.filter(t => t.tokenId !== variables.tokenId));
+      toast.success("Patient link revoked — it no longer grants access");
+    },
+    onError: (err) => toast.error(`Revoke failed: ${err.message}`),
   });
 
   const handleAISummary = () => {
@@ -348,6 +506,15 @@ export default function DisputeDetail() {
           deadlineDate={(dispute as any).deadlineDate}
         />
       )}
+      {/* Duplicate detection banner — surfaces similar open disputes */}
+      {dispute && (
+        <DuplicateDetectionBanner
+          disputeId={dispute.id}
+          claimNumber={dispute.referenceNumber}
+          payerName={dispute.respondingPartyName}
+          billedAmount={dispute.billedAmount != null ? String(dispute.billedAmount) : null}
+        />
+      )}
         {/* Page header */}
         <div className="flex items-start justify-between">
           <div>
@@ -374,6 +541,7 @@ export default function DisputeDetail() {
                   closed: "Closed",
                   appealed: "Appealed",
                   ineligible: "Ineligible",
+                  withdrawn: "Withdrawn",
                 }[dispute.status] ?? dispute.status?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
               </span>
             </div>
@@ -381,6 +549,9 @@ export default function DisputeDetail() {
               {dispute.initiatingPartyName} vs {dispute.respondingPartyName ?? "TBD"} ·{" "}
               {dispute.serviceType?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} · Filed {dispute.createdAt ? new Date(dispute.createdAt as unknown as string).toLocaleDateString() : "—"}
             </p>
+            <div className="ml-7 mt-1.5">
+              <SettlementChips disputeId={dispute.id} />
+            </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <Button
@@ -401,6 +572,44 @@ export default function DisputeDetail() {
             >
               {isPinned(dispute.id) ? <PinOff size={14} /> : <Pin size={14} />}
               {isPinned(dispute.id) ? "Unpin" : "Pin"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (isWatching) watchlistRemoveMutation.mutate({ disputeId: dispute.id });
+                else watchlistAddMutation.mutate({ disputeId: dispute.id });
+              }}
+              disabled={watchlistAddMutation.isPending || watchlistRemoveMutation.isPending}
+              className={`flex items-center gap-2 ${
+                isWatching
+                  ? "border-sky-400 text-sky-700 bg-sky-50 hover:bg-sky-100 dark:border-sky-600 dark:text-sky-400 dark:bg-sky-900/20"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              title={isWatching ? "Remove from watchlist" : "Add to watchlist"}
+            >
+              {isWatching ? <StarOff size={14} /> : <Star size={14} />}
+              {isWatching ? "Watching" : "Watch"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowNotifyModal(true)}
+              className="flex items-center gap-2 text-muted-foreground hover:text-foreground"
+              title="Send a notification about this dispute"
+            >
+              <Bell size={14} />
+              Notify
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowInvitePayerModal(true)}
+              className="flex items-center gap-2 text-muted-foreground hover:text-foreground"
+              title="Invite the payer (responding party) onto this dispute"
+            >
+              <MailPlus size={14} />
+              Invite Payer
             </Button>
             <Button variant="outline" onClick={handleAISummary} disabled={aiSummaryMutation.isPending} className="flex items-center gap-2 border-violet-300 text-violet-700 hover:bg-violet-50">
               <Brain size={14} />{aiSummaryMutation.isPending ? "Analysing..." : "AI Summary"}
@@ -511,6 +720,68 @@ export default function DisputeDetail() {
 
           {/* Right sidebar */}
           <div className="space-y-4">
+            {/* Compliance rail — statutory deadline ledger (45 CFR 149.510) */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <CalendarClock size={14} className="text-blue-500" />Compliance Rail
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <ComplianceRail disputeId={dispute.id} />
+              </CardContent>
+            </Card>
+
+            {/* Phase 20-FE: CMS Gateway submission status. The gateway
+                columns (gateway_submission_id / gateway_status) are populated
+                only once the CMS Gateway integration delivers; until then the
+                card states that honestly instead of implying submission. */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <FileText size={14} className="text-indigo-500" />CMS Gateway Submission
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {(dispute as any).gatewaySubmissionId ? (
+                  <div className="space-y-1 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">Status</span>
+                      <span className="font-medium text-slate-700 capitalize">
+                        {String((dispute as any).gatewayStatus ?? "submitted").replace(/_/g, " ")}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-400 break-all">
+                      Submission ID: <code>{String((dispute as any).gatewaySubmissionId)}</code>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500">
+                    Not submitted via the CMS Gateway yet — pending CMS Gateway integration. This dispute is
+                    tracked on-platform; no federal portal submission has been recorded.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Phase 17-FE: IDR completeness checklist (client-computed from the
+                CMS data dictionary) + server gate gaps (PRECONDITION_FAILED). */}
+            <DisputeCompleteness
+              context="idr_initiation"
+              values={(() => {
+                const d = dispute as unknown as Record<string, unknown>;
+                return {
+                  serviceState: d.facilityState ?? d.patientState,
+                  serviceCategory: d.serviceType,
+                  planType: d.planType,
+                  noticeConsentStatus: d.noticeConsentStatus,
+                  initialPaymentDate: d.initialPaymentDate,
+                  openNegotiationEndDate: d.openNegotiationDeadline,
+                };
+              })()}
+              gateErrors={gateErrors}
+            />
+
             {/* Outcome Prediction */}
             <OutcomePredictionGauge
               disputeId={dispute.id}
@@ -605,6 +876,95 @@ export default function DisputeDetail() {
                       <div className="font-medium text-slate-700">{dispute.idrEntityName}</div>
                     </div>
                   </>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Phase15-FA (A11): patient portal view-link issuance */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <Users size={14} className="text-teal-500" />Patient Portal Link
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 pt-0">
+                <p className="text-xs text-slate-500">
+                  Issue a secure, expiring view-only link so the patient can follow this dispute at <code>/patient/&lt;token&gt;</code> and upload documents. Only the initiating party or an admin can issue links.
+                </p>
+                <input
+                  className="w-full border rounded px-2 py-1.5 text-sm bg-background"
+                  aria-label="Patient name"
+                  placeholder="Patient name (required)"
+                  value={patientName}
+                  onChange={e => setPatientName(e.target.value)}
+                />
+                <input
+                  className="w-full border rounded px-2 py-1.5 text-sm bg-background"
+                  aria-label="Patient email (optional)"
+                  placeholder="Patient email (optional)"
+                  type="email"
+                  value={patientEmail}
+                  onChange={e => setPatientEmail(e.target.value)}
+                />
+                <input
+                  className="w-full border rounded px-2 py-1.5 text-sm bg-background"
+                  aria-label="Patient phone (optional)"
+                  placeholder="Patient phone (optional)"
+                  value={patientPhone}
+                  onChange={e => setPatientPhone(e.target.value)}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full text-xs"
+                  disabled={issuePatientLinkMutation.isPending || !patientName.trim() || !id}
+                  onClick={() => id && issuePatientLinkMutation.mutate({
+                    disputeId: id,
+                    patientName: patientName.trim(),
+                    email: patientEmail.trim() || undefined,
+                    phone: patientPhone.trim() || undefined,
+                  })}
+                >
+                  {issuePatientLinkMutation.isPending ? "Issuing…" : "Issue patient link"}
+                </Button>
+                {issuedLink && (
+                  <div className="rounded border border-teal-200 bg-teal-50 p-2 space-y-1">
+                    <p className="text-xs text-teal-800 break-all font-mono">{issuedLink.url}</p>
+                    <p className="text-xs text-teal-700">Expires {issuedLink.expiresAt}. The token is shown only here — it is stored hashed server-side.</p>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="text-xs"
+                      onClick={() => { navigator.clipboard?.writeText(issuedLink.url).then(() => toast.success("Link copied")).catch(() => toast.error("Copy failed — select the link manually")); }}
+                    >
+                      Copy link
+                    </Button>
+                  </div>
+                )}
+                {sessionTokens.length > 0 && (
+                  <div className="space-y-1.5 border-t border-slate-100 pt-2">
+                    <p className="text-xs font-medium text-slate-600">Issued this session</p>
+                    <p className="text-xs text-slate-400">
+                      Only links issued from this browser session appear here — previously issued links are not listed.
+                    </p>
+                    {sessionTokens.map(t => (
+                      <div key={t.tokenId} className="flex items-center justify-between gap-2 rounded border border-slate-200 px-2 py-1.5">
+                        <div className="min-w-0">
+                          <p className="text-xs text-slate-700 truncate">{t.patientName}</p>
+                          <p className="text-[11px] text-slate-400">Expires {t.expiresAt}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-xs text-red-600 hover:text-red-700 shrink-0"
+                          disabled={revokePatientTokenMutation.isPending}
+                          onClick={() => revokePatientTokenMutation.mutate({ tokenId: t.tokenId })}
+                        >
+                          Revoke
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -801,6 +1161,96 @@ export default function DisputeDetail() {
               <Button className="flex-1 bg-purple-600 hover:bg-purple-700" disabled={!counterOfferAmount || submitCounterOfferMutation.isPending}
                 onClick={() => submitCounterOfferMutation.mutate({ disputeId: dispute.id, offerType: "responding_party", amount: counterOfferAmount, rationale: counterOfferRationale || undefined })}>
                 {submitCounterOfferMutation.isPending ? "Submitting..." : "Submit Counter-Offer"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Send Notification Modal ────────────────────────────────────── */}
+      {showNotifyModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Send Notification</h3>
+            <p className="text-xs text-slate-500 mb-4">Record and dispatch a notification for this dispute. Email/SMS delivery occurs only when recipient details are provided and delivery is configured on this deployment.</p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Type</label>
+                <select value={notifyType} onChange={e => setNotifyType(e.target.value as any)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="system_alert">System alert</option>
+                  <option value="deadline_warning">Deadline warning</option>
+                  <option value="step_advanced">Step advanced</option>
+                  <option value="determination_issued">Determination issued</option>
+                  <option value="offer_received">Offer received</option>
+                  <option value="document_uploaded">Document uploaded</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Title</label>
+                <input type="text" value={notifyTitle} onChange={e => setNotifyTitle(e.target.value)}
+                  placeholder="Notification title"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Message</label>
+                <textarea value={notifyMessage} onChange={e => setNotifyMessage(e.target.value)} rows={3}
+                  placeholder="Notification message…"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Recipient email (optional)</label>
+                <input type="email" value={notifyEmail} onChange={e => setNotifyEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <Button variant="outline" className="flex-1" onClick={() => setShowNotifyModal(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!notifyTitle || !notifyMessage || sendNotificationMutation.isPending}
+                onClick={() => sendNotificationMutation.mutate({
+                  disputeId: dispute.id,
+                  notificationType: notifyType,
+                  title: notifyTitle,
+                  message: notifyMessage,
+                  recipientEmail: notifyEmail || undefined,
+                })}>
+                {sendNotificationMutation.isPending ? "Sending..." : "Send Notification"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Invite Payer Modal ─────────────────────────────────────────── */}
+      {showInvitePayerModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Invite Payer</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Invite the responding-party payer onto this dispute. A payer account is created when none exists for
+              the contact email, and the payer is linked to this dispute as responding party. Only the initiating
+              party or an admin may invite.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Payer name</label>
+                <input type="text" value={invitePayerName} onChange={e => setInvitePayerName(e.target.value)}
+                  placeholder="e.g., Acme Health Plan"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Contact email</label>
+                <input type="email" value={invitePayerEmail} onChange={e => setInvitePayerEmail(e.target.value)}
+                  placeholder="payer-contact@example.com"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <Button variant="outline" className="flex-1" onClick={() => setShowInvitePayerModal(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!invitePayerName.trim() || !invitePayerEmail.trim() || invitePayerMutation.isPending}
+                onClick={() => invitePayerMutation.mutate({ disputeId: dispute.id, payerName: invitePayerName.trim(), contactEmail: invitePayerEmail.trim() })}>
+                {invitePayerMutation.isPending ? "Inviting..." : "Send Invite"}
               </Button>
             </div>
           </div>

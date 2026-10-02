@@ -26,8 +26,21 @@ GRANT ALL PRIVILEGES ON SCHEMA public TO idr_user;
 GRANT ALL PRIVILEGES ON SCHEMA permify TO idr_user;
 GRANT ALL PRIVILEGES ON SCHEMA temporal TO idr_user;
 
--- Create replication slot for Kafka CDC
-SELECT pg_create_logical_replication_slot('idr_kafka_slot', 'pgoutput')
-  WHERE NOT EXISTS (
-    SELECT 1 FROM pg_replication_slots WHERE slot_name = 'idr_kafka_slot'
-  );
+-- Audit P1-9: the init-time `pg_create_logical_replication_slot`
+-- ('idr_kafka_slot') was REMOVED. An init-created slot with no consumer
+-- pins WAL forever and grows pg_wal without bound. The CDC consumer owns
+-- slot lifecycle and must create the slot when it connects.
+
+-- ----------------------------------------------------------------------------
+-- Audit P1-9: instance tuning via ALTER SYSTEM (persists to
+-- postgresql.auto.conf; applied on first boot, takes effect after restart).
+-- Values assume a 4GB container; adjust proportionally for other sizes.
+-- ----------------------------------------------------------------------------
+ALTER SYSTEM SET shared_buffers = '1GB';              -- ~25% of 4GB
+ALTER SYSTEM SET effective_cache_size = '3GB';        -- ~75% of 4GB
+ALTER SYSTEM SET work_mem = '16MB';
+ALTER SYSTEM SET max_parallel_workers_per_gather = 4;
+ALTER SYSTEM SET wal_compression = 'on';
+ALTER SYSTEM SET checkpoint_timeout = '15min';
+ALTER SYSTEM SET max_wal_size = '2GB';
+ALTER SYSTEM SET random_page_cost = 1.1;              -- SSD-backed volumes

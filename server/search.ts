@@ -21,6 +21,7 @@
 import Fuse from "fuse.js";
 import { Client as OpenSearchClient } from "@opensearch-project/opensearch";
 import { getDb } from "./db";
+import { canAccessDispute } from "./authz";
 import {
   disputes,
   disputeDocuments,
@@ -47,7 +48,9 @@ function getOpenSearchClient(): OpenSearchClient | null {
       auth: process.env.OPENSEARCH_USER
         ? { username: process.env.OPENSEARCH_USER, password: process.env.OPENSEARCH_PASSWORD || "" }
         : undefined,
-      ssl: { rejectUnauthorized: false },
+      // OPENSEARCH_VERIFY_TLS=true enforces certificate verification (recommended
+      // in production); anything else keeps the legacy lenient behavior.
+      ssl: { rejectUnauthorized: process.env.OPENSEARCH_VERIFY_TLS === "true" },
     });
     return _osClient;
   } catch {
@@ -186,9 +189,170 @@ export async function indexDocument(
       id,
       body: { ...payload, updatedAt: new Date().toISOString() },
     });
+    _indexFailureSet.delete(`${entityType}:${id}`);
   } catch (err) {
     console.warn(`[search] OpenSearch index error (${entityType}):`, err);
+    await recordIndexFailure(entityType, id, payload, err);
   }
+}
+
+// ── Indexing-failure retry set ────────────────────────────────────────────────
+// Failures are tracked in-memory (fast path) AND persisted to the
+// search_index_failures table (migration 0039_wave_w3.sql, raw SQL —
+// drizzle/schema.ts is owned by another wave) so they survive restarts and
+// are drained by the admin reindex job (search.reindexAll). While OpenSearch
+// is down, reads still fall back to the in-process Fuse.js index
+// (searchOpenSearch returns null on error → Fuse path in search()/suggest()).
+
+const _indexFailureSet = new Set<string>(); // `${entityType}:${id}`
+
+/** Test hook: inspect/clear the in-memory failure set. */
+export function _indexFailures(): Set<string> {
+  return _indexFailureSet;
+}
+
+async function recordIndexFailure(
+  entityType: SearchEntityType,
+  id: string,
+  payload: Record<string, unknown>,
+  err: unknown,
+): Promise<void> {
+  _indexFailureSet.add(`${entityType}:${id}`);
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const { sql } = await import("drizzle-orm");
+    const rowId = `sif_${entityType}_${id}`.slice(0, 64);
+    await db.execute(sql`
+      INSERT INTO search_index_failures (id, "entityType", "entityId", payload, "errorMessage", attempts, "createdAt")
+      VALUES (${rowId}, ${entityType}, ${id}, ${JSON.stringify(payload)}, ${String((err as Error)?.message ?? err).slice(0, 1000)}, 1, NOW())
+      ON CONFLICT ("entityType", "entityId") DO UPDATE
+      SET payload = EXCLUDED.payload,
+          "errorMessage" = EXCLUDED."errorMessage",
+          attempts = search_index_failures.attempts + 1
+    `);
+  } catch (persistErr) {
+    console.warn("[search] failed to persist index failure:", persistErr);
+  }
+}
+
+/** Retry all recorded indexing failures; returns the number drained. */
+export async function drainIndexFailures(): Promise<{ drained: number; remaining: number }> {
+  const db = await getDb();
+  if (!db) return { drained: 0, remaining: _indexFailureSet.size };
+  // Without an OpenSearch client there is nothing to index into — keep the
+  // failure rows for a later drain instead of silently discarding them.
+  if (!getOpenSearchClient()) {
+    const { sql } = await import("drizzle-orm");
+    const r: any = await db.execute(sql`SELECT COUNT(*)::int AS n FROM search_index_failures`).catch(() => null);
+    const rows = r ? (Array.isArray(r) ? r : (r?.rows ?? [])) : [];
+    return { drained: 0, remaining: Number(rows[0]?.n ?? _indexFailureSet.size) };
+  }
+  const { sql } = await import("drizzle-orm");
+  let rows: Array<Record<string, any>> = [];
+  try {
+    const r: any = await db.execute(sql`SELECT id, "entityType", "entityId", payload FROM search_index_failures LIMIT 1000`);
+    rows = Array.isArray(r) ? r : (r?.rows ?? []);
+  } catch { /* table not yet migrated */ }
+
+  let drained = 0;
+  for (const row of rows) {
+    let payload: Record<string, unknown> = {};
+    try { payload = JSON.parse(row.payload ?? "{}"); } catch { /* reindex below */ }
+    try {
+      await indexDocument(row.entityType as SearchEntityType, row.entityId, payload);
+      if (!_indexFailureSet.has(`${row.entityType}:${row.entityId}`)) {
+        // indexDocument succeeded (it clears the memory marker on success)
+        await db.execute(sql`DELETE FROM search_index_failures WHERE id = ${row.id}`);
+        drained += 1;
+      }
+    } catch {
+      // Still failing — leave the row for the next drain.
+    }
+  }
+  const remainingRaw: any = await db.execute(sql`SELECT COUNT(*)::int AS n FROM search_index_failures`).catch(() => null);
+  const remainingRows = remainingRaw ? (Array.isArray(remainingRaw) ? remainingRaw : (remainingRaw?.rows ?? [])) : [];
+  const remaining = Number(remainingRows[0]?.n ?? _indexFailureSet.size);
+  return { drained, remaining };
+}
+
+// ── Admin reindex ─────────────────────────────────────────────────────────────
+
+export interface ReindexReport {
+  indexed: Record<SearchEntityType, number>;
+  drainedFailures: number;
+  remainingFailures: number;
+  took: number; // ms
+}
+
+const REINDEX_BATCH = 500;
+
+/**
+ * Admin reindex: rebuild the OpenSearch index from Postgres in bounded
+ * batches of 500 per entity type, then drain the indexing-failure retry set,
+ * then invalidate the in-process Fuse.js fallback cache so it rebuilds from
+ * fresh data on next read. OpenSearch-down reads continue to fall back to
+ * Fuse throughout (see searchOpenSearch).
+ */
+export async function reindexAllFromPostgres(batchSize = REINDEX_BATCH): Promise<ReindexReport> {
+  const started = Date.now();
+  const db = await getDb();
+  const indexed: Record<SearchEntityType, number> = {
+    dispute: 0, document: 0, audit: 0, payer_contact: 0,
+    idr_entity: 0, expert: 0, regulatory: 0, qpa_benchmark: 0,
+  };
+  if (!db) return { indexed, drainedFailures: 0, remainingFailures: _indexFailureSet.size, took: Date.now() - started };
+
+  const { asc } = await import("drizzle-orm");
+
+  async function reindexEntity<TRow extends { id: string }>(
+    entityType: SearchEntityType,
+    table: any,
+    idColumn: any,
+    mapRow: (row: TRow) => Record<string, unknown>,
+  ): Promise<void> {
+    let offset = 0;
+    for (;;) {
+      const rows = (await db!.select().from(table).orderBy(asc(idColumn)).limit(batchSize).offset(offset)) as TRow[];
+      if (!rows.length) break;
+      for (const row of rows) {
+        await indexDocument(entityType, row.id, mapRow(row));
+        indexed[entityType] += 1;
+      }
+      offset += rows.length;
+      if (rows.length < batchSize) break;
+    }
+  }
+
+  await reindexEntity("dispute", disputes, disputes.id, (d: any) => ({
+    disputeId: d.id, referenceNumber: d.referenceNumber ?? "", payerName: d.respondingPartyName ?? "",
+    serviceType: d.serviceType ?? "", status: d.status ?? "",
+  }));
+  await reindexEntity("document", disputeDocuments, disputeDocuments.id, (d: any) => ({
+    disputeId: d.disputeId ?? "", fileName: d.fileName ?? "", documentType: d.documentType ?? "",
+  }));
+  await reindexEntity("audit", auditLog, auditLog.id, (a: any) => ({
+    action: a.action ?? "", entityType: a.entityType ?? "", entityId: a.entityId ?? "", userId: a.userId ?? "",
+  }));
+  await reindexEntity("payer_contact", payerContacts, payerContacts.id, (p: any) => ({
+    payerName: p.payerName ?? "", contactName: p.contactName ?? "", email: p.email ?? "",
+  }));
+  await reindexEntity("idr_entity", idrEntities, idrEntities.id, (e: any) => ({
+    name: e.name ?? "", certificationNumber: e.certificationNumber ?? "",
+  }));
+  await reindexEntity("expert", expertPanel, expertPanel.id, (e: any) => ({
+    name: e.name ?? "", specialty: e.specialty ?? "",
+  }));
+  await reindexEntity("regulatory", regulatoryUpdates, regulatoryUpdates.id, (r: any) => ({
+    title: r.title ?? "", summary: r.summary ?? "", category: r.category ?? "",
+  }));
+  await reindexEntity("qpa_benchmark", qpaBenchmarks, qpaBenchmarks.id, (q: any) => ({
+    serviceType: q.specialty ?? "", cptCode: q.cptCode ?? "", state: q.source ?? "",
+  }));
+
+  const { drained, remaining } = await drainIndexFailures();
+  invalidateSearchIndex();
+  return { indexed, drainedFailures: drained, remainingFailures: remaining, took: Date.now() - started };
 }
 
 /** Convenience wrapper for dispute indexing (backward compat) */
@@ -337,19 +501,63 @@ async function buildIndex(): Promise<IndexCache> {
         notes:          d.notes ?? "",
         billedAmount:   d.billedAmount ?? "",
         currentStep:    d.currentStep ?? "",
+        // ownership fields for object-level visibility filtering (not search keys)
+        initiatingPartyId: d.initiatingPartyId ?? "",
+        createdBy:      d.createdBy ?? "",
       }));
     } catch (err) { console.warn("[Search] disputes:", err); }
 
-    // Documents
+    // Documents — W6: full-text v1. Extracted text is joined from
+    // documentAnalyses.ocrText (doc-intelligence results, matched by
+    // disputeId+fileName) and smartFormExtractions content, so searches match
+    // document text, not just file names. Hits keep documentId+disputeId
+    // linkage; visibility scoping (uploadedBy / parent-dispute access) is
+    // unchanged (filterVisibleHits).
     try {
       const rows = await db.select().from(disputeDocuments).orderBy(desc(disputeDocuments.uploadedAt)).limit(5000);
+      // Extracted-text lookup from document analyses (OCR/doc-intelligence).
+      const textByDocKey = new Map<string, string>();
+      try {
+        const { documentAnalyses } = await import("../drizzle/schema");
+        const analyses = await db.select().from(documentAnalyses).orderBy(desc(documentAnalyses.createdAt)).limit(10000);
+        for (const a of analyses) {
+          if (!a.ocrText) continue;
+          const key = `${a.disputeId ?? ""}|${a.fileName ?? ""}`;
+          if (!textByDocKey.has(key)) textByDocKey.set(key, a.ocrText.slice(0, 20_000));
+        }
+      } catch (err) { console.warn("[Search] document_analyses text:", err); }
       documentData = rows.map(d => ({
         id:           d.id,
         disputeId:    d.disputeId ?? "",
         fileName:     d.fileName ?? "",
         documentType: d.documentType ?? "",
-        extractedText: "",
+        extractedText: textByDocKey.get(`${d.disputeId ?? ""}|${d.fileName ?? ""}`) ?? "",
+        // ownership field for object-level visibility filtering (not a search key)
+        uploadedBy:   d.uploadedBy ?? "",
       }));
+      // Smart-form extractions with dispute linkage are indexed as documents
+      // so their extracted content is searchable and linked back.
+      try {
+        const { smartFormExtractions } = await import("../drizzle/schema");
+        const extractions = await db.select().from(smartFormExtractions).orderBy(desc(smartFormExtractions.createdAt)).limit(5000);
+        for (const e of extractions) {
+          if (!e.disputeId || e.status !== "complete") continue;
+          const fieldText = Object.values(e.extractedFields ?? {})
+            .map(f => (f as { value?: string | number | null })?.value)
+            .filter(v => v !== null && v !== undefined)
+            .join(" ");
+          const text = [e.inputPreview ?? "", fieldText].join(" ").trim();
+          if (!text) continue;
+          documentData.push({
+            id:           `sfe:${e.id}`,
+            disputeId:    e.disputeId,
+            fileName:     e.documentName ?? `smart-form-extraction-${e.id}`,
+            documentType: "smart_form_extraction",
+            extractedText: text.slice(0, 20_000),
+            uploadedBy:   e.userId ?? "",
+          });
+        }
+      } catch (err) { console.warn("[Search] smart_form_extractions text:", err); }
     } catch (err) { console.warn("[Search] documents:", err); }
 
     // Audit log
@@ -472,6 +680,39 @@ const ALL_ENTITY_TYPES: SearchEntityType[] = [
   "payer_contact", "idr_entity", "expert", "regulatory", "qpa_benchmark",
 ];
 
+// Entity types whose hits embed tenant-private data (PHI/financials/audit).
+// These are filtered by object-level ownership for non-admin callers.
+const RESTRICTED_ENTITY_TYPES: ReadonlySet<SearchEntityType> = new Set<SearchEntityType>(["dispute", "document", "audit"]);
+
+/**
+ * Fail-closed visibility filter for search hits (IDOR guard).
+ * Admins and unscoped internal callers see everything; regular users only see
+ * hits on objects they own or — for dispute-linked hits — have been granted
+ * access to via the authz layer.
+ */
+async function filterVisibleHits(
+  hits: SearchHit[],
+  userId?: string,
+  userRole?: "user" | "admin"
+): Promise<SearchHit[]> {
+  if (!userId || userRole === "admin") return hits;
+  const checks = await Promise.all(hits.map(async (hit) => {
+    if (!RESTRICTED_ENTITY_TYPES.has(hit.entityType)) return true;
+    const item = hit.item as Record<string, unknown>;
+    if (hit.entityType === "audit") return item.userId === userId;
+    if (hit.entityType === "dispute") {
+      if (item.initiatingPartyId === userId || item.createdBy === userId) return true;
+      try { return await canAccessDispute(userId, userRole ?? "user", hit.id, "read"); } catch { return false; }
+    }
+    // documents: uploader, or read access to the parent dispute
+    if (item.uploadedBy === userId) return true;
+    const disputeId = typeof item.disputeId === "string" ? item.disputeId : null;
+    if (!disputeId) return false;
+    try { return await canAccessDispute(userId, userRole ?? "user", disputeId, "read"); } catch { return false; }
+  }));
+  return hits.filter((_, i) => checks[i]);
+}
+
 /**
  * Execute a full-text search across all indexed entity types.
  * Returns results ranked by relevance score.
@@ -490,7 +731,12 @@ export async function search(query: SearchQuery): Promise<SearchResult> {
 
   // Try OpenSearch first
   const osResult = await searchOpenSearch(q, entityTypes, limit);
-  if (osResult) return osResult;
+  if (osResult) {
+    // Enforce object-level visibility on externally-served hits.
+    osResult.hits = await filterVisibleHits(osResult.hits, query.userId, query.userRole);
+    osResult.total = osResult.hits.length;
+    return osResult;
+  }
 
   // Fall back to Fuse.js
   const index = await getIndex();
@@ -525,9 +771,12 @@ export async function search(query: SearchQuery): Promise<SearchResult> {
   // Sort by score descending
   hits.sort((a, b) => b.score - a.score);
 
+  // Enforce object-level visibility before returning hits.
+  const visibleHits = await filterVisibleHits(hits, query.userId, query.userRole);
+
   return {
-    total: hits.length,
-    hits: hits.slice(0, limit),
+    total: visibleHits.length,
+    hits: visibleHits.slice(0, limit),
     query: q,
     entityTypes,
     took: Date.now() - start,
@@ -715,7 +964,7 @@ const INDEX_MAPPINGS: Record<string, object> = {
     mappings: {
       properties: {
         name:         { type: "text", fields: { keyword: { type: "keyword" } } },
-        credentials:  { type: "text" },
+        credentials:  { type: "keyword" },
         specialty:    { type: "keyword" },
         bio:          { type: "text", analyzer: "english" },
         availability: { type: "keyword" },
@@ -795,9 +1044,16 @@ export interface SuggestResult {
  */
 export async function suggest(
   prefix: string,
-  limit = 8
+  limit = 8,
+  userId?: string,
+  userRole?: "user" | "admin"
 ): Promise<SuggestResult[]> {
   if (!prefix || prefix.trim().length < 2) return [];
+
+  // IDOR guard: suggestions for tenant-private entity types (disputes, documents,
+  // audit) would leak reference numbers/labels across tenants. Non-admin callers
+  // only receive suggestions from shared reference data.
+  const includeRestricted = !userId || userRole === "admin";
 
   const client = getOpenSearchClient();
   if (client) {
@@ -832,7 +1088,7 @@ export async function suggest(
           else if (idx.includes("regulatory")) entityType = "regulatory";
           else if (idx.includes("qpa"))   entityType = "qpa_benchmark";
           return { text: o.text, score: o._score || 0, entityType };
-        });
+        }).filter(s => includeRestricted || !RESTRICTED_ENTITY_TYPES.has(s.entityType));
       }
     } catch {
       // Fall through to Fuse.js prefix fallback
@@ -862,7 +1118,9 @@ export async function suggest(
 
   // Access internal Fuse docs via _docs (undocumented but stable)
   type FuseInternal = { _docs: Record<string, unknown>[] };
-  prefixScan((index.disputes as unknown as FuseInternal)._docs ?? [], "referenceNumber", "dispute");
+  if (includeRestricted) {
+    prefixScan((index.disputes as unknown as FuseInternal)._docs ?? [], "referenceNumber", "dispute");
+  }
   prefixScan((index.payerContacts as unknown as FuseInternal)._docs ?? [], "payerName", "payer_contact");
   prefixScan((index.idrEntities as unknown as FuseInternal)._docs ?? [], "name", "idr_entity");
   prefixScan((index.expertPanel as unknown as FuseInternal)._docs ?? [], "name", "expert");

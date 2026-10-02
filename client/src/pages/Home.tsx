@@ -74,10 +74,10 @@ const AUDIENCES = [
 ];
 
 const colorMap: Record<string, { bg: string; border: string; text: string; btn: string; badge: string }> = {
-  blue:   { bg: "bg-blue-50",   border: "border-blue-200",   text: "text-blue-700",   btn: "bg-blue-600 hover:bg-blue-700",   badge: "bg-blue-100 text-blue-700" },
+  blue:   { bg: "bg-info",   border: "border-info-foreground/30",   text: "text-info-foreground",   btn: "bg-primary hover:bg-primary/90",   badge: "bg-info text-info-foreground" },
   purple: { bg: "bg-purple-50", border: "border-purple-200", text: "text-purple-700", btn: "bg-purple-600 hover:bg-purple-700", badge: "bg-purple-100 text-purple-700" },
-  amber:  { bg: "bg-amber-50",  border: "border-amber-200",  text: "text-amber-700",  btn: "bg-amber-600 hover:bg-amber-700",  badge: "bg-amber-100 text-amber-700" },
-  green:  { bg: "bg-green-50",  border: "border-green-200",  text: "text-green-700",  btn: "bg-green-600 hover:bg-green-700",  badge: "bg-green-100 text-green-700" },
+  amber:  { bg: "bg-warning",  border: "border-warning-foreground/30",  text: "text-warning-foreground",  btn: "bg-primary hover:bg-primary/90",  badge: "bg-warning text-warning-foreground" },
+  green:  { bg: "bg-success",  border: "border-success-foreground/30",  text: "text-success-foreground",  btn: "bg-primary hover:bg-primary/90",  badge: "bg-success text-success-foreground" },
 };
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -94,8 +94,8 @@ export default function Home() {
     if (!loading && isAuthenticated) navigate("/dashboard");
   }, [isAuthenticated, loading, navigate]);
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50">
-      <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+    <div className="min-h-screen flex items-center justify-center bg-muted">
+      <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
     </div>
   );
 
@@ -131,41 +131,41 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-white text-slate-900 antialiased">
+    <div className="min-h-screen bg-white text-foreground antialiased">
       {/* ── Navigation ── */}
-      <nav className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-slate-100 shadow-sm">
+      <nav className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-border shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
           <div className="flex items-center gap-3">
-            <img src={APP_LOGO} className="h-9 w-9 rounded-xl object-cover border border-slate-200" alt="HealthPoint" />
-            <span className="text-xl font-bold text-slate-900">{APP_TITLE}</span>
+            <img src={APP_LOGO} className="h-9 w-9 rounded-xl object-cover border border-border" alt="HealthPoint" />
+            <span className="text-xl font-bold text-foreground">{APP_TITLE}</span>
           </div>
           {/* Desktop nav */}
-          <div className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
-            <a href="#how-it-works" className="hover:text-slate-900 transition-colors">How It Works</a>
-            <a href="#for-you" className="hover:text-slate-900 transition-colors">For You</a>
-            <a href="#pricing" className="hover:text-slate-900 transition-colors">Pricing</a>
-            <a href="#nsa-guide" className="hover:text-slate-900 transition-colors">NSA Guide</a>
+          <div className="hidden md:flex items-center gap-6 text-sm font-medium text-muted-foreground">
+            <a href="#how-it-works" className="hover:text-foreground transition-colors">How It Works</a>
+            <a href="#for-you" className="hover:text-foreground transition-colors">For You</a>
+            <a href="#pricing" className="hover:text-foreground transition-colors">Pricing</a>
+            <a href="#nsa-guide" className="hover:text-foreground transition-colors">NSA Guide</a>
           </div>
           <div className="hidden md:flex items-center gap-3">
-            <a href={getLoginUrl()} className="text-sm font-medium text-slate-600 hover:text-slate-900 px-4 py-2 rounded-lg hover:bg-slate-100 transition-colors">Sign In</a>
+            <a href={getLoginUrl()} className="text-sm font-medium text-muted-foreground hover:text-foreground px-4 py-2 rounded-lg hover:bg-muted transition-colors">Sign In</a>
             <a href={getRegisterUrl("provider", "/dashboard")}
-              className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition-colors">
+              className="text-sm font-semibold text-white bg-primary hover:bg-primary/90 px-4 py-2 rounded-lg transition-colors">
               Get Started
             </a>
           </div>
           {/* Mobile menu toggle */}
-          <button className="md:hidden p-2 rounded-lg hover:bg-slate-100" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+          <button className="md:hidden p-2 rounded-lg hover:bg-muted" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
             {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
         </div>
         {/* Mobile menu */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-slate-100 bg-white px-4 py-4 flex flex-col gap-3">
-            <a href="#how-it-works" className="text-sm font-medium text-slate-600 py-2" onClick={() => setMobileMenuOpen(false)}>How It Works</a>
-            <a href="#for-you" className="text-sm font-medium text-slate-600 py-2" onClick={() => setMobileMenuOpen(false)}>For You</a>
-            <a href="#pricing" className="text-sm font-medium text-slate-600 py-2" onClick={() => setMobileMenuOpen(false)}>Pricing</a>
-            <a href={getLoginUrl()} className="text-sm font-medium text-slate-600 py-2">Sign In</a>
-            <a href={getRegisterUrl("provider", "/dashboard")} className="text-sm font-semibold text-white bg-blue-600 px-4 py-2 rounded-lg text-center">Get Started</a>
+          <div className="md:hidden border-t border-border bg-white px-4 py-4 flex flex-col gap-3">
+            <a href="#how-it-works" className="text-sm font-medium text-muted-foreground py-2" onClick={() => setMobileMenuOpen(false)}>How It Works</a>
+            <a href="#for-you" className="text-sm font-medium text-muted-foreground py-2" onClick={() => setMobileMenuOpen(false)}>For You</a>
+            <a href="#pricing" className="text-sm font-medium text-muted-foreground py-2" onClick={() => setMobileMenuOpen(false)}>Pricing</a>
+            <a href={getLoginUrl()} className="text-sm font-medium text-muted-foreground py-2">Sign In</a>
+            <a href={getRegisterUrl("provider", "/dashboard")} className="text-sm font-semibold text-white bg-primary px-4 py-2 rounded-lg text-center">Get Started</a>
           </div>
         )}
       </nav>
@@ -174,7 +174,7 @@ export default function Home() {
       <section className="relative overflow-hidden bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 text-white">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(56,189,248,0.15),transparent_60%)]" />
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-20 pb-24 text-center">
-          <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500/20 border border-blue-400/30 rounded-full text-blue-300 text-sm font-medium mb-8">
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500/20 border border-info-foreground/30 rounded-full text-blue-300 text-sm font-medium mb-8">
             <Scale size={14} />
             NSA No Surprises Act — Federal IDR Platform
           </div>
@@ -189,7 +189,7 @@ export default function Home() {
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <a href={getRegisterUrl("provider", "/dashboard")}
-              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold px-8 py-3.5 rounded-xl text-base transition-colors">
+              className="inline-flex items-center gap-2 bg-primary hover:bg-primary/90 text-white font-semibold px-8 py-3.5 rounded-xl text-base transition-colors">
               Access the Demonstration <ArrowRight size={18} />
             </a>
             <a href="#how-it-works"
@@ -201,7 +201,7 @@ export default function Home() {
       </section>
 
       {/* ── Verified capabilities ── */}
-      <section className="bg-blue-600 text-white py-12">
+      <section className="bg-primary text-white py-12">
         <div className="max-w-5xl mx-auto px-4 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
           {[
             { value: "19", label: "Workflow Steps Modeled" },
@@ -218,18 +218,18 @@ export default function Home() {
       </section>
 
       {/* ── How It Works (19-step workflow) ── */}
-      <section id="how-it-works" className="py-20 bg-slate-50">
+      <section id="how-it-works" className="py-20 bg-muted">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-14">
-            <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">The Complete Process</span>
-            <h2 className="text-4xl font-extrabold text-slate-900 mt-2 mb-4">19-Step IDR Workflow</h2>
-            <p className="text-slate-600 max-w-2xl mx-auto">The demonstration models each workflow step and provides a workspace for deadlines, evidence, offers, determinations, and payment evidence.</p>
+            <span className="text-info-foreground font-semibold text-sm uppercase tracking-wider">The Complete Process</span>
+            <h2 className="text-4xl font-extrabold text-foreground mt-2 mb-4">19-Step IDR Workflow</h2>
+            <p className="text-muted-foreground max-w-2xl mx-auto">The demonstration models each workflow step and provides a workspace for deadlines, evidence, offers, determinations, and payment evidence.</p>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {IDR_STEPS.map(s => (
-              <div key={s.n} className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col items-center text-center hover:border-blue-300 hover:shadow-md transition-all">
-                <div className="w-9 h-9 rounded-full bg-blue-600 text-white text-sm font-bold flex items-center justify-center mb-2">{s.n}</div>
-                <p className="text-xs font-medium text-slate-700 leading-tight">{s.label}</p>
+              <div key={s.n} className="bg-white border border-border rounded-xl p-4 flex flex-col items-center text-center hover:border-info-foreground/30 hover:shadow-md transition-all">
+                <div className="w-9 h-9 rounded-full bg-primary text-white text-sm font-bold flex items-center justify-center mb-2">{s.n}</div>
+                <p className="text-xs font-medium text-foreground leading-tight">{s.label}</p>
               </div>
             ))}
           </div>
@@ -256,7 +256,7 @@ export default function Home() {
                     </div>
                     <div>
                       <h4 className="font-semibold text-white mb-0.5">{f.title}</h4>
-                      <p className="text-slate-400 text-sm">{f.desc}</p>
+                      <p className="text-muted-foreground text-sm">{f.desc}</p>
                     </div>
                   </div>
                 ))}
@@ -272,14 +272,14 @@ export default function Home() {
               </div>
               <div className="p-5 font-mono text-xs space-y-2 text-slate-300">
                 <p><span className="text-sky-400">demo@healthpoint</span><span className="text-slate-500">:~$</span> <span className="text-white">review_dispute --sample</span></p>
-                <p className="text-slate-500">{">"} Loading an illustrative workflow record...</p>
+                <p className="text-slate-400">{">"} Loading an illustrative workflow record...</p>
                 <p className="text-green-400">✓ Sample record loaded — no patient or payment data displayed</p>
-                <p className="text-slate-500">{">"} Preparing review prompts...</p>
+                <p className="text-slate-400">{">"} Preparing review prompts...</p>
                 <p className="text-yellow-400">⚡ Staff review required: eligibility, evidence completeness, and deadlines</p>
-                <p className="text-slate-500">{">"} Generating a draft outline...</p>
+                <p className="text-slate-400">{">"} Generating a draft outline...</p>
                 <p className="text-green-400">✓ Draft generated for authorized-user review</p>
                 <p className="text-sky-400">{">"} Next action: <span className="text-white">Validate source records before taking any operational action</span></p>
-                <p className="text-slate-500 animate-pulse">▋</p>
+                <p className="text-slate-400 animate-pulse">▋</p>
               </div>
             </div>
           </div>
@@ -290,9 +290,9 @@ export default function Home() {
       <section id="for-you" className="py-20 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-14">
-            <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Built for Every Stakeholder</span>
-            <h2 className="text-4xl font-extrabold text-slate-900 mt-2 mb-4">One Platform, Every Role</h2>
-            <p className="text-slate-600 max-w-2xl mx-auto">Whether you're filing disputes, adjudicating them, or defending against them — HealthPoint has a purpose-built workflow for your role.</p>
+            <span className="text-info-foreground font-semibold text-sm uppercase tracking-wider">Built for Every Stakeholder</span>
+            <h2 className="text-4xl font-extrabold text-foreground mt-2 mb-4">One Platform, Every Role</h2>
+            <p className="text-muted-foreground max-w-2xl mx-auto">Whether you're filing disputes, adjudicating them, or defending against them — HealthPoint has a purpose-built workflow for your role.</p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {AUDIENCES.map(a => {
@@ -302,11 +302,11 @@ export default function Home() {
                   <div className={`w-11 h-11 rounded-xl ${c.badge} flex items-center justify-center mb-4`}>
                     <a.icon size={22} />
                   </div>
-                  <h3 className="font-bold text-slate-900 text-lg mb-2">{a.title}</h3>
-                  <p className="text-slate-500 text-sm mb-4 italic">"{a.pain}"</p>
+                  <h3 className="font-bold text-foreground text-lg mb-2">{a.title}</h3>
+                  <p className="text-muted-foreground text-sm mb-4 italic">"{a.pain}"</p>
                   <ul className="space-y-2 flex-1">
                     {a.outcomes.map(o => (
-                      <li key={o} className="flex items-start gap-2 text-sm text-slate-700">
+                      <li key={o} className="flex items-start gap-2 text-sm text-foreground">
                         <CheckCircle2 size={15} className={`${c.text} mt-0.5 flex-shrink-0`} />
                         {o}
                       </li>
@@ -327,19 +327,19 @@ export default function Home() {
       <section id="pricing" className="py-20 bg-white">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-14">
-            <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Current Status</span>
-            <h2 className="text-4xl font-extrabold text-slate-900 mt-2 mb-4">Development Demonstration</h2>
-            <p className="text-slate-600">This deployment is a development demonstration. Commercial pricing, trials, support commitments, and service-level agreements are not offered through this page.</p>
+            <span className="text-info-foreground font-semibold text-sm uppercase tracking-wider">Current Status</span>
+            <h2 className="text-4xl font-extrabold text-foreground mt-2 mb-4">Development Demonstration</h2>
+            <p className="text-muted-foreground">This deployment is a development demonstration. Commercial pricing, trials, support commitments, and service-level agreements are not offered through this page.</p>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 grid sm:grid-cols-3 gap-6 text-left">
+          <div className="rounded-2xl border border-border bg-muted p-8 grid sm:grid-cols-3 gap-6 text-left">
             {[
               ["Workflow demo", "Use the guided dispute, document, offer, and determination views for evaluation."],
               ["Human review", "Validate legal, clinical, payment, and regulatory decisions with qualified personnel."],
               ["No funds transfer", "Payment entries record external evidence; they do not initiate or release funds."],
             ].map(([title, description]) => (
               <div key={title}>
-                <h3 className="font-semibold text-slate-900 mb-2">{title}</h3>
-                <p className="text-sm text-slate-600">{description}</p>
+                <h3 className="font-semibold text-foreground mb-2">{title}</h3>
+                <p className="text-sm text-muted-foreground">{description}</p>
               </div>
             ))}
           </div>
@@ -352,7 +352,7 @@ export default function Home() {
           <div className="text-center mb-12">
             <span className="text-sky-400 font-semibold text-sm uppercase tracking-wider">Regulatory Reference</span>
             <h2 className="text-4xl font-extrabold mt-2 mb-4">NSA/IDR Quick Reference</h2>
-            <p className="text-slate-400">Key timelines and thresholds under the No Surprises Act.</p>
+            <p className="text-slate-300">Key timelines and thresholds under the No Surprises Act.</p>
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {[
@@ -429,15 +429,15 @@ export default function Home() {
                 <select value={leadForm.role}
                   onChange={e => setLeadForm(f => ({ ...f, role: e.target.value }))}
                   className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/40">
-                  <option value="provider" className="text-slate-900">Physician / Provider</option>
-                  <option value="facility" className="text-slate-900">Hospital / Facility</option>
-                  <option value="payer" className="text-slate-900">Health Plan / Payer</option>
-                  <option value="idr_entity" className="text-slate-900">IDR Entity / Arbitrator</option>
+                  <option value="provider" className="text-foreground">Physician / Provider</option>
+                  <option value="facility" className="text-foreground">Hospital / Facility</option>
+                  <option value="payer" className="text-foreground">Health Plan / Payer</option>
+                  <option value="idr_entity" className="text-foreground">IDR Entity / Arbitrator</option>
                 </select>
               </div>
               {leadError && <p className="text-red-300 text-sm">{leadError}</p>}
               <button type="submit"
-                className="w-full bg-white text-blue-700 font-bold py-3.5 rounded-xl text-base hover:bg-blue-50 transition-colors">
+                className="w-full bg-white text-info-foreground font-bold py-3.5 rounded-xl text-base hover:bg-info transition-colors">
                 Create My Account →
               </button>
               <p className="text-center text-blue-200 text-xs">
@@ -498,7 +498,7 @@ export default function Home() {
           </div>
           <div className="border-t border-slate-800 pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
             <p>© 2026 HealthPoint. Development demonstration for IDR workflow evaluation.</p>
-            <p className="text-slate-600">Authentication tooling · FHIR R4 interface · Human review required</p>
+            <p className="text-slate-400">Authentication tooling · FHIR R4 interface · Human review required</p>
           </div>
         </div>
       </footer>

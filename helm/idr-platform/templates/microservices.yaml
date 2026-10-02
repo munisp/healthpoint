@@ -19,10 +19,6 @@ spec:
       labels:
         {{- include "idr-platform.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: go-services
-      annotations:
-        dapr.io/enabled: "true"
-        dapr.io/app-id: "idr-go-services"
-        dapr.io/app-port: "8090"
     spec:
       containers:
         - name: go-services
@@ -101,10 +97,6 @@ spec:
       labels:
         {{- include "idr-platform.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: rust-services
-      annotations:
-        dapr.io/enabled: "true"
-        dapr.io/app-id: "idr-rust-services"
-        dapr.io/app-port: "8091"
     spec:
       containers:
         - name: rust-services
@@ -120,8 +112,6 @@ spec:
                 secretKeyRef:
                   name: idr-secrets
                   key: kafka-brokers
-            - name: FLUVIO_SC_HOST
-              value: "{{ include "idr-platform.fullname" . }}-fluvio-sc"
           livenessProbe:
             httpGet:
               path: /health

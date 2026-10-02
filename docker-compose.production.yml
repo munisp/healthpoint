@@ -5,6 +5,26 @@ services:
   mojaloop-simulator:
     profiles: ["simulation-only-never-enable-in-production"]
 
+  # Audit P1 (2026-09-07): Keycloak production hardening. The base file runs
+  # `start --optimized` against Postgres already (no start-dev/dev-mem); this
+  # overlay adds the mandatory public hostname with strict hostname/HTTPS
+  # enforcement and disables plain HTTP (TLS terminates at the Caddy edge,
+  # which forwards X-Forwarded-* — hence KC_PROXY_HEADERS).
+  keycloak:
+    environment:
+      KC_HOSTNAME: "${KEYCLOAK_HOSTNAME:?Set the public Keycloak URL, e.g. https://keycloak.example.com}"
+      KC_HOSTNAME_STRICT: "true"
+      KC_HOSTNAME_STRICT_HTTPS: "true"
+      KC_HTTP_ENABLED: "false"
+      KC_PROXY_HEADERS: xforwarded
+
+  # Audit P1-6 (2026-09-07): ML serving auth is fail-closed — the overlay
+  # makes the API key mandatory instead of inheriting the empty default.
+  ml-service:
+    environment:
+      ML_API_KEY: "${ML_API_KEY:?Set ML_API_KEY — scoring endpoints 401 fail-closed without it}"
+      ML_DEV_MODE: ""   # auth bypass is never allowed in production
+
   app:
     environment:
       NODE_ENV: production

@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -6,11 +7,33 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Calculator, TrendingUp, TrendingDown, Info, DollarSign } from "lucide-react";
 
-// NSA IDR fee schedule (CMS published rates as of 2024)
-const IDR_ADMIN_FEES = {
-  single_claim: { batched: false, fee: 350, label: "Single Claim" },
-  batched_same_payer: { batched: true, fee: 350, label: "Batched (Same Payer, Same Code)" },
+// Fallback IDR admin fees (CMS published rates as of 2024), used only when
+// the live feeSchedules.list data is unavailable. feeSchedules.list is an
+// admin-protected procedure, so non-admin users always see the fallback —
+// the provenance banner below states which source is in effect.
+const FALLBACK_IDR_ADMIN_FEES = {
+  single: { fee: 350, label: "Single Claim" },
+  batched: { fee: 350, label: "Batched (Same Payer, Same Code)" },
 };
+
+type FeeRow = {
+  effectiveYear: number;
+  tier: "single" | "batched";
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  amountUsd: number;
+  citation?: string | null;
+};
+
+/** Pick the fee row currently in effect for a tier (latest effectiveFrom). */
+function currentFee(rows: FeeRow[] | undefined, tier: "single" | "batched"): FeeRow | null {
+  if (!rows?.length) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const eligible = rows
+    .filter(r => r.tier === tier && r.effectiveFrom <= today && (!r.effectiveTo || r.effectiveTo >= today))
+    .sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom));
+  return eligible[0] ?? null;
+}
 
 // Estimated attorney/consultant fees per hour
 const COMPLEXITY_COSTS = {
@@ -55,13 +78,25 @@ export default function IDRCostEstimator() {
   const [isBatched, setIsBatched] = useState(false);
   const [claimCount, setClaimCount] = useState("1");
 
+  // Live admin fee schedule (admin-only procedure; non-admins fall back).
+  const feeQuery = trpc.feeSchedules.list.useQuery(undefined, { retry: false, staleTime: 5 * 60_000 });
+  const liveSingle = currentFee(feeQuery.data as FeeRow[] | undefined, "single");
+  const liveBatched = currentFee(feeQuery.data as FeeRow[] | undefined, "batched");
+  const singleFee = liveSingle?.amountUsd ?? FALLBACK_IDR_ADMIN_FEES.single.fee;
+  const batchedFee = liveBatched?.amountUsd ?? FALLBACK_IDR_ADMIN_FEES.batched.fee;
+  const feeSource = liveSingle || liveBatched
+    ? `Live fee schedule (feeSchedules.list) — single $${singleFee}, batched $${batchedFee}, effective ${(liveSingle ?? liveBatched)!.effectiveFrom}`
+    : feeQuery.isError
+      ? "Static fallback: CMS-published 2024 IDR admin fees ($350) — live fee schedule is admin-only or unavailable"
+      : "Loading fee schedule…";
+
   const calc = useMemo(() => {
     const billed = parseFloat(billedAmount) || 0;
     const offer = parseFloat(payerOffer) || 0;
     const count = parseInt(claimCount) || 1;
     if (!billed || !offer) return null;
 
-    const adminFee = isBatched ? IDR_ADMIN_FEES.batched_same_payer.fee : IDR_ADMIN_FEES.single_claim.fee * count;
+    const adminFee = isBatched ? batchedFee : singleFee * count;
     const complexityData = COMPLEXITY_COSTS[complexity as keyof typeof COMPLEXITY_COSTS];
     const legalCost = complexityData.hours * complexityData.rate * (isBatched ? 1 : Math.min(count, 3));
     const totalCost = adminFee + legalCost;
@@ -73,7 +108,7 @@ export default function IDRCostEstimator() {
     const roi = totalCost > 0 ? ((expectedValue / totalCost) * 100) : 0;
 
     return { adminFee, legalCost, totalCost, winRate, potentialGain, expectedValue, breakEvenGain, roi, count };
-  }, [billedAmount, payerOffer, serviceType, complexity, isBatched, claimCount]);
+  }, [billedAmount, payerOffer, serviceType, complexity, isBatched, claimCount, singleFee, batchedFee]);
 
   const formatCurrency = (v: number) =>
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
@@ -91,6 +126,12 @@ export default function IDRCostEstimator() {
       <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
         <Info className="h-4 w-4 shrink-0" />
         <span>Estimates use CMS published IDR administrative fees and industry-average attorney rates. Actual costs vary. Historical win rates are based on CMS IDR data reports.</span>
+      </div>
+
+      {/* Phase15-FA (A9): fee provenance — live schedule when readable, explicit fallback otherwise */}
+      <div className={`flex items-center gap-2 p-2.5 border rounded-lg text-xs ${liveSingle || liveBatched ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
+        <Info className="h-4 w-4 shrink-0" />
+        <span><strong>Fee source:</strong> {feeSource}</span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

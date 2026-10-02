@@ -58,8 +58,18 @@ class OAuthService {
   constructor(private client: ReturnType<typeof axios.create>) {
     console.log("[OAuth] Initialized with baseURL:", ENV.oAuthServerUrl);
     if (!ENV.oAuthServerUrl) {
-      console.error(
-        "[OAuth] ERROR: OAUTH_SERVER_URL is not configured! Set OAUTH_SERVER_URL environment variable."
+      // NOT the app's real authentication path - Keycloak session/bearer
+      // resolution (server/_core/context.ts, server/_core/keycloak.ts,
+      // server/auth/bearer.ts) is what actually authenticates every
+      // request; this client only backs the legacy cron-identity branch
+      // (session.openId.startsWith("cron_")) used by two scheduled HTTP
+      // endpoints (settlementBalanceProof, ledgerReconciliation's
+      // scheduled-endpoint trigger - NOT the primary hourly internal
+      // reconciliation scheduler, which runs independently of this).
+      // Logging this at ERROR level reads as "authentication is broken"
+      // to anyone scanning startup logs; it is not.
+      console.warn(
+        "[OAuth] OAUTH_SERVER_URL is not configured — the legacy cron-identity path (two scheduled-endpoint handlers only) is unavailable. Primary user authentication (Keycloak) is unaffected."
       );
     }
   }

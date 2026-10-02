@@ -2,7 +2,6 @@ import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import net from "net";
-import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import slowDown from "express-slow-down";
@@ -14,13 +13,24 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerKeycloakRoutes } from "./keycloak";
 import { bootstrapOpenSearchIndices } from "../search";
 import { startKafkaConsumer } from "../events/kafka-consumer";
-import { bootstrapPermifySchema } from "../authz";
-import { appRouter } from "../routers";
+import { assertDisputeAccess, bootstrapPermifySchema } from "../authz";
+// rootRouter (server/app-router.ts) = appRouter + idrCompliance barrel merge;
+// routers.ts itself is workstream-owned and intentionally not edited here.
+import { rootRouter } from "../app-router";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { deadlineCheckHandler } from "../scheduled/deadlineCheck";
+import { idrDeadlineCheckHandler } from "../scheduled/idrDeadlineCheck";
+import { deadlineAutopilotHandler } from "../scheduled/deadlineAutopilot";
 import { weeklyDigestHandler } from "../scheduled/weeklyDigest";
 import { settlementBalanceProofHandler } from "../scheduled/settlementBalanceProof";
+import { ledgerReconciliationHandler } from "../scheduled/ledgerReconciliation";
+import { webhookRetryWorkerHandler } from "../scheduled/webhookRetryWorker";
+import { notificationRetryWorkerHandler } from "../scheduled/notificationRetryWorker";
+import { dailyDigestHandler } from "../scheduled/dailyDigest";
+import { regulatoryFeedPollHandler } from "../scheduled/regulatoryFeedPoll";
+import { bulkFhirWorkerHandler } from "../scheduled/bulkFhirWorker";
+import { retentionWorkerHandler, startRetentionWorker } from "../scheduled/retentionWorker";
 import { ENV } from "./env";
 import {
   SETTLEMENT_EVENT_ID_HEADER,
@@ -29,6 +39,8 @@ import {
   SETTLEMENT_TIMESTAMP_HEADER,
   parseSettlementCallbackKeyring,
   verifySettlementCallbackSignature,
+  deriveSettlementCallbackNonce,
+  claimSettlementCallbackNonce,
 } from "../settlement-auth";
 import {
   parseSettlementMtlsFingerprints,
@@ -41,8 +53,13 @@ import { reconcileAuthenticatedSettlementCallback, settlementCallbackSchema } fr
 import { providerSettlementReportSchema, reconcileProviderSettlementReport } from "../settlement-lifecycle";
 import { LedgerIntegrityError } from "../ledger";
 import { startOutboxWorker } from "../outbox-worker";
+import { startLedgerReconciliationScheduler } from "../reconciliation-scheduler";
 import { isTigerBeetleEnabled, startTigerBeetleTunnel, stopTigerBeetleTunnel } from "../tigerbeetle";
 import { createScheduledAuth } from "../scheduled-auth";
+import { securityHeaders } from "./security-headers";
+import { isOriginAllowed } from "./cors-policy";
+import { apiRateLimiter, authRateLimiter, sensitiveRateLimiter } from "../auth/ratelimit";
+import { requireApiAdmin, requireApiAuth } from "../auth/bearer";
 
 // ─── Startup ENV validation ──────────────────────────────────────────────────
 function validateEnv() {
@@ -98,7 +115,11 @@ async function findAvailablePort(startPort = 3000): Promise<number> {
 }
 
 // ─── Scheduled endpoint auth ─────────────────────────────────────────────────
-const SCHEDULED_SECRET = process.env.SCHEDULED_SECRET ?? "dev-scheduled-secret";
+// Production fails closed: createScheduledAuth throws when the secret is empty.
+const SCHEDULED_SECRET = process.env.SCHEDULED_SECRET ?? (ENV.isProduction ? "" : "dev-scheduled-secret");
+if (!process.env.SCHEDULED_SECRET && !ENV.isProduction) {
+  console.warn("[startup] SCHEDULED_SECRET is not set — using the insecure development default; never deploy without it");
+}
 const scheduledAuth = createScheduledAuth(ENV.isProduction, SCHEDULED_SECRET);
 
 // ─── Server startup ───────────────────────────────────────────────────────────
@@ -116,44 +137,42 @@ async function startServer() {
   }
 
   const app = express();
+  // Behind the ingress (and Cloudflare) every request arrives from a private
+  // cluster IP with X-Forwarded-For set. Without trust proxy, req.ip is the
+  // ingress for every user, so express-rate-limit keyed all clients into one
+  // bucket (and warned ERR_ERL_UNEXPECTED_X_FORWARDED_FOR). Trust only
+  // private-range hops by default; override with TRUST_PROXY (an Express
+  // trust-proxy value, e.g. "1" or "loopback, 10.0.0.0/8").
+  const trustProxy = process.env.TRUST_PROXY?.trim();
+  app.set("trust proxy", trustProxy ? (/^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy) : "loopback, linklocal, uniquelocal");
   const server = createServer(app);
 
-  // ── Security headers (helmet) ──────────────────────────────────────────────
-  app.use(
-    helmet({
-      contentSecurityPolicy: ENV.isProduction
-        ? {
-            directives: {
-              defaultSrc: ["'self'"],
-              scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // Vite HMR needs unsafe-eval in dev
-              styleSrc: ["'self'", "'unsafe-inline'"],
-              imgSrc: ["'self'", "data:", "blob:", "https:"],
-              connectSrc: ["'self'", "https:"],
-              fontSrc: ["'self'", "data:", "https:"],
-              frameSrc: ["'none'"],
-            },
-          }
-        : false, // Disable CSP in dev to allow Vite HMR
-      crossOriginEmbedderPolicy: false, // Allow embedding for dashboard iframes
-    })
-  );
+  // ── Security headers ────────────────────────────────────────────────────────
+  // Centralized in server/_core/security-headers.ts (helmet): hardened CSP for
+  // the Vite PWA client, HSTS, nosniff, Referrer-Policy, frame-ancestors 'none'.
+  app.use(securityHeaders(ENV.isProduction));
 
   // ── CORS ──────────────────────────────────────────────────────────────────
   // Configure via ALLOWED_ORIGINS env var (comma-separated list of origins).
-  // In development all origins are allowed; in production only the listed ones.
+  // Policy in server/_core/cors-policy.ts: the app's own origin is always
+  // allowed; in production other origins must be listed. A disallowed origin
+  // gets a 403 here — never an error thrown into the 500 handler.
   const configuredOrigins = [ENV.appUrl, ...ENV.allowedOrigins].filter(Boolean);
   // Export for testing
   (app as any).__allowedOrigins = configuredOrigins;
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const allowed = isOriginAllowed(
+      { origin: req.headers.origin, host: req.headers.host },
+      { isProduction: ENV.isProduction, configuredOrigins },
+    );
+    if (allowed) return next();
+    console.warn(`[cors] rejected origin ${req.headers.origin} for ${req.method} ${req.path} — add it to ALLOWED_ORIGINS if it is legitimate`);
+    res.status(403).json({ error: "Origin not allowed" });
+  });
   app.use(
     cors({
-      origin: (origin, callback) => {
-        // Allow requests with no origin (mobile apps, curl, server-to-server)
-        if (!origin) return callback(null, true);
-        // In dev, allow all origins
-        if (!ENV.isProduction) return callback(null, true);
-        if (configuredOrigins.some(o => origin === o || origin.startsWith(o))) return callback(null, true);
-        callback(new Error(`CORS: origin ${origin} not allowed. Add it to ALLOWED_ORIGINS env var.`));
-      },
+      // Only origins that passed the gate above reach here, so reflect them.
+      origin: true,
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
@@ -212,6 +231,16 @@ async function startServer() {
     })
   );
 
+  // ── Redis-backed distributed rate limiting (server/auth/ratelimit.ts) ─────
+  // Limits are per-instance-independent (shared via Redis). Auth/token,
+  // settlement/payment, and PHI routes FAIL CLOSED in production when Redis
+  // is unavailable; the general tRPC limiter is fail-open-with-log (documented
+  // in ratelimit.ts). Limits configurable via RATE_LIMIT_* env vars.
+  app.use("/api/auth", authRateLimiter());
+  app.use("/api/settlement", sensitiveRateLimiter());
+  app.use("/api/fhir", sensitiveRateLimiter());
+  app.use("/api/trpc", apiRateLimiter());
+
   // ── Request logging (morgan) ──────────────────────────────────────────────
   // Use 'combined' format in production for full Apache-style logs, 'dev' in development
   app.use(morgan(ENV.isProduction ? "combined" : "dev"));
@@ -237,9 +266,9 @@ async function startServer() {
     const verification = verifySettlementCallbackSignature({
       secret: process.env.SETTLEMENT_CALLBACK_SECRET,
       keyring: parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING),
-      keyId: req.header(SETTLEMENT_KEY_ID_HEADER) ?? undefined,
-      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
-      signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+      keyId: req.header(SETTLEMENT_KEY_ID_HEADER),
+      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER),
+      signature: req.header(SETTLEMENT_SIGNATURE_HEADER),
       rawBody,
     });
     if (!verification.valid) {
@@ -271,6 +300,18 @@ async function startServer() {
     }
 
     try {
+      // Replay guard (G1): atomically claim the derived per-transmission nonce
+      // in the same request path as verification, before any business effect.
+      const nonce = deriveSettlementCallbackNonce({
+        signature: req.header(SETTLEMENT_SIGNATURE_HEADER) as string,
+        timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) as string,
+        rawBody,
+      });
+      if (!(await claimSettlementCallbackNonce(nonce))) {
+        console.warn("[settlement] replayed callback rejected", { requestId: (req as any).requestId });
+        res.status(409).json({ error: "Settlement callback replay detected" });
+        return;
+      }
       const reconciliation = await reconcileAuthenticatedSettlementCallback(parsed.data, parsedPayload as Record<string, unknown>);
       res.setHeader("Cache-Control", "no-store");
       res.status(reconciliation.duplicate ? 200 : 202).json({
@@ -306,15 +347,16 @@ async function startServer() {
     const verification = verifySettlementCallbackSignature({
       secret: process.env.SETTLEMENT_CALLBACK_SECRET,
       keyring: parseSettlementCallbackKeyring(process.env.SETTLEMENT_CALLBACK_KEYRING),
-      keyId: req.header(SETTLEMENT_KEY_ID_HEADER) ?? undefined,
-      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) ?? undefined,
-      signature: req.header(SETTLEMENT_SIGNATURE_HEADER) ?? undefined,
+      keyId: req.header(SETTLEMENT_KEY_ID_HEADER),
+      timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER),
+      signature: req.header(SETTLEMENT_SIGNATURE_HEADER),
       rawBody,
     });
     if (!verification.valid) {
       res.status(401).json({ error: "Invalid settlement report", reason: verification.reason });
       return;
     }
+
     let parsedPayload: unknown;
     try {
       parsedPayload = JSON.parse(rawBody);
@@ -324,7 +366,7 @@ async function startServer() {
     }
     const parsed = providerSettlementReportSchema.safeParse(parsedPayload);
     if (!parsed.success) {
-      res.status(400).json({ error: "Invalid settlement report payload", issues: parsed.error.issues });
+      res.status(400).json({ error: "Settlement report payload", issues: parsed.error.issues });
       return;
     }
     if (req.header(SETTLEMENT_EVENT_ID_HEADER) !== parsed.data.reportId) {
@@ -337,6 +379,17 @@ async function startServer() {
       return;
     }
     try {
+      // Replay guard (G1): same derived-nonce protection as /callbacks.
+      const nonce = deriveSettlementCallbackNonce({
+        signature: req.header(SETTLEMENT_SIGNATURE_HEADER) as string,
+        timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) as string,
+        rawBody,
+      });
+      if (!(await claimSettlementCallbackNonce(nonce))) {
+        console.warn("[settlement] replayed report rejected", { requestId: (req as any).requestId });
+        res.status(409).json({ error: "Settlement report replay detected" });
+        return;
+      }
       const reconciliation = await reconcileProviderSettlementReport(parsed.data, parsedPayload as Record<string, unknown>);
       res.setHeader("Cache-Control", "no-store");
       res.status(reconciliation.duplicate ? 200 : reconciliation.reconciliationStatus === "exception" ? 409 : 202).json(reconciliation);
@@ -347,6 +400,37 @@ async function startServer() {
       res.status(status).json({ error: "Settlement report was not reconciled", message });
     }
   });
+
+  // ── Phase 19: raw bulk-upload chunk endpoint ──────────────────────────────
+  // Raw routes that need exact request bytes MUST stay before express.json
+  // (precedent: /api/settlement/callbacks above). The Phase 20 Stripe webhook
+  // (POST /api/billing/stripe-webhook) will follow the same convention and be
+  // registered in this block. Chunk bodies are opaque octet-streams; auth is
+  // the session cookie / Bearer token via the same createContext as tRPC.
+  app.use("/api/bulk-upload", apiRateLimiter());
+  app.put(
+    "/api/bulk-upload/:sessionId/chunks/:chunkIndex",
+    express.raw({ type: () => true, limit: "10mb" }),
+    async (req: Request, res: Response) => {
+      const { handleChunkUpload } = await import("../ingest/chunk-handler");
+      await handleChunkUpload(req, res);
+    }
+  );
+
+  // ── Stripe billing webhook (Phase 20-C) ───────────────────────────────────
+  // Must stay BEFORE express.json so the HMAC signature covers the exact
+  // bytes received (settlement-callback precedent; coexists with the Phase 19
+  // bulk-upload raw mount above). Raw only; no auth cookies — Stripe is the
+  // caller and the signature IS the authentication. Fail-closed: 503 when
+  // STRIPE_* env is absent, 401 on any signature failure.
+  app.post(
+    "/api/billing/stripe-webhook",
+    express.raw({ type: "application/json", limit: "256kb" }),
+    async (req: Request, res: Response) => {
+      const { stripeWebhookHandler } = await import("../billing/stripe-webhook");
+      await stripeWebhookHandler(req, res);
+    }
+  );
 
   // ── Body parsers ──────────────────────────────────────────────────────────
   app.use(express.json({ limit: "50mb" }));
@@ -362,9 +446,10 @@ async function startServer() {
         requestId: tokens["request-id"](req, res),
         method: tokens.method(req, res),
         url: tokens.url(req, res),
-        status: parseInt(tokens.status(req, res) ?? "0"),
+        status: tokens.status(req, res),
         responseTimeMs: parseFloat(tokens["response-time"](req, res) ?? "0"),
-        contentLength: tokens.res(req, res, "content-length") ?? "-",
+        // morgan has no "content-length" token of its own — read the response header via tokens.res().
+        contentLength: Number(tokens.res(req, res, "content-length")) || null,
         userId: tokens["user-id"](req, res),
         userAgent: tokens["user-agent"](req, res),
         remoteAddr: tokens["remote-addr"](req, res),
@@ -397,10 +482,69 @@ async function startServer() {
     res.status(200).json({ ready: true, uptime: Math.round((Date.now() - startTime) / 1000) });
   });
 
-  // ── FHIR R4 read endpoint — GET /api/fhir/Claim/:id ───────────────────────
-  // Returns a dispute as a FHIR R4 Claim resource (application/fhir+json)
-  app.get("/api/fhir/Claim/:id", async (req: Request, res: Response) => {
+  // ── /healthz — process liveness only ──────────────────────────────────────
+  // Never touches dependencies; returns 200 as long as the HTTP server answers.
+  // Used by Docker/Kubernetes liveness probes. Do not point load balancers here.
+  app.get("/healthz", (_req: Request, res: Response) => {
+    res.status(200).json({ status: "ok", uptime: Math.round((Date.now() - startTime) / 1000) });
+  });
+
+  // ── /readyz — dependency readiness gate ───────────────────────────────────
+  // Fails closed (503) unless PostgreSQL AND Redis answer within
+  // READYZ_TIMEOUT_MS (default 2000). Compose healthchecks, orchestrator
+  // readiness probes, and load balancers must gate traffic on this endpoint.
+  app.get("/readyz", async (_req: Request, res: Response) => {
+    const timeoutMs = parseInt(process.env.READYZ_TIMEOUT_MS ?? "2000", 10);
+    const withTimeout = (p: Promise<unknown>, label: string) =>
+      Promise.race([
+        p,
+        new Promise((_resolve, reject) =>
+          setTimeout(() => reject(new Error(`${label} probe timed out after ${timeoutMs}ms`)), timeoutMs)
+        ),
+      ]);
+
+    let dbOk = false;
     try {
+      // getDb() verifies connectivity with SELECT 1 before resolving.
+      const { getDb } = await import("../db");
+      const db = (await withTimeout(getDb(), "postgres")) as unknown;
+      dbOk = db !== null;
+    } catch { /* stays false */ }
+
+    let redisOk = false;
+    try {
+      const { getRedisClient } = await import("../redis");
+      const client = getRedisClient();
+      if (!client) throw new Error("Redis client not configured");
+      await withTimeout(client.ping(), "redis");
+      redisOk = true;
+    } catch { /* stays false */ }
+
+    const ready = dbOk && redisOk;
+    res.status(ready ? 200 : 503).json({
+      ready,
+      checks: {
+        postgres: dbOk ? "ok" : "unavailable",
+        redis: redisOk ? "ok" : "unavailable",
+      },
+      uptime: Math.round((Date.now() - startTime) / 1000),
+    });
+  });
+
+  // ── FHIR R4 read endpoint — GET /api/fhir/Claim/:id ───────────────────────
+  // Returns a dispute as a FHIR R4 Claim resource (application/fhir+json).
+  // PHI: requires authentication (Keycloak Bearer token or session cookie via
+  // requireApiAuth) AND dispute-level read authorization (server/authz.ts).
+  // This route was previously unauthenticated — remediated in the PHI audit.
+  app.get("/api/fhir/Claim/:id", requireApiAuth(), async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user as { id: string; role: "user" | "admin" };
+      try {
+        await assertDisputeAccess(user.id, user.role, req.params.id, "read");
+      } catch {
+        res.status(403).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "forbidden", diagnostics: "You do not have read access to this claim" }] });
+        return;
+      }
       const { getDb } = await import("../db");
       const { disputes: disputesTable } = await import("../../drizzle/schema");
       const { eq } = await import("drizzle-orm");
@@ -413,6 +557,21 @@ async function startServer() {
       if (!rows.length) {
         res.status(404).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "not-found", diagnostics: `Claim/${req.params.id} not found` }] });
         return;
+      }
+      // PHI read audit (fire-and-forget — never blocks the response)
+      {
+        const { createAuditEntry } = await import("../db");
+        const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? req.ip ?? null;
+        createAuditEntry({
+          userId: user.id,
+          action: "phi.read",
+          entityType: "fhir.Claim",
+          entityId: req.params.id,
+          oldValue: null,
+          newValue: null,
+          ipAddress: ip,
+          userAgent: (req.headers["user-agent"] as string | undefined) ?? null,
+        }).catch(err => console.warn("[audit] phi.read write failed:", err instanceof Error ? err.message : err));
       }
       const d = rows[0];
       const claim = {
@@ -436,36 +595,30 @@ async function startServer() {
         ]).filter(Boolean),
       };
       res.setHeader("Content-Type", "application/fhir+json");
+      res.setHeader("Cache-Control", "no-store"); // PHI responses must not be cached
       res.status(200).json(claim);
     } catch (err) {
-      res.status(500).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "exception", diagnostics: String(err) }] });
+      console.error("[fhir] Claim read failed:", err);
+      res.status(500).json({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: "exception", diagnostics: "Failed to read the Claim resource" }] });
     }
   });
+
+  // ── CDS Hooks discovery — GET /cds-services ───────────────────────────────
+  // CDS Hooks spec discovery document listing registered ACTIVE hooks:
+  //   { services: [{ hook, id, title, description }] }
+  // Auth: when CDS_JWT_REQUIRED=true, requires a Bearer JWT signed with the
+  // HS256 shared secret CDS_JWT_SECRET (per the CDS Hooks mutual-auth
+  // deployment pattern). Otherwise the endpoint is OPEN (documented) — hook
+  // metadata is non-PHI and EHRs commonly fetch discovery pre-authorization.
+  const { registerCdsDiscovery } = await import("./cds-discovery");
+  registerCdsDiscovery(app);
 
   // ── Keycloak OIDC routes ──────────────────────────────────────────────────────
   registerKeycloakRoutes(app);
 
-  // ── Dapr pub/sub subscription discovery + event handlers ─────────────────
-  app.get("/dapr/subscribe", (_req: Request, res: Response) => {
-    res.json([
-      { pubsubname: "idr-pubsub", topic: "idr.dispute.events", route: "/api/events/dispute" },
-      { pubsubname: "idr-pubsub", topic: "idr.payments",        route: "/api/events/payment" },
-      { pubsubname: "idr-pubsub", topic: "idr.audit",           route: "/api/events/audit" },
-    ]);
-  });
-  app.post("/api/events/dispute", express.json(), (req: Request, res: Response) => {
-    const event = (req.body as Record<string, unknown>)?.data ?? req.body;
-    console.info("[Dapr] dispute event:", (event as Record<string, unknown>)?.eventType ?? "unknown");
-    res.status(200).json({ status: "SUCCESS" });
-  });
-  app.post("/api/events/payment", express.json(), (req: Request, res: Response) => {
-    const event = (req.body as Record<string, unknown>)?.data ?? req.body;
-    console.info("[Dapr] payment event:", (event as Record<string, unknown>)?.type ?? "unknown");
-    res.status(200).json({ status: "SUCCESS" });
-  });
-  app.post("/api/events/audit", express.json(), (_req: Request, res: Response) => {
-    res.status(200).json({ status: "SUCCESS" });
-  });
+  // NOTE: the Dapr pub/sub ingress (GET /dapr/subscribe + POST /api/events/*)
+  // was removed — Dapr infrastructure is retired branch-wide and the internal
+  // event flow uses the in-process/Kafka bus in server/events/bus.ts instead.
 
   // ── Legacy unauthenticated transfer callback retirement ───────────────────
   app.post("/api/mojaloop/callbacks/transfers", (_req: Request, res: Response) => {
@@ -477,18 +630,43 @@ async function startServer() {
 
   // ── Scheduled heartbeat endpoints (auth-guarded in production) ───────────
   app.post("/api/scheduled/deadline-check", scheduledAuth, deadlineCheckHandler);
+  app.post("/api/scheduled/idr-deadline-check", scheduledAuth, idrDeadlineCheckHandler);
   app.post("/api/scheduled/weekly-digest", scheduledAuth, weeklyDigestHandler);
   app.post("/api/scheduled/settlement-balance-proof", scheduledAuth, settlementBalanceProofHandler);
+  app.post("/api/scheduled/ledger-reconciliation", scheduledAuth, ledgerReconciliationHandler);
+  app.post("/api/scheduled/webhook-retry", scheduledAuth, webhookRetryWorkerHandler);
+  app.post("/api/scheduled/notification-retry", scheduledAuth, notificationRetryWorkerHandler);
+  app.post("/api/scheduled/daily-digest", scheduledAuth, dailyDigestHandler);
+  app.post("/api/scheduled/regulatory-feed-poll", scheduledAuth, regulatoryFeedPollHandler);
+  app.post("/api/scheduled/bulk-fhir-worker", scheduledAuth, bulkFhirWorkerHandler);
+  app.post("/api/scheduled/retention-purge", scheduledAuth, retentionWorkerHandler);
+  app.post("/api/scheduled/deadline-autopilot", scheduledAuth, deadlineAutopilotHandler);
+
+  // PHI retention purge (fhir_resource_cache, smart_form_extractions) on an
+  // env-configurable cadence (RETENTION_SWEEP_INTERVAL_MS, default daily; 0
+  // disables the in-process interval — e.g. when an external cron drives
+  // POST /api/scheduled/retention-purge above).
+  {
+    const intervalMs = Number(process.env.RETENTION_SWEEP_INTERVAL_MS ?? 24 * 60 * 60 * 1000);
+    if (Number.isFinite(intervalMs) && intervalMs > 0) startRetentionWorker(intervalMs);
+  }
 
   // Durable settlement and payment-evidence events are reconciled after their
   // transaction commits. The worker is single-flight in each process; database
   // event claims prevent duplicate in-process dispatch across instances.
   startOutboxWorker();
 
+  // Postgres ↔ TigerBeetle ledger reconciliation on an env-configurable
+  // cadence (LEDGER_RECONCILIATION_INTERVAL_MINUTES, default hourly; 0
+  // disables the in-process scheduler — e.g. when an external cron drives
+  // POST /api/scheduled/ledger-reconciliation above).
+  startLedgerReconciliationScheduler();
+
   // ── Ollama pull-stream SSE endpoint ────────────────────────────────────────
   // Streams NDJSON progress from Ollama's /api/pull endpoint as SSE events.
-  // Requires admin role via JWT cookie (same auth as tRPC protectedProcedure).
-  app.get("/api/ollama/pull-stream", async (req: Request, res: Response) => {
+  // Requires an authenticated ADMIN (Bearer token or session cookie), enforced
+  // by requireApiAdmin() — the admin requirement was previously comment-only.
+  app.get("/api/ollama/pull-stream", requireApiAdmin(), async (req: Request, res: Response) => {
     const model = req.query.model as string;
     if (!model || model.trim().length === 0) {
       res.status(400).json({ error: "model query param required" });
@@ -532,7 +710,6 @@ async function startServer() {
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
@@ -576,8 +753,30 @@ async function startServer() {
   app.use(
     "/api/trpc",
     createExpressMiddleware({
-      router: appRouter,
+      router: rootRouter,
       createContext,
+      // phase14-perfa: short private caching for slow-changing reference-data
+      // reads (fee schedules, IDRE directory, QPA benchmark tables, org
+      // branding). All other tRPC responses keep their previous headers
+      // (no explicit Cache-Control) — PHI-bearing reads are never cached.
+      responseMeta({ paths, type }) {
+        if (type !== "query") return {};
+        const CACHEABLE = new Set([
+          "feeSchedules.list",
+          "idreDirectory.list",
+          "qpaBenchmarks.list",
+          "qpaBenchmarks.stateModifiers",
+          "orgs.getBranding",
+        ]);
+        if (paths?.some(p => CACHEABLE.has(p))) {
+          return {
+            headers: {
+              "Cache-Control": "private, max-age=30, stale-while-revalidate=60",
+            },
+          };
+        }
+        return {};
+      },
       onError: ({ error, path }) => {
         if (error.code === "INTERNAL_SERVER_ERROR") {
           console.error(`[tRPC] Internal error on ${path}:`, error.message);
@@ -610,6 +809,22 @@ async function startServer() {
   startKafkaConsumer().catch(err =>
     console.warn("[startup] Kafka consumer failed to start (non-fatal):", err)
   );
+
+  // ── Phase 19: bulk-ingest resume + drop-folder poller (env-gated) ─────────
+  if (process.env.BULK_INGEST_ENABLED !== "false") {
+    import("../ingest/bulk-ingest").then(({ resumePendingSessions }) =>
+      resumePendingSessions().catch(err =>
+        console.warn("[startup] bulk-ingest resume failed (non-fatal):", err)
+      )
+    ).catch(() => undefined);
+  }
+  if (process.env.DROP_FOLDER_ENABLED === "true") {
+    import("../ingest/drop-folder").then(({ startDropFolderPoller }) =>
+      startDropFolderPoller()
+    ).catch(err =>
+      console.warn("[startup] drop-folder poller failed to start (non-fatal):", err)
+    );
+  }
 
   // ── Port binding ──────────────────────────────────────────────────────────
   const preferredPort = parseInt(process.env.PORT || "3000");

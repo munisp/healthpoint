@@ -145,3 +145,33 @@ describe("settlement callback signature verification", () => {
     })).toMatchObject({ valid: false });
   });
 });
+
+// ── G1 replay-protection nonce derivation (pure, no DB) ─────────────────────
+describe("settlement callback replay nonce (G1)", () => {
+  it("is deterministic per transmission and distinct across re-signed retries", async () => {
+    const { deriveSettlementCallbackNonce, signSettlementCallback } = await import("./settlement-auth");
+    const secret = "k".repeat(40);
+    const body = JSON.stringify({ eventId: "evt-nonce-1", provider: "mojaloop" });
+    const ts = "1789528800000";
+    const sig = signSettlementCallback(secret, ts, body);
+    const a = deriveSettlementCallbackNonce({ signature: sig, timestamp: ts, rawBody: body });
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(deriveSettlementCallbackNonce({ signature: sig, timestamp: ts, rawBody: body })).toBe(a);
+    // any byte change (re-signed retry, new timestamp, or tampered body) → new nonce
+    const sig2 = signSettlementCallback(secret, "1789528800001", body);
+    expect(deriveSettlementCallbackNonce({ signature: sig2, timestamp: "1789528800001", rawBody: body })).not.toBe(a);
+    expect(deriveSettlementCallbackNonce({ signature: sig, timestamp: ts, rawBody: body + " " })).not.toBe(a);
+  });
+
+  it("claimSettlementCallbackNonce fails closed when the DB is unavailable", async () => {
+    const { claimSettlementCallbackNonce, deriveSettlementCallbackNonce } = await import("./settlement-auth");
+    const saved = process.env.DATABASE_URL;
+    delete process.env.DATABASE_URL;
+    try {
+      const nonce = deriveSettlementCallbackNonce({ signature: "ab", timestamp: "1", rawBody: "{}" });
+      await expect(claimSettlementCallbackNonce(nonce)).rejects.toThrow(/replay store unavailable/);
+    } finally {
+      if (saved !== undefined) process.env.DATABASE_URL = saved;
+    }
+  });
+});
