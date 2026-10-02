@@ -234,3 +234,32 @@ export async function sendNewLeadNotification(
     console.error("[email] Failed to send lead notification:", err);
   }
 }
+
+/**
+ * Send a login one-time-passcode email (server/auth/emailOtp.ts).
+ * Unlike sendNewLeadNotification, failures here DO throw — if the email
+ * never arrives the user has no other way to get this code, so the caller
+ * needs to know and surface a real error rather than silently leaving them
+ * waiting on a login screen for a message that was never sent.
+ */
+export async function sendLoginOtpEmail(to: string, code: string): Promise<void> {
+  const resend = getResend();
+  if (!resend) {
+    console.info("[email] RESEND_API_KEY not set — skipping login OTP email");
+    throw new Error("Email delivery is not configured");
+  }
+
+  const { error } = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: [to],
+    subject: `Your HealthPoint sign-in code: ${code}`,
+    html: `<p>Your HealthPoint sign-in code is:</p><p style="font-size:28px;font-weight:700;letter-spacing:4px;">${code}</p><p>This code expires in 10 minutes. If you didn't request this, you can ignore this email.</p>`,
+    text: `Your HealthPoint sign-in code is: ${code}\n\nThis code expires in 10 minutes. If you didn't request this, you can ignore this email.`,
+  });
+
+  if (error) {
+    console.error("[email] Resend error sending login OTP:", error);
+    throw new Error("Failed to send login code email");
+  }
+  console.info(`[email] Login OTP sent to ${to}`);
+}

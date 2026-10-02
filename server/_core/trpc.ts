@@ -50,6 +50,8 @@ const invalidateSearchOnMutation = t.middleware(async opts => {
  */
 export const MFA_PENDING_ALLOWED_PATHS = new Set([
   "auth.verifyLoginTotp",
+  "auth.requestLoginEmailOtp",
+  "auth.verifyLoginEmailOtp",
   "auth.me",
   "totp.status",
   "totp.generateSecret",

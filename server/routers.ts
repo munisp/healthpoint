@@ -323,6 +323,54 @@ export const appRouter = router({
         });
         return { success: true } as const;
       }),
+    /**
+     * Alternative to verifyLoginTotp for a user who has TOTP enabled but
+     * doesn't have their authenticator app to hand: emails a 6-digit code
+     * via Resend (server/auth/emailOtp.ts) that can be exchanged for a
+     * full session the same way a TOTP/backup code can.
+     */
+    requestLoginEmailOtp: protectedProcedure.mutation(async ({ ctx }) => {
+      if (!ctx.mfaPending) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No MFA-pending login session" });
+      }
+      if (!ctx.user.email) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No email address on file for this account" });
+      }
+      const { requestLoginEmailOtp } = await import("./auth/emailOtp");
+      try {
+        await requestLoginEmailOtp(ctx.user.id, ctx.user.email);
+      } catch (err) {
+        console.error("[auth] requestLoginEmailOtp failed:", err instanceof Error ? err.message : err);
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not send the sign-in code — try again" });
+      }
+      return { success: true } as const;
+    }),
+    verifyLoginEmailOtp: protectedProcedure
+      .input(z.object({ code: z.string().length(6) }))
+      .mutation(async ({ ctx, input }) => {
+        if (!ctx.mfaPending) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "No MFA-pending login session" });
+        }
+        const { verifyLoginEmailOtp } = await import("./auth/emailOtp");
+        const result = await verifyLoginEmailOtp(ctx.user.id, input.code);
+        if (result === "rate_limited") {
+          throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many attempts — request a new code" });
+        }
+        if (result !== "ok") {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid or expired sign-in code" });
+        }
+        const { createSessionToken, getSessionDurationMsForUser } = await import("./_core/keycloak");
+        const durationMs = await getSessionDurationMsForUser(ctx.user.id);
+        const token = await createSessionToken(ctx.user.id, ctx.user.name ?? "", ctx.user.email ?? "", durationMs);
+        ctx.res.cookie(COOKIE_NAME, token, {
+          httpOnly: true,
+          sameSite: "lax",
+          secure: ENV.isProduction,
+          maxAge: durationMs,
+          path: "/",
+        });
+        return { success: true } as const;
+      }),
   }),
 
   // --- Dashboard --------------------------------------------------------------
