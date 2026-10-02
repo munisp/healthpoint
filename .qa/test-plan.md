@@ -184,6 +184,29 @@ see `risks.md`.
         ops relies on, surfacing as a generic error instead. Money is
         never at risk; operational visibility is.
 
+- [x] **Stakeholder roles, admin types, and the patient-facing surface**
+      — `test-cases/stakeholder-roles-and-admin-types.md`. Closes the
+      gap flagged mid-pass: all prior authz testing only exercised
+      user-vs-admin, never the business stakeholder roles or the
+      patient surface.
+      - Self-selecting the privileged `idr_entity`/`payer` stakeholder
+        roles is correctly blocked live (3/3); `provider` self-select
+        still works.
+      - Confirmed there really are two distinct "admin" concepts:
+        dispute-scoped (`arbitrator`, granted via `authz.grantAccess`)
+        vs platform-wide (`users.role`) — granting the former on one
+        dispute does NOT leak into `admin.allDisputes` or
+        `reports.exportCSV`. The schema's third concept, `org_admin`,
+        turned out to be unreachable dead schema (no `organizations`
+        table exists; nothing can ever grant it) — not an untested
+        feature, just not built.
+      - Patient-facing portal (zero-login, opaque bearer token) tested
+        end to end for the first time this pass: redaction contract
+        holds (a planted internal `notes` marker never appeared in the
+        response), single-use is really enforced (not just commented),
+        a garbage token and a revoked token are both correctly denied
+        with distinct, specific error messages (4/4 PASS).
+
 ## Next, in priority order (risk-weighted)
 1. Everything else (the remaining ~35 router namespaces, performance,
    chaos, DR, deployment/rollback) — explicitly deferred. Chaos/load
