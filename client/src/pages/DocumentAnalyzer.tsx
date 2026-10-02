@@ -17,7 +17,7 @@ import {
   Upload, FileText, Scan, CheckCircle2, AlertCircle, Loader2,
   Eye, Copy, ArrowRight, Brain, FileSearch, Zap, RotateCcw,
   ChevronRight, Info, Columns2, LayoutList, ZoomIn, ZoomOut,
-  Pencil, Save, X, RefreshCw, CheckCheck,
+  Pencil, Save, X, RefreshCw, CheckCheck, Download,
 } from "lucide-react";
 
 type DocType = "eob" | "ra" | "cms1500" | "ub04" | "appeal" | "other";
@@ -325,6 +325,9 @@ export default function DocumentAnalyzer() {
     ? ({ ...extractedFields, ...overrides } as ExtractedFields)
     : null;
 
+  const [analysisId, setAnalysisId] = useState<string | null>(null);
+  const utils = trpc.useUtils();
+
   const analyzeMutation = trpc.docIntelligence.analyze.useMutation({
     onSuccess: (data) => {
       setCurrentStep(4);
@@ -334,6 +337,7 @@ export default function DocumentAnalyzer() {
         setOverrides({});
         setSavedOverrides({});
       }
+      setAnalysisId((data as { id?: string }).id ?? null);
       toast.success("Document analysis complete!", { description: `${data.confidence ?? 0}% confidence` });
     },
     onError: (err) => {
@@ -404,6 +408,43 @@ export default function DocumentAnalyzer() {
     if (effectiveFields.dateOfService) params.set("serviceDate", effectiveFields.dateOfService);
     navigate(`/disputes/new?${params.toString()}`);
     toast.success("Fields pre-filled in New Dispute form");
+  };
+
+  // Result actions on the persisted analysis record (docIntelligence.get /
+  // docIntelligence.getDownloadUrl). Available only after a server-side
+  // analysis record exists (analysisId captured from the analyze response).
+  const [resultActionPending, setResultActionPending] = useState(false);
+
+  const handleDownloadOriginal = async () => {
+    if (!analysisId) return;
+    setResultActionPending(true);
+    try {
+      const { url } = await utils.docIntelligence.getDownloadUrl.fetch({ id: analysisId });
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      toast.error("Download unavailable", { description: e instanceof Error ? e.message : "No stored file for this analysis" });
+    } finally {
+      setResultActionPending(false);
+    }
+  };
+
+  const handleReloadStored = async () => {
+    if (!analysisId) return;
+    setResultActionPending(true);
+    try {
+      const stored = await utils.docIntelligence.get.fetch({ id: analysisId });
+      if (stored?.extractedFields) {
+        setExtractedFields(stored.extractedFields as ExtractedFields);
+        setOverrides({});
+        toast.success("Reloaded stored analysis from server");
+      } else {
+        toast.info("Stored analysis has no extracted fields");
+      }
+    } catch (e) {
+      toast.error("Reload failed", { description: e instanceof Error ? e.message : undefined });
+    } finally {
+      setResultActionPending(false);
+    }
   };
 
   const isAnalyzing = analyzeMutation.isPending;
@@ -697,6 +738,20 @@ export default function DocumentAnalyzer() {
                         <ArrowRight className="h-3 w-3 mr-1" />
                         Auto-fill Dispute
                       </Button>
+                      {analysisId && (
+                        <>
+                          <Button variant="outline" size="sm" onClick={handleReloadStored} disabled={resultActionPending}
+                            title="Re-fetch the persisted analysis record from the server">
+                            <RefreshCw className="h-3 w-3 mr-1" />
+                            Reload stored
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={handleDownloadOriginal} disabled={resultActionPending}
+                            title="Download the original stored file for this analysis">
+                            <Download className="h-3 w-3 mr-1" />
+                            Download original
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
