@@ -65,6 +65,14 @@ export default function BatchBuilder() {
     submitted ?? { items: [] },
     { enabled: !!submitted, retry: false }
   );
+  // auditfix-b: batching suggestions (batchedDisputes.suggestBatches) — same
+  // parsed items, returns grouped proposals with projection_not_guarantee
+  // economics; the server's previewNote is rendered verbatim.
+  const suggestQuery = trpc.batchedDisputes.suggestBatches.useQuery(
+    submitted ?? { items: [] },
+    { enabled: !!submitted, retry: false }
+  );
+  const suggestions = suggestQuery.data as any;
   const result = evalQuery.data as any;
   // Cap preview mirrors the server rule: ONP on/after 2026-11-01 -> 50, else 25.
   const capPreview = !onpDate ? 25 : onpDate >= "2026-11-01" ? 50 : 25;
@@ -177,6 +185,46 @@ export default function BatchBuilder() {
                     </TableBody>
                   </Table>
                 </div>
+
+                {/* auditfix-b: suggested batches with projected economics */}
+                {suggestQuery.isFetching && <p className="text-sm text-muted-foreground">Computing batch suggestions…</p>}
+                {suggestions && !suggestQuery.isFetching && (
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground">{suggestions.previewNote}</p>
+                    {(suggestions.batches ?? []).length === 0 && (
+                      <p className="text-sm text-muted-foreground">
+                        No batchable groups found — these items would be filed individually.
+                      </p>
+                    )}
+                    {(suggestions.batches ?? []).map((b: any) => (
+                      <div key={b.batchKey} className="border rounded p-3 space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium">{b.batchKey}</span>
+                          <Badge variant="outline">{b.economics.lineItemCount} items</Badge>
+                          <Badge variant="secondary">
+                            projected savings ${b.economics.totalProjectedSavingsRangeUsd.min.toFixed(2)} – ${b.economics.totalProjectedSavingsRangeUsd.max.toFixed(2)}
+                          </Badge>
+                          <Badge variant="outline">{String(b.economics.label).replace(/_/g, " ")}</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Admin fees: ${b.economics.singleFilingsAdminFeesUsd.toFixed(2)} singly → ${b.economics.batchedAdminFeeUsd.toFixed(2)} batched
+                          (deterministic savings ${b.economics.adminFeeSavingsUsd.toFixed(2)}).
+                        </p>
+                        <p className="text-xs">Items: {b.items.map((i: any) => i.lineItemId).join(", ")}</p>
+                      </div>
+                    ))}
+                    {(suggestions.unbatched ?? []).length > 0 && (
+                      <details className="text-xs text-muted-foreground">
+                        <summary>{suggestions.unbatched.length} item(s) could not be batched</summary>
+                        <ul className="list-disc pl-5 mt-1 space-y-0.5">
+                          {suggestions.unbatched.map((u: any, i: number) => (
+                            <li key={i}>{u.item.lineItemId}: {u.reason}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
+                )}
 
                 <div className="rounded-md border border-border bg-accent/50 p-3">
                   <p className="text-xs font-semibold text-foreground flex items-center gap-1.5 mb-1.5">
