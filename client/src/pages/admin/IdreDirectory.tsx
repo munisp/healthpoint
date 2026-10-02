@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Building2, Plus, Pencil, ShieldOff, RefreshCw } from "lucide-react";
+import { Building2, Plus, Pencil, ShieldOff, ShieldCheck, RefreshCw, UserPlus } from "lucide-react";
 
 type EntityForm = {
   name: string;
@@ -56,6 +56,28 @@ export default function IdreDirectoryAdmin() {
   const [form, setForm] = useState<EntityForm>(emptyForm);
   const [decertifyTarget, setDecertifyTarget] = useState<{ id: string; name: string } | null>(null);
   const [decertifyReason, setDecertifyReason] = useState("");
+  const [verifyTarget, setVerifyTarget] = useState<{ id: string; name: string } | null>(null);
+  const [verifyNote, setVerifyNote] = useState("");
+  const [assignTarget, setAssignTarget] = useState<{ id: string; name: string } | null>(null);
+  const [assignDisputeId, setAssignDisputeId] = useState("");
+  const [assignArbitratorId, setAssignArbitratorId] = useState("");
+  const disputesQuery = trpc.disputes.list.useQuery({ limit: 100 }, { enabled: !!assignTarget });
+
+  const verifyMut = trpc.identity.verifyIdreCertification.useMutation({
+    onSuccess: () => {
+      toast.success("Certification marked verified (audit-logged)");
+      setVerifyTarget(null); setVerifyNote("");
+      utils.idreDirectory.list.invalidate();
+    },
+    onError: e => toast.error(e.message),
+  });
+  const proposeAssignMut = trpc.idre.proposeAssignment.useMutation({
+    onSuccess: () => {
+      toast.success("IDRE assignment proposed on the dispute");
+      setAssignTarget(null); setAssignDisputeId(""); setAssignArbitratorId("");
+    },
+    onError: e => toast.error(e.message),
+  });
 
   const createMut = trpc.idreDirectory.create.useMutation({
     onSuccess: () => { toast.success("IDR entity registered"); setShowEditor(false); utils.idreDirectory.list.invalidate(); },
@@ -134,7 +156,17 @@ export default function IdreDirectoryAdmin() {
                   Expiry: {e.certificationExpiry ? new Date(e.certificationExpiry).toLocaleDateString() : "—"}
                 </p>
               </div>
-              <div className="flex gap-2 shrink-0">
+              <div className="flex gap-2 shrink-0 flex-wrap justify-end">
+                {e.certificationStatus !== "verified" && (
+                  <Button variant="outline" size="sm" onClick={() => setVerifyTarget({ id: e.id, name: e.name })}>
+                    <ShieldCheck className="h-3.5 w-3.5 mr-1" /> Verify cert
+                  </Button>
+                )}
+                {e.isActive && (
+                  <Button variant="outline" size="sm" onClick={() => setAssignTarget({ id: e.id, name: e.name })}>
+                    <UserPlus className="h-3.5 w-3.5 mr-1" /> Propose assignment
+                  </Button>
+                )}
                 <Button variant="outline" size="sm" onClick={() => openEdit(e)}><Pencil className="h-3.5 w-3.5 mr-1" /> Edit</Button>
                 {e.isActive && (
                   <Button variant="destructive" size="sm" onClick={() => setDecertifyTarget({ id: e.id, name: e.name })}>
@@ -168,6 +200,73 @@ export default function IdreDirectoryAdmin() {
             <Button variant="outline" onClick={() => setShowEditor(false)}>Cancel</Button>
             <Button onClick={submit} disabled={createMut.isPending || updateMut.isPending}>
               {editingId ? "Save changes" : "Register"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!verifyTarget} onOpenChange={() => setVerifyTarget(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Verify certification — {verifyTarget?.name}</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            No public IDRE certification registry exists; an admin reviews evidence (e.g. the CMS certification
+            letter) and marks the entity verified. This action is audit-logged.
+          </p>
+          <div className="space-y-1 mt-2">
+            <Label>Evidence note (min 20 characters)</Label>
+            <Textarea value={verifyNote} onChange={e => setVerifyNote(e.target.value)} rows={3}
+              placeholder="Describe the reviewed evidence, e.g. CMS certification letter dated …" />
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" onClick={() => setVerifyTarget(null)}>Cancel</Button>
+            <Button
+              disabled={verifyNote.trim().length < 20 || verifyMut.isPending}
+              onClick={() => verifyTarget && verifyMut.mutate({ idrEntityId: verifyTarget.id, evidenceNote: verifyNote.trim() })}
+            >
+              {verifyMut.isPending ? "Verifying…" : "Mark verified"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!assignTarget} onOpenChange={() => setAssignTarget(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Propose assignment — {assignTarget?.name}</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Proposes this IDR entity for a dispute (status "proposed"). The assigned arbitrator, when specified,
+            is notified and must accept with a conflict-of-interest attestation.
+          </p>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1">
+              <Label>Dispute</Label>
+              <select
+                className="w-full border rounded-md px-2 py-2 text-sm bg-background"
+                value={assignDisputeId}
+                onChange={e => setAssignDisputeId(e.target.value)}
+                aria-label="Dispute for assignment"
+              >
+                <option value="">Select a dispute…</option>
+                {(disputesQuery.data?.items ?? []).map((d: any) => (
+                  <option key={d.id} value={d.id}>{d.referenceNumber ?? d.id} — {d.respondingPartyName ?? "TBD"}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label>Arbitrator user ID (optional)</Label>
+              <Input value={assignArbitratorId} onChange={e => setAssignArbitratorId(e.target.value)} placeholder="user id" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" onClick={() => setAssignTarget(null)}>Cancel</Button>
+            <Button
+              disabled={!assignDisputeId || proposeAssignMut.isPending}
+              onClick={() => assignTarget && proposeAssignMut.mutate({
+                disputeId: assignDisputeId,
+                idrEntityId: assignTarget.id,
+                arbitratorUserId: assignArbitratorId.trim() || undefined,
+              })}
+            >
+              {proposeAssignMut.isPending ? "Proposing…" : "Propose assignment"}
             </Button>
           </div>
         </DialogContent>
