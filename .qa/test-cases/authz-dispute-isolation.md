@@ -79,3 +79,28 @@ for the owner/unrelated/admin matrix tested.
   real second account.
 - The `admin.updateUserRole` / bootstrap-claim flow itself (bypassed via
   direct DB write for this test).
+
+## UPDATE: granted-relation path tested — RESULT: PASS (2/2 additional sub-checks)
+
+Followed up the "Not yet tested" item above with the real
+`authz.grantAccess` procedure (not a DB shortcut this time — it's a real
+tRPC mutation, itself gated by requiring `admin`-level access on the
+dispute, which the owner has implicitly).
+
+7. As the owner (`test-provider`), granted `test-health-plan` `"read"`
+   access via `authz.grantAccess`.
+   **Result: PASS.** The exact same `test-health-plan` session that was
+   denied in step 4 above can now read the dispute — confirms the grant
+   path works and takes effect immediately (no re-login needed).
+8. Attempted `disputes.advance` (requires `"write"`) as `test-health-plan`,
+   who was only granted `"read"`.
+   **Result: PASS.** Denied with a real `FORBIDDEN`
+   ("You do not have write access..."). Confirms permission levels are
+   enforced with real least-privilege granularity (`read`/`write`/`admin`
+   are not just a binary has-access flag) — a `read` grant cannot be used
+   to perform a `write`-level mutation.
+
+## Full authz matrix now verified for real, end to end:
+owner (allow) / no relation (deny) / granted read (allow-for-read,
+deny-for-write) / admin (allow). Mutation-side authz confirmed
+alongside read-side.
