@@ -98,4 +98,41 @@ describe("lakehouseExportWorkflow (time-skipping test server)", () => {
     expect(summary.failures[0]).toContain("documents");
     expect(summaries).toHaveLength(1);
   }, 30_000);
+
+  // The test above only covers an activity that fails on EVERY attempt
+  // (retries exhausted). It never proves the retry policy itself actually
+  // retries a TRANSIENT failure and recovers -- a worker restart, a dropped
+  // connection, or a brief dependency outage mid-export should not surface
+  // as a dataset failure if a later attempt within the maximumAttempts
+  // budget (lakehouse.workflows.ts: 3) succeeds.
+  it("recovers from a transient activity failure within the retry budget (not just permanent failures)", async () => {
+    exported.length = 0;
+    summaries.length = 0;
+    failDatasets = new Set(); // not using the "always fails" fixture path
+    let disputesAttempts = 0;
+    mockActivities.runIncrementalExportActivity.mockImplementation(async (input: { runId: string; dataset: string }) => {
+      if (input.dataset === "disputes") {
+        disputesAttempts++;
+        if (disputesAttempts < 2) {
+          throw new Error("transient failure (e.g. a dropped connection) on attempt " + disputesAttempts);
+        }
+      }
+      exported.push(input.dataset);
+      return {
+        dataset: input.dataset,
+        rowCount: 7,
+        s3Key: `lakehouse-exports/incremental/${input.dataset}/${input.runId}.ndjson`,
+        previousWatermark: null,
+        newWatermark: "2026-09-05T00:00:00.000Z",
+      };
+    });
+    const summary = await runWorkflow({ runId: "test-run-3" });
+    // Recovered on the 2nd attempt, well within the 3-attempt budget --
+    // the workflow must see this as a full, honest success, not a failure
+    // that happened to still complete.
+    expect(disputesAttempts).toBe(2);
+    expect(exported).toEqual([...LAKEHOUSE_EXPORT_DATASETS]);
+    expect(summary.succeeded).toBe(true);
+    expect(summary.failures).toEqual([]);
+  }, 30_000);
 });
