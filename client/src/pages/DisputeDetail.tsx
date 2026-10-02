@@ -13,7 +13,8 @@ import {
   AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock,
   DollarSign, FileText, Gavel, LogOut, Scale, Upload, Users,
   TrendingUp, CheckCircle, XCircle, RefreshCw, Download, Bell,
-  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp, Pin, PinOff, CalendarClock
+  Brain, Sparkles, AlertCircle, ChevronDown, ChevronUp, Pin, PinOff, CalendarClock,
+  Star, StarOff, MailPlus
 } from "lucide-react";
 import WorkflowTimeline from "@/components/WorkflowTimeline";
 import DeadlineCountdownBanner from "@/components/DeadlineCountdownBanner";
@@ -111,10 +112,30 @@ const OFFER_TYPE_COLORS: Record<string, string> = {
 // ─── Document Version Row ─────────────────────────────────────────────────────
 function DocumentVersionRow({ doc, disputeId }: { doc: any; disputeId: string }) {
   const [showVersions, setShowVersions] = useState(false);
+  const versionFileRef = useRef<HTMLInputElement>(null);
+  const utils = trpc.useUtils();
   const { data: versions } = trpc.documents.listVersions.useQuery(
     { documentId: doc.id },
     { enabled: showVersions }
   );
+  const uploadVersionMutation = trpc.documents.uploadVersion.useMutation({
+    onSuccess: () => {
+      utils.documents.listVersions.invalidate({ documentId: doc.id });
+      utils.documents.list.invalidate({ disputeId });
+      toast.success("New document version uploaded");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const handleVersionFile = (f: File) => {
+    uploadVersionMutation.mutate({
+      documentId: doc.id,
+      disputeId,
+      fileName: f.name,
+      fileType: f.type || "application/octet-stream",
+      fileSize: f.size,
+      storageKey: `disputes/${disputeId}/${Date.now()}-${f.name}`,
+    });
+  };
   return (
     <div className="rounded-lg bg-slate-50 border border-slate-100">
       <div className="flex items-start gap-2 p-2">
@@ -134,6 +155,27 @@ function DocumentVersionRow({ doc, disputeId }: { doc: any; disputeId: string })
         >
           {showVersions ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           History
+        </button>
+        <input
+          ref={versionFileRef}
+          type="file"
+          className="hidden"
+          accept=".pdf,.docx,.xlsx,.png,.jpg"
+          aria-label={`Upload new version of ${doc.fileName || doc.title}`}
+          onChange={e => {
+            const f = e.target.files?.[0];
+            if (f) handleVersionFile(f);
+            e.target.value = "";
+          }}
+        />
+        <button
+          onClick={() => versionFileRef.current?.click()}
+          disabled={uploadVersionMutation.isPending}
+          className="text-xs text-blue-500 hover:underline shrink-0 flex items-center gap-0.5 disabled:opacity-50"
+          title="Upload a new version of this document"
+        >
+          <Upload size={12} />
+          {uploadVersionMutation.isPending ? "Uploading…" : "New version"}
         </button>
       </div>
       {showVersions && (
@@ -298,6 +340,50 @@ export default function DisputeDetail() {
       setShowAiSummary(true);
     },
     onError: (err) => toast.error(`AI summary failed: ${err.message}`),
+  });
+
+  // Watchlist toggle (server-side watchlist: watchlist.add / watchlist.remove / watchlist.isWatching)
+  const { data: isWatching } = trpc.watchlist.isWatching.useQuery(
+    { disputeId: id! },
+    { enabled: !!id }
+  );
+  const watchlistAddMutation = trpc.watchlist.add.useMutation({
+    onSuccess: () => { utils.watchlist.isWatching.invalidate({ disputeId: id! }); utils.watchlist.list.invalidate(); toast.success("Added to your watchlist"); },
+    onError: (err) => toast.error(err.message),
+  });
+  const watchlistRemoveMutation = trpc.watchlist.remove.useMutation({
+    onSuccess: () => { utils.watchlist.isWatching.invalidate({ disputeId: id! }); utils.watchlist.list.invalidate(); toast.success("Removed from your watchlist"); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Manual notification dispatch (disputes.sendNotification)
+  const [showNotifyModal, setShowNotifyModal] = useState(false);
+  const [notifyType, setNotifyType] = useState<"deadline_warning" | "step_advanced" | "determination_issued" | "offer_received" | "document_uploaded" | "system_alert">("system_alert");
+  const [notifyTitle, setNotifyTitle] = useState("");
+  const [notifyMessage, setNotifyMessage] = useState("");
+  const [notifyEmail, setNotifyEmail] = useState("");
+  const sendNotificationMutation = trpc.disputes.sendNotification.useMutation({
+    onSuccess: () => {
+      setShowNotifyModal(false);
+      setNotifyTitle(""); setNotifyMessage(""); setNotifyEmail(""); setNotifyType("system_alert");
+      toast.success("Notification sent");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Payer invite issuance (payer.invite): the acceptance landing page at
+  // /accept-invite already exists; this is the missing issuing side.
+  const [showInvitePayerModal, setShowInvitePayerModal] = useState(false);
+  const [invitePayerName, setInvitePayerName] = useState("");
+  const [invitePayerEmail, setInvitePayerEmail] = useState("");
+  const invitePayerMutation = trpc.payer.invite.useMutation({
+    onSuccess: () => {
+      setShowInvitePayerModal(false);
+      setInvitePayerName(""); setInvitePayerEmail("");
+      utils.disputes.getTimeline.invalidate();
+      toast.success("Payer invited — an invite email is sent when SMTP is configured on this deployment");
+    },
+    onError: (err) => toast.error(err.message),
   });
 
   const issuePatientLinkMutation = trpc.patientPortal.issueViewToken.useMutation({
@@ -466,6 +552,44 @@ export default function DisputeDetail() {
             >
               {isPinned(dispute.id) ? <PinOff size={14} /> : <Pin size={14} />}
               {isPinned(dispute.id) ? "Unpin" : "Pin"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (isWatching) watchlistRemoveMutation.mutate({ disputeId: dispute.id });
+                else watchlistAddMutation.mutate({ disputeId: dispute.id });
+              }}
+              disabled={watchlistAddMutation.isPending || watchlistRemoveMutation.isPending}
+              className={`flex items-center gap-2 ${
+                isWatching
+                  ? "border-sky-400 text-sky-700 bg-sky-50 hover:bg-sky-100 dark:border-sky-600 dark:text-sky-400 dark:bg-sky-900/20"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              title={isWatching ? "Remove from watchlist" : "Add to watchlist"}
+            >
+              {isWatching ? <StarOff size={14} /> : <Star size={14} />}
+              {isWatching ? "Watching" : "Watch"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowNotifyModal(true)}
+              className="flex items-center gap-2 text-muted-foreground hover:text-foreground"
+              title="Send a notification about this dispute"
+            >
+              <Bell size={14} />
+              Notify
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowInvitePayerModal(true)}
+              className="flex items-center gap-2 text-muted-foreground hover:text-foreground"
+              title="Invite the payer (responding party) onto this dispute"
+            >
+              <MailPlus size={14} />
+              Invite Payer
             </Button>
             <Button variant="outline" onClick={handleAISummary} disabled={aiSummaryMutation.isPending} className="flex items-center gap-2 border-violet-300 text-violet-700 hover:bg-violet-50">
               <Brain size={14} />{aiSummaryMutation.isPending ? "Analysing..." : "AI Summary"}
@@ -992,6 +1116,96 @@ export default function DisputeDetail() {
               <Button className="flex-1 bg-purple-600 hover:bg-purple-700" disabled={!counterOfferAmount || submitCounterOfferMutation.isPending}
                 onClick={() => submitCounterOfferMutation.mutate({ disputeId: dispute.id, offerType: "responding_party", amount: counterOfferAmount, rationale: counterOfferRationale || undefined })}>
                 {submitCounterOfferMutation.isPending ? "Submitting..." : "Submit Counter-Offer"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Send Notification Modal ────────────────────────────────────── */}
+      {showNotifyModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Send Notification</h3>
+            <p className="text-xs text-slate-500 mb-4">Record and dispatch a notification for this dispute. Email/SMS delivery occurs only when recipient details are provided and delivery is configured on this deployment.</p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Type</label>
+                <select value={notifyType} onChange={e => setNotifyType(e.target.value as any)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="system_alert">System alert</option>
+                  <option value="deadline_warning">Deadline warning</option>
+                  <option value="step_advanced">Step advanced</option>
+                  <option value="determination_issued">Determination issued</option>
+                  <option value="offer_received">Offer received</option>
+                  <option value="document_uploaded">Document uploaded</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Title</label>
+                <input type="text" value={notifyTitle} onChange={e => setNotifyTitle(e.target.value)}
+                  placeholder="Notification title"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Message</label>
+                <textarea value={notifyMessage} onChange={e => setNotifyMessage(e.target.value)} rows={3}
+                  placeholder="Notification message…"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Recipient email (optional)</label>
+                <input type="email" value={notifyEmail} onChange={e => setNotifyEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <Button variant="outline" className="flex-1" onClick={() => setShowNotifyModal(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!notifyTitle || !notifyMessage || sendNotificationMutation.isPending}
+                onClick={() => sendNotificationMutation.mutate({
+                  disputeId: dispute.id,
+                  notificationType: notifyType,
+                  title: notifyTitle,
+                  message: notifyMessage,
+                  recipientEmail: notifyEmail || undefined,
+                })}>
+                {sendNotificationMutation.isPending ? "Sending..." : "Send Notification"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Invite Payer Modal ─────────────────────────────────────────── */}
+      {showInvitePayerModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Invite Payer</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Invite the responding-party payer onto this dispute. A payer account is created when none exists for
+              the contact email, and the payer is linked to this dispute as responding party. Only the initiating
+              party or an admin may invite.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Payer name</label>
+                <input type="text" value={invitePayerName} onChange={e => setInvitePayerName(e.target.value)}
+                  placeholder="e.g., Acme Health Plan"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Contact email</label>
+                <input type="email" value={invitePayerEmail} onChange={e => setInvitePayerEmail(e.target.value)}
+                  placeholder="payer-contact@example.com"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <Button variant="outline" className="flex-1" onClick={() => setShowInvitePayerModal(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!invitePayerName.trim() || !invitePayerEmail.trim() || invitePayerMutation.isPending}
+                onClick={() => invitePayerMutation.mutate({ disputeId: dispute.id, payerName: invitePayerName.trim(), contactEmail: invitePayerEmail.trim() })}>
+                {invitePayerMutation.isPending ? "Inviting..." : "Send Invite"}
               </Button>
             </div>
           </div>
