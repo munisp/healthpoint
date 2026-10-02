@@ -121,6 +121,49 @@ export default function ComplianceCenter() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Fee schedule creation (admin-only server-side; the server enforces the role)
+  const [scheduleForm, setScheduleForm] = useState({
+    effectiveFrom: "", effectiveTo: "", adminFeeDollars: "",
+    idreSingleMin: "", idreSingleMax: "", idreBatchedMin: "", idreBatchedMax: "",
+    source: "", notes: "",
+  });
+  const createScheduleMutation = trpc.idrCompliance["fees.createSchedule"].useMutation({
+    onSuccess: () => {
+      toast.success("Fee schedule created");
+      setScheduleForm({ effectiveFrom: "", effectiveTo: "", adminFeeDollars: "", idreSingleMin: "", idreSingleMax: "", idreBatchedMin: "", idreBatchedMax: "", source: "", notes: "" });
+      schedulesQuery.refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const toCents = (dollars: string) => {
+    const n = Math.round(parseFloat(dollars) * 100);
+    return Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+  };
+  const submitSchedule = () => {
+    const adminFeeCents = toCents(scheduleForm.adminFeeDollars);
+    if (!scheduleForm.effectiveFrom || adminFeeCents == null) {
+      toast.error("Effective-from date and a non-negative admin fee are required");
+      return;
+    }
+    createScheduleMutation.mutate({
+      effectiveFrom: scheduleForm.effectiveFrom,
+      effectiveTo: scheduleForm.effectiveTo || undefined,
+      adminFeeCents,
+      idreFeeSingleMinCents: scheduleForm.idreSingleMin ? toCents(scheduleForm.idreSingleMin) : undefined,
+      idreFeeSingleMaxCents: scheduleForm.idreSingleMax ? toCents(scheduleForm.idreSingleMax) : undefined,
+      idreFeeBatchedMinCents: scheduleForm.idreBatchedMin ? toCents(scheduleForm.idreBatchedMin) : undefined,
+      idreFeeBatchedMaxCents: scheduleForm.idreBatchedMax ? toCents(scheduleForm.idreBatchedMax) : undefined,
+      source: scheduleForm.source || undefined,
+      notes: scheduleForm.notes || undefined,
+    });
+  };
+
+  // Per-determination federal reporting record (view + download)
+  const [recordRequested, setRecordRequested] = useState(false);
+  const determinationRecordQuery = trpc.idrCompliance["reporting.determinationRecord"].useQuery(
+    { disputeId }, { enabled: recordRequested && !!disputeId, retry: false }
+  );
+
   // Federal reporting tab
   const [period, setPeriod] = useState({ from: "", to: "" });
   const [reportSubmitted, setReportSubmitted] = useState(false);
@@ -270,6 +313,55 @@ export default function ComplianceCenter() {
                   </TableBody>
                 </Table>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Create Fee Schedule (admin)</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Amounts are entered in dollars and stored as integer cents. Admin fee is required; IDRE ranges are optional.
+                Server-side admin role is enforced.
+              </p>
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Effective from</Label>
+                  <Input type="date" value={scheduleForm.effectiveFrom} onChange={e => setScheduleForm(f => ({ ...f, effectiveFrom: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Effective to (optional)</Label>
+                  <Input type="date" value={scheduleForm.effectiveTo} onChange={e => setScheduleForm(f => ({ ...f, effectiveTo: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Admin fee (USD)</Label>
+                  <Input type="number" min="0" step="0.01" className="w-28" value={scheduleForm.adminFeeDollars} onChange={e => setScheduleForm(f => ({ ...f, adminFeeDollars: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">IDRE single min</Label>
+                  <Input type="number" min="0" step="0.01" className="w-28" value={scheduleForm.idreSingleMin} onChange={e => setScheduleForm(f => ({ ...f, idreSingleMin: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">IDRE single max</Label>
+                  <Input type="number" min="0" step="0.01" className="w-28" value={scheduleForm.idreSingleMax} onChange={e => setScheduleForm(f => ({ ...f, idreSingleMax: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">IDRE batched min</Label>
+                  <Input type="number" min="0" step="0.01" className="w-28" value={scheduleForm.idreBatchedMin} onChange={e => setScheduleForm(f => ({ ...f, idreBatchedMin: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">IDRE batched max</Label>
+                  <Input type="number" min="0" step="0.01" className="w-28" value={scheduleForm.idreBatchedMax} onChange={e => setScheduleForm(f => ({ ...f, idreBatchedMax: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Source (optional)</Label>
+                  <Input className="w-48" placeholder="e.g. HHS guidance 2026" value={scheduleForm.source} onChange={e => setScheduleForm(f => ({ ...f, source: e.target.value }))} />
+                </div>
+                <Button size="sm" disabled={createScheduleMutation.isPending} onClick={submitSchedule}>
+                  {createScheduleMutation.isPending ? "Creating..." : "Create Schedule"}
+                </Button>
+              </div>
             </CardContent>
           </Card>
 
@@ -520,6 +612,47 @@ export default function ComplianceCenter() {
                     {(reportQuery.data as any).csv}
                   </pre>
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-base">Per-Determination Record (selected dispute)</CardTitle>
+              <div className="flex gap-2">
+                {determinationRecordQuery.data && (
+                  <Button size="sm" variant="outline"
+                    onClick={() => {
+                      const blob = new Blob([JSON.stringify(determinationRecordQuery.data, null, 2)], { type: "application/json" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `determination-record-${disputeId}.json`;
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      URL.revokeObjectURL(url);
+                    }}>
+                    <Download size={14} className="mr-1.5" /> Download JSON
+                  </Button>
+                )}
+                <Button size="sm" disabled={!disputeId || determinationRecordQuery.isFetching}
+                  onClick={() => { setRecordRequested(true); determinationRecordQuery.refetch(); }}>
+                  {determinationRecordQuery.isFetching ? "Loading..." : "Load Record"}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {!disputeId && (
+                <p className="text-sm text-muted-foreground">Select a dispute above to load its per-determination federal reporting record.</p>
+              )}
+              {disputeId && recordRequested && determinationRecordQuery.isError && (
+                <p className="text-sm text-destructive">{determinationRecordQuery.error.message}</p>
+              )}
+              {determinationRecordQuery.data && (
+                <pre className="text-xs bg-muted rounded-md p-3 overflow-auto max-h-96">
+                  {JSON.stringify(determinationRecordQuery.data, null, 2)}
+                </pre>
               )}
             </CardContent>
           </Card>
