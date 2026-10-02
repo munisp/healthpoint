@@ -71,7 +71,7 @@ describe.skipIf(!HAS_DB)("W4-F4 signature capture (live PG)", () => {
       patientName: "Jane Patient",
     });
     expect(link.token).toBeTruthy();
-    expect(link.path).toContain("/patient/consent-sign/");
+    expect(link.path).toBe(`/consent-sign/${link.token}`); // matches the App.tsx /consent-sign/:token route
 
     // renderNoticeDocument in Spanish for the patient to review.
     const rendered = await providerCaller.noticeConsent.renderNoticeDocument({
