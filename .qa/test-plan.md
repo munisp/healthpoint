@@ -15,21 +15,27 @@ see `risks.md`.
 - [x] Real dev server boots against real local Postgres/Redis.
 - [x] DEFECT-001, DEFECT-002 fixed and regressed clean.
 - [x] Architecture, infrastructure, role model mapped (this directory).
-
-## In progress
-- [ ] Wire a reachable Keycloak so real auth'd journeys can run (user
-      confirmed one exists in its own `keycloak` namespace in-cluster).
+- [x] Wired a real local Keycloak (own container, importing the repo's
+      `keycloak/realm-export.json`) — found and fixed 2 more real bugs
+      to get there (DEFECT-004: OIDC discovery HTTPS-only block;
+      missing default client scopes). See defects.md.
+- [x] **Authz/IDOR dispute isolation** — `test-cases/authz-dispute-isolation.md`.
+      3/3 real, executed sub-checks PASS: owner allowed, unrelated
+      authenticated user denied (real FORBIDDEN, not a loose name
+      match), admin bypass allowed. Also confirmed Keycloak realm roles
+      are never auto-synced to app privilege (deliberate, good).
 
 ## Next, in priority order (risk-weighted)
 1. **Disputes + ledger + QPA calculation** (`routers.ts`'s `disputes`,
-   `ledger`, `qpa` namespaces) — the core financial/regulatory workflow.
-   Highest blast radius if wrong.
-2. **Authz / IDOR** — exercise the ReBAC model for real with 2+ real
-   logged-in users of different roles/relations: can a `payer` read a
-   dispute they're not the `reviewer` on? Can a `provider` from org A
-   read org B's dispute? This is the single highest-value test given a
-   regulated, adversarial-party domain (providers and payers are
-   literally on opposite sides of money).
+   `ledger`, `qpa` namespaces) — the core financial/regulatory workflow
+   itself (amounts, QPA math, settlement), as opposed to just access
+   control around it. Highest blast radius if wrong.
+2. **Authz follow-ups** (see test-cases/authz-dispute-isolation.md's
+   "Not yet tested"): granted-relation path (reviewer/arbitrator/
+   org_admin actually working, not just the no-relation deny case),
+   mutation-side authz (e.g. advanceStep on a dispute you don't own),
+   the real bootstrap-admin-claim flow (bypassed via direct DB write
+   this pass).
 3. **Impersonation guardrails** — already has real blocking logic
    (admin-impersonating-admin, onboarding-state transitions); worth
    proving those specific denials actually fire, not just reading the code.
