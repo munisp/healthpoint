@@ -12,6 +12,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const discoveryMock = vi.fn();
 vi.mock("openid-client", () => ({
   discovery: (...args: any[]) => discoveryMock(...args),
+  // discoverCached passes { execute: [allowInsecureRequests] } outside
+  // production - needs to exist on the mock even though these tests never
+  // execute real discovery (see discovery-cache.ts).
+  allowInsecureRequests: Symbol("allowInsecureRequests"),
 }));
 
 import { discoverCached, _clearDiscoveryCache } from "../_core/discovery-cache";

@@ -52,7 +52,22 @@ export async function discoverCached(
   }
 
   try {
-    const config = await client.discovery(issuerUrl, clientId, clientSecret);
+    // openid-client/oauth4webapi v6 refuses plain-HTTP discovery by default
+    // ("only requests to HTTPS are allowed") - confirmed live: local dev
+    // Keycloak (KEYCLOAK_URL=http://localhost:8080, matching .env.example)
+    // cannot complete OIDC discovery at all without this, meaning the real
+    // login flow has never been locally testable against a non-HTTPS
+    // Keycloak. allowInsecureRequests is the library's own sanctioned
+    // escape hatch for exactly this - gated to non-production so it can
+    // never silently weaken a real deployment (which uses the real HTTPS
+    // issuer, e.g. https://keycloak-servers.newfire.app).
+    const config = await client.discovery(
+      issuerUrl,
+      clientId,
+      clientSecret,
+      undefined,
+      process.env.NODE_ENV === "production" ? undefined : { execute: [client.allowInsecureRequests] },
+    );
     _cache.set(key, { config, fetchedAt: now });
     return config;
   } catch (err) {
