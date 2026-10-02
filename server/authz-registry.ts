@@ -416,14 +416,14 @@ export const authzCheckers: Record<string, AuthzChecker> = {
     if (isAdmin(ctx)) return;
     const { getRunOwner } = await import("./idr/portal-rpa/run-owners");
     // Fail closed when no owner is recorded (pre-fix runs).
-    assertOwnerOrAdmin(ctx, getRunOwner(runId) ?? null, "portal run");
+    assertOwnerOrAdmin(ctx, (await getRunOwner(runId)) ?? null, "portal run");
   },
   "portalRpa.resolveCheckpoint": async (ctx, raw) => {
     const checkpointId = strField(raw, "checkpointId");
     if (!checkpointId) return;
     if (isAdmin(ctx)) return;
     const { getCheckpointOwner } = await import("./idr/portal-rpa/run-owners");
-    const owner = getCheckpointOwner(checkpointId);
+    const owner = await getCheckpointOwner(checkpointId);
     // Unknown checkpoint → the procedure's queue lookup rejects it; nothing leaks.
     if (owner === undefined) return;
     assertOwnerOrAdmin(ctx, owner, "portal run checkpoint");
