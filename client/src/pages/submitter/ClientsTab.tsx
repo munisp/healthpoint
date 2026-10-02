@@ -41,11 +41,44 @@ function AttestationStatusBadge({ attestationId }: { attestationId: string }) {
   return <Badge variant="outline">attestation not currently valid</Badge>;
 }
 
+/** Drill-down: disputes filed under this delegation (submitter.listClientDisputes). */
+function ClientDisputes({ clientId }: { clientId: string }) {
+  const q = trpc.submitter.listClientDisputes.useQuery({ submitterClientId: clientId });
+  const rows = (q.data ?? []) as Array<{
+    id: string; referenceNumber: string; status: string;
+    billedAmount: string | null; serviceDate: string | Date; batchId: string | null;
+  }>;
+  if (q.isLoading) return <p className="text-sm text-muted-foreground">Loading disputes…</p>;
+  if (q.isError) return <p role="alert" className="text-sm text-destructive">{q.error.message}</p>;
+  if (!rows.length) return <p className="text-sm text-muted-foreground">No disputes filed for this client yet.</p>;
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-left text-muted-foreground">
+          <th className="py-1">Reference</th><th>Status</th><th>Billed</th><th>Service date</th><th>Batched</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(d => (
+          <tr key={d.id} className="border-t">
+            <td className="py-1 font-mono text-xs">{d.referenceNumber}</td>
+            <td><Badge variant="outline">{d.status.replace(/_/g, " ")}</Badge></td>
+            <td>{d.billedAmount != null ? `$${Number(d.billedAmount).toFixed(2)}` : "—"}</td>
+            <td className="text-xs">{new Date(d.serviceDate).toLocaleDateString()}</td>
+            <td className="text-xs">{d.batchId ? "yes" : "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function ClientCard({ client, submitterOrgId }: { client: SubmitterClient; submitterOrgId: string }) {
   const utils = trpc.useUtils();
   const [npis, setNpis] = useState(client.npis.join(", "));
   const [tins, setTins] = useState(client.tins.join(", "));
   const [editing, setEditing] = useState(false);
+  const [showDisputes, setShowDisputes] = useState(false);
   const knownIds = useMemo(() => knownAttestationIds(client.id), [client.id]);
 
   const invalidate = () => utils.submitter.listClients.invalidate({ submitterOrgId });
@@ -93,6 +126,9 @@ function ClientCard({ client, submitterOrgId }: { client: SubmitterClient; submi
         ) : (
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" onClick={() => setEditing(true)}>Edit roster</Button>
+            <Button size="sm" variant="outline" onClick={() => setShowDisputes(v => !v)}>
+              {showDisputes ? "Hide disputes" : "View disputes"}
+            </Button>
             {client.status === "active" && (
               <Button size="sm" variant="outline" className="text-red-700 border-red-300"
                 disabled={setStatus.isPending}
@@ -112,6 +148,11 @@ function ClientCard({ client, submitterOrgId }: { client: SubmitterClient; submi
                 </Button>
               </>
             )}
+          </div>
+        )}
+        {showDisputes && (
+          <div className="border rounded p-3">
+            <ClientDisputes clientId={client.id} />
           </div>
         )}
       </CardContent>
