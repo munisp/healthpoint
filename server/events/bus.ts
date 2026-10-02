@@ -85,7 +85,19 @@ export type IDREventType =
   | "user.logout"
   | "consent.signed"
   | "consent.revoked"
-  | "consent.expired";
+  | "consent.expired"
+  // Wave auditfix (A): portal RPA driver lifecycle + checkpoint interrupts
+  // (durable store/queue in server/idr/portal-rpa/store.ts).
+  | "rpa.run.blocked"
+  | "rpa.run.failed"
+  | "rpa.run.checkpoint"
+  | "rpa.run.unconfirmed"
+  | "rpa.run.completed"
+  | "rpa.run.dry_run_complete"
+  | "rpa.checkpoint.enqueued"
+  | "rpa.checkpoint.claimed"
+  | "rpa.checkpoint.resolved"
+  | "rpa.checkpoint.expired";
 
 export type IDRTopic =
   | "idr.disputes.state_changes"
@@ -95,7 +107,8 @@ export type IDRTopic =
   | "idr.notifications"
   | "idr.audit"
   | "idr.users"
-  | "idr.consent";
+  | "idr.consent"
+  | "idr.rpa";
 
 const EVENT_TOPIC_MAP: Record<IDREventType, IDRTopic> = {
   "dispute.created": "idr.disputes.state_changes",
@@ -119,6 +132,16 @@ const EVENT_TOPIC_MAP: Record<IDREventType, IDRTopic> = {
   "consent.signed": "idr.consent",
   "consent.revoked": "idr.consent",
   "consent.expired": "idr.consent",
+  "rpa.run.blocked": "idr.rpa",
+  "rpa.run.failed": "idr.rpa",
+  "rpa.run.checkpoint": "idr.rpa",
+  "rpa.run.unconfirmed": "idr.rpa",
+  "rpa.run.completed": "idr.rpa",
+  "rpa.run.dry_run_complete": "idr.rpa",
+  "rpa.checkpoint.enqueued": "idr.rpa",
+  "rpa.checkpoint.claimed": "idr.rpa",
+  "rpa.checkpoint.resolved": "idr.rpa",
+  "rpa.checkpoint.expired": "idr.rpa",
 };
 
 export interface IDREvent<T = Record<string, unknown>> {
