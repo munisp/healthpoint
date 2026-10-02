@@ -111,6 +111,33 @@ export async function registerForPushNotifications(
   }
 }
 
+/**
+ * Unregister the current device's Expo push token on the server
+ * (pushSubscriptions.unregisterExpoToken) and clear the local sync markers.
+ * Best effort — intended for sign-out so the departed session's device stops
+ * receiving dispute notifications. Never throws.
+ */
+export async function unregisterPushToken(): Promise<void> {
+  try {
+    const token = await AsyncStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
+    if (!token) return;
+    const synced = await AsyncStorage.getItem(PUSH_TOKEN_SYNCED_KEY);
+    if (synced === token) {
+      // Only call the server when we believe it holds this token.
+      await trpc.pushSubscriptions.unregisterExpoToken.mutate({ token });
+    }
+    await AsyncStorage.multiRemove([PUSH_TOKEN_STORAGE_KEY, PUSH_TOKEN_SYNCED_KEY]);
+  } catch {
+    // Offline or server unreachable — local markers are still cleared so the
+    // next sign-in re-registers cleanly.
+    try {
+      await AsyncStorage.multiRemove([PUSH_TOKEN_STORAGE_KEY, PUSH_TOKEN_SYNCED_KEY]);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 /** Read the locally stored Expo push token (null when never registered). */
 export async function getStoredPushToken(): Promise<string | null> {
   try {
