@@ -96,15 +96,44 @@ different trust model from everything else tested this pass (no login,
 opaque bearer token, strict redaction) — holds up under live testing on
 every documented guarantee checked.
 
+## Part 4 — idr_entity's actual determination-issuing capability: resolved
+Checked every reference to `idr_entity`/`stakeholderRole` across
+`server/routers.ts`: it is used ONLY as descriptive metadata (who this
+person represents) and in the self-selection guard already tested
+above. **No procedure anywhere gates on `stakeholderRole ===
+"idr_entity"` specifically.** The real authorization for issuing a
+determination is whatever generic dispute-level permission the caller
+holds — the `arbitrator` ReBAC relation or system admin, both already
+verified live in Part 2. There is nothing further to test here; the
+stakeholder role and the authorization mechanism are two independent
+systems, confirmed by reading every call site, not assumed.
+
+## Part 5 — the remaining two patient-portal endpoints
+- **`uploadDocument`**: deliberately does NOT enforce single-use (its
+  own comment: "tolerates prior view use") — confirmed live: a token
+  already consumed by `viewCase` still succeeds for upload, and a
+  SECOND upload with the identical token also succeeds (genuinely
+  repeatable, not an oversight — a patient needs to attach multiple
+  documents under one link). Revocation still correctly blocks it
+  (`UNAUTHORIZED — "revoked"`) once revoked.
+- **`ppdrIntake`**: scope separation confirmed (a `ppdr_intake` token
+  rejected by `viewCase`'s "view"-scope requirement). A real intake
+  with plausible numbers produced genuinely computed values
+  (`excessUsd: 1500` = billedTotal − gfeTotal, not a stub) and created
+  a real FSM case. **Found a real but harmless doc/code mismatch**:
+  `server/personas/guards.ts`'s comment claims "ppdr_intake tokens stay
+  reusable until expiry for the intake wizard," but
+  `patientPortal.ppdrIntake`'s handler explicitly calls
+  `markPatientTokenUsed` after a successful intake (line ~287) — live-
+  confirmed the token IS single-use in practice, contradicting the
+  comment. Not a security defect: the enforced behavior (single
+  intake per link) is actually the safer of the two, preventing a
+  leaked/shared link from spam-creating unlimited duplicate PPDR
+  cases. Just a stale comment worth correcting.
+
 ## Still not tested
-- The `idr_entity` persona's actual determination-issuing capability
-  (is there a procedure gated specifically on holding that stakeholder
-  role, distinct from generic admin/arbitrator write access?) — not
-  located/tested this pass.
 - `payer`-specific flows beyond the self-assignment block (e.g., is
   `reviewer` relation actually granted to payer-role users
   automatically anywhere, or always a manual `grantAccess` call?).
-- `patientPortal.uploadDocument` and `patientPortal.ppdrIntake` (the
-  other two public, token-guarded endpoints) — not exercised this pass.
 - `facility` stakeholder role — not distinguished from `provider` in
   any test this pass.
