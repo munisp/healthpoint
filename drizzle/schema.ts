@@ -589,7 +589,7 @@ export const webhookStatusEnum = pgEnum("webhook_status", ["active", "paused", "
 export const webhooks = pgTable(
   "webhooks",
   {
-    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    id: varchar("id", { length: 64 }).primaryKey(),
     userId: varchar("userId", { length: 64 }).notNull(),
     name: varchar("name", { length: 128 }).notNull(),
     url: text("url").notNull(),
@@ -612,7 +612,7 @@ export type InsertWebhook = typeof webhooks.$inferInsert;
 export const outcomePredictions = pgTable(
   "outcome_predictions",
   {
-    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    id: varchar("id", { length: 64 }).primaryKey(),
     disputeId: varchar("disputeId", { length: 64 }).notNull(),
     winProbability: integer("winProbability").notNull(),
     confidenceScore: integer("confidenceScore").notNull(),
@@ -633,7 +633,7 @@ export const documentAnalysisStatusEnum = pgEnum("doc_analysis_status", ["pendin
 export const documentAnalyses = pgTable(
   "document_analyses",
   {
-    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    id: varchar("id", { length: 64 }).primaryKey(),
     disputeId: varchar("disputeId", { length: 64 }),
     userId: varchar("userId", { length: 64 }).notNull(),
     fileName: varchar("fileName", { length: 256 }).notNull(),
@@ -1630,7 +1630,7 @@ export const hermesInsights = pgTable(
     expiresAt: timestamp("expiresAt"),
   },
   (t) => [
-    index("hermes_insights_disputeId_idx").on(t.disputeId),
+    index("hermes_insights_dispute_idx").on(t.disputeId),
     index("hermes_insights_type_idx").on(t.insightType),
   ]
 );
