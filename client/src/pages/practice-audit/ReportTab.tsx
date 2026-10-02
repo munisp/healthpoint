@@ -16,8 +16,17 @@
  * LANE B: QUALIFIES + window closed → time-barred for IDR; appeal/contract
  *         lane (QPA variance evidence where amounts are present).
  * LANE C: everything else → payer-behavior intelligence aggregates.
+ *
+ * auditfix-b: share-management card wired to practiceAudit.createAuditShareToken
+ * / listAuditShareTokens / revokeAuditShareToken. Tokens are shown ONCE
+ * (server stores only the hash); share URLs point at the public read-only
+ * /audit-share/:token route.
  */
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +50,108 @@ const LANE_META: Record<Lane, { title: string; badge: string; description: strin
     description: "BLOCKED / NEEDS_REVIEW / UNSCORED claims retained for payer-behavior aggregates.",
   },
 };
+
+/** Share-management card (auditfix-b): create / list / revoke read-only audit share tokens. */
+function ShareTokensCard({ orgId }: { orgId: string }) {
+  const utils = trpc.useUtils();
+  const [label, setLabel] = useState("");
+  const [days, setDays] = useState("30");
+  const [issued, setIssued] = useState<{ shareToken: string; expiresAt: string | Date } | null>(null);
+
+  const list = trpc.practiceAudit.listAuditShareTokens.useQuery({ orgId });
+  const create = trpc.practiceAudit.createAuditShareToken.useMutation({
+    onSuccess: r => {
+      setIssued({ shareToken: r.shareToken, expiresAt: r.expiresAt });
+      setLabel("");
+      toast.success("Share link created — copy it now, the token is shown only once");
+      utils.practiceAudit.listAuditShareTokens.invalidate({ orgId });
+    },
+    onError: e => toast.error(e.message),
+  });
+  const revoke = trpc.practiceAudit.revokeAuditShareToken.useMutation({
+    onSuccess: () => {
+      toast.success("Share link revoked");
+      utils.practiceAudit.listAuditShareTokens.invalidate({ orgId });
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const daysNum = Number(days);
+  const validDays = Number.isInteger(daysNum) && daysNum >= 1 && daysNum <= 90;
+  const shareUrl = issued ? `${window.location.origin}/audit-share/${issued.shareToken}` : null;
+
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Share this audit report (read-only links)</CardTitle></CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <p className="text-xs text-muted-foreground max-w-2xl">
+          Create a read-only link to this audit report for an outside reviewer (e.g. counsel or an auditor).
+          Links expire after 1–90 days and can be revoked at any time. Only the token hash is stored —
+          the link itself is shown once, at creation.
+        </p>
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <Label className="text-xs">Label (optional)</Label>
+            <Input className="w-56" placeholder="e.g. Q3 external auditor" value={label} onChange={e => setLabel(e.target.value)} aria-label="Share token label" />
+          </div>
+          <div>
+            <Label className="text-xs">Expires in (days, 1–90)</Label>
+            <Input className="w-24" inputMode="numeric" value={days} onChange={e => setDays(e.target.value)} aria-label="Share token expiry days" />
+          </div>
+          <Button size="sm" variant="outline" disabled={!validDays || create.isPending}
+            onClick={() => create.mutate({ orgId, label: label.trim() || undefined, expiresInDays: daysNum })}>
+            {create.isPending ? "Creating…" : "Create share link"}
+          </Button>
+        </div>
+        {issued && shareUrl && (
+          <div className="rounded border border-teal-200 bg-teal-50 p-3 space-y-1" role="status">
+            <p className="text-xs text-teal-800 break-all font-mono">{shareUrl}</p>
+            <p className="text-xs text-teal-800">
+              Expires {new Date(issued.expiresAt).toLocaleDateString()}. Shown once — copy it now.
+            </p>
+            <Button size="sm" variant="secondary" className="text-xs"
+              onClick={() => navigator.clipboard?.writeText(shareUrl).then(
+                () => toast.success("Share link copied"),
+                () => toast.error("Copy failed — select the link manually"),
+              )}>
+              Copy share link
+            </Button>
+          </div>
+        )}
+        {list.isLoading && <p className="text-muted-foreground">Loading share links…</p>}
+        {list.isError && <p role="alert" className="text-destructive">{list.error.message}</p>}
+        {list.data && (
+          <>
+            {list.data.length === 0 && <p className="text-muted-foreground">No share links created yet.</p>}
+            {list.data.map(t => {
+              const expired = new Date(t.expiresAt).getTime() < Date.now();
+              const revoked = !!t.revokedAt;
+              return (
+                <div key={t.id} className="flex flex-wrap items-center gap-2 border rounded p-2">
+                  <span className="font-medium">{t.label ?? "Untitled link"}</span>
+                  {revoked ? <Badge variant="destructive">revoked</Badge>
+                    : expired ? <Badge variant="outline">expired</Badge>
+                    : <Badge variant="secondary">active</Badge>}
+                  <span className="text-xs text-muted-foreground">
+                    expires {new Date(t.expiresAt).toLocaleDateString()} · opened {t.accessCount} time{t.accessCount === 1 ? "" : "s"}
+                    {t.lastAccessedAt ? ` · last opened ${new Date(t.lastAccessedAt).toLocaleDateString()}` : ""}
+                  </span>
+                  {!revoked && !expired && (
+                    <Button size="sm" variant="ghost" className="ml-auto text-red-700"
+                      disabled={revoke.isPending}
+                      onClick={() => revoke.mutate({ shareTokenId: t.id })}>
+                      Revoke
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function ReportTab({ orgId }: { orgId: string }) {
   const { data: summary, isLoading: summaryLoading } = trpc.practiceAudit.scoreAndSummarize.useQuery({ orgId });
@@ -242,6 +353,7 @@ export default function ReportTab({ orgId }: { orgId: string }) {
           </Card>
         ))}
       </div>
+      <ShareTokensCard orgId={orgId} />
     </div>
   );
 }
