@@ -30,21 +30,34 @@
   writing Permify relationships, creating real Keycloak realm data) needs
   explicit confirmation first.
 
-## Architecture observation: the "central" object-level authz registry is currently inert
-`server/authz-registry.ts` / `enforceObjectLevelAuthz` middleware
-(`server/_core/trpc.ts`) is documented as the central IDOR-protection
-layer, consulting a path→checker registry, with "unmapped paths
-default-allow with a once-per-path audit log line." Live testing this
-pass logged that exact default-allow line for EVERY protected path
-exercised (`disputes.getById`, `disputes.advance`, `authz.grantAccess`,
-`impersonation.start`, `admin.updateUserRole`, `apiKeys.create`,
-`admin.allDisputes`) — meaning this registry currently has ZERO
-checkers registered for any of them. Not currently exploitable: every
-path tested has its OWN inline authz check (e.g. `assertDisputeAccess`
-called directly in the procedure body), which is what's actually
-enforcing access — confirmed via extensive live testing this pass. But
-it means the "central" layer is doing nothing right now, and anyone
-relying on its existence as a safety net (rather than the per-procedure
-inline checks) would be wrong. Worth a follow-up decision: either
-populate the registry for real, or remove the apparatus so it stops
-looking like active protection.
+## CORRECTED: the object-level authz registry is real and substantially populated — my earlier note was wrong
+Original note (below, struck through in spirit) claimed this registry
+was "currently inert." That was an overgeneralization from a small,
+coincidental sample. Re-checked properly: `server/authz-registry.ts`'s
+`authzCheckers` map has ~80 real registered entries spanning most of
+the "other ~35 namespaces" this pass hadn't touched yet — `documents.*`,
+`ai.*`, `expertReview.*`, `comments.*`, `webhooks.*`, `bulkFhir.*`,
+`cdsHooksRouter.*`, `reports.exportCSV`/`exportPDF`, and many more.
+
+**Verified live, not just by reading the registry:** `reports.exportCSV`
+(tenant-wide dispute data export) uses `adminOnlyCheck`. As a genuine
+non-admin user: `FORBIDDEN` — *"Admin role required to export
+tenant-wide reports."* As an admin: succeeds, returns a real CSV with
+real aggregate data. Both the deny and allow paths confirmed for real.
+
+What's actually true: the handful of paths exercised earlier this pass
+(`disputes.getById`/`advance`, `authz.*`, `impersonation.*`, `admin.*`,
+`apiKeys.*`) genuinely have NO registry entry and rely entirely on
+their own inline `assertDisputeAccess`/role checks instead — that part
+of the original note was accurate. But generalizing "no entry for these
+7 paths" into "the registry is inert" was wrong and not something to
+have stated without checking the registry's actual contents first.
+Lesson for this QA process itself: a `grep` of the real registry
+contents is cheap and should have happened before writing the broader
+claim, not after.
+
+**Still open:** ~35 namespaces remain untested beyond the one path
+(`reports.exportCSV`) spot-checked here; the registry's broad real
+coverage doesn't mean every entry in it is individually correct, only
+that the mechanism itself is live and enforcing for at least this one
+case.

@@ -87,10 +87,16 @@ see `risks.md`.
       bypassed this time): claim succeeds exactly once, audit-logged,
       correctly denied for a second user once an admin exists again.
 
+- [x] **Authz-registry corrected + spot-checked** — earlier note calling
+      it "inert" was wrong (see risks.md CORRECTED section): it has ~80
+      real registered checkers covering most of the untested namespaces.
+      Spot-checked one live: `reports.exportCSV`'s `adminOnlyCheck` —
+      denied for a real non-admin, succeeds for a real admin. Mechanism
+      confirmed genuinely active; most of its ~80 individual entries are
+      still unverified beyond this one.
+
 ## Next, in priority order (risk-weighted)
-1. Decide and act on the inert authz-registry (see risks.md) — populate
-   it for real or remove it so it stops looking like active protection.
-2. Everything else (the remaining ~35 router namespaces, performance,
+1. Everything else (the remaining ~35 router namespaces, performance,
    chaos, DR, deployment/rollback) — explicitly deferred. Chaos/load
    testing in particular should NOT target shared cluster infra
    (Kafka, Permify's real endpoint) without a separate, explicit go-ahead
