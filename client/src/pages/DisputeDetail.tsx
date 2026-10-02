@@ -81,11 +81,11 @@ const NEXT_STEP_MAP: Record<string, { step: string; status: string; label: strin
   STEP_02_OPEN_NEGOTIATION_PERIOD: { step: "STEP_03_OPEN_NEGOTIATION_FAILED", status: "open_negotiation", label: "Mark Negotiation Failed" },
   STEP_03_OPEN_NEGOTIATION_FAILED: { step: "STEP_04_IDR_INITIATED", status: "idr_initiated", label: "Initiate Federal IDR" },
   STEP_04_IDR_INITIATED: { step: "STEP_05_IDR_NOTICE_SENT", status: "idr_initiated", label: "Send IDR Notice to CMS" },
-  STEP_05_IDR_NOTICE_SENT: { step: "STEP_06_IDR_ENTITY_SELECTION", status: "idr_entity_selection", label: "Begin Entity Selection" },
+  STEP_05_IDR_NOTICE_SENT: { step: "STEP_06_IDR_ENTITY_SELECTION", status: "idr_initiated", label: "Begin Entity Selection" },
   STEP_06_IDR_ENTITY_SELECTION: { step: "STEP_07_IDR_ENTITY_SELECTED", status: "idr_entity_selection", label: "Confirm Entity Selected" },
-  STEP_07_IDR_ENTITY_SELECTED: { step: "STEP_08_ELIGIBILITY_REVIEW", status: "eligibility_review", label: "Begin Eligibility Review" },
+  STEP_07_IDR_ENTITY_SELECTED: { step: "STEP_08_ELIGIBILITY_REVIEW", status: "idr_entity_selection", label: "Begin Eligibility Review" },
   STEP_08_ELIGIBILITY_REVIEW: { step: "STEP_09_OFFER_SUBMISSION", status: "offer_submission", label: "Open Offer Submission" },
-  STEP_09_OFFER_SUBMISSION: { step: "STEP_10_QPA_DISCLOSURE", status: "qpa_disclosure", label: "Disclose QPA" },
+  STEP_09_OFFER_SUBMISSION: { step: "STEP_10_QPA_DISCLOSURE", status: "offer_submission", label: "Disclose QPA" },
   STEP_10_QPA_DISCLOSURE: { step: "STEP_11_ADDITIONAL_INFORMATION", status: "offer_submission", label: "Open Additional Info Period" },
   STEP_11_ADDITIONAL_INFORMATION: { step: "STEP_12_ARBITRATION_REVIEW", status: "under_arbitration", label: "Begin Arbitration Review" },
   STEP_12_ARBITRATION_REVIEW: { step: "STEP_13_DETERMINATION_ISSUED", status: "determination_issued", label: "Issue Determination" },
@@ -252,6 +252,13 @@ export default function DisputeDetail() {
   const [patientEmail, setPatientEmail] = useState("");
   const [patientPhone, setPatientPhone] = useState("");
   const [issuedLink, setIssuedLink] = useState<{ url: string; expiresAt: string } | null>(null);
+  // Tokens issued during THIS session only (wave A added tokenId to the
+  // issueViewToken response, enabling patientPortal.revokeToken). The server
+  // exposes no list of historical tokens, so this list is session-scoped by
+  // design and the copy below must say so.
+  const [sessionTokens, setSessionTokens] = useState<
+    { tokenId: string; patientName: string; url: string; expiresAt: string }[]
+  >([]);
 
   // Advance state
   const [advanceDescription, setAdvanceDescription] = useState("");
@@ -389,10 +396,23 @@ export default function DisputeDetail() {
   const issuePatientLinkMutation = trpc.patientPortal.issueViewToken.useMutation({
     onSuccess: (r) => {
       const url = `${window.location.origin}${r.path}`;
-      setIssuedLink({ url, expiresAt: new Date(r.expiresAt).toLocaleString() });
+      const expiresAt = new Date(r.expiresAt).toLocaleString();
+      setIssuedLink({ url, expiresAt });
+      setSessionTokens(prev => [
+        ...prev,
+        { tokenId: r.tokenId, patientName: patientName.trim(), url, expiresAt },
+      ]);
       toast.success("Patient portal link issued — copy it below and share it with the patient");
     },
     onError: (err) => toast.error(err.message),
+  });
+
+  const revokePatientTokenMutation = trpc.patientPortal.revokeToken.useMutation({
+    onSuccess: (_r, variables) => {
+      setSessionTokens(prev => prev.filter(t => t.tokenId !== variables.tokenId));
+      toast.success("Patient link revoked — it no longer grants access");
+    },
+    onError: (err) => toast.error(`Revoke failed: ${err.message}`),
   });
 
   const handleAISummary = () => {
@@ -919,6 +939,31 @@ export default function DisputeDetail() {
                     >
                       Copy link
                     </Button>
+                  </div>
+                )}
+                {sessionTokens.length > 0 && (
+                  <div className="space-y-1.5 border-t border-slate-100 pt-2">
+                    <p className="text-xs font-medium text-slate-600">Issued this session</p>
+                    <p className="text-xs text-slate-400">
+                      Only links issued from this browser session appear here — previously issued links are not listed.
+                    </p>
+                    {sessionTokens.map(t => (
+                      <div key={t.tokenId} className="flex items-center justify-between gap-2 rounded border border-slate-200 px-2 py-1.5">
+                        <div className="min-w-0">
+                          <p className="text-xs text-slate-700 truncate">{t.patientName}</p>
+                          <p className="text-[11px] text-slate-400">Expires {t.expiresAt}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-xs text-red-600 hover:text-red-700 shrink-0"
+                          disabled={revokePatientTokenMutation.isPending}
+                          onClick={() => revokePatientTokenMutation.mutate({ tokenId: t.tokenId })}
+                        >
+                          Revoke
+                        </Button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </CardContent>
