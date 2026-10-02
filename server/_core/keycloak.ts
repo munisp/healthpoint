@@ -28,22 +28,39 @@ import { parse as parseCookieHeader } from "cookie";
 import type { User } from "../../drizzle/schema";
 import { ForbiddenError } from "@shared/_core/errors";
 
-// ─── PKCE state store backed by Redis (falls back to in-memory) ─────────────
-import { cacheGet, cacheSet, cacheDel } from "../redis";
+// ─── PKCE state store backed by Redis (dev-only in-memory shadow) ───────────
+import { cacheGet, cacheSet, cacheDel, getRedisClient } from "../redis";
 // Phase13-FC (G13): registration redirect sanitization (strips ?role=).
 import { sanitizeRegisterRedirect } from "../auth/register-redirect";
 
+// In-memory shadow is a DEVELOPMENT convenience only. In production a
+// per-process store is unsafe (multi-instance logins lose state; process
+// restart silently invalidates in-flight flows), so we FAIL CLOSED when Redis
+// is unavailable instead of silently relying on the fallback (audit fix).
 const _memPkceStore = new Map<string, { codeVerifier: string; redirectTo: string }>();
 
-async function pkceSet(state: string, data: { codeVerifier: string; redirectTo: string }): Promise<void> {
-  await cacheSet(`pkce:${state}`, data, 600); // 10 min TTL
-  _memPkceStore.set(state, data);
-  setTimeout(() => _memPkceStore.delete(state), 10 * 60 * 1000);
+function pkceRedisUnavailableInProd(): boolean {
+  return ENV.isProduction && !getRedisClient();
 }
 
-async function pkceGet(state: string): Promise<{ codeVerifier: string; redirectTo: string } | null> {
+// Exported for the fail-closed unit proof (keycloak-pkce.test.ts); the login
+// flow remains the only production caller.
+export async function pkceSet(state: string, data: { codeVerifier: string; redirectTo: string }): Promise<void> {
+  if (pkceRedisUnavailableInProd()) {
+    throw new Error("PKCE state store unavailable (Redis required in production)");
+  }
+  await cacheSet(`pkce:${state}`, data, 600); // 10 min TTL
+  if (!ENV.isProduction) {
+    _memPkceStore.set(state, data);
+    setTimeout(() => _memPkceStore.delete(state), 10 * 60 * 1000);
+  }
+}
+
+export async function pkceGet(state: string): Promise<{ codeVerifier: string; redirectTo: string } | null> {
+  if (pkceRedisUnavailableInProd()) return null; // fail closed → invalid_state
   const cached = await cacheGet<{ codeVerifier: string; redirectTo: string }>(`pkce:${state}`);
   if (cached) return cached;
+  if (ENV.isProduction) return null; // never consult the per-process shadow in prod
   return _memPkceStore.get(state) ?? null;
 }
 
