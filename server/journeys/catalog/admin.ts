@@ -67,7 +67,11 @@ export const j18: Journey = {
       async run(ctx) {
         const hook = await ctx.provider.webhooks.create({
           name: `journey-hook-${ctx.ns("j18")}`.slice(0, 128),
-          url: "https://127.0.0.1:9/unreachable",
+          // DEFECT-008 (webhook-url-guard.ts) rejects loopback/private targets,
+          // so the fixture uses RFC 5737 TEST-NET-3 (203.0.113.0/24): a public,
+          // guard-allowed, but globally unroutable address — delivery fails
+          // honestly without weakening the SSRF guard.
+          url: "https://203.0.113.1:9/unreachable",
           events: ["dispute.advanced"],
         });
         ctx.assert((hook as { id: string }).id !== undefined, "webhook created");
