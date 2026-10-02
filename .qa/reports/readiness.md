@@ -7,16 +7,15 @@ concurrency, and a first slice of security testing.
 
 ## Can this platform be safely rolled out tomorrow?
 
-**Decision: GO WITH CONDITIONS — one condition is urgent, not optional**
+**Decision: GO WITH CONDITIONS**
 
-It already *is* rolled out — `healthpoint:20261002-1321` is live on
-`kind-newwave-dev`, serving real traffic, 2 replicas, zero downtime during
-this pass's deploy. Everything below this point was true until this
-round of testing found **DEFECT-008**, a live, currently-exploitable P1
-SSRF (full writeup in `defects.md` and the "Critical: one open,
-currently-live vulnerability" section below) that changes the urgency
-of the "conditions" in this decision. This is not a "schedule it for next
-sprint" condition — it needs attention now.
+It already *is* rolled out — `healthpoint:20261002-1605` is live on
+`kind-newwave-dev`, serving real traffic, 2 replicas, zero downtime
+across every deploy this pass. **Update: DEFECT-008 (P1 SSRF) was found,
+fixed, and shipped to production within this same pass** — see
+"Resolved: DEFECT-008" below. It is no longer an open urgent condition;
+the conditions that remain are the ordinary unverified-scope items this
+report has tracked throughout.
 
 ### Evidence (what's actually been proven, not assumed)
 - **6 real defects found and fixed**, all verified live with before/after
@@ -85,43 +84,49 @@ sprint" condition — it needs attention now.
   handles the IP-based-rate-limit-behind-a-reverse-proxy problem via
   Express `trust proxy` config.
 
-### Critical: one open, currently-live vulnerability
-**DEFECT-008 (P1 — SSRF, CWE-918) is open, unfixed, and live in
-production right now.** Any authenticated user — not admin-gated — can
-register a webhook URL and the server will fetch it with zero
-destination validation (Zod checks syntax only). Confirmed live, twice:
-a webhook pointed at an internal port triggered a real connection
-attempt; a second pointed at the app's own health endpoint got a real
-`200` back, proving the server made a genuine internal HTTP request on
-the caller's behalf. The real automatic delivery path
-(`webhook-dispatcher.ts`) has the identical gap — not just the
-on-demand `.test` button — with up to 5 automatic retries per event, so
-this is a persistent primitive, not a one-shot probe. **Checked for a
-compensating control and found none**: `kubectl get networkpolicy -n
-healthpoint` returns no resources — nothing at the network layer limits
-what the pod can reach. This app deploys to DigitalOcean, where the
-instance metadata endpoint (`169.254.169.254`) is reachable the same
-way. This is exactly the class of finding the skill calls out as able
-to force a NO-GO regardless of score — I'm not calling a full NO-GO
-because the system is already live, the fix is bounded and
-well-understood (a destination allowlist/denylist check, detailed in
-`defects.md`), and nothing indicates active exploitation — but this is
-not a "someday" item. Recommend, as an immediate stopgap if a full fix
-can't land same-day: disable `webhooks.create`/`webhooks.update`
-(or pause all active webhooks) until the destination check is in place.
+### Resolved: DEFECT-008 (was critical, is now fixed and deployed)
+**DEFECT-008 (P1 — SSRF, CWE-918) was found, fixed, and shipped to
+production within this same pass — no longer open.** Any authenticated
+user — not admin-gated — could register a webhook URL and the server
+would fetch it with zero destination validation (Zod checked syntax
+only). Confirmed live, twice, before the fix: a webhook pointed at an
+internal port triggered a real connection attempt; a second pointed at
+the app's own health endpoint got a real `200` back, proving the server
+made a genuine internal HTTP request on the caller's behalf. The real
+automatic delivery path (`webhook-dispatcher.ts`) had the identical gap
+— not just the on-demand `.test` button — with up to 5 automatic
+retries per event, so this was a persistent primitive, not a one-shot
+probe. No compensating network control existed (`kubectl get
+networkpolicy -n healthpoint` returned no resources), and this app
+deploys to DigitalOcean, where the instance metadata endpoint is
+reachable the same way — this was exactly the class of finding the
+skill calls out as able to force a NO-GO regardless of score.
 
-### High-risk issues: one more open candidate (lower urgency)
-Both original P1s (DEFECT-005, DEFECT-006) are fixed and verified.
-**DEFECT-007** (candidate P2, found via the e2e suite this round): a
-settlement report that would overpay a dispute via a second,
+**Fix**: `assertWebhookUrlSafe` (`server/webhook-url-guard.ts`) resolves
+the hostname via real DNS and rejects loopback/RFC 1918/link-local
+(cloud metadata)/CGNAT ranges and their IPv6 equivalents; called at
+create/update time AND immediately before every real fetch (closing the
+DNS-rebinding gap a create-time-only check would leave), with
+`redirect: "error"` on both fetch calls to block redirect-based
+bypass. Re-tested both original exploits post-fix (now rejected);
+confirmed the fetch-time layer is independently real (31ms rejection
+against an address that would otherwise hang ~5s); 26 new unit tests;
+full regression clean (1397 passing, same 1 pre-existing Kafka failure
+as the whole session). **Deployed**: `healthpoint:20261002-1605`, both
+replicas rolled out clean, confirmed live on the production endpoint.
+Full detail in `defects.md`.
+
+### High-risk issues: one open candidate (lower urgency)
+All three P1s (DEFECT-005, DEFECT-006, DEFECT-008) are fixed and
+verified. **DEFECT-007** (candidate P2, found via the e2e suite this
+round): a settlement report that would overpay a dispute via a second,
 independently-valid transfer bypasses the reconciliation-exception
 audit trail ops relies on and surfaces as a generic rejection instead.
 Money is never at risk — the same ledger guard that makes DEFECT-005
 safe prevents the overpay here too — but the operational visibility
 this system is built to provide doesn't fire for this specific case.
-Needs a product decision (see `defects.md`), not a guessed fix. This
-one can wait for a normal prioritization cycle; DEFECT-008 above
-cannot.
+Needs a product decision (see `defects.md`), not a guessed fix. Unlike
+DEFECT-008, this one can wait for a normal prioritization cycle.
 
 ### Unverified areas (the honest remainder — not assumed safe, not assumed broken)
 - **~33 of ~40 router namespaces** beyond disputes/ledger/authz/webhooks/

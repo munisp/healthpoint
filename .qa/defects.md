@@ -377,4 +377,11 @@ pre-existing/deliberately-unconfigured Kafka failure as the whole
 session, no new regressions.
 **Cleanup:** All test webhooks deleted from the local test DB; this was
 tested and fixed against the local dev server/repo, never the live
-cluster directly — deployment to production is the next step.
+cluster directly.
+**Deployed:** `healthpoint:20261002-1605` shipped to production
+(`clusters/newwave-dev/healthpoint/deployment.yaml`, commit `5a18c76`).
+Rolled out to both replicas, clean startup, confirmed on the live
+endpoint. No live exploit re-test was run against production itself
+(unnecessary — same code, same guard function already proven locally
+and via 26 dedicated unit tests; creating test webhook data in the real
+production DB wasn't worth the marginal confidence).
