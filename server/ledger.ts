@@ -529,6 +529,19 @@ export async function recordPaymentInTransaction(
     entryType: "credit", description: "Verified external payment evidence recorded", referenceId, referenceType: "payment", idempotencyKey,
   });
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${disputeId}))`);
+  // Idempotency MUST be checked before any business-state validation below.
+  // Confirmed live: a genuine retry (same idempotencyKey) of a payment that
+  // fully covered the determination amount was rejected with "No remaining
+  // determined amount to pay" instead of returning the original entry -
+  // assertPaymentAcceptable was validating against state the call's OWN
+  // prior success had already changed. A replay must always return its
+  // original result regardless of any state change since (including one
+  // this same idempotency key caused).
+  const existing = await tx.select().from(ledgerEntries).where(and(
+    eq(ledgerEntries.disputeId, disputeId), eq(ledgerEntries.idempotencyKey, idempotencyKey)
+  )).limit(1);
+  if (existing[0]) return existing[0];
+
   const disputeRows = await tx.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
   const dispute = disputeRows[0];
   if (!dispute) throw new LedgerIntegrityError("Dispute not found");
@@ -537,11 +550,6 @@ export async function recordPaymentInTransaction(
   }
   assertPaymentAcceptable(dispute, paidCents);
   const paidToDateCents = dollarsToCents(dispute.paidAmount);
-  const existing = await tx.select().from(ledgerEntries).where(and(
-    eq(ledgerEntries.disputeId, disputeId), eq(ledgerEntries.idempotencyKey, idempotencyKey)
-  )).limit(1);
-  if (existing[0]) return existing[0];
-
   const now = new Date();
   await tx.insert(ledgerAccounts).values(ALL_ACCOUNT_TYPES.map(accountType => ({
     id: crypto.randomUUID(), disputeId, accountType: asDbAccountType(accountType), balanceCents: 0, currency: "USD", createdAt: now, updatedAt: now,

@@ -129,3 +129,43 @@ this flow has been proven to work end to end, not just read in source.
 - Recommend, as a separate piece of work: fix `keycloak/realm-export.json`
   to either hold real resolvable values or go through a documented
   templating step, and consider exporting the full default scope set.
+
+## DEFECT-005 — FIXED
+**Severity:** P1 (critical — real financial-correctness bug, idempotency
+is a core invariant for a payment ledger)
+**Title:** A genuine idempotent payment retry was rejected with a
+confusing error instead of returning its original result
+**Evidence:** Recorded a real verified payment ($390, fully covering a
+dispute's $390 determination) via `ledger.recordPayment` as admin.
+Retried the EXACT SAME call with the EXACT SAME `idempotencyKey`
+(simulating a client retry after e.g. a dropped response) — instead of
+returning the original entry, it failed with: *"No remaining determined
+amount to pay: determination 390.00 USD is already covered by recorded
+payments of 390.00 USD."*
+**Root cause:** `recordPaymentInTransaction` (`server/ledger.ts`) ran
+`assertPaymentAcceptable()` (a business-state balance check) BEFORE
+checking whether a ledger entry with this `idempotencyKey` already
+existed. The first call's own success changed the state
+(`paidAmount` now equals `determinationAmount`), so the retry's balance
+check saw "nothing left to pay" and threw — even though the correct
+behavior for a true idempotent replay is to return the original result
+unconditionally, before any state-dependent validation runs at all.
+**Impact:** Any real retry of a successful payment (network timeout,
+client-side retry logic, a caller that didn't see the first response)
+would get a hard error implying something is wrong, when the payment
+had actually already succeeded correctly. In an automated settlement
+pipeline this could be read as a failure requiring manual intervention
+for a request that was, in fact, already complete.
+**Fix:** Moved the idempotency-key existing-entry lookup to run
+immediately after the per-dispute advisory lock is acquired, before the
+dispute fetch, the step-state check, and `assertPaymentAcceptable` —
+so a replay always short-circuits to its original result regardless of
+any state change the original call itself caused.
+**Verification:** Reproduced live (real server, real Postgres, real
+admin session): first call succeeded and posted $390; the SAME call
+with the SAME idempotency key failed with the error above BEFORE the
+fix. After the fix, the identical retry returned the exact original
+entry (same `id`, same `createdAt`) instead of erroring. Ledger balance
+confirmed correct afterward (`paid: $390` exactly once, not duplicated,
+not errored away). Full vitest regression: 1378/1393 passing, same 1
+pre-existing/deliberately-unconfigured failure, no new regressions.
