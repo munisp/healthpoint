@@ -5,6 +5,22 @@ import { enforcePathAuthz } from "../authz-registry";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  // tRPC's default error shape includes the raw error.stack (absolute
+  // server file paths, library internals) in every error response body,
+  // regardless of NODE_ENV - confirmed live: a plain 404 on a bad
+  // procedure path leaked the full node_modules stack trace to the HTTP
+  // client. Strip it outside development (CWE-209 information exposure).
+  errorFormatter(opts) {
+    const { shape } = opts;
+    if (process.env.NODE_ENV === "development") return shape;
+    return {
+      ...shape,
+      data: {
+        ...shape.data,
+        stack: undefined,
+      },
+    };
+  },
 });
 
 export const router = t.router;
