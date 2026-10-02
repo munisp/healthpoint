@@ -61,3 +61,12 @@ claim, not after.
 coverage doesn't mean every entry in it is individually correct, only
 that the mechanism itself is live and enforcing for at least this one
 case.
+
+## Spot-check: reports.exportCSV + documents.list (registry-mediated checks)
+Both confirmed correctly enforcing live, with genuinely non-admin/
+unrelated sessions (verified role via a direct DB check before each
+test, after losing track of which of the 4 named test users were
+currently admin mid-session twice in a row — a real process lesson:
+always re-verify the test subject's actual current state immediately
+before asserting a result, in a long session with lots of role
+toggling). No defects found in either.
