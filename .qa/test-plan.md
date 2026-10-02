@@ -46,6 +46,17 @@ see `risks.md`.
       because the balance check ran before the idempotency-key lookup.
       Fixed, verified live, zero regressions (1378/1393).
 
+- [x] **MFA-pending gate** — confirmed live: an mfa-pending session calling
+      a procedure NOT on `MFA_PENDING_ALLOWED_PATHS` (`disputes.list`)
+      correctly gets `FORBIDDEN`/`mfa_required`.
+      Along the way, built the email-OTP MFA feature the user asked for
+      (TOTP was the only path before — see the `feat(auth)` commit) and
+      verified IT end to end too: real delivery via Resend's SDK (routed
+      through the AfroNG resend-simulator), single-use enforcement
+      (old code rejected on a fresh mfa-pending session), and a
+      per-user (not per-session) rate limit that correctly capped
+      attempts across two separate login sessions.
+
 ## Next, in priority order (risk-weighted)
 1. **Authz follow-ups** (see test-cases/authz-dispute-isolation.md's
    "Not yet tested"): granted-relation path (reviewer/arbitrator/
@@ -53,13 +64,10 @@ see `risks.md`.
    mutation-side authz (e.g. advanceStep on a dispute you don't own),
    the real bootstrap-admin-claim flow (bypassed via direct DB write
    this pass).
-3. **Impersonation guardrails** — already has real blocking logic
+2. **Impersonation guardrails** — already has real blocking logic
    (admin-impersonating-admin, onboarding-state transitions); worth
    proving those specific denials actually fire, not just reading the code.
-4. **MFA-pending gate** — confirm the allow-list is actually enforced
-   (can a pre-MFA session call something NOT on
-   `MFA_PENDING_ALLOWED_PATHS`?).
-5. **API key scope stripping** — confirm a non-admin-owned `hp_` key
+3. **API key scope stripping** — confirm a non-admin-owned `hp_` key
    genuinely cannot reach admin-only procedures even if the underlying
    user is later promoted.
 6. Everything else (the remaining ~35 router namespaces, performance,
