@@ -25,11 +25,23 @@ see `risks.md`.
       match), admin bypass allowed. Also confirmed Keycloak realm roles
       are never auto-synced to app privilege (deliberate, good).
 
+- [x] **QPA + ledger + idempotency** — `test-cases/ledger-qpa-financial.md`.
+      QPA calculation confirmed real/differentiated (not stubbed).
+      Double-entry ledger confirmed correct on dispute creation. Payment
+      idempotency confirmed PERFECT on the non-admin/unverified path
+      (duplicate key → same reportId, zero ledger movement either way).
+      Admin/verified path blocked by a real state-machine guard
+      ("payment-determination stage" required) — correct behavior, but
+      means that path is still unverified; needs walking a dispute
+      through its full lifecycle first (next item below).
+
 ## Next, in priority order (risk-weighted)
-1. **Disputes + ledger + QPA calculation** (`routers.ts`'s `disputes`,
-   `ledger`, `qpa` namespaces) — the core financial/regulatory workflow
-   itself (amounts, QPA math, settlement), as opposed to just access
-   control around it. Highest blast radius if wrong.
+1. **Walk one dispute through its full IDR lifecycle** (open negotiation
+   → IDR initiation → `idrEntityId` assignment → `submitOffer` both
+   sides → `advanceStep` to determination) far enough to retest payment
+   idempotency on the REAL money-moving admin/settlement-linked path —
+   the one path not yet exercised. Bigger, multi-step setup; worth doing
+   properly rather than rushing.
 2. **Authz follow-ups** (see test-cases/authz-dispute-isolation.md's
    "Not yet tested"): granted-relation path (reviewer/arbitrator/
    org_admin actually working, not just the no-relation deny case),
