@@ -71,6 +71,15 @@ vi.mock("../db", () => ({
   getDb: async () => fakeDb(),
 }));
 
+// DEFECT-008 fix: webhook-dispatcher now calls assertWebhookUrlSafe, which
+// does a real DNS lookup. These fixtures use a non-resolving test domain
+// (receiver.example.com) and this file is only testing retry/backoff
+// behavior, not URL safety (see webhook-url-guard.test.ts for that) — so
+// the guard is mocked at the module boundary, same as ../db above.
+vi.mock("../webhook-url-guard", () => ({
+  assertWebhookUrlSafe: vi.fn(async () => {}),
+}));
+
 import { computeNextRetryAt, dispatchWebhooksForEvent, attemptDelivery, WEBHOOK_RETRY_SCHEDULE_MS } from "../webhook-dispatcher";
 
 // drizzle table objects expose their name differently across versions; the

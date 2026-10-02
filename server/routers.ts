@@ -57,6 +57,7 @@ import { storagePut, storageGet } from "./storage";
 import { generateDisputePDF } from "./pdf-export";
 import { generateReportsPDF, generateReportsCSV } from "./reports-export";
 import { getDb, checkDbHealth } from "./db";
+import { assertWebhookUrlSafe } from "./webhook-url-guard";
 import { encryptCredentials } from "./credential-crypto";
 import { eq, and, or, ilike, desc, asc, sql, type SQL } from "drizzle-orm";
 import { stepNotes, users, disputes as disputesTable, disputeComments, payerContacts, apiKeys, slaBreaches, webhookDeliveries, emailDigestPreferences, disputeWatchlist, disputeEscalations, disputeAppeals, disputeNarratives, documentExpiryAlerts, fhirCapabilityStatements, smartTokens, bulkFhirExportJobs, cdsHooks, daVinciTransactions, fhirResourceCache, uscdiDataElements, smartFormExtractions, orgSettings, totpSecrets, qpaBenchmarks, qpaStateModifiers, regulatoryUpdates, expertPanel, complianceChecks, changelogEntries, emrConnections, providerSandboxAcceptances } from "../drizzle/schema";
@@ -3067,6 +3068,7 @@ export const appRouter = router({
         events: z.array(z.string()).min(1),
       }))
       .mutation(async ({ ctx, input }) => {
+        await assertWebhookUrlSafe(input.url);
         // Cryptographically secure signing secret (never Math.random):
         // 256 bits of CSPRNG entropy as hex via two UUIDs.
         const secret = `whsec_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
@@ -3090,6 +3092,7 @@ export const appRouter = router({
         status: z.enum(['active', 'paused', 'failed']).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        if (input.url) await assertWebhookUrlSafe(input.url);
         const { id, events, ...rest } = input;
         await updateWebhook(id, { ...rest, events: events ? JSON.stringify(events) : undefined });
         return { success: true };
@@ -3108,12 +3111,18 @@ export const appRouter = router({
         const hook = hooks.find(h => h.id === input.id);
         if (!hook) throw new TRPCError({ code: 'NOT_FOUND', message: 'Webhook not found' });
         try {
+          // Re-check at fetch time, not just at create/update time: DNS can be
+          // repointed at an internal address after the URL was first validated
+          // (rebinding), so only a check immediately before the real network
+          // call is an actual security boundary.
+          await assertWebhookUrlSafe(hook.url);
           const payload = JSON.stringify({ event: 'test.ping', timestamp: new Date().toISOString(), source: 'HealthPoint IDR' });
           const res = await fetch(hook.url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-HealthPoint-Event': 'test.ping' },
             body: payload,
             signal: AbortSignal.timeout(5000),
+            redirect: 'error', // never silently follow a redirect to an internal target
           });
           await updateWebhook(input.id, { lastTriggeredAt: new Date(), failureCount: res.ok ? 0 : hook.failureCount + 1 });
           return { success: res.ok, statusCode: res.status };

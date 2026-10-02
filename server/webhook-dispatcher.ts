@@ -22,6 +22,7 @@ import crypto from "crypto";
 import { getDb } from "./db";
 import { webhooks, webhookDeliveries } from "../drizzle/schema";
 import { and, eq, lte, sql } from "drizzle-orm";
+import { assertWebhookUrlSafe } from "./webhook-url-guard";
 
 type WebhookRow = {
   id: string;
@@ -165,6 +166,12 @@ export async function attemptDelivery(deliveryId: string): Promise<void> {
   let delivered = false;
 
   try {
+    // Re-resolve and re-check immediately before every real delivery attempt
+    // (not just once at webhooks.create/update time): DNS can be repointed at
+    // an internal address after the URL was first validated (rebinding), and
+    // this is the automatic, retried path -- the actual security boundary
+    // has to live here, not only at the one-time input validation.
+    await assertWebhookUrlSafe(webhook.url);
     const response = await fetch(webhook.url, {
       method: "POST",
       headers: {
@@ -176,6 +183,7 @@ export async function attemptDelivery(deliveryId: string): Promise<void> {
       },
       body,
       signal: controller.signal,
+      redirect: "error", // never silently follow a redirect to an internal target
     });
     responseStatus = response.status;
     if (!response.ok) {
