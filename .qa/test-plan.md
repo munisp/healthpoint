@@ -57,20 +57,38 @@ see `risks.md`.
       per-user (not per-session) rate limit that correctly capped
       attempts across two separate login sessions.
 
+- [x] **Authz follow-ups** — `test-cases/authz-dispute-isolation.md`
+      UPDATE section. Real `authz.grantAccess` grant tested (not a DB
+      shortcut): the exact same previously-denied user can read the
+      dispute immediately after being granted `"read"`, and is
+      correctly still denied `"write"`-level `disputes.advance` with
+      only a `"read"` grant — permission levels are real, not binary.
+
+- [x] **Impersonation guardrails** — `test-cases/impersonation-guardrails.md`.
+      4/4 PASS: onboarding-state block fires regardless of target role;
+      admin-impersonating-admin block is real AND target-role-specific
+      (the same mutation succeeds when impersonating a non-admin); full
+      audit trail confirmed in `audit_log`, including the blocked
+      attempts (not just successful actions).
+
+- [x] **API key scope stripping** — found and fixed a real P1:
+      DEFECT-006. `adminProcedure` checked only the live `ctx.user.role`,
+      never `ctx.apiKeyScopes` — so a key deliberately minted with
+      `"read,write"` (admin correctly stripped at creation since the
+      owner wasn't admin yet) silently gained full admin access the
+      moment its owner was LATER promoted, with the key itself never
+      reissued. Fixed: `adminProcedure` now also requires
+      `ctx.apiKeyScopes.includes("admin")` when the request came via an
+      API key. Verified live (before/after), confirmed no regression on
+      legitimately admin-scoped keys. Full regression clean.
+
 ## Next, in priority order (risk-weighted)
-1. **Authz follow-ups** (see test-cases/authz-dispute-isolation.md's
-   "Not yet tested"): granted-relation path (reviewer/arbitrator/
-   org_admin actually working, not just the no-relation deny case),
-   mutation-side authz (e.g. advanceStep on a dispute you don't own),
-   the real bootstrap-admin-claim flow (bypassed via direct DB write
-   this pass).
-2. **Impersonation guardrails** — already has real blocking logic
-   (admin-impersonating-admin, onboarding-state transitions); worth
-   proving those specific denials actually fire, not just reading the code.
-3. **API key scope stripping** — confirm a non-admin-owned `hp_` key
-   genuinely cannot reach admin-only procedures even if the underlying
-   user is later promoted.
-6. Everything else (the remaining ~35 router namespaces, performance,
+1. The real bootstrap-admin-claim flow (`orgs.claimBootstrapAdmin`) —
+   bypassed via direct DB role promotion in every admin-related test
+   this pass; the flow itself is still unverified.
+2. Decide and act on the inert authz-registry (see risks.md) — populate
+   it for real or remove it so it stops looking like active protection.
+3. Everything else (the remaining ~35 router namespaces, performance,
    chaos, DR, deployment/rollback) — explicitly deferred. Chaos/load
    testing in particular should NOT target shared cluster infra
    (Kafka, Permify's real endpoint) without a separate, explicit go-ahead
