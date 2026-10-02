@@ -90,6 +90,18 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
     throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
   }
+  // Confirmed live: apiKeys.create strips the "admin" scope from a key at
+  // mint time when its owner isn't an admin yet (server/auth/bearer.ts
+  // re-derives the SAME filter from the owner's CURRENT role on every
+  // request) - but this check only ever looked at ctx.user.role, so a
+  // pre-existing key minted with scopes "read,write" silently gained full
+  // admin procedure access the moment its owner was LATER promoted to
+  // admin, even though the key's own stored scopes were never updated.
+  // A scoped key must never reach further than its own granted scopes,
+  // independent of what its owner's account can do by other means.
+  if (ctx.viaApiKey && !ctx.apiKeyScopes.includes("admin")) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "This API key does not have the admin scope" });
+  }
   return next({ ctx });
 });
 

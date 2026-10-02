@@ -169,3 +169,52 @@ entry (same `id`, same `createdAt`) instead of erroring. Ledger balance
 confirmed correct afterward (`paid: $390` exactly once, not duplicated,
 not errored away). Full vitest regression: 1378/1393 passing, same 1
 pre-existing/deliberately-unconfigured failure, no new regressions.
+
+## DEFECT-006 — FIXED
+**Severity:** P1 (critical — real privilege-escalation path)
+**Title:** A pre-existing, intentionally-scope-limited API key silently
+gains full admin access the moment its owner is later promoted to admin
+**Evidence:** `apiKeys.create` correctly strips the `"admin"` scope at
+mint time when the requester isn't an admin (confirmed: a key minted by
+a non-admin test user requesting `["read","write","admin"]` was stored
+with `scopes: "read,write"` only). Calling `admin.allDisputes` with that
+key as a non-admin owner was correctly denied. But after promoting the
+SAME key's owner to `admin` in the database — with the key's own stored
+scopes left completely unchanged — the EXACT SAME, never-reissued key
+was then able to successfully call `admin.allDisputes`.
+**Root cause:** `adminProcedure` (`server/routers.ts`) only checked
+`ctx.user.role !== "admin"`. `server/auth/bearer.ts`'s
+`authenticateApiKey` re-derives the effective scope filter from the
+key owner's CURRENT role on every request (`user.role === "admin" ?
+requestedScopes : requestedScopes.filter(s => s !== "admin")`) and sets
+`ctx.user` to that live user row — so once the owner becomes admin,
+`ctx.user.role` reads `"admin"` regardless of what the key itself was
+ever granted. `adminProcedure` never consulted `ctx.apiKeyScopes` at
+all, so it had no way to tell "this request has an admin session" apart
+from "this request has a non-admin-scoped key whose owner happens to be
+admin now."
+**Impact:** Defeats the entire purpose of scoped API keys for any
+`adminProcedure`-gated endpoint. A key deliberately minted with limited
+scope (e.g. for a specific automation/integration that should never be
+able to perform admin actions) silently becomes a full admin key the
+moment its owner's account is promoted for unrelated reasons — with no
+re-mint, no scope change, and no visible signal to anyone relying on
+the key's documented scope.
+**Fix:** `adminProcedure` now also requires, when the request
+authenticated via an API key (`ctx.viaApiKey`), that
+`ctx.apiKeyScopes.includes("admin")` — independent of the live
+`ctx.user.role` check.
+**Verification:** Reproduced live end to end (real server, real
+Postgres, real Keycloak sessions): non-admin mints a key requesting
+admin scope → stored as `read,write` → denied pre-promotion (baseline)
+→ owner promoted to admin in the DB, key never touched → **before the
+fix**, the same key was allowed through `admin.allDisputes`; **after
+the fix**, the same key is correctly denied with `"This API key does
+not have the admin scope"`. Also confirmed no regression on the
+legitimate path: a key minted by an ALREADY-admin user with the admin
+scope genuinely granted continues to work normally. Full regression:
+1372/1393 passing + 20 skipped (2 Temporal suites hit a transient
+ephemeral-server startup timeout under post-restart system load,
+confirmed unrelated to this change — both pass cleanly, 6/6, on a
+clean re-run) + the 1 pre-existing/deliberately-unconfigured
+kafka-connectivity failure. No new regressions.
