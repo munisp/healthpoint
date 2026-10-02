@@ -1,15 +1,23 @@
 /**
- * Auth context — OIDC Authorization Code + PKCE sign-in (Phase 7).
+ * OIDC (PKCE) authentication against Keycloak for the mobile app.
  *
- * Uses expo-auth-session's AuthRequest against the same OIDC discovery
- * endpoint the web app uses (server/_core/oidc.ts). The authorization code
- * is exchanged for tokens with PKCE; the access token authenticates tRPC
- * calls (server accepts Bearer tokens via mobileAccessTokens / OAuth JWT
- * verification), and the refresh token is stored in Expo SecureStore for
- * silent re-authentication.
+ * Flow: expo-auth-session `useAuthRequest` (PKCE on by default) →
+ * authorization-code exchange → tokens persisted in expo-secure-store →
+ * proactive silent refresh via the stored refresh token (30s expiry skew so
+ * a token never dies mid-request).
  *
- * If the OIDC endpoints are unreachable (dev without an IdP), the context
- * surfaces a clear error instead of hanging.
+ * Session lifecycle:
+ * - Any API response with HTTP 401 triggers the unauthorized handler
+ *   registered with the tRPC layer → tokens cleared → router redirects to
+ *   /login (see app/(tabs)/_layout.tsx guard).
+ * - Sign-out calls trpc.auth.logout (best effort), then clears SecureStore
+ *   tokens AND the AsyncStorage read cache (PHI must not linger) AND the
+ *   react-query in-memory cache.
+ *
+ * Discovery document:
+ *   ${keycloakUrl}/realms/healthpoint/.well-known/openid-configuration
+ * Client: `healthpoint-app` (public client; must allow the redirect URI
+ *   `healthpoint://auth/callback` and PKCE).
  */
 import React, {
   createContext,
@@ -21,179 +29,217 @@ import React, {
   useState,
 } from "react";
 import * as AuthSession from "expo-auth-session";
+import * as SecureStore from "expo-secure-store";
 import * as WebBrowser from "expo-web-browser";
 import Constants from "expo-constants";
-import {
-  destroySession,
-  getValidAccessToken,
-  loadSession,
-  saveSession,
-  type Session,
-} from "./session";
-import { setMobileAccessTokenProvider } from "../api/trpc";
+import { registerTokenProvider, registerUnauthorizedHandler } from "../api/trpc";
 import { logoutServerSide } from "../api/hooks";
 import { unregisterPushToken } from "../notifications/push";
+import { clearAllCache } from "../api/cache";
+import { queryClient } from "../api/queryClient";
 
 WebBrowser.maybeCompleteAuthSession();
 
-export type AuthStatus = "loading" | "signedOut" | "signedIn";
+const extra = (Constants.expoConfig?.extra ?? {}) as Record<string, string>;
+const KEYCLOAK_URL: string = extra.keycloakUrl ?? "http://localhost:8080";
+const REALM: string = extra.keycloakRealm ?? "healthpoint";
+const CLIENT_ID: string = extra.keycloakClientId ?? "healthpoint-app";
+const ISSUER = `${KEYCLOAK_URL}/realms/${REALM}`;
 
-export interface AuthContextValue {
+const STORE_KEYS = {
+  accessToken: "hp.accessToken",
+  refreshToken: "hp.refreshToken",
+  expiresAt: "hp.expiresAt", // epoch ms
+} as const;
+
+export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
+
+interface AuthContextValue {
   status: AuthStatus;
-  /** True once the OIDC discovery document + auth request are ready. */
+  /** True once discovery + request objects are ready and sign-in can start. */
   ready: boolean;
   error: string | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
-  /** Returns a valid access token (refreshing if needed), or null. */
+  /** Returns a valid access token, refreshing silently if necessary. */
   getAccessToken: () => Promise<string | null>;
 }
 
-const AuthContext = createContext<AuthContextValue>({
-  status: "loading",
-  ready: false,
-  error: null,
-  signIn: async () => {},
-  signOut: async () => {},
-  getAccessToken: async () => null,
-});
+const AuthContext = createContext<AuthContextValue | null>(null);
 
-export function useAuthContext(): AuthContextValue {
-  return useContext(AuthContext);
+async function persistTokens(
+  accessToken: string,
+  refreshToken: string | undefined,
+  expiresInSeconds: number | undefined
+): Promise<void> {
+  const expiresAt = Date.now() + (expiresInSeconds ?? 300) * 1000;
+  await SecureStore.setItemAsync(STORE_KEYS.accessToken, accessToken);
+  await SecureStore.setItemAsync(STORE_KEYS.expiresAt, String(expiresAt));
+  if (refreshToken) {
+    await SecureStore.setItemAsync(STORE_KEYS.refreshToken, refreshToken);
+  }
 }
 
-function extra(): { oidcBaseUrl?: string; oidcClientId?: string } {
-  return (Constants.expoConfig?.extra ?? {}) as {
-    oidcBaseUrl?: string;
-    oidcClientId?: string;
-  };
+async function clearTokens(): Promise<void> {
+  await Promise.all([
+    SecureStore.deleteItemAsync(STORE_KEYS.accessToken),
+    SecureStore.deleteItemAsync(STORE_KEYS.refreshToken),
+    SecureStore.deleteItemAsync(STORE_KEYS.expiresAt),
+  ]);
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [error, setError] = useState<string | null>(null);
-  const sessionRef = useRef<Session | null>(null);
 
-  const oidcBaseUrl = extra().oidcBaseUrl?.replace(/\/$/, "");
-  const clientId = extra().oidcClientId;
-
-  // OIDC discovery (same well-known endpoint as the web app).
-  const discovery = AuthSession.useAutoDiscovery(
-    oidcBaseUrl ? `${oidcBaseUrl}/.well-known/openid-configuration` : ""
-  );
-
-  // Redirect URI: hp://auth/callback in dev/standalone builds.
+  const discovery = AuthSession.useAutoDiscovery(ISSUER);
   const redirectUri = AuthSession.makeRedirectUri({
-    scheme: "hp",
+    scheme: "healthpoint",
     path: "auth/callback",
   });
 
-  const [request, , promptAsync] = AuthSession.useAuthRequest(
+  const [request, response, promptAsync] = AuthSession.useAuthRequest(
     {
-      clientId: clientId ?? "",
+      clientId: CLIENT_ID,
       redirectUri,
       scopes: ["openid", "profile", "email", "offline_access"],
       responseType: AuthSession.ResponseType.Code,
-      usePKCE: true,
     },
     discovery
   );
+
+  const refreshAsyncRef = useRef<
+    null | ((refreshToken: string) => Promise<string | null>)
+  >(null);
+
+  // Full local teardown: tokens, offline cache, in-memory query cache.
+  const destroySession = useCallback(async (): Promise<void> => {
+    await clearTokens();
+    await clearAllCache();
+    queryClient.clear();
+    setStatus("unauthenticated");
+  }, []);
+
+  // 401 → re-login: the tRPC layer fires this when the server rejects the
+  // Bearer token (expired refresh, revoked session, role change, etc.).
+  useEffect(() => {
+    registerUnauthorizedHandler(() => {
+      void destroySession();
+    });
+  }, [destroySession]);
+
+  // Returns a valid access token: cached if unexpired, otherwise refreshed.
+  const getAccessToken = useCallback(async (): Promise<string | null> => {
+    const [accessToken, refreshToken, expiresAtRaw] = await Promise.all([
+      SecureStore.getItemAsync(STORE_KEYS.accessToken),
+      SecureStore.getItemAsync(STORE_KEYS.refreshToken),
+      SecureStore.getItemAsync(STORE_KEYS.expiresAt),
+    ]);
+    if (!accessToken) return null;
+
+    const expiresAt = Number(expiresAtRaw ?? 0);
+    // 30s skew so we never hand out a token that expires mid-request.
+    if (expiresAt - 30_000 > Date.now()) return accessToken;
+
+    if (!refreshToken || !refreshAsyncRef.current) return null;
+    return refreshAsyncRef.current(refreshToken);
+  }, []);
+
+  // Refresh helper needs `discovery`, which only exists after discovery loads.
+  useEffect(() => {
+    if (!discovery) return;
+    refreshAsyncRef.current = async (refreshToken: string) => {
+      try {
+        const refreshed = await AuthSession.refreshAsync(
+          { clientId: CLIENT_ID, refreshToken },
+          discovery
+        );
+        if (!refreshed.accessToken) return null;
+        await persistTokens(
+          refreshed.accessToken,
+          refreshed.refreshToken ?? refreshToken,
+          refreshed.expiresIn ?? undefined
+        );
+        setStatus("authenticated");
+        return refreshed.accessToken;
+      } catch {
+        // Refresh token rejected — drop the session; user must sign in again.
+        await destroySession();
+        return null;
+      }
+    };
+  }, [discovery, destroySession]);
+
+  // Expose the token getter to the tRPC client.
+  useEffect(() => {
+    registerTokenProvider(getAccessToken);
+  }, [getAccessToken]);
 
   // Restore a persisted session on launch.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const stored = await loadSession();
+      const token = await SecureStore.getItemAsync(STORE_KEYS.accessToken);
       if (cancelled) return;
-      if (stored) {
-        sessionRef.current = stored;
-        setStatus("signedIn");
-      } else {
-        setStatus("signedOut");
-      }
+      setStatus(token ? "authenticated" : "unauthenticated");
     })();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const applySession = useCallback(async (session: Session | null) => {
-    sessionRef.current = session;
-    if (session) {
-      await saveSession(session);
-      setStatus("signedIn");
-    } else {
-      await destroySession();
-      setStatus("signedOut");
-    }
-  }, []);
-
-  const getAccessToken = useCallback(async (): Promise<string | null> => {
-    if (!discovery?.tokenEndpoint) return sessionRef.current?.accessToken ?? null;
-    const next = await getValidAccessToken(
-      discovery.tokenEndpoint,
-      clientId ?? "",
-      sessionRef.current
-    );
-    if (next !== sessionRef.current) {
-      await applySession(next);
-    }
-    return next?.accessToken ?? null;
-  }, [discovery, clientId, applySession]);
-
-  // Wire the tRPC Bearer token provider once getAccessToken exists.
+  // Handle the authorization response: exchange the code for tokens.
   useEffect(() => {
-    setMobileAccessTokenProvider(getAccessToken);
-  }, [getAccessToken]);
-
-  // Exchange the authorization code for tokens when the browser returns.
-  const exchangeCode = useCallback(
-    async (code: string) => {
-      if (!discovery?.tokenEndpoint || !request?.codeVerifier || !clientId) {
-        throw new Error("OIDC discovery not ready");
+    if (!response) return;
+    if (response.type === "error") {
+      setError(response.error?.message ?? "Sign-in failed");
+      return;
+    }
+    if (response.type !== "success") return;
+    const code = response.params.code;
+    if (!code || !discovery || !request?.codeVerifier) {
+      setError("Sign-in response was incomplete.");
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const tokens = await AuthSession.exchangeCodeAsync(
+          {
+            clientId: CLIENT_ID,
+            code,
+            redirectUri,
+            extraParams: { code_verifier: request.codeVerifier! },
+          },
+          discovery
+        );
+        if (cancelled) return;
+        if (!tokens.accessToken) {
+          setError("Token response did not include an access token.");
+          return;
+        }
+        await persistTokens(
+          tokens.accessToken,
+          tokens.refreshToken ?? undefined,
+          tokens.expiresIn ?? undefined
+        );
+        setError(null);
+        setStatus("authenticated");
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Token exchange failed");
+        }
       }
-      const tokenResponse = await AuthSession.exchangeCodeAsync(
-        {
-          clientId,
-          code,
-          redirectUri,
-          extraParams: { code_verifier: request.codeVerifier },
-        },
-        { tokenEndpoint: discovery.tokenEndpoint }
-      );
-      const now = Math.floor(Date.now() / 1000);
-      const session: Session = {
-        accessToken: tokenResponse.accessToken,
-        refreshToken: tokenResponse.refreshToken,
-        idToken: tokenResponse.idToken,
-        expiresAt: now + (tokenResponse.expiresIn ?? 3600),
-        issuedAt: now,
-      };
-      await applySession(session);
-    },
-    [discovery, request, clientId, redirectUri, applySession]
-  );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [response, discovery, request, redirectUri]);
 
   const signIn = useCallback(async () => {
     setError(null);
-    if (!oidcBaseUrl || !clientId) {
-      setError(
-        "OIDC is not configured for this build (extra.oidcBaseUrl / extra.oidcClientId missing)."
-      );
-      return;
-    }
-    try {
-      const result = await promptAsync();
-      if (result.type === "success" && result.params.code) {
-        await exchangeCode(result.params.code);
-      } else if (result.type === "error") {
-        setError(result.error?.message ?? "Sign-in failed");
-      }
-      // "cancel" / "dismiss" — user backed out; leave state as-is.
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Sign-in failed");
-    }
-  }, [oidcBaseUrl, clientId, promptAsync, exchangeCode]);
+    await promptAsync();
+  }, [promptAsync]);
 
   const signOut = useCallback(async () => {
     // Best-effort server-side session teardown (trpc.auth.logout) BEFORE
@@ -225,4 +271,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth(): AuthContextValue {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used inside <AuthProvider>");
+  return ctx;
 }

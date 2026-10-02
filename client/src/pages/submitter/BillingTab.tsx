@@ -8,6 +8,9 @@
  *     undetermined disputes are never billed (server-enforced).
  *   submitterBilling.createInvoicePaymentLink — Stripe Checkout link
  *     (card + ACH bank debit); only legal for status=sent (server-enforced).
+ *   submitterBilling.updateBillingConfig — billing model settings
+ *     (flat per determined dispute, or contingency % of award).
+ *   submitterBilling.listInvoicePayments — payment status across invoices.
  *   submitterBilling.getInvoicePaymentStatus — payment status. paidAt is
  *     webhook-only on the server; this UI never displays "paid" from a mere
  *     link creation.
@@ -202,6 +205,99 @@ function InvoiceDetail({ invoice }: { invoice: Invoice }) {
   );
 }
 
+/** Billing model settings (submitterBilling.updateBillingConfig). */
+function BillingConfigCard({ client, onSaved }: { client: SubmitterClient; onSaved: () => void }) {
+  const [model, setModel] = useState<string>(client.billingModel ?? "contingency");
+  const [pct, setPct] = useState(client.contingencyPct ?? "");
+  const [flat, setFlat] = useState(client.flatFeeUsd ?? "");
+  const m = trpc.submitterBilling.updateBillingConfig.useMutation({
+    onSuccess: () => { toast.success("Billing settings saved"); onSaved(); },
+    onError: e => toast.error(e.message),
+  });
+  const pctNum = Number(pct);
+  const flatNum = Number(flat);
+  const valid = model === "contingency"
+    ? pct.trim() !== "" && Number.isFinite(pctNum) && pctNum >= 0 && pctNum <= 100
+    : flat.trim() !== "" && Number.isFinite(flatNum) && flatNum >= 0;
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Billing settings — {client.label}</CardTitle></CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p className="text-xs text-muted-foreground max-w-2xl">
+          Choose how this client is billed: a contingency percentage of each award, or a flat fee per
+          determined dispute. Applies to invoices generated after saving; existing invoices are unchanged.
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <Label className="text-xs">Billing model</Label>
+            <select className="border rounded px-2 py-1 text-sm bg-background block" value={model}
+              onChange={e => setModel(e.target.value)} aria-label="Billing model">
+              <option value="contingency">Contingency (% of award)</option>
+              <option value="flat">Flat fee (per determined dispute)</option>
+            </select>
+          </div>
+          {model === "contingency" ? (
+            <div>
+              <Label className="text-xs">Contingency %</Label>
+              <Input className="w-28" inputMode="decimal" value={pct} onChange={e => setPct(e.target.value)} aria-label="Contingency percent" />
+            </div>
+          ) : (
+            <div>
+              <Label className="text-xs">Flat fee (USD)</Label>
+              <Input className="w-32" inputMode="decimal" value={flat} onChange={e => setFlat(e.target.value)} aria-label="Flat fee USD" />
+            </div>
+          )}
+          <Button size="sm" variant="outline" disabled={!valid || m.isPending}
+            onClick={() => m.mutate(model === "contingency"
+              ? { submitterClientId: client.id, billingModel: "contingency", contingencyPct: pctNum }
+              : { submitterClientId: client.id, billingModel: "flat", flatFeeUsd: flatNum })}>
+            {m.isPending ? "Saving…" : "Save billing settings"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Payment status across all of a client's invoices (submitterBilling.listInvoicePayments). */
+function PaymentsCard({ client }: { client: SubmitterClient }) {
+  const q = trpc.submitterBilling.listInvoicePayments.useQuery({ submitterClientId: client.id });
+  const rows = q.data ?? [];
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Payments — {client.label}</CardTitle></CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {q.isLoading && <p className="text-muted-foreground">Loading payment status…</p>}
+        {q.isError && <p role="alert" className="text-destructive">{q.error.message}</p>}
+        {q.data && rows.length === 0 && (
+          <p className="text-muted-foreground">No invoices yet — payment status appears once an invoice exists.</p>
+        )}
+        {rows.length > 0 && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Invoice</TableHead><TableHead>Status</TableHead><TableHead>Total</TableHead>
+                <TableHead>Online payment</TableHead><TableHead>Paid at</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map(r => (
+                <TableRow key={r.invoiceId}>
+                  <TableCell className="font-mono text-xs">{r.invoiceNumber}</TableCell>
+                  <TableCell><Badge variant={STATUS_VARIANT[r.status] ?? "outline"}>{r.status}</Badge></TableCell>
+                  <TableCell>${Number(r.totalUsd).toFixed(2)}</TableCell>
+                  <TableCell className="text-xs">{r.stripeStatus ?? "not configured / manual"}</TableCell>
+                  <TableCell className="text-xs">{r.paidAt ? new Date(r.paidAt).toLocaleDateString() : "—"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function BillingTab({ clients }: { clients: SubmitterClient[] }) {
   const [clientId, setClientId] = useState("");
   const client = clients.find(c => c.id === clientId) ?? clients[0];
@@ -286,6 +382,8 @@ export default function BillingTab({ clients }: { clients: SubmitterClient[] }) 
           )}
         </CardContent>
       </Card>
+      {client && <BillingConfigCard client={client} onSaved={() => invoicesQ.refetch()} />}
+      {client && <PaymentsCard client={client} />}
     </div>
   );
 }
