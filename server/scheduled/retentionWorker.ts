@@ -24,13 +24,15 @@ export interface RetentionResult {
   cutoff: Date;
   fhirCachePurged: number;
   smartFormExtractionsPurged: number;
+  /** Expired settlement-callback replay-protection nonces (G1). */
+  settlementNoncesPurged: number;
 }
 
 /** Delete rows older than the retention cutoff. Returns per-table counts. */
 export async function runRetentionPurge(days?: number): Promise<RetentionResult> {
   const n = days ?? retentionDays();
   const cutoff = new Date(Date.now() - n * 24 * 60 * 60 * 1000);
-  const result: RetentionResult = { retentionDays: n, cutoff, fhirCachePurged: 0, smartFormExtractionsPurged: 0 };
+  const result: RetentionResult = { retentionDays: n, cutoff, fhirCachePurged: 0, smartFormExtractionsPurged: 0, settlementNoncesPurged: 0 };
   const db = await getDb();
   if (!db) return result;
   const { lt } = await import("drizzle-orm");
@@ -43,7 +45,13 @@ export async function runRetentionPurge(days?: number): Promise<RetentionResult>
     const r = await db.delete(smartFormExtractions).where(lt(smartFormExtractions.createdAt, cutoff)).returning({ id: smartFormExtractions.id });
     result.smartFormExtractionsPurged = r.length;
   } catch (err) { console.warn("[retention] smart_form_extractions purge failed:", err); }
-  console.info(`[retention] purge complete (>${n}d): fhirCache=${result.fhirCachePurged} smartFormExtractions=${result.smartFormExtractionsPurged}`);
+  // G1: replay-protection nonces expire on their own clock (24h TTL), not the
+  // retention window — purge rows whose expiresAt has passed.
+  try {
+    const { purgeExpiredSettlementCallbackNonces } = await import("../settlement-auth");
+    result.settlementNoncesPurged = await purgeExpiredSettlementCallbackNonces();
+  } catch (err) { console.warn("[retention] settlement_callback_nonces purge failed:", err); }
+  console.info(`[retention] purge complete (>${n}d): fhirCache=${result.fhirCachePurged} smartFormExtractions=${result.smartFormExtractionsPurged} settlementNonces=${result.settlementNoncesPurged}`);
   return result;
 }
 
