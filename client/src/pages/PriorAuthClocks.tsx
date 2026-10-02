@@ -337,7 +337,7 @@ export default function PriorAuthClocks() {
                 {(ALLOWED[request.state as PaState] ?? []).map(to => (
                   <Button key={to} size="sm" variant="outline" disabled={transitionMutation.isPending}
                     onClick={() => doTransition(to)}>
-                    {"→ "}{to.replace(/_/g, " ")}
+                    {"\\u2192 "}{to.replace(/_/g, " ")}
                   </Button>
                 ))}
                 {(ALLOWED[request.state as PaState] ?? []).length === 0 && (
