@@ -39,6 +39,8 @@ import {
   SETTLEMENT_TIMESTAMP_HEADER,
   parseSettlementCallbackKeyring,
   verifySettlementCallbackSignature,
+  deriveSettlementCallbackNonce,
+  claimSettlementCallbackNonce,
 } from "../settlement-auth";
 import {
   parseSettlementMtlsFingerprints,
@@ -298,6 +300,18 @@ async function startServer() {
     }
 
     try {
+      // Replay guard (G1): atomically claim the derived per-transmission nonce
+      // in the same request path as verification, before any business effect.
+      const nonce = deriveSettlementCallbackNonce({
+        signature: req.header(SETTLEMENT_SIGNATURE_HEADER) as string,
+        timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) as string,
+        rawBody,
+      });
+      if (!(await claimSettlementCallbackNonce(nonce))) {
+        console.warn("[settlement] replayed callback rejected", { requestId: (req as any).requestId });
+        res.status(409).json({ error: "Settlement callback replay detected" });
+        return;
+      }
       const reconciliation = await reconcileAuthenticatedSettlementCallback(parsed.data, parsedPayload as Record<string, unknown>);
       res.setHeader("Cache-Control", "no-store");
       res.status(reconciliation.duplicate ? 200 : 202).json({
@@ -365,6 +379,17 @@ async function startServer() {
       return;
     }
     try {
+      // Replay guard (G1): same derived-nonce protection as /callbacks.
+      const nonce = deriveSettlementCallbackNonce({
+        signature: req.header(SETTLEMENT_SIGNATURE_HEADER) as string,
+        timestamp: req.header(SETTLEMENT_TIMESTAMP_HEADER) as string,
+        rawBody,
+      });
+      if (!(await claimSettlementCallbackNonce(nonce))) {
+        console.warn("[settlement] replayed report rejected", { requestId: (req as any).requestId });
+        res.status(409).json({ error: "Settlement report replay detected" });
+        return;
+      }
       const reconciliation = await reconcileProviderSettlementReport(parsed.data, parsedPayload as Record<string, unknown>);
       res.setHeader("Cache-Control", "no-store");
       res.status(reconciliation.duplicate ? 200 : reconciliation.reconciliationStatus === "exception" ? 409 : 202).json(reconciliation);
