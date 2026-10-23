@@ -25,6 +25,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
 import {
   useAdvanceDispute,
   useDisputeTimeline,
@@ -526,14 +527,12 @@ export default function DisputeDetailScreen() {
  * W7-1: attach a document picked from the device via expo-document-picker.
  *
  * Storage model parity note (verified against server/routers.ts
- * documents.upload + client/src/pages/BatchEvidenceUpload.tsx): the server
- * persists document METADATA (fileName/mime/size/storageKey/storageUrl);
- * there is no object-storage upload endpoint, and the web batch uploader
- * stores the bytes inline as a data: URL. Mobile cannot build data: URLs
- * without an additional file-system dependency, so we attach metadata with
- * the device's content URI as storageUrl (a valid WHATWG URL, satisfying
- * the z.string().url() check). Byte upload from mobile is a reported
- * server gap, not hidden here.
+ * documents.upload + documents.uploadVersion): the server now requires the
+ * raw file bytes (fileBase64, ≤10 MB) and persists them to object storage
+ * under storageKey BEFORE recording the metadata row — the same byte path as
+ * workflow.uploadNoteAttachment. Mobile reads the picked file from the
+ * document-picker cache copy as base64 via expo-file-system (10 MB guard
+ * applied before reading).
  */
 function DocumentUploadButton({
   disputeId,
@@ -556,6 +555,21 @@ function DocumentUploadButton({
     });
     if (result.canceled || !result.assets?.length) return;
     const asset = result.assets[0];
+    if ((asset.size ?? 0) > 10 * 1024 * 1024) {
+      hapticError();
+      setError("File must be under 10 MB.");
+      return;
+    }
+    let fileBase64: string;
+    try {
+      fileBase64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+    } catch {
+      hapticError();
+      setError("Failed to read the selected file.");
+      return;
+    }
     const storageKey = `disputes/${disputeId}/${Date.now()}-${asset.name}`;
     upload.mutate(
       {
@@ -565,7 +579,7 @@ function DocumentUploadButton({
         documentType: "other",
         fileSize: Math.max(1, asset.size ?? 1),
         storageKey,
-        storageUrl: asset.uri,
+        fileBase64,
       },
       {
         onSuccess: () => {
