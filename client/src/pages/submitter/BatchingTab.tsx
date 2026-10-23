@@ -20,6 +20,8 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import ModelHonestyBadge from "@/components/ModelHonestyBadge";
+import { honestyLabelCopy } from "@/lib/feedback";
 import type { SubmitterClient } from "./SubmitterConsole";
 
 const usd = (v: number | null | undefined) =>
@@ -253,7 +255,107 @@ function OfferStrategy({ client }: { client: SubmitterClient }) {
   );
 }
 
-export default function BatchingTab({ clients }: { clients: SubmitterClient[] }) {
+/**
+ * OfferStrategyV2 — Phase 21 (S3). Data-trained offer recommendation
+ * (offerStrategy.recommendV2). The server's modelVersion block (version,
+ * trainedAt, trainingSampleSize) and honestyLabel are surfaced verbatim via
+ * ModelHonestyBadge. When the label is `insufficient_data` the estimate is
+ * null and an honest "not enough data yet" state is shown — no synthetic
+ * fallback, no fabricated confidence.
+ */
+function OfferStrategyV2({ orgId, client }: { orgId: string; client: SubmitterClient }) {
+  const disputesQ = trpc.submitter.listClientDisputes.useQuery(
+    { submitterClientId: client.id },
+    { enabled: client.status === "active" },
+  );
+  const [disputeId, setDisputeId] = useState("");
+  const offer = trpc.offerStrategy.recommendV2.useQuery(
+    { orgId, disputeId },
+    { enabled: !!disputeId && !!orgId, retry: 1 },
+  );
+  const disputes = (disputesQ.data ?? []) as Array<{ id: string; referenceNumber: string; status: string }>;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+          {client.label} — offer strategy (data-trained)
+          {offer.data?.modelVersion
+            ? <ModelHonestyBadge modelVersion={offer.data.modelVersion} />
+            : <Badge variant="outline">statistical estimate</Badge>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {disputesQ.isLoading && <p className="text-muted-foreground">Loading disputes…</p>}
+        {disputesQ.isError && <p role="alert" className="text-destructive">{disputesQ.error.message}</p>}
+        {disputesQ.data && disputes.length === 0 && (
+          <p className="text-muted-foreground">No disputes filed for this client yet.</p>
+        )}
+        {disputes.length > 0 && (
+          <select
+            aria-label="Dispute for data-trained offer recommendation"
+            className="border rounded px-2 py-1 text-sm bg-background"
+            value={disputeId}
+            onChange={e => setDisputeId(e.target.value)}
+          >
+            <option value="">Select a dispute…</option>
+            {disputes.map(d => (
+              <option key={d.id} value={d.id}>{d.referenceNumber} ({d.status})</option>
+            ))}
+          </select>
+        )}
+        {offer.isFetching && <p className="text-muted-foreground">Computing recommendation…</p>}
+        {offer.isError && <p role="alert" className="text-destructive">{offer.error.message}</p>}
+        {offer.data && !offer.isFetching && (
+          <div className="space-y-2">
+            {offer.data.label === "insufficient_data" ? (
+              <div className="border rounded p-3 space-y-1">
+                <p className="font-medium">Not enough data yet</p>
+                <p className="text-xs text-muted-foreground">{honestyLabelCopy("insufficient_data")}</p>
+                <p className="text-xs text-muted-foreground">{offer.data.honestyNote}</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div>
+                  <p className="text-muted-foreground">Recommended offer</p>
+                  <p className="text-lg font-semibold">{usd(offer.data.recommendedOfferUsdStatisticalEstimate)}</p>
+                  <p className="text-xs text-muted-foreground">{offer.data.label.replace(/_/g, " ")}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Win probability (shrunk)</p>
+                  <p className="text-lg font-semibold">
+                    {offer.data.features.shrunkWinRate == null
+                      ? "—"
+                      : `${Math.round(offer.data.features.shrunkWinRate * 1000) / 10}%`}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    segment: {offer.data.features.segmentTierUsed ?? "none"} (n={offer.data.features.segmentSampleSize})
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">QPA</p>
+                  <p className="text-lg font-semibold">{usd(offer.data.features.qpaUsd)}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Expected net at recommendation</p>
+                  <p className="text-lg font-semibold">{usd(offer.data.features.expectedNetUsdAtRecommendation)}</p>
+                </div>
+              </div>
+            )}
+            <ul className="list-disc pl-5 text-xs text-muted-foreground space-y-0.5">
+              {offer.data.rationale.map((r, i) => <li key={i}>{r}</li>)}
+            </ul>
+            {offer.data.label !== "insufficient_data" && (
+              <p className="text-xs text-muted-foreground border rounded p-2">{offer.data.honestyNote}</p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function BatchingTab({ clients, orgId }: { clients: SubmitterClient[]; orgId?: string }) {
   const active = clients.filter(c => c.status === "active");
   return (
     <div className="space-y-4 pt-4">
@@ -269,6 +371,7 @@ export default function BatchingTab({ clients }: { clients: SubmitterClient[] })
       )}
       {active.map(c => <AutoBatchPreview key={`batch-${c.id}`} client={c} />)}
       {active.map(c => <OfferStrategy key={`offer-${c.id}`} client={c} />)}
+      {orgId && active.map(c => <OfferStrategyV2 key={`offer2-${c.id}`} orgId={orgId} client={c} />)}
     </div>
   );
 }
