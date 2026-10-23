@@ -34,6 +34,7 @@ import {
   cleanPriorRuns,
   seedFixtureUsers,
   startLlmStub,
+  startStorageStub,
 } from "../server/journeys/context";
 import { buildJourneyContext } from "../server/journeys/framework";
 import { rootRouter } from "../server/app-router";
@@ -77,6 +78,7 @@ function printReport(reports: JourneyReport[]): void {
 async function main(): Promise<number> {
   const sql = postgres(DATABASE_URL!);
   const llmStub = await startLlmStub();
+  const storageStub = await startStorageStub();
   try {
     if (clean) await cleanPriorRuns(sql);
     const users = await seedFixtureUsers();
@@ -103,6 +105,7 @@ async function main(): Promise<number> {
     return failed.length ? 1 : 0;
   } finally {
     llmStub?.close();
+    storageStub?.close();
     await sql.end();
   }
 }
