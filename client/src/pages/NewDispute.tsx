@@ -1,241 +1,236 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useLocation } from "wouter";
-import { trpc } from "@/lib/trpc";
+/**
+ * /disputes/new — Phase9-FE complete new-dispute wizard (5 steps).
+ * Carried forward intact from the dashboard module — see git history for
+ * pre-restructure context.
+ */
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
+import { useLocation } from "wouter";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { APP_LOGO, APP_TITLE } from "@/const";
-import { toast } from "sonner";
-import {
-  ArrowLeft, ArrowRight, CheckCircle2, LogOut, Scale,
-  Save, AlertTriangle, AlertCircle, Info, TrendingUp, Clock,
-  ShieldCheck, ShieldAlert, ShieldX,
-} from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Label } from "@/components/ui/label";
 import DisputeCompleteness, { parseGateMissingFields } from "@/components/DisputeCompleteness";
 import SmartFormPanel from "@/components/SmartFormPanel";
+import PrefillReviewBanner from "@/components/PrefillReviewBanner";
 import {
-  clearOfflineDrafts,
-  isNetworkError,
-  listOfflineDrafts,
-  removeOfflineDraft,
-  queueOfflineDraft,
-} from "@/lib/offline-drafts";
+  KeystrokeTracker,
+  buildPrefillTerminalEvents,
+  type PrefilledField,
+} from "@/lib/feedback";
+import {
+  CheckCircle2, ChevronRight, ChevronLeft, Plus, Trash2,
+  AlertTriangle, DollarSign, FileText, User, MapPin, Zap, Database
+} from "lucide-react";
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const SERVICE_TYPES = [
-  { value: "emergency_medicine", label: "Emergency Medicine" },
-  { value: "anesthesiology", label: "Anesthesiology" },
-  { value: "pathology", label: "Pathology" },
-  { value: "radiology", label: "Radiology" },
-  { value: "neonatology", label: "Neonatology" },
-  { value: "surgery", label: "Surgery" },
-  { value: "hospitalist", label: "Hospitalist" },
-  { value: "air_ambulance", label: "Air Ambulance" },
-  { value: "ground_ambulance", label: "Ground Ambulance" },
-  { value: "other", label: "Other" },
-];
+  { value: "EMERGENCY", label: "Emergency Services" },
+  { value: "NON_EMERGENCY_ANCILLARY", label: "Non-Emergency Ancillary" },
+  { value: "NON_EMERGENCY_NON_ANCILLARY", label: "Non-Emergency Non-Ancillary" },
+  { value: "AIR_AMBULANCE", label: "Air Ambulance" },
+] as const;
+
+/** Phase 21 (S2a): EMR extracted field (snake_case) → form field key. Shared
+ *  by the eager prefill path and the manual "Extract & Populate" button. */
+const EMR_FIELD_MAP: Record<string, keyof FormData> = {
+  initiating_party_name: "initiatingPartyName",
+  initiating_party_type: "initiatingPartyType",
+  responding_party_name: "respondingPartyName",
+  responding_party_type: "respondingPartyType",
+  service_type: "serviceType",
+  service_date: "serviceDate",
+  patient_state: "patientState",
+  facility_state: "facilityState",
+  billed_amount: "billedAmount",
+  cpt_codes: "cptCodes",
+  icd10_codes: "icd10Codes",
+  initiating_party_npi: "initiatingPartyNpi",
+};
 
 const PARTY_TYPES = [
-  { value: "provider", label: "Provider / Physician" },
-  { value: "facility", label: "Facility / Hospital" },
-  { value: "payer", label: "Health Plan / Payer" },
-  { value: "aggregator", label: "Aggregator" },
-];
+  { value: "provider", label: "Provider / Facility" },
+  { value: "provider_group", label: "Provider Group" },
+  { value: "health_plan", label: "Health Plan / Issuer" },
+  { value: "tpa", label: "Third-Party Administrator" },
+] as const;
 
 const US_STATES = [
-  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
-  "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
-  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
-  "VA","WA","WV","WI","WY","DC",
+  "AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN",
+  "IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH",
+  "NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT",
+  "VT","VA","WA","WV","WI","WY",
 ];
 
 const STEPS = [
-  { id: 1, title: "Initiating Party", description: "Who is initiating this IDR dispute?" },
-  { id: 2, title: "Responding Party", description: "Who is the responding party (payer or provider)?" },
-  { id: 3, title: "Service Details", description: "Describe the healthcare service in dispute" },
-  { id: 4, title: "Financial Information", description: "Enter the billed amount and CPT codes" },
-  { id: 5, title: "Review & Submit", description: "Review all information before initiating the dispute" },
+  { id: 1, label: "Parties", icon: User },
+  { id: 2, label: "Service Details", icon: MapPin },
+  { id: 3, label: "Line Items", icon: DollarSign },
+  { id: 4, label: "Documents & Negotiation", icon: FileText },
+  { id: 5, label: "Review & Submit", icon: CheckCircle2 },
 ];
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type LineItem = { cptCode: string; icd10Codes: string; billedAmount: string; quantity: string };
+
 type FormData = {
-  initiatingPartyType: string;
   initiatingPartyName: string;
-  initiatingPartyNpi: string;
-  respondingPartyType: string;
+  initiatingPartyType: string;
   respondingPartyName: string;
-  respondingPartyNpi: string;
+  respondingPartyType: string;
+  patientFirstName: string;
+  patientLastName: string;
   serviceType: string;
   serviceDate: string;
+  facilityName: string;
   patientState: string;
   facilityState: string;
+  billedAmount: string;
   cptCodes: string;
   icd10Codes: string;
-  billedAmount: string;
-  notes: string;
+  initiatingPartyNpi: string;
+  initiatingPartyTin: string;
+  priorNegotiationNotes: string;
+  openNegotiationStartDate: string;
+  openNegotiationEndDate: string;
+  lineItems: LineItem[];
 };
 
-const INITIAL_FORM: FormData = {
-  initiatingPartyType: "provider",
-  initiatingPartyName: "",
-  initiatingPartyNpi: "",
-  respondingPartyType: "payer",
-  respondingPartyName: "",
-  respondingPartyNpi: "",
-  serviceType: "emergency_medicine",
-  serviceDate: "",
-  patientState: "CA",
-  facilityState: "CA",
-  cptCodes: "",
-  icd10Codes: "",
-  billedAmount: "",
-  notes: "",
+const EMPTY: FormData = {
+  initiatingPartyName: "", initiatingPartyType: "provider",
+  respondingPartyName: "", respondingPartyType: "health_plan",
+  patientFirstName: "", patientLastName: "",
+  serviceType: "EMERGENCY", serviceDate: "",
+  facilityName: "", patientState: "", facilityState: "",
+  billedAmount: "", cptCodes: "", icd10Codes: "",
+  initiatingPartyNpi: "", initiatingPartyTin: "",
+  priorNegotiationNotes: "",
+  openNegotiationStartDate: "", openNegotiationEndDate: "",
+  lineItems: [{ cptCode: "", icd10Codes: "", billedAmount: "", quantity: "1" }],
 };
 
-// ─── QPA severity colour map ──────────────────────────────────────────────────
-const SEVERITY_CONFIG = {
-  ok: {
-    bg: "bg-success",
-    border: "border-success-foreground/30",
-    text: "text-success-foreground",
-    badge: "bg-success text-success-foreground",
-    icon: CheckCircle2,
-    label: "Within QPA Range",
-  },
-  warning: {
-    bg: "bg-warning",
-    border: "border-warning-foreground/30",
-    text: "text-warning-foreground",
-    badge: "bg-warning text-warning-foreground",
-    icon: AlertTriangle,
-    label: "Above QPA — Documentation Needed",
-  },
-  high: {
-    bg: "bg-orange-50",
-    border: "border-orange-200",
-    text: "text-orange-800",
-    badge: "bg-orange-100 text-orange-800",
-    icon: AlertCircle,
-    label: "Significantly Above QPA",
-  },
-  extreme: {
-    bg: "bg-red-50",
-    border: "border-red-200",
-    text: "text-red-800",
-    badge: "bg-red-100 text-red-800",
-    icon: AlertCircle,
-    label: "Extreme Outlier — Review Required",
-  },
-};
+// ─── Draft persistence hook ───────────────────────────────────────────────────
+
+function useDraft() {
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Phase 21: keystroke/prefill tracking refs (declared before `update`).
+  const keystrokeTrackerRef = useRef(new KeystrokeTracker());
+  const prefilledFieldsRef = useRef<PrefilledField[]>([]);
+  const utils = trpc.useUtils();
+  const { data: draftData } = trpc.disputes.getDraft.useQuery();
+  const saveMutation = trpc.disputes.saveDraft.useMutation();
+  const deleteDraftMutation = trpc.disputes.deleteDraft.useMutation();
+  const draftId = draftData?.draft?.id ?? null;
+
+  const scheduleSave = useCallback((currentStep: number, formData: FormData) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveMutation.mutate({ step: currentStep, data: formData });
+    }, 1500);
+  }, [saveMutation]);
+
+  return { draftData, draftId, scheduleSave, deleteDraftMutation };
+}
+
+// ─── Step indicator ───────────────────────────────────────────────────────────
+
+function StepIndicator({ current }: { current: number }) {
+  return (
+    <div className="flex items-center justify-between mb-8">
+      {STEPS.map((s, idx) => (
+        <div key={s.id} className="flex items-center flex-1">
+          <div className="flex flex-col items-center flex-shrink-0">
+            <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold border-2 transition-colors ${
+              current > s.id ? "bg-blue-600 border-blue-600 text-white" :
+              current === s.id ? "border-blue-600 text-blue-600 bg-blue-50" :
+              "border-slate-300 text-slate-400"
+            }`}>
+              {current > s.id ? <CheckCircle2 size={18} /> : s.id}
+            </div>
+            <span className={`text-xs mt-1 font-medium hidden sm:block ${
+              current === s.id ? "text-blue-600" : current > s.id ? "text-slate-600" : "text-slate-400"
+            }`}>{s.label}</span>
+          </div>
+          {idx < STEPS.length - 1 && (
+            <div className={`flex-1 h-0.5 mx-1 mb-4 sm:mb-4 ${current > s.id ? "bg-blue-600" : "bg-slate-200"}`} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Field component ──────────────────────────────────────────────────────────
+
+function Field({ label, required, error, children, hint, emrConfidence, emrSource }: {
+  label: string; required?: boolean; error?: string; children: React.ReactNode; hint?: string;
+  emrConfidence?: number; emrSource?: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-sm font-medium text-slate-700">
+        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+        {emrConfidence !== undefined && (
+          <span
+            className="ml-2 px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700"
+            title={emrSource ? `Extracted from ${emrSource}` : "Extracted from EMR"}
+          >
+            EMR {Math.round(emrConfidence * 100)}%
+          </span>
+        )}
+      </Label>
+      {children}
+      {hint && !error && <p className="text-xs text-slate-400">{hint}</p>}
+      {error && <p className="text-xs text-red-500 flex items-center gap-1"><AlertTriangle size={12} />{error}</p>}
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function NewDispute() {
   const [, navigate] = useLocation();
-  const { user, logout } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [currentStep, setCurrentStep] = useState(1);
-  // Phase 17-FE: PRECONDITION_FAILED gate errors from submit attempts (exact gaps from server).
-  const [gateErrors, setGateErrors] = useState<unknown[]>([]);
-  // Pre-fill from template query params (e.g., /disputes/new?serviceType=emergency_medicine&billedAmount=5000)
-  const [form, setForm] = useState<FormData>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const overrides: Partial<FormData> = {};
-    const pick = (key: keyof FormData, param: string) => {
-      const v = params.get(param);
-      if (v) (overrides as Record<string, string>)[key] = v;
-    };
-    pick("serviceType", "serviceType");
-    pick("initiatingPartyName", "initiatingPartyName");
-    pick("initiatingPartyType", "initiatingPartyType");
-    pick("respondingPartyName", "respondingPartyName");
-    pick("respondingPartyType", "respondingPartyType");
-    pick("billedAmount", "billedAmount");
-    pick("notes", "notes");
-    // patientName maps to notes if no dedicated field exists
-    const patientName = params.get("patientName");
-    const claimNumber = params.get("claimNumber");
-    if (patientName || claimNumber) {
-      const extra = [patientName ? `Patient: ${patientName}` : "", claimNumber ? `Claim: ${claimNumber}` : ""].filter(Boolean).join(" | ");
-      if (!overrides.notes) overrides.notes = extra;
-    }
-    const hasTemplate = Object.keys(overrides).length > 0;
-    return { ...INITIAL_FORM, ...overrides, _fromTemplate: hasTemplate } as FormData;
-  });
-  const [draftLoaded, setDraftLoaded] = useState(false);
-  const [lastSaved, setLastSaved] = useState<Date | null>(null);
-  const [offlineQueued, setOfflineQueued] = useState(false);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const utils = trpc.useUtils();
+  const [form, setForm] = useState<FormData>(EMPTY);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitted, setSubmitted] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [showEMRPull, setShowEMRPull] = useState(false);
+  const [emrPullResult, setEMRPullResult] = useState<{
+    patient?: { firstName?: string; lastName?: string } | null;
+    extractedData: Record<string, string | null>;
+    fieldConfidence: Record<string, number>;
+    fieldSource?: Record<string, string>;
+    summary: { fieldsExtracted: number; fieldsEmpty: number };
+    message: string;
+  } | null>(null);
+  const [selectedEMRId, setSelectedEMRId] = useState("");
+  const [emrPatientId, setEMRPatientId] = useState("");
+  const [emrClaimId, setEMRClaimId] = useState("");
+  const { draftData, draftId, scheduleSave, deleteDraftMutation } = useDraft();
 
-  // ─── Load existing draft on mount ──────────────────────────────────────────
-  const { data: existingDraft } = trpc.drafts.get.useQuery(undefined, {
-    enabled: !draftLoaded,
-    retry: false,
-  });
-
+  // Restore draft on mount
   useEffect(() => {
-    if (existingDraft && !draftLoaded) {
-      const fd = existingDraft.formData as Partial<FormData>;
-      setForm(prev => ({ ...prev, ...fd }));
-      setCurrentStep(existingDraft.currentStep ?? 1);
-      setDraftLoaded(true);
-      toast.info("Draft restored from your last session", { duration: 3000 });
-    } else if (existingDraft === null && !draftLoaded) {
-      setDraftLoaded(true);
+    if (draftData?.draft && !draftRestored) {
+      const { step, data } = draftData.draft;
+      if (step > 0 && Object.keys(data as object).length > 0) {
+        setForm(data as FormData);
+        setCurrentStep(Math.min(step, 5));
+        toast.info(`Draft restored from step ${step}`, { duration: 3000 });
+      }
+      setDraftRestored(true);
     }
-  }, [existingDraft, draftLoaded]);
-
-  // ─── Auto-save mutation ─────────────────────────────────────────────────────
-  // Offline-first: when the browser is offline (or the save fails with a
-  // network error) the draft payload is queued in IndexedDB and flushed on
-  // the next `online` event (see lib/offline-drafts.ts).
-  const saveDraftMutation = trpc.drafts.save.useMutation({
-    onSuccess: () => setLastSaved(new Date()),
-    onError: (err, vars) => {
-      if (!navigator.onLine || isNetworkError(err)) {
-        queueOfflineDraft({ wizardStep: vars.wizardStep, formData: vars.formData }).then(ok => {
-          if (ok) setOfflineQueued(true);
-        });
-      }
-      // otherwise silent — auto-save failures should not interrupt the user
-    },
-  });
-
-  const deleteDraftMutation = trpc.drafts.delete.useMutation();
-
-  // Flush queued offline drafts back to the server when connectivity returns
-  useEffect(() => {
-    const flush = async () => {
-      const queued = await listOfflineDrafts();
-      if (queued.length === 0) return;
-      for (const d of queued) {
-        try {
-          await saveDraftMutation.mutateAsync({ wizardStep: d.wizardStep, formData: d.formData });
-          await removeOfflineDraft(d.id);
-        } catch {
-          return; // still failing — keep the rest of the queue
-        }
-      }
-      setOfflineQueued(false);
-      toast.success("Offline draft synced to the server", { duration: 3000 });
-    };
-    window.addEventListener("online", flush);
-    return () => window.removeEventListener("online", flush);
-  }, [saveDraftMutation]);
-
-  // Debounced auto-save: fires 800ms after the last change
-  const scheduleSave = useCallback((step: number, data: FormData) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      const payload = { wizardStep: step, formData: data as unknown as Record<string, unknown> };
-      if (!navigator.onLine) {
-        queueOfflineDraft(payload).then(ok => { if (ok) setOfflineQueued(true); });
-        return;
-      }
-      saveDraftMutation.mutate(payload);
-    }, 800);
-  }, [saveDraftMutation]);
+  }, [draftData, draftRestored]);
 
   const update = useCallback((field: keyof FormData, value: string) => {
+    // Phase 21: count keystrokes on prefilled fields (presented→terminal).
+    if (prefilledFieldsRef.current.some(f => f.formKey === field)) {
+      keystrokeTrackerRef.current.increment(field);
+    }
     setForm(prev => {
       const next = { ...prev, [field]: value };
       scheduleSave(currentStep, next);
@@ -243,814 +238,708 @@ export default function NewDispute() {
     });
   }, [currentStep, scheduleSave]);
 
-  const handleStepChange = (newStep: number) => {
-    setCurrentStep(newStep);
-    // Save immediately on step change
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveDraftMutation.mutate({ wizardStep: newStep, formData: form as unknown as Record<string, unknown> });
+  const updateLineItem = useCallback((idx: number, field: keyof LineItem, value: string) => {
+    setForm(prev => {
+      const items = [...prev.lineItems];
+      items[idx] = { ...items[idx], [field]: value };
+      scheduleSave(currentStep, { ...prev, lineItems: items });
+      return { ...prev, lineItems: items };
+    });
+  }, [currentStep, scheduleSave]);
+
+  const addLineItem = () => setForm(prev => ({
+    ...prev,
+    lineItems: [...prev.lineItems, { cptCode: "", icd10Codes: "", billedAmount: "", quantity: "1" }],
+  }));
+
+  const removeLineItem = (idx: number) => setForm(prev => ({
+    ...prev,
+    lineItems: prev.lineItems.filter((_, i) => i !== idx),
+  }));
+
+  // ─── Validation ─────────────────────────────────────────────────────────────
+
+  const validate = (step: number): boolean => {
+    const e: Record<string, string> = {};
+    if (step === 1) {
+      if (!form.initiatingPartyName.trim()) e.initiatingPartyName = "Initiating party name is required";
+      if (!form.respondingPartyName.trim()) e.respondingPartyName = "Responding party (health plan) name is required";
+    }
+    if (step === 2) {
+      if (!form.serviceType) e.serviceType = "Service type is required";
+      if (!form.serviceDate) e.serviceDate = "Service date is required";
+      if (!form.patientState) e.patientState = "Patient state is required";
+      if (!form.facilityState) e.facilityState = "Facility state is required";
+    }
+    if (step === 3) {
+      if (!form.billedAmount || isNaN(Number(form.billedAmount)) || Number(form.billedAmount) <= 0)
+        e.billedAmount = "Valid billed amount is required";
+      if (!form.cptCodes.trim()) e.cptCodes = "At least one CPT/HCPCS code is required";
+      form.lineItems.forEach((li, i) => {
+        if (li.cptCode && (!li.billedAmount || isNaN(Number(li.billedAmount))))
+          e[`li_${i}_amount`] = "Line item amount required";
+      });
+    }
+    setErrors(e);
+    return Object.keys(e).length === 0;
   };
 
-  // ─── Real-time QPA validation ───────────────────────────────────────────────
-  // Only fires when billedAmount + cptCodes + facilityState are all populated
-  const cptArray = form.cptCodes.split(",").map(c => c.trim()).filter(Boolean);
-  const qpaEnabled =
-    currentStep === 4 &&
-    /^\d+(\.\d{1,2})?$/.test(form.billedAmount) &&
-    parseFloat(form.billedAmount) > 0 &&
-    cptArray.length > 0 &&
-    form.facilityState.length === 2;
+  // ─── EMR Data Pull ──────────────────────────────────────────────────────────
 
-  const { data: qpaResult, isFetching: qpaFetching } = trpc.qpa.validate.useQuery(
-    {
-      billedAmount: form.billedAmount,
-      cptCodes: cptArray,
-      facilityState: form.facilityState,
-    },
-    {
-      enabled: qpaEnabled,
-      // Debounce: staleTime ensures we don't re-fetch on every keystroke
-      staleTime: 2000,
-      refetchOnWindowFocus: false,
-    }
+  const { data: emrConnections } = trpc.emr.listConnections.useQuery(undefined, { enabled: isAuthenticated });
+  const { data: emrPatients } = trpc.emr.queryPatients.useQuery(
+    { connectionId: selectedEMRId },
+    { enabled: !!selectedEMRId }
   );
-
-  // ─── EMR Data Pull ─────────────────────────────────────────────────────────
-  const { data: emrConnections } = trpc.emr.list.useQuery();
-  const [showEMRPull, setShowEMRPull] = useState(false);
-
-  const [patientSearchQuery, setPatientSearchQuery] = useState("");
-  const [patientSuggestions, setPatientSuggestions] = useState<{ id: string; name: string; dob: string; mrn: string }[]>([]);
-  const [showPatientDropdown, setShowPatientDropdown] = useState(false);
-  const patientSearchMutation = trpc.ai.searchPatients.useMutation({
-    onSuccess: (results) => {
-      setPatientSuggestions(results);
-      setShowPatientDropdown(results.length > 0);
-    },
-  });
-
-  const [emrPullResult, setEMRPullResult] = useState<{
-    success: boolean;
-    fieldsExtracted: number;
-    fieldConfidence: Record<string, number>;
-    extractedData: Record<string, unknown>;
-    fhirResources: string[];
-    summary: string;
-    warnings: string[];
-  } | null>(null);
-  const [selectedEMRId, setSelectedEMRId] = useState("");
-  const [emrPatientId, setEMRPatientId] = useState("");
-  const [emrClaimId, setEMRClaimId] = useState("");
 
   const emrPullMutation = trpc.ai.pullDisputeData.useMutation({
     onSuccess: (result) => {
       setEMRPullResult(result);
-      if (result.success && result.fieldsExtracted > 0) {
-        const d = result.extractedData as Record<string, string>;
-        // Map extracted fields into the form
-        if (d.initiating_party_name) update("initiatingPartyName", String(d.initiating_party_name));
-        if (d.initiating_party_type) update("initiatingPartyType", String(d.initiating_party_type));
-        if (d.responding_party_name) update("respondingPartyName", String(d.responding_party_name));
-        if (d.responding_party_type) update("respondingPartyType", String(d.responding_party_type));
-        if (d.service_type) update("serviceType", String(d.service_type));
-        if (d.service_date) update("serviceDate", String(d.service_date));
-        if (d.patient_state) update("patientState", String(d.patient_state));
-        if (d.facility_state) update("facilityState", String(d.facility_state));
-        if (d.billed_amount) update("billedAmount", String(d.billed_amount));
-        if (d.cpt_codes) update("cptCodes", String(d.cpt_codes));
-        if (d.icd10_codes) update("icd10Codes", String(d.icd10_codes));
-        if (d.initiating_party_npi) update("initiatingPartyNpi", String(d.initiating_party_npi));
-        toast.success(`${result.fieldsExtracted} fields populated from ${result.emrSystem} EMR.`);
-      } else {
-        toast.warning(result.summary);
-      }
+      // Auto-populate form fields from extracted data
+      const d = result.extractedData;
+      if (d.initiating_party_name) update("initiatingPartyName", d.initiating_party_name);
+      if (d.initiating_party_type) update("initiatingPartyType", d.initiating_party_type);
+      if (d.responding_party_name) update("respondingPartyName", d.responding_party_name);
+      if (d.responding_party_type) update("respondingPartyType", d.responding_party_type);
+      if (d.service_type) update("serviceType", d.service_type);
+      if (d.service_date) update("serviceDate", d.service_date);
+      if (d.patient_state) update("patientState", d.patient_state);
+      if (d.facility_state) update("facilityState", d.facility_state);
+      if (d.billed_amount) update("billedAmount", d.billed_amount);
+      if (d.cpt_codes) update("cptCodes", d.cpt_codes);
+      if (d.icd10_codes) update("icd10Codes", d.icd10_codes);
+      if (d.initiating_party_npi) update("initiatingPartyNpi", d.initiating_party_npi);
+      if (result.patient?.firstName) update("patientFirstName", result.patient.firstName);
+      if (result.patient?.lastName) update("patientLastName", result.patient.lastName);
+      toast.success(`Extracted ${result.summary.fieldsExtracted} fields from EMR — review and adjust before submitting.`, { duration: 4000 });
     },
-    onError: (err) => toast.error(`EMR pull failed: ${err.message}`),
+    onError: (err) => {
+      toast.error(`EMR pull failed: ${err.message}`);
+    },
   });
 
   const activeEMRConnections = (emrConnections ?? []).filter((c: any) => c.status === "active");
 
-  // ─── Submit ─────────────────────────────────────────────────────────────────
+  // ─── Phase 21 (S2a): eager prefill ────────────────────────────────────────
+  // On entering the wizard with EMR context (single active connection is
+  // auto-selected; patient/claim selection triggers a re-prefill), call
+  // prefill.dispute EAGERLY. The server records `presented` suggestion
+  // events; the client records terminal accepted/edited events on submit.
+  // The manual "Extract & Populate Fields" button below remains as fallback.
+  const { data: myOrgs } = trpc.orgs.listMine.useQuery(undefined, { staleTime: 60_000 });
+  const prefillOrgId = myOrgs?.[0]?.orgId ?? null;
+  const [prefillAppliedKey, setPrefillAppliedKey] = useState<string | null>(null);
+  const [prefilledFields, setPrefilledFields] = useState<PrefilledField[]>([]);
+  const [prefillMeta, setPrefillMeta] = useState<{ suggestionId: string; modelName: string } | null>(null);
+
+  const setPrefilled = (fields: PrefilledField[]) => {
+    prefilledFieldsRef.current = fields;
+    setPrefilledFields(fields);
+  };
+
+  // Auto-select when exactly one active EMR connection exists (eager entry).
+  useEffect(() => {
+    if (!selectedEMRId && activeEMRConnections.length === 1) {
+      setSelectedEMRId(activeEMRConnections[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emrConnections]);
+
+  const selectedEMRConn = activeEMRConnections.find((c: any) => c.id === selectedEMRId);
+  const prefillQueryKey = prefillOrgId && selectedEMRConn
+    ? `${prefillOrgId}|${selectedEMRId}|${emrPatientId}|${emrClaimId}`
+    : null;
+  const prefillQ = trpc.prefill.dispute.useQuery(
+    {
+      orgId: prefillOrgId!,
+      connectionId: selectedEMRId,
+      emrSystem: (selectedEMRConn as any)?.emrSystem ?? "",
+      patientId: emrPatientId || undefined,
+      claimId: emrClaimId || undefined,
+      dateOfService: form.serviceDate || undefined,
+    },
+    {
+      enabled: !!prefillQueryKey && prefillAppliedKey !== prefillQueryKey,
+      retry: 1,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+    },
+  );
+
+  useEffect(() => {
+    const result = prefillQ.data;
+    if (!result || !prefillQueryKey || prefillAppliedKey === prefillQueryKey) return;
+    setPrefillAppliedKey(prefillQueryKey);
+    setEMRPullResult(result);
+    const d = (result.extractedData ?? {}) as Record<string, unknown>;
+    const applied: PrefilledField[] = [];
+    for (const [sourceField, formKey] of Object.entries(EMR_FIELD_MAP)) {
+      const v = d[sourceField];
+      if (v === null || v === undefined || v === "") continue;
+      const sv = String(v);
+      update(formKey, sv);
+      applied.push({
+        formKey,
+        sourceField,
+        suggestedValue: sv,
+        suggestedValueHash: result.suggestedValueHashes?.[sourceField] ?? null,
+        confidence: result.fieldConfidence?.[sourceField] ?? null,
+      });
+    }
+    if (applied.length > 0) {
+      keystrokeTrackerRef.current = new KeystrokeTracker();
+      setPrefilled(applied);
+      setPrefillMeta({ suggestionId: result.suggestionId, modelName: result.modelName });
+      toast.info(`Prefilled ${applied.length} fields from EMR — please review before submitting.`, { duration: 4000 });
+    } else if (result.fieldsExtracted === 0) {
+      // Honest no-prefill state: nothing extracted for this context.
+      setPrefilled([]);
+      setPrefillMeta(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillQ.data, prefillQueryKey]);
+
+  const feedbackRecord = trpc.feedback.record.useMutation();
+
+  // ─── Submit ──────────────────────────────────────────────────────────────────
+
   const createMutation = trpc.disputes.create.useMutation({
     onSuccess: async (dispute) => {
+      // Phase 21 (S1): terminal suggestion events for prefilled fields.
+      // Untouched-confirmed => "accepted"; user-changed => "edited". Values
+      // are hashed client-side; fire-and-forget (never blocks navigation).
+      const pf = prefilledFieldsRef.current;
+      if (pf.length > 0 && prefillMeta && prefillOrgId) {
+        const latencyMs = keystrokeTrackerRef.current.dwellMs();
+        void buildPrefillTerminalEvents(pf, form as unknown as Record<string, string>, keystrokeTrackerRef.current)
+          .then(events => {
+            for (const ev of events) {
+              feedbackRecord.mutate({
+                orgId: prefillOrgId,
+                suggestionId: prefillMeta.suggestionId,
+                surface: "new_dispute_prefill",
+                action: ev.action,
+                modelName: prefillMeta.modelName,
+                confidence: ev.confidence ?? undefined,
+                fieldName: ev.fieldName,
+                suggestedValueHash: ev.suggestedValueHash ?? undefined,
+                finalValueHash: ev.finalValueHash ?? undefined,
+                keystrokeCount: ev.keystrokeCount,
+                latencyMs,
+                metadata: { disputeId: dispute.id },
+              });
+            }
+          })
+          .catch(() => { /* telemetry must never block submission */ });
+      }
       // Delete the draft after successful submission
       await deleteDraftMutation.mutateAsync();
-      await clearOfflineDrafts();
-      setOfflineQueued(false);
-      setGateErrors([]);
-      utils.drafts.get.invalidate();
-      toast.success(`Dispute ${dispute.referenceNumber} initiated successfully`);
-      navigate(`/disputes/${dispute.id}`);
+      setSubmitted(true);
+      toast.success("Dispute created — entering open negotiation (30 business days per NSA)", { duration: 4000 });
+      setTimeout(() => navigate(`/disputes/${dispute.id}`), 1200);
     },
     onError: (err) => {
       toast.error(err.message);
-      // Phase 17-FE: surface PRECONDITION_FAILED gate gaps in the completeness panel.
-      if (err.data?.code === "PRECONDITION_FAILED") setGateErrors(prev => [...prev, err]);
     },
   });
 
-  // Exact gaps reported by server gate errors; editing the form clears the block.
-  const gateMissingFields = Array.from(new Set(gateErrors.flatMap(parseGateMissingFields)));
-  useEffect(() => {
-    if (gateErrors.length > 0) setGateErrors([]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form]);
-
-  const canProceed = () => {
-    if (currentStep === 1) return form.initiatingPartyName.trim().length > 0;
-    if (currentStep === 2) return form.respondingPartyName.trim().length > 0;
-    if (currentStep === 3) return !!(form.serviceDate && form.patientState && form.facilityState);
-    if (currentStep === 4) return !!(form.billedAmount && form.cptCodes.trim().length > 0);
-    return true;
-  };
-
   const handleSubmit = () => {
-    const cptArr = form.cptCodes.split(",").map(c => c.trim()).filter(Boolean);
-    const icd10Arr = form.icd10Codes.split(",").map(c => c.trim()).filter(Boolean);
+    if (!validate(3)) { setCurrentStep(3); return; }
     createMutation.mutate({
-      initiatingPartyType: form.initiatingPartyType as "provider" | "facility" | "payer" | "aggregator",
       initiatingPartyName: form.initiatingPartyName,
-      initiatingPartyNpi: form.initiatingPartyNpi || undefined,
-      respondingPartyType: form.respondingPartyType as "provider" | "facility" | "payer" | "aggregator",
-      respondingPartyName: form.respondingPartyName || undefined,
-      respondingPartyNpi: form.respondingPartyNpi || undefined,
-      serviceType: form.serviceType as "emergency_medicine" | "anesthesiology" | "pathology" | "radiology" | "neonatology" | "assistant_surgeon" | "hospitalist" | "intensivist" | "air_ambulance" | "ground_ambulance" | "other",
-      serviceDate: new Date(form.serviceDate).toISOString(),
+      initiatingPartyType: form.initiatingPartyType as "provider" | "provider_group" | "health_plan" | "tpa",
+      respondingPartyName: form.respondingPartyName,
+      respondingPartyType: form.respondingPartyType as "provider" | "provider_group" | "health_plan" | "tpa",
+      patientFirstName: form.patientFirstName || undefined,
+      patientLastName: form.patientLastName || undefined,
+      serviceType: form.serviceType as "EMERGENCY" | "NON_EMERGENCY_ANCILLARY" | "NON_EMERGENCY_NON_ANCILLARY" | "AIR_AMBULANCE",
+      serviceDate: form.serviceDate,
+      facilityName: form.facilityName || undefined,
       patientState: form.patientState,
       facilityState: form.facilityState,
-      cptCodes: cptArr,
-      icd10Codes: icd10Arr.length > 0 ? icd10Arr : undefined,
       billedAmount: form.billedAmount,
-      notes: form.notes || undefined,
+      cptCodes: form.cptCodes.split(",").map(c => c.trim()).filter(Boolean),
+      icd10Codes: form.icd10Codes ? form.icd10Codes.split(",").map(c => c.trim()).filter(Boolean) : undefined,
+      initiatingPartyNpi: form.initiatingPartyNpi || undefined,
+      initiatingPartyTin: form.initiatingPartyTin || undefined,
+      priorNegotiationNotes: form.priorNegotiationNotes || undefined,
+      openNegotiationStartDate: form.openNegotiationStartDate || undefined,
+      openNegotiationEndDate: form.openNegotiationEndDate || undefined,
+      lineItems: form.lineItems
+        .filter(li => li.cptCode && li.billedAmount)
+        .map(li => ({
+          cptCode: li.cptCode,
+          icd10Codes: li.icd10Codes ? li.icd10Codes.split(",").map(c => c.trim()).filter(Boolean) : undefined,
+          billedAmount: li.billedAmount,
+          quantity: li.quantity ? parseInt(li.quantity) : 1,
+        })),
     });
   };
 
-  const Field = ({
-    label, required, children, hint, fieldKey,
-  }: { label: string; required?: boolean; children: React.ReactNode; hint?: string; fieldKey?: string }) => {
-    // Map camelCase fieldKey to snake_case for confidence lookup
-    const snakeKey = fieldKey ? fieldKey.replace(/([A-Z])/g, '_$1').toLowerCase() : undefined;
-    const confScore = emrPullResult?.fieldConfidence
-      ? (fieldKey ? emrPullResult.fieldConfidence[fieldKey] : undefined)
-        ?? (snakeKey ? emrPullResult.fieldConfidence[snakeKey] : undefined)
-      : undefined;
-    const confPct = confScore !== undefined ? Math.round(confScore * 100) : null;
-    const isExtracted = confPct !== null;
-    const confLabel = confPct === null ? '' : confPct >= 90 ? 'High confidence' : confPct >= 70 ? 'Medium confidence — review recommended' : 'Low confidence — manual verification required';
-    const ConfIcon = confPct === null ? null : confPct >= 90 ? ShieldCheck : confPct >= 70 ? ShieldAlert : ShieldX;
-    const confColor = confPct === null ? '' : confPct >= 90 ? 'text-success-foreground' : confPct >= 70 ? 'text-warning-foreground' : 'text-red-600';
-    const fieldBorder = isExtracted ? (confPct! >= 90 ? 'ring-1 ring-success-foreground/40' : confPct! >= 70 ? 'ring-1 ring-warning-foreground/40' : 'ring-2 ring-red-300') : '';
-    return (
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <label className="block text-sm font-medium text-muted-foreground">
-            {label}{required && <span className="text-red-500 ml-0.5">*</span>}
-          </label>
-          {isExtracted && ConfIcon && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className={`flex items-center gap-1 text-xs font-medium cursor-help ${confColor}`}>
-                  <ConfIcon className="h-3.5 w-3.5" />
-                  {confPct}%
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-xs">
-                <p className="text-xs">
-                  <strong>EMR Extraction Confidence: {confPct}%</strong><br />
-                  {confLabel}.
-                  {confPct! < 90 && " Please verify this field before submitting."}
-                </p>
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-        <div className={`rounded-lg ${fieldBorder}`}>
-          {children}
-        </div>
-        {hint && <p className="text-xs text-muted-foreground mt-1">{hint}</p>}
-        {isExtracted && confPct! < 70 && (
-          <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
-            <ShieldX className="h-3 w-3" /> Low confidence — please verify this value manually.
+  const totalBilled = form.lineItems.reduce((s, li) => s + (parseFloat(li.billedAmount) || 0) * (parseInt(li.quantity) || 1), 0);
+
+  // Gate missing fields from the last create failure — drives DisputeCompleteness
+  // deep links without inventing any field list client-side.
+  const gateMissingFields = parseGateMissingFields(createMutation.error?.message);
+
+  if (submitted) return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50">
+      <CheckCircle2 size={48} className="text-green-500" />
+      <h2 className="text-xl font-bold text-slate-800">Dispute Submitted</h2>
+      <p className="text-slate-500">Open negotiation period started (30 business days per NSA §2799A-1)</p>
+      <p className="text-sm text-slate-400">Redirecting to dispute detail…</p>
+    </div>
+  );
+
+  return (
+    <div className="max-w-3xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Initiate IDR Dispute</h1>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Federal No Surprises Act — 45 CFR §149.510 · Open negotiation must precede IDR
           </p>
+        </div>
+        {draftId && (
+          <span className="text-xs text-slate-400 flex items-center gap-1">
+            <CheckCircle2 size={12} className="text-green-500" />Draft saved
+          </span>
         )}
       </div>
-    );
-  };
 
-  // ─── QPA panel ──────────────────────────────────────────────────────────────
-  const QPAPanel = () => {
-    if (!qpaEnabled) return null;
-    if (qpaFetching) {
-      return (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted rounded-lg p-3 border border-border">
-          <Clock size={14} className="animate-spin" />
-          Calculating QPA benchmark…
+      <StepIndicator current={currentStep} />
+
+      {/* Smart Form Panel — adaptive assistance */}
+      <SmartFormPanel
+        formData={{
+          serviceType: form.serviceType,
+          patientState: form.patientState,
+          facilityState: form.facilityState,
+          serviceDate: form.serviceDate,
+          billedAmount: form.billedAmount,
+          cptCodes: form.cptCodes,
+          openNegotiationStartDate: form.openNegotiationStartDate,
+          openNegotiationEndDate: form.openNegotiationEndDate,
+        }}
+      />
+
+      {/* Server-side completeness (authoritative field list) */}
+      <div className="flex justify-end">
+        <DisputeCompleteness
+          mode="new"
+          fields={{
+            initiatingPartyName: form.initiatingPartyName,
+            respondingPartyName: form.respondingPartyName,
+            serviceType: form.serviceType,
+            serviceDate: form.serviceDate,
+            patientState: form.patientState,
+            facilityState: form.facilityState,
+            billedAmount: form.billedAmount,
+            cptCodes: form.cptCodes.split(",").map(c => c.trim()).filter(Boolean),
+            icd10Codes: form.icd10Codes ? form.icd10Codes.split(",").map(c => c.trim()).filter(Boolean) : undefined,
+            initiatingPartyNpi: form.initiatingPartyNpi || undefined,
+            initiatingPartyTin: form.initiatingPartyTin || undefined,
+            openNegotiationStartDate: form.openNegotiationStartDate || undefined,
+            openNegotiationEndDate: form.openNegotiationEndDate || undefined,
+          }}
+          serverMissingFields={gateMissingFields}
+        />
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+        {/* Phase 21 (S2a): eager-prefill review banner */}
+        <PrefillReviewBanner fields={prefilledFields} modelName={prefillMeta?.modelName ?? null} />
+        {/* EMR Pull Panel */}
+        <div className="mb-6 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50 overflow-hidden">
+          <button
+            onClick={() => setShowEMRPull(p => !p)}
+            className="w-full flex items-center justify-between px-4 py-3 text-left"
+          >
+            <div className="flex items-center gap-2">
+              <Database size={16} className="text-blue-600" />
+              <span className="text-sm font-semibold text-blue-800">Pull from EMR</span>
+              {emrPullResult && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+                  {emrPullResult.summary.fieldsExtracted} fields extracted
+                </span>
+              )}
+            </div>
+            <span className="text-xs text-blue-600">{showEMRPull ? "Hide" : "Show"}</span>
+          </button>
+
+          {showEMRPull && (
+            <div className="px-4 pb-4 space-y-3 border-t border-blue-100">
+              {activeEMRConnections.length === 0 ? (
+                <p className="text-sm text-blue-700 pt-3">
+                  No active EMR connections.{" "}
+                  <button className="underline font-medium" onClick={() => navigate("/emr/connect")}>Connect an EMR system</button>
+                  {" "}to auto-populate dispute data.
+                </p>
+              ) : (
+                <div className="pt-3 space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <Label className="text-xs text-blue-700">EMR Connection</Label>
+                      <select
+                        value={selectedEMRId}
+                        onChange={e => { setSelectedEMRId(e.target.value); setEMRPatientId(""); }}
+                        className="w-full mt-1 px-2 py-1.5 text-sm border border-blue-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">Select connection…</option>
+                        {activeEMRConnections.map((c: any) => (
+                          <option key={c.id} value={c.id}>{c.emrSystem} — {c.facilityName || c.id}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-blue-700">Patient</Label>
+                      <select
+                        value={emrPatientId}
+                        onChange={e => setEMRPatientId(e.target.value)}
+                        disabled={!selectedEMRId}
+                        className="w-full mt-1 px-2 py-1.5 text-sm border border-blue-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                      >
+                        <option value="">Select patient…</option>
+                        {(emrPatients ?? []).map((p: any) => (
+                          <option key={p.id} value={p.id}>{p.firstName} {p.lastName} {p.mrn ? `(MRN: ${p.mrn})` : ""}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-blue-700">Claim ID (optional)</Label>
+                      <Input
+                        value={emrClaimId}
+                        onChange={e => setEMRClaimId(e.target.value)}
+                        placeholder="e.g. CLM-001"
+                        className="mt-1 text-sm border-blue-200 bg-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        if (!selectedEMRId) { toast.error("Select an EMR connection first"); return; }
+                        emrPullMutation.mutate({
+                          connectionId: selectedEMRId,
+                          emrSystem: activeEMRConnections.find((c: any) => c.id === selectedEMRId)?.emrSystem ?? "",
+                          patientId: emrPatientId || undefined,
+                          claimId: emrClaimId || undefined,
+                        });
+                      }}
+                      disabled={emrPullMutation.isPending || !selectedEMRId}
+                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                    >
+                      <Zap size={14} className="mr-1" />
+                      {emrPullMutation.isPending ? "Extracting…" : "Extract & Populate Fields"}
+                    </Button>
+                    <p className="text-xs text-blue-600">
+                      Fields with a blue <span className="px-1 py-0.5 rounded bg-blue-100 font-medium">EMR %</span> badge were auto-extracted. Always review before submitting.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-      );
-    }
-    if (!qpaResult) return null;
 
-    const cfg = SEVERITY_CONFIG[qpaResult.severity as keyof typeof SEVERITY_CONFIG];
-    const SeverityIcon = cfg.icon;
-
-    return (
-      <div className={`rounded-lg border p-4 space-y-3 ${cfg.bg} ${cfg.border}`}>
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <SeverityIcon size={16} className={cfg.text} />
-            <span className={`text-sm font-semibold ${cfg.text}`}>QPA Benchmark Analysis</span>
-          </div>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cfg.badge}`}>
-            {cfg.label}
-          </span>
-        </div>
-
-        {/* Key metrics */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-white/70 rounded-lg p-2.5 text-center">
-            <div className="text-xs text-muted-foreground mb-0.5">QPA Estimate</div>
-            <div className="text-base font-bold text-foreground">
-              ${qpaResult.qpaEstimate.toLocaleString()}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {form.facilityState} adjusted ×{qpaResult.stateAdjustmentFactor.toFixed(2)}
-            </div>
-          </div>
-          <div className="bg-white/70 rounded-lg p-2.5 text-center">
-            <div className="text-xs text-muted-foreground mb-0.5">Billed Amount</div>
-            <div className="text-base font-bold text-foreground">
-              ${parseFloat(form.billedAmount).toLocaleString()}
-            </div>
-            <div className="text-xs text-muted-foreground">as submitted</div>
-          </div>
-          <div className="bg-white/70 rounded-lg p-2.5 text-center">
-            <div className="text-xs text-muted-foreground mb-0.5">% of QPA</div>
-            <div className={`text-base font-bold ${
-              qpaResult.percentageOfQpa <= 100 ? "text-success-foreground" :
-              qpaResult.percentageOfQpa <= 150 ? "text-warning-foreground" : "text-red-700"
-            }`}>
-              {qpaResult.percentageOfQpa}%
-            </div>
-            <div className="text-xs text-muted-foreground">
-              Range: ${qpaResult.totalBenchmarkMin.toLocaleString()}–${qpaResult.totalBenchmarkMax.toLocaleString()}
+        {/* ── Step 1: Parties ── */}
+        {currentStep === 1 && (
+          <div className="space-y-6">
+            <h2 className="text-lg font-semibold text-slate-800">Parties to the Dispute</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <Field label="Initiating Party Name" required error={errors.initiatingPartyName}
+                hint="Your practice, facility, or organization name"
+                emrConfidence={emrPullResult?.fieldConfidence?.initiating_party_name}
+                emrSource={emrPullResult?.fieldSource?.initiating_party_name}>
+                <Input value={form.initiatingPartyName} onChange={e => update("initiatingPartyName", e.target.value)}
+                  placeholder="e.g., Riverside Emergency Physicians LLC" />
+              </Field>
+              <Field label="Initiating Party Type" required>
+                <select value={form.initiatingPartyType} onChange={e => update("initiatingPartyType", e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  {PARTY_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </Field>
+              <Field label="Responding Party (Health Plan) Name" required error={errors.respondingPartyName}
+                hint="The insurance company or health plan"
+                emrConfidence={emrPullResult?.fieldConfidence?.responding_party_name}
+                emrSource={emrPullResult?.fieldSource?.responding_party_name}>
+                <Input value={form.respondingPartyName} onChange={e => update("respondingPartyName", e.target.value)}
+                  placeholder="e.g., Aetna Health Inc." />
+              </Field>
+              <Field label="Responding Party Type" required>
+                <select value={form.respondingPartyType} onChange={e => update("respondingPartyType", e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  {PARTY_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </Field>
+              <Field label="NPI (Initiating Party)" hint="10-digit National Provider Identifier (optional)"
+                emrConfidence={emrPullResult?.fieldConfidence?.initiating_party_npi}
+                emrSource={emrPullResult?.fieldSource?.initiating_party_npi}>
+                <Input value={form.initiatingPartyNpi} onChange={e => update("initiatingPartyNpi", e.target.value)}
+                  placeholder="1234567890" maxLength={10} />
+              </Field>
+              <Field label="TIN (Initiating Party)" hint="Tax ID — required for certified IDR entity payment processing">
+                <Input value={form.initiatingPartyTin} onChange={e => update("initiatingPartyTin", e.target.value)}
+                  placeholder="12-3456789" maxLength={10} />
+              </Field>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* CPT benchmarks */}
-        {Object.keys(qpaResult.cptBenchmarks).length > 0 && (
-          <div>
-            <div className="text-xs font-medium text-muted-foreground mb-1.5 flex items-center gap-1">
-              <TrendingUp size={11} /> CPT Code Benchmarks
+        {/* ── Step 2: Service Details ── */}
+        {currentStep === 2 && (
+          <div className="space-y-6">
+            <h2 className="text-lg font-semibold text-slate-800">Service Details</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <Field label="Service Type" required error={errors.serviceType}>
+                <select value={form.serviceType} onChange={e => update("serviceType", e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  {SERVICE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </Field>
+              <Field label="Service Date" required error={errors.serviceDate}
+                emrConfidence={emrPullResult?.fieldConfidence?.service_date}
+                emrSource={emrPullResult?.fieldSource?.service_date}>
+                <Input type="date" value={form.serviceDate} onChange={e => update("serviceDate", e.target.value)} />
+              </Field>
+              <Field label="Patient First Name" hint="PHI — stored encrypted at rest">
+                <Input value={form.patientFirstName} onChange={e => update("patientFirstName", e.target.value)} placeholder="Jane" />
+              </Field>
+              <Field label="Patient Last Name" hint="PHI — stored encrypted at rest">
+                <Input value={form.patientLastName} onChange={e => update("patientLastName", e.target.value)} placeholder="Doe" />
+              </Field>
+              <Field label="Facility Name" hint="Where the service was rendered">
+                <Input value={form.facilityName} onChange={e => update("facilityName", e.target.value)}
+                  placeholder="e.g., Riverside General Hospital" />
+              </Field>
+              <Field label="Patient State" required error={errors.patientState}
+                emrConfidence={emrPullResult?.fieldConfidence?.patient_state}
+                emrSource={emrPullResult?.fieldSource?.patient_state}>
+                <select value={form.patientState} onChange={e => update("patientState", e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">Select state…</option>
+                  {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </Field>
+              <Field label="Facility State" required error={errors.facilityState}
+                hint="Determines federal vs. state IDR process jurisdiction"
+                emrConfidence={emrPullResult?.fieldConfidence?.facility_state}
+                emrSource={emrPullResult?.fieldSource?.facility_state}>
+                <select value={form.facilityState} onChange={e => update("facilityState", e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">Select state…</option>
+                  {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </Field>
             </div>
-            <div className="space-y-1">
-              {Object.entries(qpaResult.cptBenchmarks).map(([cpt, bench]) => (
-                <div key={cpt} className="flex items-center justify-between text-xs bg-white/60 rounded px-2 py-1">
-                  <span className="font-mono font-medium text-foreground">{cpt}</span>
-                  <span className="text-muted-foreground flex-1 mx-2 truncate">{bench.description}</span>
-                  <span className="font-medium text-foreground">
-                    National: ${bench.median.toLocaleString()} → {form.facilityState}: ${bench.adjusted.toLocaleString()}
-                  </span>
+          </div>
+        )}
+
+        {/* ── Step 3: Line Items ── */}
+        {currentStep === 3 && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-slate-800">Billing Information</h2>
+              <div className="text-sm text-slate-600">
+                Total billed: <span className="font-bold text-slate-800">${totalBilled.toFixed(2)}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <Field label="Total Billed Amount ($)" required error={errors.billedAmount}
+                hint="The full amount billed to the health plan"
+                emrConfidence={emrPullResult?.fieldConfidence?.billed_amount}
+                emrSource={emrPullResult?.fieldSource?.billed_amount}>
+                <Input type="number" min="0" step="0.01" value={form.billedAmount}
+                  onChange={e => update("billedAmount", e.target.value)} placeholder="0.00" />
+              </Field>
+              <Field label="CPT / HCPCS Codes" required error={errors.cptCodes}
+                hint="Comma-separated, e.g., 99285, 99291"
+                emrConfidence={emrPullResult?.fieldConfidence?.cpt_codes}
+                emrSource={emrPullResult?.fieldSource?.cpt_codes}>
+                <Input value={form.cptCodes} onChange={e => update("cptCodes", e.target.value)}
+                  placeholder="99285, 99291" />
+              </Field>
+              <Field label="ICD-10 Diagnosis Codes" hint="Comma-separated (optional)"
+                emrConfidence={emrPullResult?.fieldConfidence?.icd10_codes}
+                emrSource={emrPullResult?.fieldSource?.icd10_codes}>
+                <Input value={form.icd10Codes} onChange={e => update("icd10Codes", e.target.value)}
+                  placeholder="R07.9, I10" />
+              </Field>
+            </div>
+
+            {/* Line Items */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-700">Line Items (optional)</h3>
+                <Button type="button" variant="outline" size="sm" onClick={addLineItem}
+                  className="flex items-center gap-1 text-xs">
+                  <Plus size={12} />Add Line Item
+                </Button>
+              </div>
+              {form.lineItems.map((li, idx) => (
+                <div key={idx} className="grid grid-cols-12 gap-2 items-end p-3 bg-slate-50 rounded-lg">
+                  <div className="col-span-3">
+                    <Label className="text-xs text-slate-500">CPT Code</Label>
+                    <Input value={li.cptCode} onChange={e => updateLineItem(idx, "cptCode", e.target.value)}
+                      placeholder="99285" className="h-8 text-xs mt-1" />
+                  </div>
+                  <div className="col-span-3">
+                    <Label className="text-xs text-slate-500">ICD-10</Label>
+                    <Input value={li.icd10Codes} onChange={e => updateLineItem(idx, "icd10Codes", e.target.value)}
+                      placeholder="R07.9" className="h-8 text-xs mt-1" />
+                  </div>
+                  <div className="col-span-2">
+                    <Label className="text-xs text-slate-500">Amount ($)</Label>
+                    <Input type="number" min="0" step="0.01" value={li.billedAmount}
+                      onChange={e => updateLineItem(idx, "billedAmount", e.target.value)}
+                      placeholder="0.00" className={`h-8 text-xs mt-1 ${errors[`li_${idx}_amount`] ? "border-red-400" : ""}`} />
+                    {errors[`li_${idx}_amount`] && <p className="text-xs text-red-500 mt-0.5">{errors[`li_${idx}_amount`]}</p>}
+                  </div>
+                  <div className="col-span-2">
+                    <Label className="text-xs text-slate-500">Qty</Label>
+                    <Input type="number" min="1" value={li.quantity}
+                      onChange={e => updateLineItem(idx, "quantity", e.target.value)}
+                      className="h-8 text-xs mt-1" />
+                  </div>
+                  <div className="col-span-2 flex justify-end">
+                    {form.lineItems.length > 1 && (
+                      <Button type="button" variant="ghost" size="sm" onClick={() => removeLineItem(idx)}
+                        className="h-8 w-8 p-0 text-slate-400 hover:text-red-500">
+                        <Trash2 size={14} />
+                      </Button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Recommendation */}
-        <div className={`text-xs ${cfg.text} leading-relaxed`}>
-          <strong>Recommendation:</strong> {qpaResult.recommendation}
-        </div>
-
-        {/* Regulatory note */}
-        <div className="flex items-start gap-1.5 text-xs text-muted-foreground bg-white/50 rounded p-2">
-          <Info size={11} className="mt-0.5 shrink-0" />
-          <span>{qpaResult.regulatoryNote}</span>
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div className="min-h-screen bg-muted">
-      <header className="bg-white border-b border-border px-6 h-14 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <img src={APP_LOGO} className="h-8 w-8 rounded-lg object-cover" alt="logo" />
-          <span className="text-lg font-bold text-foreground">{APP_TITLE}</span>
-        </div>
-        <nav className="flex items-center gap-4">
-          <button onClick={() => navigate("/disputes")} className="text-sm text-muted-foreground hover:text-info-foreground">
-            ← Disputes
-          </button>
-          {/* Draft status indicator */}
-          {lastSaved && (
-            <span className="flex items-center gap-1 text-xs text-success-foreground">
-              <Save size={11} />
-              Saved {lastSaved.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          )}
-          {saveDraftMutation.isPending && (
-            <span className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Save size={11} className="animate-pulse" />
-              Saving…
-            </span>
-          )}
-          {offlineQueued && (
-            <Badge variant="outline" className="text-xs text-warning-foreground border-warning-foreground/30 bg-warning">
-              Offline — draft saved on this device
-            </Badge>
-          )}
-          <span className="text-sm text-muted-foreground">{user?.name}</span>
-          <Button variant="outline" size="sm" onClick={logout}><LogOut size={14} /></Button>
-        </nav>
-      </header>
-
-      <main className="max-w-3xl mx-auto px-6 py-8">
-        {/* Page title */}
-        <div className="flex items-center gap-3 mb-8">
-          <button onClick={() => navigate("/disputes")} className="text-muted-foreground hover:text-muted-foreground">
-            <ArrowLeft size={20} />
-          </button>
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Initiate IDR Dispute</h1>
-            <p className="text-sm text-muted-foreground">NSA Federal Independent Dispute Resolution Process</p>
-          </div>
-          {existingDraft && (
-            <Badge variant="outline" className="ml-auto text-xs text-warning-foreground border-warning-foreground/30 bg-warning">
-              Draft restored
-            </Badge>
-          )}
-        </div>
-
-        {/* SmartForm AI Auto-Fill Panel */}
-        <div className="mb-4">
-          <SmartFormPanel
-            targetForm="dispute"
-            onApply={(fields) => {
-              const fieldMap: Record<string, keyof FormData> = {
-                patientName: "notes",
-                providerName: "initiatingPartyName",
-                providerNPI: "initiatingPartyNpi",
-                payerName: "respondingPartyName",
-                serviceDate: "serviceDate",
-                billedAmount: "billedAmount",
-                cptCodes: "cptCodes",
-                diagnosisCodes: "icd10Codes",
-                serviceType: "serviceType",
-                placeOfService: "facilityState",
-              };
-              let count = 0;
-              Object.entries(fields).forEach(([key, extracted]) => {
-                const formKey = fieldMap[key];
-                if (formKey && extracted.value) {
-                  update(formKey, String(extracted.value));
-                  count++;
-                }
-              });
-              if (count > 0) toast.success(`SmartForm populated ${count} fields from your document.`);
-            }}
-          />
-        </div>
-        {/* EMR Pull Panel */}
-        {activeEMRConnections.length > 0 && (
-          <div className="mb-6">
-            {!showEMRPull ? (
-              <button
-                onClick={() => setShowEMRPull(true)}
-                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 border-dashed border-teal-300 bg-teal-50 hover:bg-teal-100 transition-colors text-sm text-teal-700 font-medium"
-              >
-                <span className="flex items-center gap-2">
-                  <span className="text-lg">🏥</span>
-                  Pull Dispute Data from Connected EMR
-                  <Badge variant="outline" className="text-xs border-teal-300 text-teal-700">
-                    {activeEMRConnections.length} active
-                  </Badge>
-                </span>
-                <span className="text-teal-500">▾ Show</span>
-              </button>
-            ) : (
-              <div className="rounded-xl border border-teal-200 bg-teal-50 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-teal-800">🏥 Pull Dispute Data from EMR</span>
-                  <button onClick={() => setShowEMRPull(false)} className="text-xs text-teal-500 hover:text-teal-700">× Close</button>
-                </div>
-                <p className="text-xs text-teal-700">Select a connected EMR system and provide a patient or claim identifier. The AI extraction agent will populate all available dispute fields automatically via FHIR R4.</p>
-                <div className="grid grid-cols-1 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-muted-foreground mb-1">EMR System *</label>
-                    <select
-                      value={selectedEMRId}
-                      onChange={e => setSelectedEMRId(e.target.value)}
-                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-                    >
-                      <option value="">Select EMR connection…</option>
-                      {activeEMRConnections.map((c: any) => (
-                        <option key={c.id} value={c.id}>{c.systemName} ({c.emrSystem})</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="relative">
-                      <label className="block text-xs font-medium text-muted-foreground mb-1">Patient ID or Name</label>
-                      <Input
-                        value={patientSearchQuery || emrPatientId}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setPatientSearchQuery(val);
-                          setEMRPatientId(val);
-                          if (val.length >= 2 && selectedEMRId) {
-                            const conn = activeEMRConnections.find((c: any) => c.id === selectedEMRId);
-                            if (conn) patientSearchMutation.mutate({ connectionId: selectedEMRId, emrSystem: (conn as any).emrSystem, query: val });
-                          } else {
-                            setShowPatientDropdown(false);
-                          }
-                        }}
-                        onBlur={() => setTimeout(() => setShowPatientDropdown(false), 200)}
-                        placeholder="Search by name or ID…"
-                        className="text-sm"
-                      />
-                      {showPatientDropdown && patientSuggestions.length > 0 && (
-                        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-border rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                          {patientSuggestions.map(p => (
-                            <button
-                              key={p.id}
-                              type="button"
-                              className="w-full text-left px-3 py-2 hover:bg-accent text-xs border-b border-border last:border-0"
-                              onClick={() => {
-                                setEMRPatientId(p.id);
-                                setPatientSearchQuery(`${p.name} (${p.id})`);
-                                setShowPatientDropdown(false);
-                              }}
-                            >
-                              <div className="font-medium text-foreground">{p.name}</div>
-                              <div className="text-muted-foreground">ID: {p.id} · DOB: {p.dob} · MRN: {p.mrn}</div>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted-foreground mb-1">Claim ID (optional)</label>
-                      <Input
-                        value={emrClaimId}
-                        onChange={e => setEMRClaimId(e.target.value)}
-                        placeholder="e.g., CLM-98765"
-                        className="text-sm"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  disabled={!selectedEMRId || emrPullMutation.isPending}
-                  onClick={() => {
-                    const conn = activeEMRConnections.find((c: any) => c.id === selectedEMRId);
-                    if (!conn) return;
-                    emrPullMutation.mutate({
-                      connectionId: selectedEMRId,
-                      emrSystem: (conn as any).emrSystem,
-                      patientId: emrPatientId || undefined,
-                      claimId: emrClaimId || undefined,
-                      dateOfService: form.serviceDate || undefined,
-                    });
-                  }}
-                  className="bg-teal-600 hover:bg-teal-700 text-white"
-                >
-                  {emrPullMutation.isPending
-                    ? <><span className="animate-spin mr-1.5">⧗</span>Extracting from EMR…</>
-                    : <>⚡ Extract & Populate Fields</>}
-                </Button>
-                {emrPullResult && (
-                  <div className={`rounded-lg border p-3 text-xs space-y-1.5 ${
-                    emrPullResult.success && emrPullResult.fieldsExtracted > 0
-                      ? "border-success-foreground/30 bg-success"
-                      : "border-warning-foreground/30 bg-warning"
-                  }`}>
-                    <div className="flex items-center gap-2">
-                      <span className={`font-semibold ${
-                        emrPullResult.success && emrPullResult.fieldsExtracted > 0 ? "text-success-foreground" : "text-warning-foreground"
-                      }`}>
-                        {emrPullResult.success && emrPullResult.fieldsExtracted > 0
-                          ? `✓ ${emrPullResult.fieldsExtracted} fields extracted`
-                          : "⚠ Extraction incomplete"}
-                      </span>
-                      {emrPullResult.fhirResources.length > 0 && (
-                        <span className="text-muted-foreground">via {emrPullResult.fhirResources.join(", ")}</span>
-                      )}
-                    </div>
-                    <p className="text-muted-foreground">{emrPullResult.summary}</p>
-                    {Object.keys(emrPullResult.fieldConfidence).length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {Object.entries(emrPullResult.fieldConfidence).map(([field, conf]) => (
-                          <span key={field} className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                            conf >= 0.9 ? "bg-success text-success-foreground" :
-                            conf >= 0.7 ? "bg-warning text-warning-foreground" : "bg-red-100 text-red-700"
-                          }`}>
-                            {field}: {Math.round(conf * 100)}%
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {emrPullResult.warnings.length > 0 && (
-                      <ul className="text-warning-foreground space-y-0.5">
-                        {emrPullResult.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
-                      </ul>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+        {/* ── Step 4: Documents & Negotiation ── */}
+        {currentStep === 4 && (
+          <div className="space-y-6">
+            <h2 className="text-lg font-semibold text-slate-800">Open Negotiation Period</h2>
+            <div className="p-4 bg-blue-50 rounded-lg text-sm text-blue-700 border border-blue-100">
+              <p className="font-semibold mb-1">Federal NSA Requirement</p>
+              <p>Parties must engage in a 30-business-day open negotiation period before initiating IDR.
+                 Document your good-faith negotiation attempt below — this is required for IDR eligibility.</p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <Field label="Negotiation Start Date" hint="When you first contacted the health plan">
+                <Input type="date" value={form.openNegotiationStartDate}
+                  onChange={e => update("openNegotiationStartDate", e.target.value)} />
+              </Field>
+              <Field label="Negotiation End Date" hint="30 business days from start">
+                <Input type="date" value={form.openNegotiationEndDate}
+                  onChange={e => update("openNegotiationEndDate", e.target.value)} />
+              </Field>
+            </div>
+            <Field label="Negotiation Notes" hint="Summarize your negotiation attempt — dates, contacts, offers made">
+              <textarea
+                value={form.priorNegotiationNotes}
+                onChange={e => update("priorNegotiationNotes", e.target.value)}
+                rows={4}
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                placeholder="e.g., Contacted Aetna claims dept. on 2024-01-15; offered $2,500 settlement; plan countered $800; negotiation failed on 2024-02-28."
+              />
+            </Field>
           </div>
         )}
 
-        {/* Step indicator */}
-        <div className="flex items-center gap-2 mb-8">
-          {STEPS.map((step, index) => (
-            <div key={step.id} className="flex items-center gap-2 flex-1">
-              <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-bold shrink-0 transition-colors ${
-                step.id < currentStep ? "bg-success text-success-foreground" :
-                step.id === currentStep ? "bg-primary text-white" :
-                "bg-muted text-muted-foreground"
-              }`}>
-                {step.id < currentStep ? <CheckCircle2 size={16} /> : step.id}
-              </div>
-              <span className={`text-xs font-medium hidden sm:block ${
-                step.id === currentStep ? "text-info-foreground" :
-                step.id < currentStep ? "text-success-foreground" : "text-muted-foreground"
-              }`}>
-                {step.title}
-              </span>
-              {index < STEPS.length - 1 && <div className="flex-1 h-0.5 bg-muted mx-1" />}
-            </div>
-          ))}
-        </div>
-
-        <Card className="border-border">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-lg font-semibold text-foreground">
-              Step {currentStep}: {STEPS[currentStep - 1].title}
-            </CardTitle>
-            <p className="text-sm text-muted-foreground">{STEPS[currentStep - 1].description}</p>
-          </CardHeader>
-          <CardContent className="space-y-5">
-
-            {/* ── Step 1: Initiating Party ─────────────────────────────────── */}
-            {currentStep === 1 && (
-              <>
-                <Field label="Party Type" required>
-                  <select
-                    value={form.initiatingPartyType}
-                    onChange={e => update("initiatingPartyType", e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    {PARTY_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-                  </select>
-                </Field>
-                <Field label="Party Name" required fieldKey="initiatingPartyName">
-                  <Input
-                    value={form.initiatingPartyName}
-                    onChange={e => update("initiatingPartyName", e.target.value)}
-                    placeholder="e.g., Acme Emergency Medicine Group"
-                  />
-                </Field>
-                <Field label="NPI Number" hint="10-digit National Provider Identifier (if applicable)" fieldKey="initiatingPartyNpi">
-                  <Input
-                    value={form.initiatingPartyNpi}
-                    onChange={e => update("initiatingPartyNpi", e.target.value)}
-                    placeholder="10-digit NPI"
-                    maxLength={10}
-                  />
-                </Field>
-                <div className="bg-info border border-info-foreground/30 rounded-lg p-3 text-xs text-info-foreground">
-                  <strong>NSA Requirement:</strong> The initiating party must have previously attempted open
-                  negotiation with the responding party before filing for federal IDR per 45 CFR §149.510(b).
-                </div>
-              </>
-            )}
-
-            {/* ── Step 2: Responding Party ─────────────────────────────────── */}
-            {currentStep === 2 && (
-              <>
-                <Field label="Party Type" required>
-                  <select
-                    value={form.respondingPartyType}
-                    onChange={e => update("respondingPartyType", e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    {PARTY_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-                  </select>
-                </Field>
-                <Field label="Party Name" required fieldKey="respondingPartyName">
-                  <Input
-                    value={form.respondingPartyName}
-                    onChange={e => update("respondingPartyName", e.target.value)}
-                    placeholder="e.g., BlueCross BlueShield of Texas"
-                  />
-                </Field>
-                <Field label="NPI Number" hint="10-digit NPI (if applicable)" fieldKey="respondingPartyNpi">
-                  <Input
-                    value={form.respondingPartyNpi}
-                    onChange={e => update("respondingPartyNpi", e.target.value)}
-                    placeholder="10-digit NPI"
-                    maxLength={10}
-                  />
-                </Field>
-              </>
-            )}
-
-            {/* ── Step 3: Service Details ──────────────────────────────────── */}
-            {currentStep === 3 && (
-              <>
-                <Field label="Service Type" required fieldKey="serviceType">
-                  <select
-                    value={form.serviceType}
-                    onChange={e => update("serviceType", e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    {SERVICE_TYPES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
-                </Field>
-                <Field label="Date of Service" required fieldKey="serviceDate">
-                  <Input
-                    type="date"
-                    value={form.serviceDate}
-                    onChange={e => update("serviceDate", e.target.value)}
-                  />
-                </Field>
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="Patient State" required fieldKey="patientState">
-                    <select
-                      value={form.patientState}
-                      onChange={e => update("patientState", e.target.value)}
-                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                    >
-                      {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="Facility State" required fieldKey="facilityState">
-                    <select
-                      value={form.facilityState}
-                      onChange={e => update("facilityState", e.target.value)}
-                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                    >
-                      {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  </Field>
-                </div>
-              </>
-            )}
-
-            {/* ── Step 4: Financial + QPA ──────────────────────────────────── */}
-            {currentStep === 4 && (
-              <>
-                <Field label="Billed Amount ($)" required fieldKey="billedAmount">
-                  <Input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={form.billedAmount}
-                    onChange={e => setForm(prev => { const next = { ...prev, billedAmount: e.target.value }; scheduleSave(currentStep, next); return next; })}
-                    placeholder="0.00"
-                  />
-                </Field>
-                <Field
-                  label="CPT Codes (comma-separated)"
-                  required
-                  hint="Enter all CPT codes associated with the disputed service. QPA benchmarks will appear automatically."
-                  fieldKey="cptCodes"
-                >
-                  <Input
-                    value={form.cptCodes}
-                    onChange={e => update("cptCodes", e.target.value)}
-                    placeholder="e.g., 99285, 99291, 36556"
-                  />
-                </Field>
-                <Field label="ICD-10 Codes (comma-separated)" fieldKey="icd10Codes">
-                  <Input
-                    value={form.icd10Codes}
-                    onChange={e => update("icd10Codes", e.target.value)}
-                    placeholder="e.g., I21.9, J18.9"
-                  />
-                </Field>
-                <Field label="Notes">
-                  <textarea
-                    value={form.notes}
-                    onChange={e => update("notes", e.target.value)}
-                    rows={3}
-                    placeholder="Any additional context about this dispute..."
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
-                  />
-                </Field>
-
-                {/* Real-time QPA panel */}
-                <QPAPanel />
-              </>
-            )}
-
-            {/* ── Step 5: Review & Submit ──────────────────────────────────── */}
-            {currentStep === 5 && (
-              <div className="space-y-4">
-                <div className="bg-muted rounded-lg p-4 space-y-3 text-sm">
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      { label: "Initiating Party", value: `${form.initiatingPartyName} (${form.initiatingPartyType})` },
-                      { label: "Responding Party", value: `${form.respondingPartyName} (${form.respondingPartyType})` },
-                      { label: "Service Type", value: SERVICE_TYPES.find(s => s.value === form.serviceType)?.label },
-                      { label: "Date of Service", value: form.serviceDate ? new Date(form.serviceDate).toLocaleDateString() : "—" },
-                      { label: "Patient State", value: form.patientState },
-                      { label: "Facility State", value: form.facilityState },
-                      { label: "Billed Amount", value: `$${Number(form.billedAmount).toLocaleString()}` },
-                      { label: "CPT Codes", value: form.cptCodes },
-                    ].map(item => (
-                      <div key={item.label}>
-                        <div className="text-xs text-muted-foreground">{item.label}</div>
-                        <div className="font-medium text-foreground">{item.value || "—"}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* QPA summary on review step */}
-                {qpaResult && (
-                  <div className={`rounded-lg border p-3 text-sm ${SEVERITY_CONFIG[qpaResult.severity as keyof typeof SEVERITY_CONFIG].bg} ${SEVERITY_CONFIG[qpaResult.severity as keyof typeof SEVERITY_CONFIG].border}`}>
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-foreground">QPA Benchmark</span>
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${SEVERITY_CONFIG[qpaResult.severity as keyof typeof SEVERITY_CONFIG].badge}`}>
-                        {qpaResult.percentageOfQpa}% of QPA (${qpaResult.qpaEstimate.toLocaleString()})
-                      </span>
+        {/* ── Step 5: Review ── */}
+        {currentStep === 5 && (
+          <div className="space-y-5">
+            <h2 className="text-lg font-semibold text-slate-800">Review & Submit</h2>
+            {[
+              {
+                title: "Parties",
+                items: [
+                  ["Initiating Party", form.initiatingPartyName],
+                  ["Type", PARTY_TYPES.find(t => t.value === form.initiatingPartyType)?.label ?? form.initiatingPartyType],
+                  ["Responding Party", form.respondingPartyName],
+                  ["Type", PARTY_TYPES.find(t => t.value === form.respondingPartyType)?.label ?? form.respondingPartyType],
+                  ["NPI", form.initiatingPartyNpi || "—"],
+                ],
+              },
+              {
+                title: "Service Details",
+                items: [
+                  ["Service Type", SERVICE_TYPES.find(t => t.value === form.serviceType)?.label ?? form.serviceType],
+                  ["Service Date", form.serviceDate],
+                  ["Patient", [form.patientFirstName, form.patientLastName].filter(Boolean).join(" ") || "—"],
+                  ["Facility", form.facilityName || "—"],
+                  ["Patient State", form.patientState],
+                  ["Facility State", form.facilityState],
+                ],
+              },
+              {
+                title: "Billing",
+                items: [
+                  ["Total Billed", `$${form.billedAmount}`],
+                  ["CPT Codes", form.cptCodes],
+                  ["ICD-10", form.icd10Codes || "—"],
+                  ["Line Items", `${form.lineItems.filter(li => li.cptCode).length} item(s)`],
+                ],
+              },
+              {
+                title: "Negotiation",
+                items: [
+                  ["Start Date", form.openNegotiationStartDate || "—"],
+                  ["End Date", form.openNegotiationEndDate || "—"],
+                  ["Notes", form.priorNegotiationNotes ? `${form.priorNegotiationNotes.slice(0, 100)}${form.priorNegotiationNotes.length > 100 ? "…" : ""}` : "—"],
+                ],
+              },
+            ].map(section => (
+              <div key={section.title} className="border border-slate-200 rounded-lg overflow-hidden">
+                <div className="bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700">{section.title}</div>
+                <div className="divide-y divide-slate-100">
+                  {section.items.map(([k, v]) => (
+                    <div key={k} className="flex justify-between px-4 py-2 text-sm">
+                      <span className="text-slate-500">{k}</span>
+                      <span className="text-slate-800 font-medium text-right max-w-xs truncate">{v}</span>
                     </div>
-                    <p className={`text-xs mt-1 ${SEVERITY_CONFIG[qpaResult.severity as keyof typeof SEVERITY_CONFIG].text}`}>
-                      {qpaResult.recommendation}
-                    </p>
-                  </div>
-                )}
-
-                <div className="bg-warning border border-warning-foreground/30 rounded-lg p-3 text-xs text-warning-foreground">
-                  <strong>Important:</strong> By submitting this dispute, you certify that open negotiation was
-                  attempted and failed within the required 30-business-day period per 45 CFR §149.510. Submitting
-                  a false IDR request may result in penalties.
+                  ))}
                 </div>
-
-                {/* Phase 17-FE: completeness checklist + exact server gate gaps.
-                    Client-computed (advisory) — the backend disputes completeness
-                    projection has not landed yet (phase17-ce). */}
-                <DisputeCompleteness
-                  context="idr_initiation"
-                  values={{
-                    serviceState: form.facilityState || form.patientState,
-                    serviceCategory: form.serviceType,
-                    planType: (form as { planType?: string }).planType,
-                    noticeConsentStatus: (form as { noticeConsentStatus?: string }).noticeConsentStatus,
-                    initialPaymentDate: (form as { initialPaymentDate?: string }).initialPaymentDate,
-                  }}
-                  gateErrors={gateErrors}
-                  title="IDR completeness (advisory)"
-                />
               </div>
-            )}
-
-            {/* Navigation */}
-            <div className="flex items-center justify-between pt-4 border-t border-border">
-              <Button
-                variant="outline"
-                onClick={() => currentStep === 1 ? navigate("/disputes") : handleStepChange(currentStep - 1)}
-                className="flex items-center gap-2"
-              >
-                <ArrowLeft size={14} />{currentStep === 1 ? "Cancel" : "Back"}
-              </Button>
-              {currentStep < 5 ? (
-                <Button
-                  onClick={() => handleStepChange(currentStep + 1)}
-                  disabled={!canProceed()}
-                  className="flex items-center gap-2"
-                >
-                  Next <ArrowRight size={14} />
-                </Button>
-              ) : (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span>
-                      <Button
-                        onClick={handleSubmit}
-                        disabled={createMutation.isPending || gateMissingFields.length > 0}
-                        className="flex items-center gap-2 bg-primary hover:bg-primary/90"
-                      >
-                        <Scale size={14} />
-                        {createMutation.isPending ? "Initiating…" : "Initiate IDR Dispute"}
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                  {gateMissingFields.length > 0 && (
-                    <TooltipContent side="top" className="max-w-xs">
-                      <p className="text-xs">Server gate reported missing fields — correct: {gateMissingFields.join(", ")}</p>
-                    </TooltipContent>
-                  )}
-                </Tooltip>
-              )}
+            ))}
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+              <p className="font-semibold">Before you submit</p>
+              <p className="mt-1">By submitting you attest that: (1) the information is accurate, (2) the open negotiation
+                 period has been exhausted or initiated in good faith, and (3) this dispute is eligible for the
+                 Federal IDR process under the No Surprises Act.</p>
             </div>
-          </CardContent>
-        </Card>
-      </main>
+          </div>
+        )}
+
+        {/* Navigation */}
+        <div className="flex items-center justify-between mt-8 pt-6 border-t border-slate-100">
+          <Button variant="outline" onClick={() => currentStep > 1 ? setCurrentStep(s => s - 1) : navigate("/disputes")}
+            className="flex items-center gap-1">
+            <ChevronLeft size={16} />{currentStep === 1 ? "Cancel" : "Back"}
+          </Button>
+          <div className="flex items-center gap-2">
+            {currentStep < 5 ? (
+              <Button onClick={() => { if (validate(currentStep)) setCurrentStep(s => s + 1); }}
+                className="flex items-center gap-1">
+                Continue<ChevronRight size={16} />
+              </Button>
+            ) : (
+              <Button onClick={handleSubmit} disabled={createMutation.isPending}
+                className="flex items-center gap-2 bg-green-600 hover:bg-green-700">
+                {createMutation.isPending ? (
+                  <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Submitting…</>
+                ) : (
+                  <><CheckCircle2 size={16} />Submit Dispute</>
+                )}
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
