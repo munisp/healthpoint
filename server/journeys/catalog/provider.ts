@@ -3,6 +3,7 @@
  * initiation + entity selection, documents, batching eligibility, QPA engine).
  */
 import type { Journey } from "../framework";
+import { journeyStorageObjects } from "../context";
 import {
   createJourneyDispute,
   advanceToNegotiationFailed,
@@ -236,19 +237,33 @@ export const j04: Journey = {
         const d = await createJourneyDispute(ctx, "j04");
         (ctx as unknown as { _d: string })._d = d.id;
         (ctx as unknown as { _ref: string })._ref = d.referenceNumber;
+        // documents.upload now requires the real file bytes (base64) and
+        // persists them to object storage BEFORE the metadata row (same byte
+        // path as workflow.uploadNoteAttachment / documents.uploadVersion).
+        const pdfPayload = Buffer.from(`%PDF-1.4 journey eob ${ctx.runId}`);
+        const storageKey = `journeys/${ctx.runId}/eob.pdf`;
         const doc = await ctx.provider.documents.upload({
           disputeId: d.id,
           fileName: `eob-${ctx.ns("j04")}.pdf`,
           fileType: "application/pdf",
           documentType: "eob",
-          fileSize: 1024,
-          storageKey: `journeys/${ctx.runId}/eob.pdf`,
-          storageUrl: "https://storage.invalid/journeys/eob.pdf",
+          fileSize: pdfPayload.byteLength,
+          storageKey,
+          fileBase64: pdfPayload.toString("base64"),
           description: "EOB for journey",
         });
         const listed = await ctx.provider.documents.list({ disputeId: d.id });
         ctx.assert(listed.length === 1, "document persisted", { count: listed.length });
         ctx.assertEqual(listed[0].disputeId, d.id, "document linked to dispute");
+        ctx.assertEqual(listed[0].fileSize, pdfPayload.byteLength, "fileSize recorded from true byte length");
+        // End-to-end byte path: the runner's storage stub captured the exact
+        // payload bytes under the recorded storageKey (retrievable content,
+        // not a dangling metadata-only pointer).
+        const stored = journeyStorageObjects.get(storageKey);
+        ctx.assert(
+          stored !== undefined && stored.includes(pdfPayload),
+          "uploaded bytes persisted to object storage under the recorded key",
+        );
         (ctx as unknown as { _doc: string })._doc = String(doc);
         return { evidence: { disputeId: d.id, docId: doc } };
       },
