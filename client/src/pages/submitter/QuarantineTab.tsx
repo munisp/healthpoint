@@ -11,11 +11,6 @@
  *    UI says so.
  *  - Discard: bulkUpload.discardQuarantinedRows (explicit human action;
  *    discarded rows remain visible under the "discarded" filter).
- *
- * Phase 21 (S2b): prefill.quarantineRows suggestions render as one-click
- * accept chips (suggested value + confidence + source); accepted
- * suggestionIds are passed on repair so the server records terminal
- * `accepted` suggestion events.
  */
 import { useState, type ChangeEvent } from "react";
 import { trpc } from "@/lib/trpc";
