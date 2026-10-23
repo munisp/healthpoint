@@ -20,6 +20,7 @@ import {
   cleanPriorRuns,
   seedFixtureUsers,
   startLlmStub,
+  startStorageStub,
 } from "../journeys/context";
 import { getDb } from "../db";
 import { auditLog } from "../../drizzle/schema";
@@ -45,11 +46,12 @@ function getSql(): postgres.Sql {
   return sharedSql;
 }
 
-/** Idempotent: the LLM stub binds 127.0.0.1:11434 once per worker process. */
+/** Idempotent: the local stubs (LLM 11434, storage 11435) bind once per worker process. */
 async function ensureLlmStub(): Promise<void> {
   if (llmStubStarted) return;
   llmStubStarted = true; // set before await: concurrent activities share one stub
   await startLlmStub();
+  await startStorageStub();
 }
 
 function toRunResult(report: JourneyReport): JourneyRunResult {
