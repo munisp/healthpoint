@@ -148,10 +148,10 @@ export default function SubmitterConsole() {
               <BillingTab clients={clients} />
             </TabsContent>
             <TabsContent value="analytics">
-              <AnalyticsTab clients={clients} />
+              <AnalyticsTab clients={clients} orgId={selectedOrgId} />
             </TabsContent>
             <TabsContent value="batching">
-              <BatchingTab clients={clients} />
+              <BatchingTab clients={clients} orgId={selectedOrgId} />
             </TabsContent>
           </Tabs>
         )}
