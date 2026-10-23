@@ -280,9 +280,15 @@ function OfferStrategyV2({ orgId, client }: { orgId: string; client: SubmitterCl
       <CardHeader>
         <CardTitle className="flex flex-wrap items-center gap-2 text-base">
           {client.label} — offer strategy (data-trained)
-          {offer.data?.modelVersion
-            ? <ModelHonestyBadge modelVersion={offer.data.modelVersion} />
-            : <Badge variant="outline">statistical estimate</Badge>}
+          {/* Honesty badge renders ONLY from the server-provided modelVersion
+              block. Before a recommendation exists (no dispute selected,
+              loading, or error) no provenance label is asserted. */}
+          {offer.data?.modelVersion && (
+            <ModelHonestyBadge modelVersion={offer.data.modelVersion} />
+          )}
+          {!offer.data && !offer.isFetching && !offer.isError && (
+            <span className="text-xs font-normal text-muted-foreground">No recommendation yet</span>
+          )}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
