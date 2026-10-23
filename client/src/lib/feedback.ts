@@ -10,7 +10,6 @@
  *    the user submits vs. the value that was suggested: untouched-confirmed
  *    => "accepted", any change => "edited". No inference beyond that.
  */
-
 /** Mirrors drizzle/schema-intelligence.ts SUGGESTION_EVENT_ACTIONS. */
 export type SuggestionEventAction = "presented" | "accepted" | "edited" | "rejected" | "expired";
 
