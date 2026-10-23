@@ -128,7 +128,7 @@ export function useDailyStats(days = 7, enabled = true) {
 export function useDisputesByMonth(months = 12, enabled = true) {
   return useCachedQuery<DisputesByMonthRow[]>({
     cacheKey: `dashboard:byMonth:${months}`,
-    queryKey: ["dashboard", "disputesByMonth", months],
+    queryKey: ["disputesByMonth", months],
     queryFn: () =>
       trpc.dashboard.disputesByMonth.query({ months }) as Promise<
         DisputesByMonthRow[]
@@ -232,7 +232,12 @@ export function useCreateDispute() {
   });
 }
 
-/** W7-1: documents.upload — attaches document metadata to a dispute. */
+/**
+ * W7-1: documents.upload — attaches a document to a dispute. The raw file
+ * bytes (base64, ≤10 MB) are required: the server persists them to object
+ * storage under storageKey BEFORE recording the metadata row, so the row
+ * always points at retrievable content (parity with documents.uploadVersion).
+ */
 export interface UploadDocumentInput {
   disputeId: string;
   fileName: string;
@@ -242,7 +247,7 @@ export interface UploadDocumentInput {
     | "cost_sharing_info" | "prior_authorization" | "other";
   fileSize: number;
   storageKey: string;
-  storageUrl: string;
+  fileBase64: string;
   description?: string;
 }
 
