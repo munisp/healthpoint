@@ -73,3 +73,58 @@ describeDb("runRetentionPurge (DB)", () => {
     expect(remaining[0]).toEqual({ old_cache: 0, new_cache: 1, old_sfe: 0, new_sfe: 1 });
   });
 });
+
+// ─── Phase 21: suggestion_events + next_action_dismissals retention ─────────
+import { suggestionEventsRetentionDays, DEFAULT_SUGGESTION_EVENTS_RETENTION_DAYS } from "./retentionWorker";
+
+describe("suggestionEventsRetentionDays config", () => {
+  it("defaults to 365 and honors SUGGESTION_EVENTS_RETENTION_DAYS", () => {
+    expect(DEFAULT_SUGGESTION_EVENTS_RETENTION_DAYS).toBe(365);
+    expect(suggestionEventsRetentionDays({})).toBe(365);
+    expect(suggestionEventsRetentionDays({ SUGGESTION_EVENTS_RETENTION_DAYS: "30" })).toBe(30);
+    expect(suggestionEventsRetentionDays({ SUGGESTION_EVENTS_RETENTION_DAYS: "garbage" })).toBe(365);
+  });
+});
+
+describeDb("runRetentionPurge — phase21 tables (DB)", () => {
+  const sql2 = postgres(DB_URL!, { max: 1 });
+  const run = Date.now();
+  const oldEv = `p21ret-old-${run}`;
+  const newEv = `p21ret-new-${run}`;
+  const oldDis = `p21ret-dis-old-${run}`;
+  const newDis = `p21ret-dis-new-${run}`;
+
+  beforeAll(async () => {
+    await sql2.unsafe(
+      `INSERT INTO suggestion_events (id, org_id, user_id, suggestion_id, surface, action, model_name, created_at)
+       VALUES ($1, 'org-ret', 'u1', 's1', 'next_action', 'presented', 'next-actions-v1', now() - interval '400 days'),
+              ($2, 'org-ret', 'u1', 's2', 'next_action', 'presented', 'next-actions-v1', now())`,
+      [oldEv, newEv],
+    );
+    await sql2.unsafe(
+      `INSERT INTO next_action_dismissals (id, org_id, user_id, action_key, expires_at)
+       VALUES ($1, NULL, 'u1', $3, now() - interval '1 day'), ($2, NULL, 'u1', $4, now() + interval '7 days')`,
+      [oldDis, newDis, `deadline:x:payment-${run}`, `deadline:y:payment-${run}`],
+    );
+  });
+
+  afterAll(async () => {
+    await sql2.unsafe(`DELETE FROM suggestion_events WHERE id IN ($1, $2)`, [oldEv, newEv]);
+    await sql2.unsafe(`DELETE FROM next_action_dismissals WHERE id IN ($1, $2)`, [oldDis, newDis]);
+    await sql2.end();
+  });
+
+  it("purges suggestion_events past 365d and expired dismissals only", async () => {
+    const r = await runRetentionPurge(90);
+    expect(r.suggestionEventsPurged).toBeGreaterThanOrEqual(1);
+    expect(r.nextActionDismissalsPurged).toBeGreaterThanOrEqual(1);
+    const remaining = await sql2.unsafe(
+      `SELECT (SELECT count(*) FROM suggestion_events WHERE id = $1)::int AS old_ev,
+              (SELECT count(*) FROM suggestion_events WHERE id = $2)::int AS new_ev,
+              (SELECT count(*) FROM next_action_dismissals WHERE id = $3)::int AS old_dis,
+              (SELECT count(*) FROM next_action_dismissals WHERE id = $4)::int AS new_dis`,
+      [oldEv, newEv, oldDis, newDis],
+    );
+    expect(remaining[0]).toEqual({ old_ev: 0, new_ev: 1, old_dis: 0, new_dis: 1 });
+  });
+});
