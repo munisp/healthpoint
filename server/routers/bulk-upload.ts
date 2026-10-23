@@ -29,6 +29,8 @@ import {
   claimQuarantine,
   type BulkUploadFileType,
 } from "../../drizzle/schema-bulk-upload";
+import { suggestionEvents } from "../../drizzle/schema-intelligence";
+import { recordSuggestionEvents, sha256Hex } from "./intelligence";
 import { stageClaims } from "../emr/bulk-import";
 import { requireDb } from "../personas/guards";
 import { applyManualClaimFields, manualClaimFieldsSchema } from "./practice-audit";
@@ -282,10 +284,33 @@ export const bulkUploadRouter = router({
         quarantineId: z.string(),
         fields: manualClaimFieldsSchema,
       })).min(1).max(500),
+      /** Phase 21 (S2b): suggestionIds from prefill.quarantineRows the user
+       *  accepted. Server records terminal `accepted` suggestion events and
+       *  marks provenance detail "quarantine-repair (assisted)". */
+      acceptedSuggestionIds: z.array(z.string()).max(500).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       await assertOrgMember(db, ctx.user.id, input.orgId);
+      // Phase 21: resolve accepted suggestions (presented events for this
+      // org + surface) so terminal events can be written per field.
+      const acceptedPresented = input.acceptedSuggestionIds?.length
+        ? await db.select().from(suggestionEvents).where(and(
+            eq(suggestionEvents.orgId, input.orgId),
+            eq(suggestionEvents.surface, "quarantine_repair"),
+            eq(suggestionEvents.action, "presented"),
+            inArray(suggestionEvents.suggestionId, input.acceptedSuggestionIds),
+          ))
+        : [];
+      const acceptedByRow = new Map<string, typeof acceptedPresented>();
+      for (const ev of acceptedPresented) {
+        const qid = (ev.metadata as { quarantineId?: string } | null)?.quarantineId;
+        if (!qid) continue;
+        const arr = acceptedByRow.get(qid) ?? [];
+        arr.push(ev);
+        acceptedByRow.set(qid, arr);
+      }
+      const terminalEvents: Parameters<typeof recordSuggestionEvents>[1] = [];
       const results = [];
       for (const u of input.updates) {
         const row = (await db.select().from(claimQuarantine)
@@ -295,6 +320,7 @@ export const bulkUploadRouter = router({
         if (row.status !== "quarantined") {
           throw new TRPCError({ code: "CONFLICT", message: `Quarantine row ${u.quarantineId} is ${row.status}` });
         }
+        const assisted = (acceptedByRow.get(row.id) ?? []).length > 0;
         const session = (await db.select().from(bulkUploadSessions)
           .where(eq(bulkUploadSessions.id, row.sessionId)).limit(1))[0];
         // Stage a minimal claim from the repaired fields (the quarantined row
@@ -329,14 +355,36 @@ export const bulkUploadRouter = router({
             billedCents: u.fields.billedCents ?? null,
             allowedCents: u.fields.allowedCents ?? null,
             paidCents: u.fields.paidCents ?? null,
-            sourceProvenance: { repair: { source: "manual" as const, detail: `quarantine-repair row ${row.id}` } },
+            sourceProvenance: { repair: { source: "manual" as const, detail: `quarantine-repair${assisted ? " (assisted)" : ""} row ${row.id}` } },
             sourceResourceRefs: [`quarantine:${row.id}`],
           }]);
         const claimDbId = staged.claimIds[0];
         if (!claimDbId) {
           throw new TRPCError({ code: "CONFLICT", message: "Repaired claim collided with an existing staged claim (content hash); supply a distinguishing field" });
         }
-        const r = await applyManualClaimFields(db, input.orgId, claimDbId, u.fields);
+        const r = await applyManualClaimFields(db, input.orgId, claimDbId, u.fields,
+          assisted ? { provenanceDetail: `quarantine-repair (assisted) row ${row.id}` } : undefined);
+        // Phase 21: terminal accepted events for accepted suggestions on
+        // this row (finalValueHash from the submitted field value when the
+        // suggestion covered it — equal hashes mean accepted-as-is).
+        for (const ev of acceptedByRow.get(row.id) ?? []) {
+          const fv = ev.fieldName ? (u.fields as Record<string, unknown>)[ev.fieldName] : undefined;
+          terminalEvents.push({
+            orgId: input.orgId,
+            userId: ctx.user.id,
+            suggestionId: ev.suggestionId,
+            surface: "quarantine_repair" as const,
+            action: "accepted" as const,
+            modelName: ev.modelName,
+            modelVersionId: ev.modelVersionId,
+            confidence: ev.confidence !== null ? Number(ev.confidence) : null,
+            contextHash: ev.contextHash,
+            fieldName: ev.fieldName,
+            suggestedValueHash: ev.suggestedValueHash,
+            finalValueHash: fv !== undefined && fv !== null ? sha256Hex(fv) : ev.suggestedValueHash,
+            metadata: { quarantineId: row.id },
+          });
+        }
         // Fail-closed: if the claim still fails gates (engine verdict not
         // QUALIFIES), keep the row quarantined with refreshed missingFields —
         // matching bulkCompleteClaims semantics.
@@ -353,6 +401,7 @@ export const bulkUploadRouter = router({
           results.push({ quarantineId: row.id, repaired: true, claimDbId, verdict: r.verdict, missingFields: r.missingFields });
         }
       }
+      await recordSuggestionEvents(db, terminalEvents);
       return { repaired: results.filter(r => r.repaired).length, results };
     }),
 });
