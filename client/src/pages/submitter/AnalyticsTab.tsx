@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import LearningLoopMetrics from "@/components/LearningLoopMetrics";
 import type { SubmitterClient } from "./SubmitterConsole";
 
 const usd = (v: number | null | undefined) => (v == null ? "—" : `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
@@ -143,7 +144,7 @@ function BreakevenCalculator() {
   );
 }
 
-export default function AnalyticsTab({ clients }: { clients: SubmitterClient[] }) {
+export default function AnalyticsTab({ clients, orgId }: { clients: SubmitterClient[]; orgId?: string }) {
   return (
     <div className="space-y-4 pt-4">
       {!clients.length && (
@@ -151,6 +152,8 @@ export default function AnalyticsTab({ clients }: { clients: SubmitterClient[] }
       )}
       {clients.map(c => <ClientRollupCard key={c.id} client={c} />)}
       <BreakevenCalculator />
+      {/* Phase 21 (S1 metrics): suggestion acceptance telemetry for this org. */}
+      {orgId && <LearningLoopMetrics orgId={orgId} />}
     </div>
   );
 }
