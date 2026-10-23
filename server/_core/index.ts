@@ -31,6 +31,7 @@ import { dailyDigestHandler } from "../scheduled/dailyDigest";
 import { regulatoryFeedPollHandler } from "../scheduled/regulatoryFeedPoll";
 import { bulkFhirWorkerHandler } from "../scheduled/bulkFhirWorker";
 import { retentionWorkerHandler, startRetentionWorker } from "../scheduled/retentionWorker";
+import { offerModelRefreshHandler } from "../scheduled/offerModelRefresh";
 import { ENV } from "./env";
 import {
   SETTLEMENT_EVENT_ID_HEADER,
@@ -641,6 +642,9 @@ async function startServer() {
   app.post("/api/scheduled/bulk-fhir-worker", scheduledAuth, bulkFhirWorkerHandler);
   app.post("/api/scheduled/retention-purge", scheduledAuth, retentionWorkerHandler);
   app.post("/api/scheduled/deadline-autopilot", scheduledAuth, deadlineAutopilotHandler);
+  // Phase 21: nightly offer-strategy-v2 model refresh (nightly cron; default
+  // after deadline-autopilot — see OFFER_MODEL_REFRESH_CRON in .env.example).
+  app.post("/api/scheduled/offer-model-refresh", scheduledAuth, offerModelRefreshHandler);
 
   // PHI retention purge (fhir_resource_cache, smart_form_extractions) on an
   // env-configurable cadence (RETENTION_SWEEP_INTERVAL_MS, default daily; 0
