@@ -1624,17 +1624,26 @@ export const appRouter = router({
         ]),
         fileSize: z.number().min(1),
         storageKey: z.string().min(1),
-        storageUrl: z.string().url(),
+        // Raw file bytes (base64) — same transport as workflow.uploadNoteAttachment.
+        // Previously this procedure recorded metadata only; the bytes are now
+        // persisted to object storage under storageKey BEFORE the metadata row
+        // is written, so a document row always points at retrievable content.
+        fileBase64: z.string().min(1).max(10 * 1024 * 1024), // 10 MB base64 limit
         description: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        // Persist the bytes first (same storagePut path as
+        // workflow.uploadNoteAttachment). If storage fails the mutation throws
+        // and NO metadata row is recorded — never a dangling document pointer.
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        await storagePut(input.storageKey, buffer, input.fileType);
         const docId = await addDocument({
           disputeId: input.disputeId,
           uploadedBy: ctx.user.id,
           fileName: input.fileName,
           mimeType: input.fileType,
           documentType: input.documentType,
-          fileSize: input.fileSize,
+          fileSize: buffer.byteLength,
           s3Key: input.storageKey,
           description: input.description ?? null,
         });

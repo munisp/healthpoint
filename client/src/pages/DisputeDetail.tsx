@@ -508,6 +508,37 @@ export default function DisputeDetail() {
     );
   };
 
+  // Attach a document: send the actual file bytes (base64) — the server
+  // persists them to object storage under storageKey before recording the
+  // document row, so the record always points at retrievable content.
+  const handleAttachDocument = () => {
+    if (!selectedFile) return;
+    if (selectedFile.size > 10 * 1024 * 1024) {
+      toast.error("File must be under 10 MB");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(",")[1];
+      uploadDocMutation.mutate({
+        disputeId: dispute.id,
+        documentType: docType,
+        fileName: docFileName,
+        fileType: selectedFile.type ||
+          (docFileName.endsWith(".pdf") ? "application/pdf" :
+            docFileName.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" :
+            docFileName.endsWith(".xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" :
+            "application/octet-stream"),
+        fileSize: selectedFile.size,
+        storageKey: `disputes/${dispute.id}/${Date.now()}-${docFileName}`,
+        fileBase64: base64,
+        description: docDescription || undefined,
+      });
+    };
+    reader.onerror = () => toast.error("Failed to read file");
+    reader.readAsDataURL(selectedFile);
+  };
+
   return (
     <div className="space-y-6">
       {/* Deadline countdown banner — shows when ≤ 3 business days remain */}
@@ -1306,7 +1337,14 @@ export default function DisputeDetail() {
                   <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.docx,.xlsx,.png,.jpg"
                     onChange={e => {
                       const f = e.target.files?.[0];
-                      if (f) { setDocFileName(f.name); setSelectedFile(f); }
+                      if (f) {
+                        if (f.size > 10 * 1024 * 1024) {
+                          toast.error("File must be under 10 MB");
+                          e.target.value = "";
+                          return;
+                        }
+                        setDocFileName(f.name); setSelectedFile(f);
+                      }
                     }} />
                   <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>Browse</Button>
                 </div>
@@ -1321,20 +1359,8 @@ export default function DisputeDetail() {
             </div>
             <div className="flex gap-3 mt-5">
               <Button variant="outline" className="flex-1" onClick={() => setShowDocModal(false)}>Cancel</Button>
-              <Button className="flex-1" disabled={!docTitle || !docFileName || uploadDocMutation.isPending}
-                onClick={() => uploadDocMutation.mutate({
-                  disputeId: dispute.id,
-                  documentType: docType,
-                  fileName: docFileName,
-                  fileType: docFileName.endsWith(".pdf") ? "application/pdf" :
-                    docFileName.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" :
-                    docFileName.endsWith(".xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" :
-                    "application/octet-stream",
-                  fileSize: selectedFile?.size ?? 0,
-                  storageKey: `disputes/${dispute.id}/${Date.now()}-${docFileName}`,
-                  storageUrl: `disputes/${dispute.id}/${Date.now()}-${docFileName}`,
-                  description: docDescription || undefined,
-                })}>
+              <Button className="flex-1" disabled={!docTitle || !docFileName || !selectedFile || uploadDocMutation.isPending}
+                onClick={handleAttachDocument}>
                 {uploadDocMutation.isPending ? "Attaching..." : "Attach Document"}
               </Button>
             </div>
@@ -1356,7 +1382,7 @@ export default function DisputeDetail() {
                     <span className="text-xs text-slate-500">Cert: {a.certificationNumber}</span>
                   </div>
                   <div className="text-xs text-slate-500 mt-1">
-                    Avg. {a.avgResolutionDays} days · {a.totalCasesHandled.toLocaleString()} cases handled
+                    Avg. {a.avgResolutionDays} days · {(a.totalCasesHandled ?? 0).toLocaleString()} cases handled
                   </div>
                   <div className="text-xs text-slate-400 mt-0.5">
                     States: {Array.isArray(a.states) ? a.states.join(", ") : a.states}
