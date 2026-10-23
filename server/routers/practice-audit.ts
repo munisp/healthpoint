@@ -118,6 +118,9 @@ export async function applyManualClaimFields(
   orgId: string,
   claimDbId: string,
   fields: ManualClaimFields,
+  /** Phase 21: optional provenance detail override (e.g. assisted quarantine
+   *  repair). Default preserves the pre-Phase-21 "bulk-complete" detail. */
+  opts?: { provenanceDetail?: string },
 ): Promise<ApplyManualClaimFieldsResult> {
   const claim = (await db.select().from(practiceClaims)
     .where(and(eq(practiceClaims.id, claimDbId), eq(practiceClaims.orgId, orgId)))
@@ -129,7 +132,7 @@ export async function applyManualClaimFields(
   }
   const provenance = { ...(claim.sourceProvenance ?? {}) };
   for (const k of applied) {
-    provenance[k] = { source: "manual" as const, detail: `bulk-complete ${new Date().toISOString().slice(0, 10)}` };
+    provenance[k] = { source: "manual" as const, detail: opts?.provenanceDetail ?? `bulk-complete ${new Date().toISOString().slice(0, 10)}` };
   }
   await db.update(practiceClaims)
     .set({ ...(fields as Record<string, unknown>), sourceProvenance: provenance })
