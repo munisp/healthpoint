@@ -38,6 +38,9 @@ import { practiceAuditRouter } from "./routers/practice-audit";
 import { lakehouseAnalyticsRouter } from "./routers/lakehouse-analytics";
 // phase19 addition (chunked resumable bulk claim ingestion)
 import { bulkUploadRouter } from "./routers/bulk-upload";
+// phase21 additions (intelligence & learning loop)
+import { feedbackRouter, prefillRouter, offerStrategyRouter } from "./routers/intelligence";
+import { nextActionsRouter } from "./routers/next-actions";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -67,7 +70,12 @@ export const rootRouter = mergeRouters(
   // phase17-lh addition (lakehouse analytics: lakehouse when configured, honest postgres_fallback otherwise)
   router({ lakehouseAnalytics: lakehouseAnalyticsRouter }),
   // phase19 addition (chunked resumable bulk claim ingestion)
-  router({ bulkUpload: bulkUploadRouter })
+  router({ bulkUpload: bulkUploadRouter }),
+  // phase21 additions (intelligence & learning loop)
+  router({ feedback: feedbackRouter }),
+  router({ prefill: prefillRouter }),
+  router({ offerStrategy: offerStrategyRouter }),
+  router({ nextActions: nextActionsRouter })
 );
 
 export type RootRouter = typeof rootRouter;
