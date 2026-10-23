@@ -9,6 +9,7 @@ import {
   Gavel, LogOut, Plus, Scale, TrendingUp, Activity
 } from "lucide-react";
 import SlaProgressBar, { SlaLegend, getSlaStatus } from "@/components/SlaProgressBar";
+import NextActionsPanel from "@/components/NextActionsPanel";
 import { useLocation } from "wouter";
 import { useState } from "react";
 import { useChartColors } from "@/hooks/useChartColors";
@@ -205,13 +206,18 @@ export default function Dashboard() {
                   <div className="text-xs font-medium text-slate-500 mb-2">{kpi.title}</div>
                   {/* Sparkline */}
                   <div className="-mx-1">
-                    <Sparkline data={sparklines[idx] ?? []} color={sparkColors[idx] ?? C.chart1} metricLabel={kpi.title.toLowerCase().includes("alert") ? "alerts" : kpi.title.toLowerCase().includes("month") ? "closed" : "disputes"} />
+                    <Sparkline data={sparklines[idx] ?? []} color={sparklines[idx]?.length ? sparkColors[idx] ?? C.chart1 : sparkColors[idx] ?? C.chart1} metricLabel={kpi.title.toLowerCase().includes("alert") ? "alerts" : kpi.title.toLowerCase().includes("month") ? "closed" : "disputes"} />
                   </div>
                 </CardContent>
               </Card>
             ))}
           </div>
         )}
+
+        {/* Phase 21 (S4): next-action queue — rule-based read model over
+            deadlines / idle offers / quarantine / remittances. Empty state
+            is rendered honestly inside the panel. */}
+        <NextActionsPanel limit={10} />
 
         {/* Dispute Volume Analytics Chart */}
         <Card className="border-slate-200">
