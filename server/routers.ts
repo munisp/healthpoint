@@ -1680,6 +1680,11 @@ export const appRouter = router({
         fileType: z.string().min(1),
         fileSize: z.number().min(1),
         storageKey: z.string().min(1),
+        // Raw file bytes (base64) — same transport as workflow.uploadNoteAttachment.
+        // Previously this procedure recorded metadata only; the bytes are now
+        // persisted to object storage under storageKey BEFORE the metadata row
+        // is written, so a version row always points at retrievable content.
+        fileBase64: z.string().min(1).max(10 * 1024 * 1024), // 10 MB base64 limit
         changeNote: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
@@ -1687,6 +1692,11 @@ export const appRouter = router({
         if (!db) throw new Error("Database unavailable");
         const { documentVersions } = await import("../drizzle/schema");
         const { eq, max, sql: dsql } = await import("drizzle-orm");
+        // Persist the bytes first (same storagePut path as
+        // workflow.uploadNoteAttachment). If storage fails the mutation throws
+        // and NO metadata row is recorded — never a dangling version pointer.
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        await storagePut(input.storageKey, buffer, input.fileType);
         // M10: the isLatest-flip + max(version)+insert sequence raced under
         // concurrent uploads (two writers could compute the same next version
         // and leave two isLatest rows). Serialize per document with a pg
@@ -1708,7 +1718,7 @@ export const appRouter = router({
             versionNumber: nextVersion,
             s3Key: input.storageKey,
             fileName: input.fileName,
-            fileSize: input.fileSize,
+            fileSize: buffer.byteLength,
             mimeType: input.fileType,
             uploadedBy: ctx.user.id,
             changeNote: input.changeNote ?? null,
