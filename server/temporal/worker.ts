@@ -25,7 +25,7 @@ import * as activities from "./journeys.activities";
 import * as lakehouseActivities from "./lakehouse.activities";
 import { JOURNEYS_TASK_QUEUE } from "./journeys.shared";
 import { registerLakehouseExportSchedule } from "./lakehouse-schedule";
-import { startLlmStub } from "../journeys/context";
+import { startLlmStub, startStorageStub } from "../journeys/context";
 
 function resolveTls() {
   const caPath =
@@ -45,6 +45,7 @@ async function main(): Promise<void> {
   const apiKey = process.env.TEMPORAL_AUTH_TOKEN?.trim() || undefined;
 
   await startLlmStub();
+  await startStorageStub();
 
   const connection = await NativeConnection.connect({
     address,
