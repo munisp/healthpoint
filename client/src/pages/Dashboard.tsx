@@ -206,7 +206,7 @@ export default function Dashboard() {
                   <div className="text-xs font-medium text-slate-500 mb-2">{kpi.title}</div>
                   {/* Sparkline */}
                   <div className="-mx-1">
-                    <Sparkline data={sparklines[idx] ?? []} color={sparklines[idx]?.length ? sparkColors[idx] ?? C.chart1 : sparkColors[idx] ?? C.chart1} metricLabel={kpi.title.toLowerCase().includes("alert") ? "alerts" : kpi.title.toLowerCase().includes("month") ? "closed" : "disputes"} />
+                    <Sparkline data={sparklines[idx] ?? []} color={sparkColors[idx] ?? C.chart1} metricLabel={kpi.title.toLowerCase().includes("alert") ? "alerts" : kpi.title.toLowerCase().includes("month") ? "closed" : "disputes"} />
                   </div>
                 </CardContent>
               </Card>
