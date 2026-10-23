@@ -26,13 +26,25 @@ export interface RetentionResult {
   smartFormExtractionsPurged: number;
   /** Expired settlement-callback replay-protection nonces (G1). */
   settlementNoncesPurged: number;
+  /** Phase 21: PHI-free suggestion-feedback events past their window. */
+  suggestionEventsPurged: number;
+  /** Phase 21: expired next-action dismissals (purged on expiresAt). */
+  nextActionDismissalsPurged: number;
+}
+
+/** Phase 21: suggestion_events retention (default 365d; PHI-free by construction). */
+export const DEFAULT_SUGGESTION_EVENTS_RETENTION_DAYS = 365;
+
+export function suggestionEventsRetentionDays(env: Record<string, string | undefined> = typeof process !== "undefined" ? process.env : {}): number {
+  const n = Number(env.SUGGESTION_EVENTS_RETENTION_DAYS);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_SUGGESTION_EVENTS_RETENTION_DAYS;
 }
 
 /** Delete rows older than the retention cutoff. Returns per-table counts. */
 export async function runRetentionPurge(days?: number): Promise<RetentionResult> {
   const n = days ?? retentionDays();
   const cutoff = new Date(Date.now() - n * 24 * 60 * 60 * 1000);
-  const result: RetentionResult = { retentionDays: n, cutoff, fhirCachePurged: 0, smartFormExtractionsPurged: 0, settlementNoncesPurged: 0 };
+  const result: RetentionResult = { retentionDays: n, cutoff, fhirCachePurged: 0, smartFormExtractionsPurged: 0, settlementNoncesPurged: 0, suggestionEventsPurged: 0, nextActionDismissalsPurged: 0 };
   const db = await getDb();
   if (!db) return result;
   const { lt } = await import("drizzle-orm");
@@ -51,7 +63,22 @@ export async function runRetentionPurge(days?: number): Promise<RetentionResult>
     const { purgeExpiredSettlementCallbackNonces } = await import("../settlement-auth");
     result.settlementNoncesPurged = await purgeExpiredSettlementCallbackNonces();
   } catch (err) { console.warn("[retention] settlement_callback_nonces purge failed:", err); }
-  console.info(`[retention] purge complete (>${n}d): fhirCache=${result.fhirCachePurged} smartFormExtractions=${result.smartFormExtractionsPurged} settlementNonces=${result.settlementNoncesPurged}`);
+  // Phase 21: suggestion_events on its own (longer) window — rows are the
+  // metrics substrate and PHI-free by construction.
+  try {
+    const { suggestionEvents } = await import("../../drizzle/schema-intelligence");
+    const seDays = suggestionEventsRetentionDays();
+    const seCutoff = new Date(Date.now() - seDays * 24 * 60 * 60 * 1000);
+    const r = await db.delete(suggestionEvents).where(lt(suggestionEvents.createdAt, seCutoff)).returning({ id: suggestionEvents.id });
+    result.suggestionEventsPurged = r.length;
+  } catch (err) { console.warn("[retention] suggestion_events purge failed:", err); }
+  // Phase 21: expired next-action dismissals (purged on expiresAt).
+  try {
+    const { nextActionDismissals } = await import("../../drizzle/schema-intelligence");
+    const r = await db.delete(nextActionDismissals).where(lt(nextActionDismissals.expiresAt, new Date())).returning({ id: nextActionDismissals.id });
+    result.nextActionDismissalsPurged = r.length;
+  } catch (err) { console.warn("[retention] next_action_dismissals purge failed:", err); }
+  console.info(`[retention] purge complete (>${n}d): fhirCache=${result.fhirCachePurged} smartFormExtractions=${result.smartFormExtractionsPurged} settlementNonces=${result.settlementNoncesPurged} suggestionEvents=${result.suggestionEventsPurged} nextActionDismissals=${result.nextActionDismissalsPurged}`);
   return result;
 }
 
