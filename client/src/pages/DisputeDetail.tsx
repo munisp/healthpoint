@@ -127,14 +127,28 @@ function DocumentVersionRow({ doc, disputeId }: { doc: any; disputeId: string })
     onError: (err) => toast.error(err.message),
   });
   const handleVersionFile = (f: File) => {
-    uploadVersionMutation.mutate({
-      documentId: doc.id,
-      disputeId,
-      fileName: f.name,
-      fileType: f.type || "application/octet-stream",
-      fileSize: f.size,
-      storageKey: `disputes/${disputeId}/${Date.now()}-${f.name}`,
-    });
+    if (f.size > 10 * 1024 * 1024) {
+      toast.error("File must be under 10 MB");
+      return;
+    }
+    // Send the actual file bytes (base64) — the server persists them to object
+    // storage under storageKey before recording the version row, so version
+    // history always points at retrievable content.
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(",")[1];
+      uploadVersionMutation.mutate({
+        documentId: doc.id,
+        disputeId,
+        fileName: f.name,
+        fileType: f.type || "application/octet-stream",
+        fileSize: f.size,
+        storageKey: `disputes/${disputeId}/${Date.now()}-${f.name}`,
+        fileBase64: base64,
+      });
+    };
+    reader.onerror = () => toast.error("Failed to read file");
+    reader.readAsDataURL(f);
   };
   return (
     <div className="rounded-lg bg-slate-50 border border-slate-100">
@@ -218,7 +232,7 @@ export default function DisputeDetail() {
   // Offer form state
   const [offerAmount, setOfferAmount] = useState("");
   const [offerRationale, setOfferRationale] = useState("");
-  const [offerType, setOfferType] = useState<"initiating_party" | "responding_party" | "qpa">("initiating_party");
+  const [offerType, setOfferType] = useState<"initiating_party" | "responding_party" | "qpa" | "determination">("initiating_party");
   const [counterOfferAmount, setCounterOfferAmount] = useState("");
   const [counterOfferRationale, setCounterOfferRationale] = useState("");
   const [acceptingOfferId, setAcceptingOfferId] = useState<string | null>(null);
@@ -359,7 +373,7 @@ export default function DisputeDetail() {
     onError: (err) => toast.error(err.message),
   });
   const watchlistRemoveMutation = trpc.watchlist.remove.useMutation({
-    onSuccess: () => { utils.watchlist.isWatching.invalidate({ disputeId: id! }); utils.watchlist.list.invalidate(); toast.success("Removed from your watchlist"); },
+    onSuccess: () => { utils.watchlist.isWatching.invalidate({ disputeId: id! }); utils.watchlist.list.invalidate(); toast.success("Removed from watchlist"); },
     onError: (err) => toast.error(err.message),
   });
 
@@ -588,7 +602,7 @@ export default function DisputeDetail() {
               }`}
               title={isWatching ? "Remove from watchlist" : "Add to watchlist"}
             >
-              {isWatching ? <StarOff size={14} /> : <Star size={14} />}
+              {isWatching ? <StarOff size={12} /> : <Star size={12} />}
               {isWatching ? "Watching" : "Watch"}
             </Button>
             <Button
@@ -1135,7 +1149,7 @@ export default function DisputeDetail() {
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
             <h3 className="text-lg font-semibold text-slate-800 mb-1">Submit Counter-Offer</h3>
             <p className="text-xs text-slate-500 mb-4">
-              Submit a counter-offer in response to the opposing party's offer. The certified IDR entity will consider all offers when making their binding determination under NSA §2799A-2.
+              Submit a counter-offer in response to the opposing party's offer. The certified IDR entity will consider all offers when making its binding determination under NSA §2799A-2.
             </p>
             <div className="space-y-4">
               <div>
@@ -1336,13 +1350,13 @@ export default function DisputeDetail() {
             <div className="space-y-3 max-h-80 overflow-y-auto">
               {arbitrators?.map(a => (
                 <div key={a.id} onClick={() => { setSelectedArbitratorId(a.id); setSelectedArbitratorName(a.name); }}
-                  className={`p-3 rounded-lg border cursor-pointer transition-colors ${selectedArbitratorId === a.id ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-slate-300"}`}>
+                  className={`p-4 rounded-xl border cursor-pointer transition-colors ${selectedArbitratorId === a.id ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-slate-300"}`}>
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-slate-800 text-sm">{a.name}</span>
                     <span className="text-xs text-slate-500">Cert: {a.certificationNumber}</span>
                   </div>
                   <div className="text-xs text-slate-500 mt-1">
-                    Avg. {a.avgResolutionDays} days · {a.totalCasesHandled?.toLocaleString()} cases handled
+                    Avg. {a.avgResolutionDays} days · {a.totalCasesHandled.toLocaleString()} cases handled
                   </div>
                   <div className="text-xs text-slate-400 mt-0.5">
                     States: {Array.isArray(a.states) ? a.states.join(", ") : a.states}
@@ -1352,7 +1366,7 @@ export default function DisputeDetail() {
             </div>
             <div className="flex gap-3 mt-5">
               <Button variant="outline" className="flex-1" onClick={() => setShowArbitratorModal(false)}>Cancel</Button>
-              <Button className="flex-1" disabled={!selectedArbitratorId || selectArbitratorMutation.isPending}
+              <Button className="flex-1" disabled={!selectedArbitratorId || !selectArbitratorMutation.isPending}
                 onClick={() => selectArbitratorMutation.mutate({ disputeId: dispute.id, idrEntityId: selectedArbitratorId, idrEntityName: selectedArbitratorName })}>
                 {selectArbitratorMutation.isPending ? "Selecting..." : "Confirm Selection"}
               </Button>
