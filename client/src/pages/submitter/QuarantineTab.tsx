@@ -11,6 +11,11 @@
  *    UI says so.
  *  - Discard: bulkUpload.discardQuarantinedRows (explicit human action;
  *    discarded rows remain visible under the "discarded" filter).
+ *
+ * Phase 21 (S2b): prefill.quarantineRows suggestions render as one-click
+ * accept chips (suggested value + confidence + source); accepted
+ * suggestionIds are passed on repair so the server records terminal
+ * `accepted` suggestion events.
  */
 import { useState, type ChangeEvent } from "react";
 import { trpc } from "@/lib/trpc";
@@ -21,6 +26,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import SuggestedValueChip, { type QuarantineSuggestionView } from "@/components/SuggestedValueChip";
 
 type QuarantineRow = {
   id: string;
@@ -94,8 +100,52 @@ function draftToFields(d: RepairDraft): Record<string, unknown> | null {
   return Object.keys(fields).length ? fields : null;
 }
 
+/**
+ * Map a server suggestion field name (manualClaimFieldsSchema keys) onto
+ * the repair draft. Cents fields render as USD strings; cptCodes arrays
+ * join with commas. Returns null when the field is not editable in the
+ * draft (it is simply not shown as a chip).
+ */
+export function suggestionToDraftValue(field: string, value: unknown): { key: keyof RepairDraft; value: string } | null {
+  if (value === null || value === undefined || value === "") return null;
+  switch (field) {
+    case "billedCents": return { key: "billedUsd", value: (Number(value) / 100).toFixed(2) };
+    case "allowedCents": return { key: "allowedUsd", value: (Number(value) / 100).toFixed(2) };
+    case "paidCents": return { key: "paidUsd", value: (Number(value) / 100).toFixed(2) };
+    case "cptCodes": return Array.isArray(value) ? { key: "cptCodes", value: value.join(", ") } : { key: "cptCodes", value: String(value) };
+    default: {
+      const keys: (keyof RepairDraft)[] = [
+        "claimId", "payerName", "payerId", "planType", "serviceCategory", "serviceDate",
+        "facilityState", "patientState", "networkStatus", "noticeConsentStatus",
+        "renderingNpi", "billingNpi", "tin",
+      ];
+      return (keys as string[]).includes(field) ? { key: field as keyof RepairDraft, value: String(value) } : null;
+    }
+  }
+}
+
 function RepairEditor({ orgId, row, onDone }: { orgId: string; row: QuarantineRow; onDone: () => void }) {
   const [draft, setDraft] = useState<RepairDraft>(EMPTY_DRAFT);
+  // Phase 21 (S2b): server-side suggestions (reparse + org priors, n>=5 gate).
+  const suggQ = trpc.prefill.quarantineRows.useQuery(
+    { orgId, quarantineIds: [row.id] },
+    { retry: 1, staleTime: 60_000 },
+  );
+  const suggRow = suggQ.data?.rows.find(r => r.quarantineId === row.id);
+  const suggestions = (suggRow?.suggestions ?? []) as QuarantineSuggestionView[];
+  const [acceptedFields, setAcceptedFields] = useState<Set<string>>(new Set());
+
+  const acceptSuggestion = (s: QuarantineSuggestionView) => {
+    const mapped = suggestionToDraftValue(s.field, s.suggestedValue);
+    if (!mapped) {
+      toast.info(`Suggestion for "${s.field}" is not editable in this form`);
+      return;
+    }
+    setDraft(prev => ({ ...prev, [mapped.key]: mapped.value }));
+    setAcceptedFields(prev => new Set(prev).add(s.field));
+    toast.success(`Applied suggested ${s.field} — review before re-submitting`);
+  };
+
   const repair = trpc.bulkUpload.repairQuarantinedRows.useMutation({
     onSuccess: r => {
       const res = r.results[0];
@@ -129,6 +179,33 @@ function RepairEditor({ orgId, row, onDone }: { orgId: string; row: QuarantineRo
           <p className="text-xs text-muted-foreground">Server-flagged missing: {missing.join(", ")}</p>
         )}
       </div>
+      {suggQ.isLoading && <p className="text-xs text-muted-foreground">Checking for suggestions…</p>}
+      {suggQ.isError && (
+        <p role="alert" className="text-xs text-destructive">Suggestions unavailable: {suggQ.error.message}</p>
+      )}
+      {suggQ.data && suggestions.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          No suggestions for this row — the raw payload could not be re-parsed and no org prior met the n≥5 gate.
+        </p>
+      )}
+      {suggestions.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-muted-foreground">
+            Suggestions (re-parsed from the raw file or your org's own priors) — accepting fills the field below;
+            you still review before re-submitting.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {suggestions.map(s => (
+              <SuggestedValueChip
+                key={s.field}
+                suggestion={s}
+                accepted={acceptedFields.has(s.field)}
+                onAccept={() => acceptSuggestion(s)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
         <div><Label className="text-xs">Claim ID</Label><Input value={draft.claimId} onChange={set("claimId")} aria-label="Claim ID" /></div>
         <div><Label className="text-xs">Payer name</Label><Input value={draft.payerName} onChange={set("payerName")} aria-label="Payer name" /></div>
@@ -190,7 +267,15 @@ function RepairEditor({ orgId, row, onDone }: { orgId: string; row: QuarantineRo
               toast.error("Fill at least one valid field before re-submitting");
               return;
             }
-            repair.mutate({ orgId, updates: [{ quarantineId: row.id, fields: fields as never }] });
+            repair.mutate({
+              orgId,
+              updates: [{ quarantineId: row.id, fields: fields as never }],
+              // Phase 21: server records terminal `accepted` suggestion
+              // events for this row's suggestions when any were accepted.
+              ...(acceptedFields.size > 0 && suggRow?.suggestionId
+                ? { acceptedSuggestionIds: [suggRow.suggestionId] }
+                : {}),
+            });
           }}
         >
           {repair.isPending ? "Re-submitting…" : "Re-submit repaired row"}
