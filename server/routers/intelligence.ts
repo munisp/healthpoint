@@ -338,7 +338,6 @@ const ORG_PRIOR_FIELDS = new Set([
 /** Minimum prior accepts before an org-prior suggestion is shown (design §3.2). */
 export const ORG_PRIOR_MIN_ACCEPTS = 5;
 
-
 interface QuarantineSuggestion {
   field: string;
   suggestedValue: unknown;
