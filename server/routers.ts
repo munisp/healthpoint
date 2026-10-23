@@ -42,6 +42,7 @@ import { assertDisputeAccess, assertAdminAccess, grantDisputeAccess, revokeDispu
 import { eventBus } from "./events/bus";
 import { advanceWorkflow, IDR_WORKFLOW_STEPS, getWorkflowProgress, getValidTransitions, getStatusForStep, addBusinessDays, daysUntilDeadline, validateWorkflowTransition, getStepNumber, isDeadlinePassed } from "./workflow/idr-workflow";
 import { addBusinessDays as addIdrBusinessDays, businessDaysBetween } from "./idr/deadlines";
+import { STEP_DEADLINE_DAYS, STEP_LABELS } from "./idr/step-deadlines";
 import { checkIdrInitiationWindow, checkCoolingOffForNewDispute, validateConflictCheck, checkDelegationAttestation } from "./idr/initiation-guards";
 import { assertDisputeCreateComplete, assertOpenNegotiationComplete, assertIdrInitiationComplete, assertBatchingComplete, projectDisputeCompleteness } from "./completeness/gates";
 import { idrAttestations, disputeEvents, settlementTransfers } from "../drizzle/schema";
@@ -4219,48 +4220,11 @@ Based on NSA IDR historical data and legal precedent, provide:
         const db = await getDb();
         if (!db) return [];
         // Step → statutory deadline in business days (NSA 45 CFR §149.510)
-        const stepDeadlines: Record<string, number> = {
-          STEP_01_OPEN_NEGOTIATION_INITIATED: 30,
-          STEP_02_OPEN_NEGOTIATION_PERIOD: 30,
-          STEP_03_OPEN_NEGOTIATION_FAILED: 4,
-          STEP_04_IDR_INITIATED: 3,
-          STEP_05_IDR_NOTICE_SENT: 3,
-          STEP_06_IDR_ENTITY_SELECTION: 3,
-          STEP_07_IDR_ENTITY_SELECTED: 1,
-          STEP_08_ELIGIBILITY_REVIEW: 10,
-          STEP_09_OFFER_SUBMISSION: 10,
-          STEP_10_QPA_DISCLOSURE: 5,
-          STEP_11_ADDITIONAL_INFORMATION: 10,
-          STEP_12_ARBITRATION_REVIEW: 30,
-          STEP_13_DETERMINATION_ISSUED: 30,
-          STEP_14_PAYMENT_DETERMINATION: 30,
-          STEP_15_PAYMENT_MADE: 30,
-          STEP_16_ADMINISTRATIVE_FEE_PAID: 5,
-          STEP_17_DISPUTE_CLOSED: 1,
-          STEP_18_APPEAL_FILED: 30,
-          STEP_19_APPEAL_RESOLVED: 30,
-        };
-        const stepLabels: Record<string, string> = {
-          STEP_01_OPEN_NEGOTIATION_INITIATED: "Open Negotiation",
-          STEP_02_OPEN_NEGOTIATION_PERIOD: "Negotiation Period",
-          STEP_03_OPEN_NEGOTIATION_FAILED: "Negotiation Failed",
-          STEP_04_IDR_INITIATED: "IDR Initiated",
-          STEP_05_IDR_NOTICE_SENT: "IDR Notice Sent",
-          STEP_06_IDR_ENTITY_SELECTION: "Entity Selection",
-          STEP_07_IDR_ENTITY_SELECTED: "Entity Selected",
-          STEP_08_ELIGIBILITY_REVIEW: "Eligibility Review",
-          STEP_09_OFFER_SUBMISSION: "Offer Submission",
-          STEP_10_QPA_DISCLOSURE: "QPA Disclosure",
-          STEP_11_ADDITIONAL_INFORMATION: "Additional Info",
-          STEP_12_ARBITRATION_REVIEW: "Arbitration Review",
-          STEP_13_DETERMINATION_ISSUED: "Determination Issued",
-          STEP_14_PAYMENT_DETERMINATION: "Payment Determination",
-          STEP_15_PAYMENT_MADE: "Payment Made",
-          STEP_16_ADMINISTRATIVE_FEE_PAID: "Admin Fee Paid",
-          STEP_17_DISPUTE_CLOSED: "Dispute Closed",
-          STEP_18_APPEAL_FILED: "Appeal Filed",
-          STEP_19_APPEAL_RESOLVED: "Appeal Resolved",
-        };
+        // Phase 21: both maps extracted verbatim to
+        // server/idr/step-deadlines.ts (shared with nextActions); the
+        // values are unchanged, only the location moved.
+        const stepDeadlines: Record<string, number> = STEP_DEADLINE_DAYS;
+        const stepLabels: Record<string, string> = STEP_LABELS;
         const { inArray: inArr } = await import("drizzle-orm");
         const active = await db.select().from(disputesTable)
           .where(inArr(disputesTable.status, [
