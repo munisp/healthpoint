@@ -92,6 +92,62 @@ export async function startLlmStub(): Promise<Server | null> {
   return server;
 }
 
+// ── Local object-storage stub (Biz storage-proxy compatible) ────────────────
+/**
+ * Raw request bodies captured by the storage stub, keyed by object path.
+ * Bodies are the multipart/form-data payloads exactly as POSTed by
+ * server/storage.ts storagePut — the file bytes appear verbatim inside, so
+ * journeys can assert `stored.includes(payload)` for end-to-end byte-path
+ * proof without a multipart parser.
+ */
+export const journeyStorageObjects = new Map<string, Buffer>();
+
+/**
+ * documents.upload now persists real bytes via storagePut (the same path as
+ * workflow.uploadNoteAttachment / documents.uploadVersion), which requires
+ * BUILT_IN_STORAGE_API_URL/KEY. This stub implements just enough of the
+ * storage-proxy API (upload/download URL issuance) for journeys to exercise
+ * the real byte path in-process. Real env always wins.
+ */
+export async function startStorageStub(): Promise<Server | null> {
+  if (process.env.JOURNEYS_NO_STORAGE_STUB === "1") return null;
+  const probe = await fetch("http://127.0.0.1:11435/storage/download?path=probe", { method: "OPTIONS" })
+    .then(() => true)
+    .catch(() => false);
+  if (probe) {
+    console.log("[storage-stub] something already listens on 11435; leaving it alone");
+    return null;
+  }
+  process.env.BUILT_IN_STORAGE_API_URL ??= "http://127.0.0.1:11435/";
+  process.env.BUILT_IN_STORAGE_API_KEY ??= "journey-storage-stub-key";
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1:11435");
+    const path = url.searchParams.get("path") ?? "";
+    if (req.method === "POST" && url.pathname === "/storage/upload") {
+      const chunks: Buffer[] = [];
+      req.on("data", c => chunks.push(c));
+      req.on("end", () => {
+        journeyStorageObjects.set(path, Buffer.concat(chunks));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ url: `storage://${path}` }));
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/storage/download") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ url: `storage://${path}` }));
+      return;
+    }
+    res.writeHead(404).end("{}");
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(11435, "127.0.0.1", () => resolve());
+  });
+  console.log("[storage-stub] local object-storage stub listening on 127.0.0.1:11435");
+  return server;
+}
+
 // ── Seed-min fixture users ──────────────────────────────────────────────────
 export async function seedFixtureUsers(): Promise<Record<keyof typeof FIXTURE_USERS, User>> {
   const db = await getDb();
