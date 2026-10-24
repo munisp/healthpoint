@@ -299,8 +299,11 @@ describe.skipIf(!HAS_DB)("Phase22 closed learning loop (live PG)", () => {
     const fresh = await outsider.nextActions.list({ orgId: otherOrgId, persona: "provider" });
     expect(fresh.ranking.label).toBe("static_ordering");
 
-    // Dismiss records a `rejected` suggestion event (negative signal).
-    const key = list.cards[advIdx].actionKey;
+    // Dismiss records a `rejected` suggestion event (negative signal) whose
+    // metadata.kind is the CARD kind, not the raw actionKey prefix — F1
+    // regression guard (an "idle-offer:..." key must record "idle_offer").
+    const key = list.cards[idleIdx].actionKey;
+    expect(key.startsWith("idle-offer:")).toBe(true);
     await caller.nextActions.dismiss({ actionKey: key });
     const rej = await db.select().from(suggestionEvents).where(and(
       eq(suggestionEvents.suggestionId, key),
@@ -309,6 +312,7 @@ describe.skipIf(!HAS_DB)("Phase22 closed learning loop (live PG)", () => {
     ));
     expect(rej.length).toBeGreaterThanOrEqual(1);
     expect(rej[0].orgId).toBe(orgId);
+    expect((rej[0].metadata as { kind?: string } | null)?.kind).toBe("idle_offer");
   });
 
   // ── S3: quarantine suggestion re-rank ────────────────────────────────────
@@ -367,8 +371,10 @@ describe.skipIf(!HAS_DB)("Phase22 closed learning loop (live PG)", () => {
         initiatingPartyId: U1, initiatingPartyType: "provider",
         initiatingPartyName: "P22 Provider", respondingPartyName: "P22 Payer",
         serviceType: "emergency_medicine", serviceDate: new Date("2026-06-01"),
-        patientState: "TX", facilityState: "TX", cptCodes: ["99285"],
-        billedAmount: "2000", qpaAmount: "1000",
+        patientState: "TX", facilityState: "TX",
+        cptCodes: ["99285"],
+        billedAmount: "2000",
+        qpaAmount: "1000",
         determinationAmount: "1150",
         determinationWinner: i < 15 ? "initiating_party" : "responding_party",
         idrEntityId: IDRE, status: "closed", createdBy: U1,
