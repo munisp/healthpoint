@@ -30,6 +30,7 @@ import {
   timestamp,
   jsonb,
   numeric,
+  boolean,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
@@ -88,6 +89,14 @@ export const suggestionEvents = pgTable(
 export const MODEL_VERSION_STATUSES = ["training", "active", "retired", "insufficient_data"] as const;
 export type ModelVersionStatus = (typeof MODEL_VERSION_STATUSES)[number];
 
+/**
+ * Phase 22: model kinds. "segment_stats" (P21 offer-strategy-v2 + ranker rate
+ * tables), "bandit" (nightly bandit governance snapshots; live posteriors
+ * live in bandit_arm_stats), "outcome_model" (S4 outcome-model-v2).
+ */
+export const MODEL_KINDS = ["segment_stats", "bandit", "outcome_model"] as const;
+export type ModelKind = (typeof MODEL_KINDS)[number];
+
 export const suggestionEventsTerminalUniq = "suggestion_events_terminal_uniq";
 
 export const modelVersions = pgTable(
@@ -103,6 +112,8 @@ export const modelVersions = pgTable(
     segmentCount: integer("segment_count").notNull().default(0),
     /** "statistical_estimate" | "insufficient_data". */
     honestyLabel: varchar("honesty_label", { length: 32 }).notNull(),
+    /** Phase 22: "segment_stats" | "bandit" | "outcome_model". */
+    modelKind: varchar("model_kind", { length: 24 }).notNull().default("segment_stats"),
     /** Segment stats payload (aggregates only; segments with n < 5 suppressed). */
     parameters: jsonb("parameters").notNull(),
     trainedAt: timestamp("trained_at"),
@@ -131,6 +142,130 @@ export const nextActionDismissals = pgTable(
   ],
 );
 
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 22: closed learning loop (migration 0057_wave_p22.sql)
+// ────────────────────────────────────────────────────────────────────────────
+
+export const BANDIT_OUTCOMES = ["accepted", "rejected", "countered", "expired"] as const;
+export type BanditOutcome = (typeof BANDIT_OUTCOMES)[number];
+
+/**
+ * S1: one row per bandit-eligible offerStrategy.recommendV2 serve — the
+ * arm-selection fact. Rewards are attributed NIGHTLY onto this table by the
+ * learning-loop refresh worker; the offer accept/reject payment paths are
+ * never hooked (design §3.3).
+ */
+export const banditAssignments = pgTable(
+  "bandit_assignments",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    orgId: varchar("org_id", { length: 64 }).notNull(),
+    /** Links the suggestion_events `presented` row (surface offer_recommendation). */
+    suggestionId: varchar("suggestion_id", { length: 64 }).notNull(),
+    disputeId: varchar("dispute_id", { length: 64 }).notNull(),
+    userId: varchar("user_id", { length: 64 }).notNull(),
+    segmentTier: varchar("segment_tier", { length: 48 }).notNull(),
+    segmentKey: varchar("segment_key", { length: 191 }).notNull(),
+    armId: varchar("arm_id", { length: 16 }).notNull(),
+    baselineUsd: numeric("baseline_usd", { precision: 12, scale: 2 }).notNull(),
+    servedUsd: numeric("served_usd", { precision: 12, scale: 2 }).notNull(),
+    modelVersionId: varchar("model_version_id", { length: 64 }),
+    exploration: boolean("exploration").notNull(),
+    outcome: varchar("outcome", { length: 16 }),
+    outcomeAt: timestamp("outcome_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("bandit_assignments_suggestion_uniq").on(t.suggestionId),
+    index("bandit_assignments_org_segment_arm_idx").on(t.orgId, t.segmentKey, t.armId),
+    index("bandit_assignments_dispute_idx").on(t.disputeId),
+    index("bandit_assignments_org_created_idx").on(t.orgId, t.createdAt),
+  ],
+);
+
+/**
+ * S1: Beta(a,b) posterior state per org x segment x arm. org_id is in the
+ * unique key — NO cross-org pooling (P21 counsel flag stands, design §3.4).
+ */
+export const banditArmStats = pgTable(
+  "bandit_arm_stats",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    orgId: varchar("org_id", { length: 64 }).notNull(),
+    segmentTier: varchar("segment_tier", { length: 48 }).notNull(),
+    segmentKey: varchar("segment_key", { length: 191 }).notNull(),
+    armId: varchar("arm_id", { length: 16 }).notNull(),
+    alpha: integer("alpha").notNull().default(1),
+    beta: integer("beta").notNull().default(1),
+    /** Terminal rewards attributed (alpha + beta - 2). */
+    pulls: integer("pulls").notNull().default(0),
+    /** Total servings of this arm (exposure denominator). */
+    served: integer("served").notNull().default(0),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("bandit_arm_stats_uniq").on(t.orgId, t.segmentTier, t.segmentKey, t.armId),
+  ],
+);
+
+export const RANKERS = ["next_action", "quarantine_suggestion"] as const;
+export type Ranker = (typeof RANKERS)[number];
+
+/**
+ * S2 + S3: Bayesian-smoothed act-rate per item. Refreshed nightly by full
+ * recompute from suggestion_events (no incremental state drift).
+ */
+export const rankingStats = pgTable(
+  "ranking_stats",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    orgId: varchar("org_id", { length: 64 }).notNull(),
+    ranker: varchar("ranker", { length: 32 }).notNull(),
+    /** S2: `{kind}:{persona}`; S3: `{field}:{source}`. */
+    itemKey: varchar("item_key", { length: 191 }).notNull(),
+    presented: integer("presented").notNull().default(0),
+    acts: integer("acts").notNull().default(0),
+    negatives: integer("negatives").notNull().default(0),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("ranking_stats_uniq").on(t.orgId, t.ranker, t.itemKey),
+    index("ranking_stats_org_ranker_idx").on(t.orgId, t.ranker),
+  ],
+);
+
+/**
+ * S4: append-only calibration log for outcome-model-v2 predictions (the
+ * legacy outcome_predictions table is delete+insert with no history).
+ */
+export const outcomeModelPredictions = pgTable(
+  "outcome_model_predictions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    disputeId: varchar("dispute_id", { length: 64 }).notNull(),
+    modelVersionId: varchar("model_version_id", { length: 64 }).notNull(),
+    predictedWinProb: numeric("predicted_win_prob", { precision: 5, scale: 4 }).notNull(),
+    predictedAwardP25Usd: numeric("predicted_award_p25_usd", { precision: 12, scale: 2 }),
+    predictedAwardP50Usd: numeric("predicted_award_p50_usd", { precision: 12, scale: 2 }),
+    predictedAwardP75Usd: numeric("predicted_award_p75_usd", { precision: 12, scale: 2 }),
+    segmentTier: varchar("segment_tier", { length: 48 }),
+    segmentKey: varchar("segment_key", { length: 191 }),
+    source: varchar("source", { length: 16 }).notNull(),
+    actualWinner: varchar("actual_winner", { length: 32 }),
+    actualAmountUsd: numeric("actual_amount_usd", { precision: 12, scale: 2 }),
+    actualJoinedAt: timestamp("actual_joined_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("outcome_model_predictions_dispute_idx").on(t.disputeId),
+    index("outcome_model_predictions_model_idx").on(t.modelVersionId),
+  ],
+);
+
 export type SuggestionEvent = typeof suggestionEvents.$inferSelect;
 export type ModelVersion = typeof modelVersions.$inferSelect;
 export type NextActionDismissal = typeof nextActionDismissals.$inferSelect;
+export type BanditAssignment = typeof banditAssignments.$inferSelect;
+export type BanditArmStat = typeof banditArmStats.$inferSelect;
+export type RankingStat = typeof rankingStats.$inferSelect;
+export type OutcomeModelPrediction = typeof outcomeModelPredictions.$inferSelect;
