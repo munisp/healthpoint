@@ -29,6 +29,10 @@ import { organizations, orgMemberships } from "../../drizzle/schema-personas";
 import {
   suggestionEvents,
   modelVersions,
+  banditAssignments,
+  banditArmStats,
+  rankingStats,
+  outcomeModelPredictions,
   SUGGESTION_SURFACES,
   SUGGESTION_EVENT_ACTIONS,
 } from "../../drizzle/schema-intelligence";
@@ -45,6 +49,23 @@ import {
   type SegmentStatsV2,
   type ModelVersionBlock,
 } from "../idr/offer-strategy-v2";
+import {
+  banditEnabled,
+  parseArmsBps,
+  selectOfferArm,
+  explorationRate,
+  maxExplorePerOrgPerDay,
+  minPulls,
+  rewardWindowDays,
+  type BanditSelection,
+} from "../idr/offer-bandit";
+import { canonicalSegmentKey } from "../idr/segment-keys";
+import {
+  rankingEnabled,
+  rankingMinImpressions,
+  smoothedActRate,
+  blendConfidence,
+} from "../idr/ranking";
 import { OFFER_MODEL_NAME } from "../scheduled/offerModelRefresh";
 
 type Db = Awaited<ReturnType<typeof requireDb>>;
@@ -113,6 +134,11 @@ export function stripPhiMetadata(metadata: Record<string, unknown> | undefined):
     }
   }
   return out;
+}
+
+/** Rows helper for db.execute(sql`...`) results (driver-shape tolerant). */
+function rowsOfExec(r: unknown): Array<Record<string, unknown>> {
+  return (Array.isArray(r) ? r : ((r as { rows?: unknown[] }).rows ?? [])) as Array<Record<string, unknown>>;
 }
 
 /** Insert suggestion events; terminal actions are idempotent (partial unique index). */
@@ -219,9 +245,6 @@ export const feedbackRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await requireDb();
       await assertOrgMember(db, ctx.user.id, input.orgId, READ_ROLES);
-      function rowsOfExec(r: unknown): Array<Record<string, unknown>> {
-      return (Array.isArray(r) ? r : ((r as { rows?: unknown[] }).rows ?? [])) as Array<Record<string, unknown>>;
-    }
       const surfaceFilter = input.surface ? sql`AND surface = ${input.surface}` : sql``;
       // §2.4 aggregates, computed directly in Postgres (lakehouse read-back
       // reuse is a follow-up; honesty label mirrors lakehouse-analytics).
@@ -515,13 +538,44 @@ export const prefillRouter = router({
 
       const results: Array<{ quarantineId: string; suggestionId: string; suggestions: QuarantineSuggestion[] }> = [];
       const presented: Parameters<typeof recordSuggestionEvents>[1] = [];
+
+      // ── Phase 22 (S3): learned re-rank from ranking_stats ───────────────
+      // Eligible (field, source) pairs blend their Beta(1,1)-smoothed act
+      // rate into confidence (bounded ±50% blend, design §5.4) and re-sort.
+      // The n>=5 org-prior gate and reparse precedence are UNTOUCHED —
+      // ranking re-orders what survives the gates; it never resurrects a
+      // suppressed prior. Ineligible items keep base confidence.
+      const rankStatsByKey = new Map<string, { presented: number; acts: number; negatives: number }>();
+      if (rankingEnabled()) {
+        const statsRows = await db.select().from(rankingStats).where(and(
+          eq(rankingStats.orgId, input.orgId),
+          eq(rankingStats.ranker, "quarantine_suggestion"),
+        ));
+        for (const r of statsRows) {
+          rankStatsByKey.set(r.itemKey, { presented: r.presented, acts: r.acts, negatives: r.negatives });
+        }
+      }
+      const minImpressions = rankingMinImpressions();
+
       for (const row of rows) {
         const missing = Array.isArray(row.missingFields) ? (row.missingFields as string[]) : [];
         const suggestionId = crypto.randomUUID();
         const reparse = await reparseQuarantineRow(fileTypeBySession.get(row.sessionId) ?? null, row.rawPayload, missing);
         const covered = new Set(reparse.map(s => s.field));
         const priors = await orgPriorSuggestions(db, input.orgId, missing.filter(f => !covered.has(f)));
-        const suggestions = [...reparse, ...priors.values()];
+        const suggestions: Array<QuarantineSuggestion & { learnedConfidence?: boolean }> = [...reparse, ...priors.values()];
+        for (const s of suggestions) {
+          const st = rankStatsByKey.get(`${s.field}:${s.source}`);
+          if (st && st.presented >= minImpressions) {
+            s.confidence = blendConfidence(s.confidence, smoothedActRate(st.acts, st.negatives));
+            s.learnedConfidence = true;
+          } else {
+            s.learnedConfidence = false;
+          }
+        }
+        // Stable sort by final confidence descending (ineligible items keep
+        // base confidence and relative order among ties).
+        suggestions.sort((a, b) => b.confidence - a.confidence);
         results.push({ quarantineId: row.id, suggestionId, suggestions });
         const cHash = contextHash(input.orgId, "quarantine_repair", { sessionId: row.sessionId });
         for (const s of suggestions) {
@@ -655,6 +709,103 @@ export const offerStrategyRouter = router({
       // Producer records `presented` (design §2.3: producer records
       // presented; the client records the terminal action).
       const suggestionId = crypto.randomUUID();
+      const eventMetadata: Record<string, unknown> = { disputeId: d.id, segmentTier: result.features.segmentTierUsed };
+
+      // ── Phase 22 (S1): bandit arm selection (additive) ──────────────────
+      // Runs ONLY when the v2 engine produced a real estimate
+      // (insufficient_data → no anchor exists → bandit never runs). Gates
+      // (min-pulls, ≤10% exploration rate, ≤5/day/org) force the baseline
+      // arm; posteriors are updated nightly, never online (design §3.3).
+      let banditBlock: {
+        active: boolean;
+        armId: string;
+        deltaBps: number;
+        exploration: boolean;
+        gate: BanditSelection["gate"];
+        baselineUsd: number;
+        posteriorMeans: Record<string, number>;
+      } | null = null;
+      let servedEstimate = result.recommendedOfferUsdStatisticalEstimate;
+      let label = result.label;
+      let mvOut = result.modelVersion;
+      let honestyNote = result.honestyNote;
+      if (
+        banditEnabled() &&
+        result.label === "statistical_estimate" &&
+        result.recommendedOfferUsdStatisticalEstimate !== null &&
+        result.features.segmentTierUsed !== null
+      ) {
+        const tier = result.features.segmentTierUsed;
+        const segmentKey = canonicalSegmentKey(tier, {
+          idrEntityId: d.idrEntityId ?? null,
+          serviceType: d.serviceType ?? null,
+          patientState: d.patientState ?? null,
+        });
+        // Arm posteriors for this org×segment (missing arm = Beta(1,1)).
+        const armRows = await db.select().from(banditArmStats).where(and(
+          eq(banditArmStats.orgId, input.orgId),
+          eq(banditArmStats.segmentTier, tier),
+          eq(banditArmStats.segmentKey, segmentKey),
+        ));
+        const totalPulls = armRows.reduce((s, r) => s + r.pulls, 0);
+        // Today's org counters — re-read from the DB at serve time
+        // (multi-instance safe; no in-process cache).
+        const counterRows = rowsOfExec(await db.execute(sql`
+          SELECT COUNT(*)::int AS serves,
+                 COUNT(*) FILTER (WHERE exploration)::int AS explores
+          FROM bandit_assignments
+          WHERE org_id = ${input.orgId} AND created_at >= date_trunc('day', now())
+        `));
+        const selection = selectOfferArm({
+          baselineUsd: result.recommendedOfferUsdStatisticalEstimate,
+          arms: parseArmsBps(),
+          states: armRows.map(r => ({ armId: r.armId, alpha: r.alpha, beta: r.beta, pulls: r.pulls, served: r.served })),
+          totalPulls,
+          exploresToday: Number(counterRows[0]?.explores ?? 0),
+          servesToday: Number(counterRows[0]?.serves ?? 0),
+          explorationRate: explorationRate(),
+          maxExplorePerDay: maxExplorePerOrgPerDay(),
+          minPulls: minPulls(),
+          rng: Math.random,
+        });
+        // Serve-path writes = ONE insert; served counters are bumped by the
+        // nightly attribution step (design §3.2).
+        await db.insert(banditAssignments).values({
+          id: crypto.randomUUID(),
+          orgId: input.orgId,
+          suggestionId,
+          disputeId: d.id,
+          userId: ctx.user.id,
+          segmentTier: tier,
+          segmentKey,
+          armId: selection.armId,
+          baselineUsd: String(result.recommendedOfferUsdStatisticalEstimate),
+          servedUsd: String(selection.servedUsd),
+          modelVersionId: mvBlock.id,
+          exploration: selection.exploration,
+        });
+        servedEstimate = selection.servedUsd;
+        banditBlock = {
+          active: selection.gate === "active" && selection.exploration,
+          armId: selection.armId,
+          deltaBps: selection.deltaBps,
+          exploration: selection.exploration,
+          gate: selection.gate,
+          baselineUsd: result.recommendedOfferUsdStatisticalEstimate,
+          posteriorMeans: selection.posteriorMeans,
+        };
+        eventMetadata.banditArmId = selection.armId;
+        eventMetadata.deltaBps = selection.deltaBps;
+        eventMetadata.exploration = selection.exploration;
+        if (banditBlock.active) {
+          // Honesty degrades exactly one step: bandit_active (design §3.2).
+          label = "bandit_active";
+          mvOut = { ...mvOut, honestyLabel: "bandit_active" };
+          honestyNote +=
+            " This recommendation was adjusted by a bounded, per-organization learning process (±10% maximum) that learns from accepted and rejected offers; the unadjusted statistical estimate is also shown.";
+        }
+      }
+
       await recordSuggestionEvents(db, [{
         orgId: input.orgId,
         userId: ctx.user.id,
@@ -666,9 +817,152 @@ export const offerStrategyRouter = router({
         contextHash: contextHash(input.orgId, "offer_recommendation", {
           serviceType: d.serviceType, patientState: d.patientState, idrEntityId: d.idrEntityId ?? "none",
         }),
-        metadata: { disputeId: d.id, segmentTier: result.features.segmentTierUsed },
+        metadata: eventMetadata,
       }]);
 
-      return { disputeId: d.id, referenceNumber: d.referenceNumber, suggestionId, ...result };
+      return {
+        disputeId: d.id,
+        referenceNumber: d.referenceNumber,
+        suggestionId,
+        ...result,
+        recommendedOfferUsdStatisticalEstimate: servedEstimate,
+        label,
+        modelVersion: mvOut,
+        honestyNote,
+        bandit: banditBlock,
+      };
+    }),
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 22 (S1): bandit transparency router
+// ────────────────────────────────────────────────────────────────────────────
+
+export const banditRouter = router({
+  /**
+   * Full transparency into what the bandit is doing with the org's offers
+   * (design §7): per-arm posteriors per segment + the live caps state.
+   * Org-scoped — never returns another org's rows (WHERE org_id = $1).
+   */
+  stats: protectedProcedure
+    .input(z.object({ orgId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      await assertOrgMember(db, ctx.user.id, input.orgId, READ_ROLES);
+      const armRows = await db.select().from(banditArmStats)
+        .where(eq(banditArmStats.orgId, input.orgId));
+      const counterRows = rowsOfExec(await db.execute(sql`
+        SELECT COUNT(*)::int AS serves,
+               COUNT(*) FILTER (WHERE exploration)::int AS explores
+        FROM bandit_assignments
+        WHERE org_id = ${input.orgId} AND created_at >= date_trunc('day', now())
+      `));
+      const pendingRows = rowsOfExec(await db.execute(sql`
+        SELECT COUNT(*)::int AS pending FROM bandit_assignments
+        WHERE org_id = ${input.orgId} AND outcome IS NULL
+      `));
+      return {
+        orgId: input.orgId,
+        enabled: banditEnabled(),
+        caps: {
+          explorationRate: explorationRate(),
+          maxExplorePerDay: maxExplorePerOrgPerDay(),
+          minPulls: minPulls(),
+          rewardWindowDays: rewardWindowDays(),
+          servesToday: Number(counterRows[0]?.serves ?? 0),
+          exploresToday: Number(counterRows[0]?.explores ?? 0),
+          pendingAttribution: Number(pendingRows[0]?.pending ?? 0),
+        },
+        arms: armRows.map(r => ({
+          segmentTier: r.segmentTier,
+          segmentKey: r.segmentKey,
+          armId: r.armId,
+          alpha: r.alpha,
+          beta: r.beta,
+          pulls: r.pulls,
+          served: r.served,
+          rewardRate: r.pulls > 0 ? Math.round(((r.alpha - 1) / r.pulls) * 1000) / 1000 : null,
+        })),
+        honestyNote:
+          "Arm posteriors are computed per organization only — no cross-organization pooling. Rewards are attributed nightly from real offer outcomes (accepted = 1, rejected = 0; countered and expired serves are excluded). Exploration is capped (rate + daily + ±10% amount band) and every served recommendation discloses the unadjusted baseline.",
+      };
+    }),
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 22 (S4): outcome-model calibration router
+// ────────────────────────────────────────────────────────────────────────────
+
+export const outcomeModelRouter = router({
+  /**
+   * Org-visible calibration of outcome-model-v2 over the org's OWN disputes
+   * only (membership-derived scoping, same as recommendV2). Predicted vs
+   * realized, joined nightly by the learning-loop refresh.
+   */
+  calibration: protectedProcedure
+    .input(z.object({ orgId: z.string(), days: z.number().int().min(1).max(365).default(90) }))
+    .query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      await assertOrgMember(db, ctx.user.id, input.orgId, READ_ROLES);
+      const rows = rowsOfExec(await db.execute(sql`
+        SELECT p.segment_tier AS tier, p.predicted_win_prob::float AS p_win,
+               p.actual_winner, p.actual_amount_usd::float AS actual_amount,
+               p.predicted_award_p25_usd::float AS p25, p.predicted_award_p75_usd::float AS p75
+        FROM outcome_model_predictions p
+        JOIN disputes d ON d.id = p.dispute_id
+        WHERE p.actual_winner IS NOT NULL
+          AND p.actual_joined_at >= now() - (${input.days} || ' days')::interval
+          AND d."createdBy" IN (SELECT "userId" FROM org_memberships WHERE "orgId" = ${input.orgId})
+      `));
+      const n = rows.length;
+      // Honesty: calibration copy only with N >= 30 joined outcomes.
+      if (n < 30) {
+        return {
+          orgId: input.orgId,
+          windowDays: input.days,
+          n,
+          brierScore: null,
+          meanAbsProbError: null,
+          awardCoverageP25P75: null,
+          byTier: [],
+          honestyNote:
+            `INSUFFICIENT DATA: only ${n} joined prediction-vs-outcome pairs in the window (< 30). Calibration metrics are withheld rather than shown thin.`,
+        };
+      }
+      const scored = rows.map(r => {
+        const p = Number(r.p_win);
+        const y = String(r.actual_winner) === "initiating_party" ? 1 : 0;
+        const covered =
+          r.p25 !== null && r.p75 !== null && r.actual_amount !== null &&
+          Number(r.p25) <= Number(r.actual_amount) && Number(r.actual_amount) <= Number(r.p75);
+        return { tier: String(r.tier ?? "unknown"), p, y, covered, hasBand: r.p25 !== null && r.p75 !== null && r.actual_amount !== null };
+      });
+      const brier = scored.reduce((s, r) => s + (r.p - r.y) ** 2, 0) / n;
+      const mae = scored.reduce((s, r) => s + Math.abs(r.p - r.y), 0) / n;
+      const banded = scored.filter(r => r.hasBand);
+      const coverage = banded.length > 0 ? banded.filter(r => r.covered).length / banded.length : null;
+      const tiers = new Map<string, { n: number; sumP: number; sumY: number }>();
+      for (const r of scored) {
+        const t = tiers.get(r.tier) ?? { n: 0, sumP: 0, sumY: 0 };
+        t.n += 1; t.sumP += r.p; t.sumY += r.y;
+        tiers.set(r.tier, t);
+      }
+      const round3 = (v: number) => Math.round(v * 1000) / 1000;
+      return {
+        orgId: input.orgId,
+        windowDays: input.days,
+        n,
+        brierScore: round3(brier),
+        meanAbsProbError: round3(mae),
+        awardCoverageP25P75: coverage !== null ? round3(coverage) : null,
+        byTier: [...tiers.entries()].map(([tier, t]) => ({
+          tier,
+          n: t.n,
+          meanPredictedWinProb: round3(t.sumP / t.n),
+          realizedWinRate: round3(t.sumY / t.n),
+        })),
+        honestyNote:
+          `Over the last ${input.days} days, across ${n} closed disputes in your organization, these are realized outcomes vs the model's predicted win probabilities (Brier ${round3(brier)}, mean absolute probability error ${round3(mae)}). Statistical calibration, not a guarantee.`,
+      };
     }),
 });
