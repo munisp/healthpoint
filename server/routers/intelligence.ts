@@ -573,9 +573,14 @@ export const prefillRouter = router({
             s.learnedConfidence = false;
           }
         }
-        // Stable sort by final confidence descending (ineligible items keep
-        // base confidence and relative order among ties).
-        suggestions.sort((a, b) => b.confidence - a.confidence);
+        // Stable sort by final confidence descending — ONLY when the ranking
+        // gate is open AND at least one suggestion was actually re-ranked
+        // (F2). Otherwise the P21 insertion order ([...reparse, ...priors])
+        // is preserved byte-identically (cold-start contract, .env.example
+        // NEXT_ACTION_RANKING_ENABLED).
+        if (rankingEnabled() && suggestions.some(s => s.learnedConfidence)) {
+          suggestions.sort((a, b) => b.confidence - a.confidence);
+        }
         results.push({ quarantineId: row.id, suggestionId, suggestions });
         const cHash = contextHash(input.orgId, "quarantine_repair", { sessionId: row.sessionId });
         for (const s of suggestions) {
@@ -748,17 +753,20 @@ export const offerStrategyRouter = router({
           eq(banditArmStats.segmentKey, segmentKey),
         ));
         const totalPulls = armRows.reduce((s, r) => s + r.pulls, 0);
-        // Today's org counters — re-read from the DB at serve time
-        // (multi-instance safe; no in-process cache).
+        // Today's org counters — re-read from the DB at serve time (no
+        // in-process cache). The caps are checked-then-inserted
+        // NON-atomically: best-effort under concurrency, overshoot bounded
+        // by the concurrent-serve count (see offer-bandit.ts Gate 3).
         const counterRows = rowsOfExec(await db.execute(sql`
           SELECT COUNT(*)::int AS serves,
                  COUNT(*) FILTER (WHERE exploration)::int AS explores
           FROM bandit_assignments
           WHERE org_id = ${input.orgId} AND created_at >= date_trunc('day', now())
         `));
+        const arms = parseArmsBps();
         const selection = selectOfferArm({
           baselineUsd: result.recommendedOfferUsdStatisticalEstimate,
-          arms: parseArmsBps(),
+          arms,
           states: armRows.map(r => ({ armId: r.armId, alpha: r.alpha, beta: r.beta, pulls: r.pulls, served: r.served })),
           totalPulls,
           exploresToday: Number(counterRows[0]?.explores ?? 0),
@@ -799,10 +807,13 @@ export const offerStrategyRouter = router({
         eventMetadata.exploration = selection.exploration;
         if (banditBlock.active) {
           // Honesty degrades exactly one step: bandit_active (design §3.2).
+          // S8: disclose the ACTUAL configured band (max |deltaBps| of the
+          // parsed arms, as a percent) — never a hardcoded "±10%".
+          const maxBandPct = Math.max(...arms.map(a => Math.abs(a.deltaBps))) / 100;
           label = "bandit_active";
           mvOut = { ...mvOut, honestyLabel: "bandit_active" };
           honestyNote +=
-            " This recommendation was adjusted by a bounded, per-organization learning process (±10% maximum) that learns from accepted and rejected offers; the unadjusted statistical estimate is also shown.";
+            ` This recommendation was adjusted by a bounded, per-organization learning process (±${maxBandPct}% maximum) that learns from accepted and rejected offers; the unadjusted statistical estimate is also shown.`;
         }
       }
 
@@ -884,7 +895,7 @@ export const banditRouter = router({
           rewardRate: r.pulls > 0 ? Math.round(((r.alpha - 1) / r.pulls) * 1000) / 1000 : null,
         })),
         honestyNote:
-          "Arm posteriors are computed per organization only — no cross-organization pooling. Rewards are attributed nightly from real offer outcomes (accepted = 1, rejected = 0; countered and expired serves are excluded). Exploration is capped (rate + daily + ±10% amount band) and every served recommendation discloses the unadjusted baseline.",
+          `Arm posteriors are computed per organization only — no cross-organization pooling. Rewards are attributed nightly from real offer outcomes (accepted = 1, rejected = 0; countered and expired serves are excluded). Exploration is capped (rate + daily + ±${Math.max(...parseArmsBps().map(a => Math.abs(a.deltaBps))) / 100}% amount band) and every served recommendation discloses the unadjusted baseline.`,
       };
     }),
 });
