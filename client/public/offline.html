@@ -3,45 +3,49 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0e6e5d" />
   <title>Offline — HealthPoint IDR</title>
   <style>
+    /* Warm-neutral + deep-teal trust palette (mirrors app design tokens).
+       All text/background pairs meet WCAG AA contrast. */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #f8fafc;
-      color: #1e293b;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #faf9f7;
+      color: #1f2a26;
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 1.5rem;
+      -webkit-font-smoothing: antialiased;
     }
     .card {
-      background: #fff;
-      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      border: 1px solid #e2e0da;
       border-radius: 12px;
       padding: 2.5rem 2rem;
       max-width: 420px;
       width: 100%;
       text-align: center;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+      box-shadow: 0 1px 3px rgba(15, 40, 34, 0.08);
     }
     .icon {
       width: 56px;
       height: 56px;
-      background: #eff6ff;
+      background: #e5efeb;
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
       margin: 0 auto 1.25rem;
     }
-    h1 { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.5rem; }
-    p { font-size: 0.9rem; color: #64748b; line-height: 1.6; margin-bottom: 1.5rem; }
+    h1 { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.5rem; letter-spacing: -0.01em; }
+    p { font-size: 0.9rem; color: #55605b; line-height: 1.6; margin-bottom: 1.5rem; }
     .badge {
       display: inline-block;
-      background: #dbeafe;
-      color: #1d4ed8;
+      background: #f7ebd3;
+      color: #7a5410;
       font-size: 0.75rem;
       font-weight: 600;
       padding: 0.2rem 0.6rem;
@@ -49,7 +53,7 @@
       margin-bottom: 1.25rem;
     }
     button {
-      background: #2563eb;
+      background: #0e6e5d;
       color: #fff;
       border: none;
       border-radius: 8px;
@@ -58,29 +62,35 @@
       font-weight: 600;
       cursor: pointer;
       width: 100%;
-      transition: background 0.15s;
+      transition: background-color 0.2s ease-out;
     }
-    button:hover { background: #1d4ed8; }
+    button:hover { background: #0a5a4c; }
+    button:focus-visible { outline: 2px solid #0e6e5d; outline-offset: 2px; }
     .tips {
       margin-top: 1.5rem;
       text-align: left;
-      background: #f8fafc;
+      background: #f4f3f0;
       border-radius: 8px;
       padding: 1rem;
     }
-    .tips h2 { font-size: 0.8rem; font-weight: 600; color: #475569; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
-    .tips ul { font-size: 0.82rem; color: #64748b; padding-left: 1.1rem; line-height: 1.8; }
+    .tips h2 { font-size: 0.8rem; font-weight: 600; color: #445056; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .tips ul { font-size: 0.82rem; color: #55605b; padding-left: 1.1rem; line-height: 1.8; }
+    @media (prefers-reduced-motion: reduce) {
+      button { transition: none; }
+    }
   </style>
 </head>
 <body>
-  <div class="card">
+  <main class="card">
     <div class="icon">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M1 6s4-2 11-2 11 2 11 2"/>
-        <path d="M1 18s4 2 11 2 11-2 11-2"/>
-        <line x1="1" y1="6" x2="1" y2="18"/>
-        <line x1="23" y1="6" x2="23" y2="18"/>
-        <line x1="12" y1="4" x2="12" y2="20"/>
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0e6e5d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="2" y1="2" x2="22" y2="22"/>
+        <path d="M8.5 16.5a5 5 0 0 1 7 0"/>
+        <path d="M2 8.82a15 15 0 0 1 4.17-2.65"/>
+        <path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/>
+        <path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/>
+        <path d="M5 13a10 10 0 0 1 5.24-2.76"/>
+        <line x1="12" y1="20" x2="12.01" y2="20"/>
       </svg>
     </div>
     <div class="badge">No Internet Connection</div>
@@ -89,7 +99,7 @@
       HealthPoint IDR requires an internet connection to access dispute data, AI features, and EMR integrations.
       Please check your connection and try again.
     </p>
-    <button onclick="window.location.reload()">Try Again</button>
+    <button type="button" onclick="window.location.reload()">Try Again</button>
     <div class="tips">
       <h2>While you wait</h2>
       <ul>
@@ -98,6 +108,6 @@
         <li>Any unsaved form data will be preserved</li>
       </ul>
     </div>
-  </div>
+  </main>
 </body>
 </html>

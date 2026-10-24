@@ -2,7 +2,8 @@
  * server/redis.ts
  * Redis client, distributed locking (Redlock), session cache, and pub/sub helpers.
  *
- * In production: set REDIS_URL env var (e.g. redis://localhost:6379 or rediss://...)
+ * In production: set REDIS_URL env var (e.g. redis://localhost:6379 or rediss://...),
+ * or REDIS_SENTINELS + REDIS_MASTER_NAME for Sentinel-managed failover.
  * In development/test without Redis: all operations degrade gracefully to no-ops.
  */
 
@@ -30,17 +31,69 @@ function getRedisUrl(): string | null {
   return process.env.REDIS_URL ?? null;
 }
 
+type SentinelConfig = {
+  sentinels: Array<{ host: string; port: number }>;
+  name: string;
+  password?: string;
+  sentinelPassword?: string;
+};
+
+/**
+ * Sentinel discovery (production HA). When REDIS_SENTINELS is set to a
+ * comma-separated "host:port" list and REDIS_MASTER_NAME names the monitored
+ * primary set, ioredis discovers the current primary through Sentinel and
+ * re-resolves it automatically after a failover. REDIS_PASSWORD authenticates
+ * against the data nodes; REDIS_SENTINEL_PASSWORD (optional) authenticates
+ * against the sentinels. REDIS_URL is ignored when Sentinel is configured.
+ */
+function getSentinelConfig(): SentinelConfig | null {
+  const raw = process.env.REDIS_SENTINELS?.trim();
+  const name = process.env.REDIS_MASTER_NAME?.trim();
+  if (!raw || !name) return null;
+  const sentinels = raw
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(entry => {
+      const idx = entry.lastIndexOf(":");
+      const host = idx > 0 ? entry.slice(0, idx) : entry;
+      const port = idx > 0 ? parseInt(entry.slice(idx + 1), 10) : 26379;
+      if (!host || !Number.isFinite(port)) {
+        throw new Error(`[Redis] Malformed REDIS_SENTINELS entry: "${entry}" (expected host:port)`);
+      }
+      return { host, port };
+    });
+  if (!sentinels.length) return null;
+  return {
+    sentinels,
+    name,
+    password: process.env.REDIS_PASSWORD || undefined,
+    sentinelPassword: process.env.REDIS_SENTINEL_PASSWORD || undefined,
+  };
+}
+
 export function getRedisClient(): Redis | null {
   if (_redis) return _redis;
-  const url = getRedisUrl();
-  if (!url) return null;
+  const sentinel = getSentinelConfig();
+  const url = sentinel ? null : getRedisUrl();
+  if (!sentinel && !url) return null;
 
   try {
-    _redis = new Redis(url, {
-      maxRetriesPerRequest: 3,
-      enableReadyCheck: true,
-      lazyConnect: false,
-    });
+    _redis = sentinel
+      ? new Redis({
+          sentinels: sentinel.sentinels,
+          name: sentinel.name,
+          password: sentinel.password,
+          sentinelPassword: sentinel.sentinelPassword,
+          maxRetriesPerRequest: 3,
+          enableReadyCheck: true,
+          lazyConnect: false,
+        })
+      : new Redis(url as string, {
+          maxRetriesPerRequest: 3,
+          enableReadyCheck: true,
+          lazyConnect: false,
+        });
 
     _redis.on("error", (err: Error) => {
       console.warn("[Redis] Connection error:", err.message);
@@ -181,14 +234,29 @@ export async function revokeToken(jti: string, ttlSeconds: number): Promise<void
 
 /**
  * Check if a JWT JTI has been revoked.
+ *
+ * Fail-closed in production: if Redis is unavailable or errors, the token is
+ * treated as revoked (request rejected) rather than silently allowed through.
+ * Development/test keep the graceful fail-open path with a warning, matching
+ * the rest of this module's degradation behavior.
  */
 export async function isTokenRevoked(jti: string): Promise<boolean> {
   const client = getRedisClient();
-  if (!client) return false;
+  if (!client) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("[Redis] isTokenRevoked: Redis client unavailable in production — treating token as revoked");
+      return true;
+    }
+    return false;
+  }
   try {
     const val = await client.get(`revoked:${jti}`);
     return val === "1";
   } catch (err) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("[Redis] isTokenRevoked error — treating token as revoked (fail-closed):", err);
+      return true;
+    }
     console.warn("[Redis] isTokenRevoked error:", err);
     return false;
   }

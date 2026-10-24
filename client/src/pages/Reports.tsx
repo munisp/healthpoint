@@ -22,10 +22,121 @@ const REPORT_TYPES = [
   { id: "outcomes", label: "Outcome Analysis", icon: TrendingUp, description: "Win rates, determination trends, and appeal rates" },
   { id: "timeline", label: "Timeline Compliance", icon: Clock, description: "Step completion times vs. NSA statutory deadlines" },
   { id: "emr", label: "EMR Integration", icon: CheckCircle2, description: "Data pull success rates and field extraction quality" },
+  { id: "lakehouse", label: "Lakehouse Analytics", icon: BarChart2, description: "Payer behavior, QPA trends, claim volume, dispute density (source-labeled)" },
 ];
 
 // All chart data is now DB-driven via trpc.reports.summary and trpc.dashboard.*
 // Empty arrays are shown when no data is available yet (seed via Admin panel)
+
+/** auditfix-b: lakehouse analytics section (lakehouseAnalytics router).
+ *  Every panel surfaces the server's `source` field verbatim — when the
+ *  lakehouse is not configured the server returns source:"postgres_fallback"
+ *  and the UI says exactly that (no fake "lakehouse" branding). */
+function SourceBadge({ source }: { source?: string }) {
+  if (!source) return null;
+  return source === "lakehouse"
+    ? <Badge variant="secondary">source: lakehouse</Badge>
+    : <Badge variant="outline">source: postgres fallback (lakehouse not configured)</Badge>;
+}
+
+function RowsTable({ rows, max = 10 }: { rows: Array<Record<string, unknown>>; max?: number }) {
+  if (!rows.length) return <p className="text-sm text-muted-foreground">No data available for this query yet.</p>;
+  const cols = Object.keys(rows[0]);
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-muted-foreground">
+            {cols.map(c => <th key={c} className="py-1 pr-3">{c.replace(/([A-Z])/g, " $1").replace(/_/g, " ")}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, max).map((r, i) => (
+            <tr key={i} className="border-t">
+              {cols.map(c => <td key={c} className="py-1 pr-3">{String(r[c] ?? "—")}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length > max && <p className="text-xs text-muted-foreground mt-1">Showing {max} of {rows.length} rows.</p>}
+    </div>
+  );
+}
+
+function LakehousePanel({ title, query }: { title: string; query: { data?: { source: string; rows: Array<Record<string, unknown>> }; isLoading: boolean; isError: boolean; error?: { message: string } | null } }) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex flex-wrap items-center gap-2">
+          {title}
+          <SourceBadge source={query.data?.source} />
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {query.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {query.isError && <p role="alert" className="text-sm text-destructive">{query.error?.message}</p>}
+        {query.data && <RowsTable rows={query.data.rows} />}
+      </CardContent>
+    </Card>
+  );
+}
+
+function LakehouseSection() {
+  const { data: myOrgs, isLoading: orgsLoading } = trpc.orgs.listMine.useQuery();
+  const [orgId, setOrgId] = useState("");
+  const effectiveOrgId = orgId || myOrgs?.[0]?.orgId || "";
+  const [code, setCode] = useState("");
+  const [state, setState] = useState("");
+
+  const payer = trpc.lakehouseAnalytics.payerBehaviorSummary.useQuery(
+    { orgId: effectiveOrgId }, { enabled: !!effectiveOrgId, retry: 1 });
+  const qpa = trpc.lakehouseAnalytics.qpaTrends.useQuery(
+    { orgId: effectiveOrgId, code: code.trim() || undefined, state: state.trim().toUpperCase() || undefined },
+    { enabled: !!effectiveOrgId, retry: 1 });
+  const volume = trpc.lakehouseAnalytics.claimVolumeStats.useQuery(
+    { orgId: effectiveOrgId }, { enabled: !!effectiveOrgId, retry: 1 });
+  const density = trpc.lakehouseAnalytics.disputeDensityByState.useQuery(undefined, { retry: 1 });
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-muted-foreground max-w-3xl">
+        Aggregated analytics. When the lakehouse query service is not configured on this deployment,
+        results come from the operational Postgres database and are labeled "postgres fallback".
+      </p>
+      {orgsLoading && <p className="text-sm text-muted-foreground">Loading your organizations…</p>}
+      {!orgsLoading && !myOrgs?.length && (
+        <p className="text-sm text-muted-foreground">You are not a member of any organization — organization-scoped analytics are unavailable.</p>
+      )}
+      {!!myOrgs?.length && (
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="text-xs text-muted-foreground block">Organization</label>
+            <select className="border rounded px-2 py-1 text-sm bg-background" value={effectiveOrgId}
+              onChange={e => setOrgId(e.target.value)} aria-label="Analytics organization">
+              {myOrgs.map(o => <option key={o.orgId} value={o.orgId}>{o.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block">QPA filter: service code (optional)</label>
+            <input className="border rounded px-2 py-1 text-sm bg-background w-32" value={code} onChange={e => setCode(e.target.value)} aria-label="QPA service code filter" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block">State (optional)</label>
+            <input className="border rounded px-2 py-1 text-sm bg-background w-20" maxLength={2} value={state} onChange={e => setState(e.target.value)} aria-label="QPA state filter" />
+          </div>
+        </div>
+      )}
+      {!!effectiveOrgId && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <LakehousePanel title="Payer behavior summary" query={payer} />
+          <LakehousePanel title="QPA trends" query={qpa} />
+          <LakehousePanel title="Claim volume stats" query={volume} />
+          <LakehousePanel title="Dispute density by state (platform-wide)" query={density} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Reports() {
   const C = useChartColors();
@@ -306,24 +417,75 @@ export default function Reports() {
           </Card>
         )}
 
-        {activeReport === "emr" && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {[
-              { label: "Total Data Pulls", value: "1,247", trend: "+12% vs last period", color: "text-blue-600" },
-              { label: "Success Rate", value: "97.3%", trend: "+0.8% vs last period", color: "text-green-600" },
-              { label: "Avg. Fields Extracted", value: "14.2 / 16", trend: "+1.1 vs last period", color: "text-indigo-600" },
-              { label: "Avg. Field Confidence", value: "91.4%", trend: "+2.3% vs last period", color: "text-amber-600" },
-            ].map(kpi => (
-              <Card key={kpi.label} className="border-slate-200">
-                <CardContent className="p-5">
-                  <p className="text-xs text-slate-500 mb-1">{kpi.label}</p>
-                  <p className={`text-3xl font-bold ${kpi.color}`}>{kpi.value}</p>
-                  <p className="text-xs text-green-600 mt-1">{kpi.trend}</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
+        {activeReport === "emr" && <EmrIntegrationReport />}
+        {activeReport === "lakehouse" && <LakehouseSection />}
       </div>
   );
 }
+
+// Real EMR integration metrics per connection (emr.list + emr.syncHistory).
+// Previously this card rendered fabricated KPIs ("1,247 pulls", "97.3%
+// success"); those numbers never existed server-side and were removed.
+function EmrConnectionStats({ connectionId, name, enabled }: { connectionId: string; name: string; enabled: boolean }) {
+  const { data: logs, isLoading, isError, error } = trpc.emr.syncHistory.useQuery(
+    { connectionId, limit: 100 },
+    { enabled }
+  );
+  const total = logs?.length ?? 0;
+  const success = logs?.filter(l => l.status === "success").length ?? 0;
+  const avgFields = total > 0 ? Math.round(logs!.reduce((s, l) => s + (l.fieldsExtracted ?? 0), 0) / total) : null;
+  const successRate = total > 0 ? Math.round((success / total) * 1000) / 10 : null;
+  return (
+    <Card className="border-slate-200">
+      <CardContent className="p-5">
+        <p className="text-sm font-semibold text-slate-700 mb-2 truncate">{name}</p>
+        {isLoading && <p className="text-xs text-slate-400">Loading sync history…</p>}
+        {isError && <p className="text-xs text-red-600">{error.message}</p>}
+        {logs && (
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <p className="text-xs text-slate-500">Data pulls (last 100)</p>
+              <p className="text-2xl font-bold text-blue-600">{total}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Success rate</p>
+              <p className="text-2xl font-bold text-green-600">{successRate == null ? "—" : `${successRate}%`}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Avg fields extracted</p>
+              <p className="text-2xl font-bold text-indigo-600">{avgFields == null ? "—" : avgFields}</p>
+            </div>
+          </div>
+        )}
+        {logs && total === 0 && (
+          <p className="text-xs text-slate-400 mt-1">No sync activity recorded for this connection yet.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function EmrIntegrationReport() {
+  const { isAuthenticated } = useAuth();
+  const { data: connections, isLoading, isError, error } = trpc.emr.list.useQuery(undefined, { enabled: isAuthenticated });
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-muted-foreground max-w-3xl">
+        Real sync telemetry per EMR connection (most recent 100 sync log entries per connection).
+        Period-over-period trends are not computed server-side and are therefore not shown.
+      </p>
+      {isLoading && <p className="text-sm text-muted-foreground">Loading EMR connections…</p>}
+      {isError && <p className="text-sm text-red-600">{error.message}</p>}
+      {connections && connections.length === 0 && (
+        <p className="text-sm text-muted-foreground">No EMR connections configured — there is no integration telemetry to report.</p>
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {(connections ?? []).map((c: any) => (
+          <EmrConnectionStats key={c.id} connectionId={c.id} name={c.name ?? c.emrSystem ?? c.id} enabled={isAuthenticated} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+

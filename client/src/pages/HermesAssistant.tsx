@@ -168,6 +168,30 @@ function ChatPanel({ disputeId }: { disputeId?: string }) {
   const [sessionId] = useState(() => nanoid());
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // auditfix-b: restore persisted history for this session (hermes.listChatHistory).
+  const [historyRequested, setHistoryRequested] = useState(false);
+  const historyQuery = trpc.hermes.listChatHistory.useQuery(
+    { sessionId, limit: 100 },
+    { enabled: historyRequested, retry: false },
+  );
+  const loadHistory = () => setHistoryRequested(true);
+  useEffect(() => {
+    if (!historyQuery.data) return;
+    if (historyQuery.data.length === 0) {
+      toast.info("No saved history for this session yet — history is saved once you chat.");
+      return;
+    }
+    setMessages(prev => [
+      prev[0],
+      ...historyQuery.data.map(m => ({
+        id: m.id,
+        role: m.role as ChatMessage["role"],
+        content: m.content,
+        timestamp: m.createdAt ? new Date(m.createdAt) : new Date(),
+      })),
+    ]);
+  }, [historyQuery.data]);
+
   const chatMutation = trpc.hermes.chat.useMutation({
     onSuccess: (data) => {
       setMessages(prev => [...prev, {
@@ -244,6 +268,17 @@ function ChatPanel({ disputeId }: { disputeId?: string }) {
 
   return (
     <div className="flex flex-col h-full">
+      <div className="flex items-center justify-end gap-2 px-4 pt-2">
+        <Button variant="ghost" size="sm" className="text-xs"
+          disabled={historyRequested && historyQuery.isFetching}
+          onClick={loadHistory}>
+          <History className="w-3 h-3 mr-1" />
+          {historyRequested ? (historyQuery.isFetching ? "Loading saved history…" : "Saved history loaded") : "Load saved history"}
+        </Button>
+        {historyQuery.isError && (
+          <span role="alert" className="text-xs text-destructive">{historyQuery.error.message}</span>
+        )}
+      </div>
       <ScrollArea className="flex-1 p-4" ref={scrollRef as React.RefObject<HTMLDivElement>}>
         <div className="space-y-4 pb-2">
           {messages.map((msg) => (
@@ -874,6 +909,101 @@ function JobHistoryPanel() {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
+/** auditfix-b: persisted insights panel (hermes.listInsights). Non-admins must scope by dispute. */
+function InsightsPanel() {
+  const [disputeId, setDisputeId] = useState("");
+  const q = trpc.hermes.listInsights.useQuery(
+    { disputeId: disputeId.trim() || undefined, limit: 50 },
+    { enabled: disputeId.trim().length > 0, retry: false },
+  );
+  return (
+    <div className="p-6 space-y-4">
+      <div className="space-y-1.5 max-w-md">
+        <label className="text-sm font-medium" htmlFor="insight-dispute">Dispute ID</label>
+        <p className="text-xs text-muted-foreground">
+          Insights attach to a dispute; enter a dispute id you can access to list its persisted insights.
+        </p>
+        <div className="flex gap-2">
+          <input id="insight-dispute" className="border rounded px-2 py-1 text-sm bg-background flex-1"
+            value={disputeId} onChange={e => setDisputeId(e.target.value)} placeholder="e.g. dsp_…" />
+        </div>
+      </div>
+      {q.isLoading && <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>}
+      {q.isError && <p role="alert" className="text-sm text-destructive">{q.error.message}</p>}
+      {q.data && q.data.length === 0 && (
+        <p className="text-sm text-muted-foreground">No persisted insights for this dispute yet — run a capability first.</p>
+      )}
+      <div className="space-y-2">
+        {q.data?.map(i => (
+          <Card key={i.id}>
+            <CardContent className="p-4 space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline">{i.insightType.replace(/_/g, " ")}</Badge>
+                {i.riskLevel && <Badge variant={i.riskLevel === "high" || i.riskLevel === "critical" ? "destructive" : "secondary"}>risk: {i.riskLevel}</Badge>}
+                {i.providerWinPct != null && (
+                  <Badge variant="outline">simulated provider win {i.providerWinPct}% (simulation)</Badge>
+                )}
+                <span className="text-xs text-muted-foreground">
+                  {i.generatedAt ? new Date(i.generatedAt).toLocaleString() : ""}
+                </span>
+              </div>
+              {i.narrative && <p className="text-xs text-muted-foreground line-clamp-3">{i.narrative}</p>}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** auditfix-b: regulatory change feed backed by persisted entries (hermes.listRegulatoryEntries). */
+function RegulatoryPanel() {
+  const [impact, setImpact] = useState("");
+  const q = trpc.hermes.listRegulatoryEntries.useQuery(
+    { impactLevel: (impact || undefined) as "low" | "medium" | "high" | "critical" | undefined, limit: 50 },
+    { retry: false },
+  );
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex items-end gap-2">
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium" htmlFor="reg-impact">Impact level</label>
+          <select id="reg-impact" className="border rounded px-2 py-1 text-sm bg-background"
+            value={impact} onChange={e => setImpact(e.target.value)}>
+            <option value="">All</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="critical">Critical</option>
+          </select>
+        </div>
+      </div>
+      {q.isLoading && <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>}
+      {q.isError && <p role="alert" className="text-sm text-destructive">{q.error.message}</p>}
+      {q.data && q.data.length === 0 && (
+        <p className="text-sm text-muted-foreground">No regulatory entries recorded yet — generate a regulatory feed from Capabilities.</p>
+      )}
+      <div className="space-y-2">
+        {q.data?.map(e => (
+          <Card key={e.id}>
+            <CardContent className="p-4 space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={e.impactLevel === "critical" || e.impactLevel === "high" ? "destructive" : "secondary"}>{e.impactLevel}</Badge>
+                <span className="font-medium text-sm">{e.title}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">{e.summary}</p>
+              <p className="text-xs text-muted-foreground">
+                Source: {e.sourceUrl ? <a className="underline" href={e.sourceUrl} target="_blank" rel="noreferrer">{e.source}</a> : e.source}
+                {e.effectiveDate ? ` · effective ${new Date(e.effectiveDate).toLocaleDateString()}` : ""}
+              </p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function HermesAssistant() {
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState("chat");
@@ -913,6 +1043,12 @@ export default function HermesAssistant() {
           <TabsTrigger value="history" className="flex items-center gap-1.5">
             <History className="w-3.5 h-3.5" />Job History
           </TabsTrigger>
+          <TabsTrigger value="insights" className="flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5" />Insights
+          </TabsTrigger>
+          <TabsTrigger value="regulatory" className="flex items-center gap-1.5">
+            <History className="w-3.5 h-3.5" />Regulatory
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="chat" className="flex-1 overflow-hidden mt-0 border-0">
@@ -925,6 +1061,14 @@ export default function HermesAssistant() {
 
         <TabsContent value="history" className="flex-1 overflow-auto mt-0 border-0">
           <JobHistoryPanel />
+        </TabsContent>
+
+        <TabsContent value="insights" className="flex-1 overflow-auto mt-0 border-0">
+          <InsightsPanel />
+        </TabsContent>
+
+        <TabsContent value="regulatory" className="flex-1 overflow-auto mt-0 border-0">
+          <RegulatoryPanel />
         </TabsContent>
       </Tabs>
     </div>

@@ -1,35 +1,35 @@
-# OpenAppsec WAF Policy for HealthPoint IDR
-# Protects the APISIX gateway from OWASP Top 10 attacks
+# open-appsec local policy for HealthPoint IDR platform
+# Reference: https://docs.openappsec.io/
 
-default:
-  mode: prevent-learn
-
-specific-rules:
-  - hosts:
-      - "*"
+policies:
+  - name: HealthPoint WAF Policy
     mode: prevent-learn
     practices:
-      - name: idr-waf-practice
-        type: WebApplication
-        web-attacks:
-          max-body-size-kb: 10240
-          max-header-size-bytes: 102400
-          max-url-size-bytes: 32768
-          override-mode: prevent
-        anti-bot:
-          injected-behavior: transparent
-          silent-behavior: allow
-        snort-signatures:
-          configmap: []
-          override-mode: prevent
-        openapi-schema-validation:
-          configmap: []
-          override-mode: detect
+      - name: Web Attacks
+        override:
+          web-attacks:
+            mode: prevent
+            confidence-level: high
+      - name: "Trusted Sources"
+        # Audit P0-5: the docker bridge CIDR 172.16.0.0/12 was removed from
+        # trusted sources — it bypassed the WAF for every container on the
+        # bridge network. Only localhost remains trusted (health probes).
+        override:
+          trusted-sources:
+            sources:
+              - 127.0.0.1/32
+            action: detect
+      - name: API Security
+        override:
+          api-security:
+            schema-validation: true
+            openapi-file: /etc/nginx/openapi.yaml
+    triggers:
+      - name: Default
+        conditions:
+          - type: host
+            value: "*"
 
-# Trusted sources (internal services bypass WAF)
-trusted-sources:
-  - name: internal-services
-    sources-identifiers:
-      - 10.0.0.0/8
-      - 172.16.0.0/12
-      - 192.168.0.0/16
+log:
+  destination: stdout
+  format: json

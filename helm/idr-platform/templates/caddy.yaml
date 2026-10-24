@@ -1,7 +1,9 @@
 {{- if .Values.caddy.enabled }}
 ###############################################################################
 # Caddy Edge Layer — TLS termination, HTTP/3, Coraza WAF, L4 TCP routing
-# Traffic flow: Internet → Caddy → OpenAppsec → APISIX → App
+# Traffic flow: Internet → Caddy → APISIX → App
+#               (single WAF: Coraza at the edge — ADR-003; the openappsec
+#                hop was removed 2026-09-07, see infra/openappsec/DEPRECATED.md)
 ###############################################################################
 
 # ── ConfigMap: Caddyfile ──────────────────────────────────────────────────────
@@ -80,12 +82,19 @@ data:
         }
       }
 
-      # Proxy to OpenAppsec WAF → APISIX → App
-      reverse_proxy http://{{ include "idr-platform.fullname" . }}-openappsec:80 {
+      # Proxy DIRECTLY to the APISIX gateway (ADR-003, one-WAF decision):
+      # the Coraza WAF above is the single WAF layer; the openappsec ML-WAF
+      # hop was removed (decorative — a bypass defect meant it inspected
+      # only a subset of traffic). Restore from git history only with the
+      # bypass fixed and the image pinned; see infra/openappsec/DEPRECATED.md.
+      # NOTE (pre-existing gap in this legacy chart): no APISIX Service
+      # template exists in templates/ — add one exposing port 9080 (or a
+      # subchart) before this renders to a working deployment.
+      reverse_proxy http://{{ include "idr-platform.fullname" . }}-apisix:9080 {
         header_up X-Forwarded-For {remote_host}
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-Proto https
-        health_uri /healthz
+        health_uri /apisix/status
         health_interval 10s
         lb_policy round_robin
       }
@@ -187,18 +196,6 @@ data:
                   "upstreams": [{"dial": ["{{ include "idr-platform.fullname" . }}-opensearch:9200"]}]
                 }]
               }]
-            },
-            "fluvio_mtls": {
-              "listen": ["0.0.0.0:9004"],
-              "routes": [{
-                "handle": [{
-                  "handler": "tls",
-                  "certificate_selection": {"any_tag": ["internal"]}
-                }, {
-                  "handler": "proxy",
-                  "upstreams": [{"dial": ["{{ include "idr-platform.fullname" . }}-fluvio-sc:9003"]}]
-                }]
-              }]
             }
           }
         }
@@ -276,9 +273,6 @@ spec:
               protocol: TCP
             - name: os-mtls
               containerPort: 9201
-              protocol: TCP
-            - name: fluvio-mtls
-              containerPort: 9004
               protocol: TCP
           env:
             - name: CLOUDFLARE_API_TOKEN
@@ -381,10 +375,6 @@ spec:
     - name: opensearch-mtls
       port: {{ .Values.caddy.layer4.opensearch.port }}
       targetPort: 9201
-      protocol: TCP
-    - name: fluvio-mtls
-      port: {{ .Values.caddy.layer4.fluvio.port }}
-      targetPort: 9004
       protocol: TCP
 
 ---

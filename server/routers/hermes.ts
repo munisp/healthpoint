@@ -1,20 +1,34 @@
 /**
  * Hermes AI Agent Router
- * Provides 8 AI-powered capabilities for the HealthPoint IDR platform:
+ * AI-powered capabilities for the HealthPoint IDR platform:
  * 1. Narrative generation
  * 2. Outcome simulation
  * 3. FHIR/EMR enrichment
  * 4. Risk scoring
  * 5. Payer intelligence synthesis
- * 6. Regulatory change feed
+ * 6. Regulatory change feed generation
  * 7. Arbitrator scoring
- * 8. Chat (general agent)
+ * 8. Chat (general agent) + job history
+ *
+ * Phase 13 FB (O1.24-27): listRegulatoryEntries, markRegulatoryRead,
+ * getChatHistory and getDisputeInsights were REMOVED — zero callers and no
+ * corresponding UI surfaces (HermesAssistant has no history/insights panel).
+ *
+ * Phase 15 FB (A5): the persisted tables (hermes_chat_messages,
+ * hermes_insights, hermes_regulatory_entries) were write-never-read sinks.
+ * Backend readers (listChatHistory, listInsights, listRegulatoryEntries) are
+ * re-exposed below with user-scoping + dispute IDOR guards. UI wiring is
+ * PENDING — owned by the client wave (HermesAssistant history/insights
+ * panels). Until a UI consumes them these procedures will show as
+ * NO-CALLER in alignment audits; that is intentional and documented here.
  */
 
 import { router, protectedProcedure } from "../_core/trpc";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { invokeLLM } from "../_core/llm";
 import { getDb } from "../db";
+import { assertDisputeAccess } from "../authz";
 import {
   hermesJobs,
   hermesInsights,
@@ -92,6 +106,9 @@ export const hermesRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
+      // IDOR guard: narrative generation reads the full dispute (PHI + financials).
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
+
       const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
       if (!dispute) throw new Error("Dispute not found");
 
@@ -166,6 +183,9 @@ Notes: ${dispute.notes ?? "None"}`;
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
+      // IDOR guard: outcome simulation reads the full dispute record.
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
+
       const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
       if (!dispute) throw new Error("Dispute not found");
 
@@ -192,9 +212,9 @@ Reference: ${dispute.referenceNumber}
 Service Type: ${dispute.serviceType}
 CPT Codes: ${(dispute.cptCodes as string[]).join(", ")}
 Billed: $${dispute.billedAmount}
-QPA: $${dispute.qpaAmount ?? "Unknown"}
-Provider Offer: $${dispute.initiatingPartyOffer ?? "Not submitted"}
-Payer Offer: $${dispute.respondingPartyOffer ?? "Not submitted"}
+QPA Amount: $${dispute.qpaAmount ?? "Unknown"}
+Provider Offer: ${dispute.initiatingPartyOffer ?? "Not submitted"}
+Payer Offer: ${dispute.respondingPartyOffer ?? "Not submitted"}
 State: ${dispute.patientState}
 Step: ${dispute.currentStep}
 ${input.additionalContext ? `Additional context: ${input.additionalContext}` : ""}`,
@@ -263,6 +283,9 @@ ${input.additionalContext ? `Additional context: ${input.additionalContext}` : "
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
+      // IDOR guard: risk scoring reads the full dispute record.
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
+
       const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
       if (!dispute) throw new Error("Dispute not found");
 
@@ -294,7 +317,7 @@ Consider: deadline proximity, billed/QPA ratio, step progression, missing offers
             content: `Score risk for dispute ${dispute.referenceNumber}:
 Status: ${dispute.status} | Step: ${dispute.currentStep}
 Billed: $${dispute.billedAmount} | QPA: $${dispute.qpaAmount ?? "Unknown"}
-Provider offer: $${dispute.initiatingPartyOffer ?? "None"} | Payer offer: $${dispute.respondingPartyOffer ?? "None"}
+Provider offer: ${dispute.initiatingPartyOffer ?? "None"} | Payer offer: ${dispute.respondingPartyOffer ?? "None"}
 Nearest deadline in days: ${nearestDeadlineDays}
 Eligible: ${dispute.isEligible ?? "Unknown"}`,
           },
@@ -353,6 +376,9 @@ Eligible: ${dispute.isEligible ?? "Unknown"}`,
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
+
+      // IDOR guard: enrichment attaches insights to the dispute.
+      await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
 
       const t0 = Date.now();
 
@@ -579,35 +605,15 @@ Current date context: ${new Date().toISOString().split("T")[0]}`,
         latencyMs,
       });
 
+      // Phase 15 FB (A6): changelog projection for the regulatory-feed ingest.
+      const { writeChangelogEntry } = await import("../changelog");
+      writeChangelogEntry({
+        title: `Regulatory feed ingest: ${entries.length} ${entries.length === 1 ? "entry" : "entries"}`,
+        description: `Topics: ${(input.topics ?? []).join(", ") || "general"}. Sources: ${[...new Set(entries.map((e: { source: string }) => e.source))].join(", ")}`,
+        category: "improvement",
+      }).catch(err => console.warn("[changelog] regulatory-feed projection failed (non-blocking):", err?.message ?? err));
+
       return { entries, latencyMs };
-    }),
-
-  listRegulatoryEntries: protectedProcedure
-    .input(z.object({
-      limit: z.number().min(1).max(50).default(20),
-      unreadOnly: z.boolean().default(false),
-    }))
-    .query(async ({ input }) => {
-      const db = await getDb();
-      if (!db) return [];
-      const rows = await db
-        .select()
-        .from(hermesRegulatoryEntries)
-        .where(input.unreadOnly ? eq(hermesRegulatoryEntries.isRead, false) : undefined)
-        .orderBy(desc(hermesRegulatoryEntries.createdAt))
-        .limit(input.limit);
-      return rows;
-    }),
-
-  markRegulatoryRead: protectedProcedure
-    .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database unavailable");
-      await db.update(hermesRegulatoryEntries)
-        .set({ isRead: true })
-        .where(eq(hermesRegulatoryEntries.id, input.id));
-      return { success: true };
     }),
 
   // ── 7. Arbitrator Scoring ───────────────────────────────────────────────────
@@ -622,6 +628,11 @@ Current date context: ${new Date().toISOString().split("T")[0]}`,
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
+
+      // IDOR guard: arbitrator scoring may attach an insight to the dispute.
+      if (input.disputeId) {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "write");
+      }
 
       const t0 = Date.now();
 
@@ -675,6 +686,8 @@ ${input.cptCodes?.length ? `CPT codes: ${input.cptCodes.join(", ")}` : ""}`,
         inputPayload: { arbitratorName: input.arbitratorName, serviceType: input.serviceType },
         outputJson: raw,
         modelUsed: "gpt-5",
+        promptTokens: res.usage?.prompt_tokens,
+        completionTokens: res.usage?.completion_tokens,
         latencyMs,
       });
 
@@ -711,6 +724,8 @@ ${input.cptCodes?.length ? `CPT codes: ${input.cptCodes.join(", ")}` : ""}`,
       // Fetch dispute context if provided
       let disputeContext = "";
       if (input.disputeId) {
+        // IDOR guard: dispute context contains PHI/financials.
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
         const [dispute] = await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
         if (dispute) {
           disputeContext = `\n\nActive dispute context:
@@ -718,7 +733,7 @@ Reference: ${dispute.referenceNumber}
 Provider: ${dispute.initiatingPartyName}
 Payer: ${dispute.respondingPartyName ?? "Unknown"}
 Service: ${dispute.serviceType} | CPTs: ${(dispute.cptCodes as string[]).join(", ")}
-Billed: $${dispute.billedAmount} | QPA: $${dispute.qpaAmount ?? "N/A"}
+Billed: $${dispute.billedAmount} | QPA: ${dispute.qpaAmount ?? "N/A"}
 Step: ${dispute.currentStep} | Status: ${dispute.status}`;
         }
       }
@@ -782,22 +797,66 @@ Be concise, accurate, and actionable. Cite regulatory references when relevant.$
       return { reply, messageId: assistantMsgId, latencyMs };
     }),
 
-  getChatHistory: protectedProcedure
+  // ── Phase 15 FB (A5) readers — backend-only; UI wiring pending (client wave) ──
+
+  /** Chat history for one of the caller's own sessions (newest last). */
+  listChatHistory: protectedProcedure
     .input(z.object({
-      sessionId: z.string(),
+      sessionId: z.string().min(1).max(128),
+      limit: z.number().min(1).max(200).default(100),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const rows = await db
+        .select()
+        .from(hermesChatMessages)
+        .where(and(eq(hermesChatMessages.sessionId, input.sessionId), eq(hermesChatMessages.userId, ctx.user.id)))
+        .orderBy(hermesChatMessages.createdAt)
+        .limit(input.limit);
+      return rows;
+    }),
+
+  /** Persisted insights for a dispute (IDOR-guarded) or, for admins, global. */
+  listInsights: protectedProcedure
+    .input(z.object({
+      disputeId: z.string().optional(),
+      insightType: z.string().max(64).optional(),
       limit: z.number().min(1).max(100).default(50),
     }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      return db
-        .select()
-        .from(hermesChatMessages)
-        .where(and(
-          eq(hermesChatMessages.sessionId, input.sessionId),
-          eq(hermesChatMessages.userId, ctx.user.id),
-        ))
-        .orderBy(hermesChatMessages.createdAt)
+      // hermes_insights has no userId column; rows always attach to a dispute.
+      // Non-admins MUST scope by a dispute they can read; admins may list all.
+      if (input.disputeId) {
+        await assertDisputeAccess(ctx.user.id, ctx.user.role, input.disputeId, "read");
+      } else if (ctx.user.role !== "admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "disputeId is required to list insights" });
+      }
+      const conditions = [];
+      if (input.disputeId) conditions.push(eq(hermesInsights.disputeId, input.disputeId));
+      if (input.insightType) conditions.push(eq(hermesInsights.insightType, input.insightType as typeof hermesInsights.$inferSelect["insightType"]));
+      const q = db.select().from(hermesInsights);
+      return (conditions.length ? q.where(and(...conditions)) : q)
+        .orderBy(desc(hermesInsights.generatedAt))
+        .limit(input.limit);
+    }),
+
+  /** Persisted regulatory-feed entries (platform-wide reference data). */
+  listRegulatoryEntries: protectedProcedure
+    .input(z.object({
+      impactLevel: z.enum(["low", "medium", "high", "critical"]).optional(),
+      limit: z.number().min(1).max(100).default(50),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const conditions = [];
+      if (input.impactLevel) conditions.push(eq(hermesRegulatoryEntries.impactLevel, input.impactLevel));
+      const q = db.select().from(hermesRegulatoryEntries);
+      return (conditions.length ? q.where(and(...conditions)) : q)
+        .orderBy(desc(hermesRegulatoryEntries.createdAt))
         .limit(input.limit);
     }),
 
@@ -820,18 +879,5 @@ Be concise, accurate, and actionable. Cite regulatory references when relevant.$
         .where(and(...conditions))
         .orderBy(desc(hermesJobs.createdAt))
         .limit(input.limit);
-    }),
-
-  // ── Insights for a dispute ───────────────────────────────────────────────────
-  getDisputeInsights: protectedProcedure
-    .input(z.object({ disputeId: z.string() }))
-    .query(async ({ input }) => {
-      const db = await getDb();
-      if (!db) return [];
-      return db
-        .select()
-        .from(hermesInsights)
-        .where(eq(hermesInsights.disputeId, input.disputeId))
-        .orderBy(desc(hermesInsights.generatedAt));
     }),
 });

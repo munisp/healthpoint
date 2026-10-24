@@ -1,0 +1,70 @@
+{{- if .Values.client.enabled }}
+# Static SPA served by nginx. Disabled by default — the server image already
+# serves the built client (see values.yaml).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "healthpoint.fullname" . }}-client
+  labels:
+    {{- include "healthpoint.labels" . | nindent 4 }}
+    app.kubernetes.io/component: client
+spec:
+  replicas: {{ .Values.client.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "healthpoint.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: client
+  template:
+    metadata:
+      labels:
+        {{- include "healthpoint.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: client
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: client
+          image: {{ include "healthpoint.image" (dict "image" .Values.client.image "root" .) | quote }}
+          imagePullPolicy: {{ .Values.imageDefaults.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.client.service.port }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.client.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "healthpoint.fullname" . }}-client
+  labels:
+    {{- include "healthpoint.labels" . | nindent 4 }}
+    app.kubernetes.io/component: client
+spec:
+  type: {{ .Values.client.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.client.service.port }}
+      targetPort: http
+  selector:
+    {{- include "healthpoint.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: client
+{{- end }}

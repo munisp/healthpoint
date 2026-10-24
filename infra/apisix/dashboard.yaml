@@ -1,0 +1,25 @@
+# APISIX Dashboard configuration
+# Audit P0-4: listen port moved 9000 -> 9002 to avoid the collision with the
+# MinIO S3 API (9000). Compose publishes 9002:9002.
+conf:
+  listen:
+    host: 0.0.0.0
+    port: 9002
+  allow_list:
+    - 0.0.0.0/0
+  etcd:
+    endpoints:
+      - http://etcd:2379
+    prefix: /apisix
+  log:
+    error_log:
+      level: warn
+      file_path: logs/error.log
+    access_log:
+      file_path: logs/access.log
+  authentication:
+    secret: ${DASHBOARD_SECRET}
+    expire_time: 3600
+    users:
+      - username: ${DASHBOARD_USER}
+        password: ${DASHBOARD_PASSWORD}

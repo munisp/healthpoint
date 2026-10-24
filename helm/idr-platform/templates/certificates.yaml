@@ -1,0 +1,155 @@
+{{/*
+  Internal mTLS certificates (cert-manager v1).
+  Audit P1 (2026-09-05): internal data-plane traffic (kafka, temporal,
+  tigerbeetle, redis, opensearch) is plaintext inside the cluster. When
+  internalMtls.enabled=true this template renders:
+    - a cert-manager CA Issuer backed by the existing internal CA secret
+      (caddy.internalCaSecret, default `caddy-internal-ca` — the same CA the
+      Caddy layer-4 mTLS listeners trust), and
+    - one Certificate per internal service, issued into a
+      `<service>-tls` Secret in .Values.global.namespace.
+  Prerequisites: cert-manager v1 CRDs installed; the CA secret must be
+  type kubernetes.io/tls with tls.crt/tls.key (a CA key pair).
+*/}}
+{{- if .Values.internalMtls.enabled }}
+{{- $ns := .Values.global.namespace }}
+{{- $caSecret := default .Values.caddy.internalCaSecret .Values.internalMtls.caSecretName }}
+{{- $duration := default "2160h" .Values.internalMtls.duration }}
+{{- $renewBefore := default "360h" .Values.internalMtls.renewBefore }}
+{{- $fullname := include "idr-platform.fullname" . }}
+---
+# Internal CA issuer — signs all in-cluster service certificates from the
+# existing internal CA key pair (shared with the Caddy layer-4 mTLS trust pool).
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $fullname }}-internal-ca
+  namespace: {{ $ns }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: internal-mtls
+spec:
+  ca:
+    secretName: {{ $caSecret }}
+---
+# Kafka (client + inter-broker mTLS)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-kafka-tls
+  namespace: {{ $ns }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka
+spec:
+  secretName: {{ $fullname }}-kafka-tls
+  issuerRef:
+    name: {{ $fullname }}-internal-ca
+    kind: Issuer
+  duration: {{ $duration }}
+  renewBefore: {{ $renewBefore }}
+  usages: [server auth, client auth]
+  dnsNames:
+    - {{ $fullname }}-kafka
+    - {{ $fullname }}-kafka.{{ $ns }}
+    - {{ $fullname }}-kafka.{{ $ns }}.svc
+    - {{ $fullname }}-kafka.{{ $ns }}.svc.cluster.local
+---
+# Temporal frontend gRPC mTLS
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-temporal-tls
+  namespace: {{ $ns }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal
+spec:
+  secretName: {{ $fullname }}-temporal-tls
+  issuerRef:
+    name: {{ $fullname }}-internal-ca
+    kind: Issuer
+  duration: {{ $duration }}
+  renewBefore: {{ $renewBefore }}
+  usages: [server auth, client auth]
+  dnsNames:
+    - {{ $fullname }}-temporal
+    - {{ $fullname }}-temporal.{{ $ns }}
+    - {{ $fullname }}-temporal.{{ $ns }}.svc
+    - {{ $fullname }}-temporal.{{ $ns }}.svc.cluster.local
+    - temporal-frontend
+    - temporal-frontend.{{ $ns }}.svc.cluster.local
+---
+# TigerBeetle ledger (headless StatefulSet service)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-tigerbeetle-tls
+  namespace: {{ $ns }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tigerbeetle
+spec:
+  secretName: {{ $fullname }}-tigerbeetle-tls
+  issuerRef:
+    name: {{ $fullname }}-internal-ca
+    kind: Issuer
+  duration: {{ $duration }}
+  renewBefore: {{ $renewBefore }}
+  usages: [server auth, client auth]
+  dnsNames:
+    - {{ $fullname }}-tigerbeetle
+    - {{ $fullname }}-tigerbeetle.{{ $ns }}
+    - {{ $fullname }}-tigerbeetle.{{ $ns }}.svc
+    - {{ $fullname }}-tigerbeetle.{{ $ns }}.svc.cluster.local
+    # Per-pod headless-service names (StatefulSet)
+    - "*.{{ $fullname }}-tigerbeetle.{{ $ns }}.svc.cluster.local"
+---
+# Redis (replication: master + replicas)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-redis-tls
+  namespace: {{ $ns }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  secretName: {{ $fullname }}-redis-tls
+  issuerRef:
+    name: {{ $fullname }}-internal-ca
+    kind: Issuer
+  duration: {{ $duration }}
+  renewBefore: {{ $renewBefore }}
+  usages: [server auth, client auth]
+  dnsNames:
+    - {{ $fullname }}-redis
+    - {{ $fullname }}-redis.{{ $ns }}
+    - {{ $fullname }}-redis.{{ $ns }}.svc
+    - {{ $fullname }}-redis.{{ $ns }}.svc.cluster.local
+    - {{ $fullname }}-redis-master.{{ $ns }}.svc.cluster.local
+    - {{ $fullname }}-redis-replicas.{{ $ns }}.svc.cluster.local
+---
+# OpenSearch transport + HTTP TLS
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-opensearch-tls
+  namespace: {{ $ns }}
+  labels:
+    {{- include "idr-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: opensearch
+spec:
+  secretName: {{ $fullname }}-opensearch-tls
+  issuerRef:
+    name: {{ $fullname }}-internal-ca
+    kind: Issuer
+  duration: {{ $duration }}
+  renewBefore: {{ $renewBefore }}
+  usages: [server auth, client auth]
+  dnsNames:
+    - {{ $fullname }}-opensearch
+    - {{ $fullname }}-opensearch.{{ $ns }}
+    - {{ $fullname }}-opensearch.{{ $ns }}.svc
+    - {{ $fullname }}-opensearch.{{ $ns }}.svc.cluster.local
+{{- end }}

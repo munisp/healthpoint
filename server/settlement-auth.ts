@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHash, createHmac, timingSafeEqual } from "crypto";
 
 export const SETTLEMENT_SIGNATURE_HEADER = "x-settlement-signature";
 export const SETTLEMENT_TIMESTAMP_HEADER = "x-settlement-timestamp";
@@ -69,4 +69,71 @@ export function verifySettlementCallbackSignature(input: {
     return { valid: false, reason: "invalid settlement callback signature" };
   }
   return { valid: true };
+}
+
+// ─── Replay protection (settlement_callback_nonces) ─────────────────────────
+//
+// HMAC + timestamp-window verification alone leaves a gap: a captured callback
+// is byte-identical replayable inside the window. The settlement callback
+// payloads carry NO nonce/jti field, so we DERIVE a per-transmission nonce:
+//
+//   nonce = sha256hex(`${signature}.${timestamp}.${sha256hex(rawBody)}`)
+//
+// Deterministic for a given transmission (any byte change to signature,
+// timestamp, or body yields a different nonce), yet distinct across legitimate
+// provider retries (which re-sign with a fresh timestamp), so at-least-once
+// delivery semantics are preserved and only true replays are rejected.
+//
+// Rows live in settlement_callback_nonces (migration 0055_wave_auditfix) and
+// are purged by the retention worker (server/scheduled/retentionWorker.ts).
+
+export const SETTLEMENT_NONCE_TTL_MS = 24 * 60 * 60 * 1000; // 24h >> 5min window
+
+export function deriveSettlementCallbackNonce(input: {
+  signature: string;
+  timestamp: string;
+  rawBody: string;
+}): string {
+  const bodyHash = createHash("sha256").update(input.rawBody).digest("hex");
+  return createHash("sha256")
+    .update(`${input.signature}.${input.timestamp}.${bodyHash}`)
+    .digest("hex");
+}
+
+/**
+ * Atomically claim a nonce. Returns true when the nonce was newly observed
+ * (inserted), false when it already exists (replay). Call AFTER signature
+ * verification and BEFORE business processing, in the same request path, so
+ * the claim is the single atomic gate. Throws when the DB is unavailable —
+ * settlement callbacks already require the DB for reconciliation, so this
+ * preserves fail-closed behavior (the route returns 503).
+ */
+export async function claimSettlementCallbackNonce(
+  nonce: string,
+  ttlMs: number = SETTLEMENT_NONCE_TTL_MS
+): Promise<boolean> {
+  const { getDb } = await import("./db");
+  const { settlementCallbackNonces } = await import("../drizzle/schema-portal-rpa");
+  const db = await getDb();
+  if (!db) throw new Error("settlement callback replay store unavailable (database down)");
+  const inserted = await db
+    .insert(settlementCallbackNonces)
+    .values({ nonce, expiresAt: new Date(Date.now() + ttlMs) })
+    .onConflictDoNothing()
+    .returning({ nonce: settlementCallbackNonces.nonce });
+  return inserted.length > 0;
+}
+
+/** Retention hook: drop nonce rows past their expiry. Returns rows purged. */
+export async function purgeExpiredSettlementCallbackNonces(now: Date = new Date()): Promise<number> {
+  const { getDb } = await import("./db");
+  const { settlementCallbackNonces } = await import("../drizzle/schema-portal-rpa");
+  const { lt } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .delete(settlementCallbackNonces)
+    .where(lt(settlementCallbackNonces.expiresAt, now))
+    .returning({ nonce: settlementCallbackNonces.nonce });
+  return rows.length;
 }

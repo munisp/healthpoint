@@ -98,7 +98,11 @@ export default function FHIRCacheViewer() {
               <div className="text-center py-12 text-muted-foreground">
                 <Database className="h-10 w-10 mx-auto mb-3 opacity-30" />
                 <p className="font-medium">No cached FHIR resources</p>
-                <p className="text-sm">Resources are cached automatically when EMR data is pulled into disputes.</p>
+                <p className="text-sm max-w-md mx-auto">
+                  This cache is currently read-only in the platform: resources are listed and purged here, but the
+                  EMR-sync writer that populates the cache has not been enabled yet (backend work pending).
+                  An empty list is therefore expected — not an error.
+                </p>
               </div>
             ) : (
               <div className="overflow-x-auto">

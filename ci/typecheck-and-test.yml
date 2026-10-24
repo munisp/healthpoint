@@ -1,0 +1,49 @@
+# Move this file to .github/workflows/ — automation token lacks workflow scope (403).
+# Until it is moved, GitHub Actions will NOT pick it up; run it manually with
+# `act` or copy it into .github/workflows/ via a human-maintainer commit.
+# Audit P2 (2026-09-05).
+name: typecheck-and-test
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+
+jobs:
+  typecheck-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      # TODO(assurance): remove continue-on-error once the PRE-EXISTING
+      # TypeScript errors are fixed — see ci/README.md for the current list
+      # (portal-rpa / server registry TS2802 / TS2322 and friends). The gate
+      # starts warn-only so it reports status without blocking merges on
+      # debt that predates this pipeline.
+      - name: TypeScript typecheck
+        continue-on-error: true   # TODO: warn-only until pre-existing tsc errors are fixed (ci/README.md)
+        run: npx tsc --noEmit
+
+      # Unit/integration tests that do not require external services.
+      # Kafka/Redis-backed tests are intentionally skipped here (no compose
+      # service profile is started in this job); spin up services via
+      # `docker compose up -d postgres redis kafka` in a follow-up job when
+      # integration coverage is wired in.
+      - name: Run vitest (service-free)
+        continue-on-error: true   # TODO: warn-only until the test suite is green in CI (ci/README.md)
+        env:
+          SKIP_EXTERNAL_SERVICES: "1"
+          SKIP_KAFKA: "1"
+          SKIP_REDIS: "1"
+          NODE_ENV: test
+        run: npx vitest run

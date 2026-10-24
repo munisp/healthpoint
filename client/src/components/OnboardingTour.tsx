@@ -98,7 +98,7 @@ export default function OnboardingTour() {
           <div className="bg-gradient-to-r from-primary/10 to-primary/5 px-6 pt-6 pb-4">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <span className="text-4xl">{current.emoji}</span>
+                <span className="text-4xl" aria-hidden="true">{current.emoji}</span>
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
@@ -120,7 +120,14 @@ export default function OnboardingTour() {
           </div>
 
           {/* Progress bar */}
-          <div className="h-1 bg-muted">
+          <div
+            className="h-1 bg-muted"
+            role="progressbar"
+            aria-valuemin={1}
+            aria-valuemax={TOUR_STEPS.length}
+            aria-valuenow={step + 1}
+            aria-label="Tour progress"
+          >
             <div
               className="h-full bg-primary transition-all duration-300"
               style={{ width: `${((step + 1) / TOUR_STEPS.length) * 100}%` }}
@@ -133,7 +140,7 @@ export default function OnboardingTour() {
 
             {current.tip && (
               <div className="mt-4 flex items-start gap-2 rounded-lg bg-primary/5 border border-primary/20 px-3 py-2.5">
-                <span className="text-base shrink-0">💡</span>
+                <span className="text-base shrink-0" aria-hidden="true">💡</span>
                 <p className="text-xs text-muted-foreground leading-relaxed">{current.tip}</p>
               </div>
             )}

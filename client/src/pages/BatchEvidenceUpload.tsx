@@ -16,7 +16,7 @@ interface FileEntry {
 }
 
 const ACCEPTED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/tiff", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
-const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB — matches the server fileBase64 limit
 
 export default function BatchEvidenceUpload() {
   const [disputeSearch, setDisputeSearch] = useState("");
@@ -47,7 +47,7 @@ export default function BatchEvidenceUpload() {
         continue;
       }
       if (file.size > MAX_FILE_SIZE) {
-        toast.error(`${file.name}: File too large (max 20MB)`);
+        toast.error(`${file.name}: File too large (max 10MB)`);
         continue;
       }
       entries.push({ id: crypto.randomUUID(), file, status: "pending" });
@@ -84,6 +84,8 @@ export default function BatchEvidenceUpload() {
           reader.readAsDataURL(entry.file);
         });
 
+        // Send the actual file bytes (base64) — the server persists them to
+        // object storage under storageKey before recording the document row.
         await uploadEvidenceMutation.mutateAsync({
           disputeId: selectedDisputeId,
           fileName: entry.file.name,
@@ -91,7 +93,7 @@ export default function BatchEvidenceUpload() {
           fileSize: entry.file.size,
           documentType: "other" as const,
           storageKey: `evidence/${selectedDisputeId}/${Date.now()}-${entry.file.name}`,
-          storageUrl: `data:${entry.file.type};base64,${base64}`,
+          fileBase64: base64,
         });
 
         setFiles(prev => prev.map(f => f.id === entry.id ? { ...f, status: "done" } : f));
@@ -187,7 +189,7 @@ export default function BatchEvidenceUpload() {
         >
           <Upload size={32} className={`mx-auto mb-3 ${isDragging ? "text-teal-500" : "text-slate-300"}`} />
           <p className="text-sm font-medium text-slate-600 mb-1">Drag & drop files here</p>
-          <p className="text-xs text-slate-400 mb-3">PDF, JPEG, PNG, TIFF, DOC, DOCX — max 20MB each</p>
+          <p className="text-xs text-slate-400 mb-3">PDF, JPEG, PNG, TIFF, DOC, DOCX — max 10MB each</p>
           <label className="cursor-pointer">
             <Button variant="outline" size="sm" asChild>
               <span>Browse Files</span>

@@ -1,5 +1,5 @@
 {
-  "realm": "nsa-idr-platform",
+  "realm": "healthpoint",
   "displayName": "HealthPoint NSA/IDR Platform",
   "enabled": true,
   "sslRequired": "external",

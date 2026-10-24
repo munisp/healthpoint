@@ -11,13 +11,35 @@ import {
 } from "../drizzle/schema";
 import type { SettlementTransfer } from "../drizzle/schema";
 import { getDb } from "./db";
-import { LedgerIntegrityError, recordPaymentInTransaction, reversePaymentInTransaction } from "./ledger";
+import { disputes } from "../drizzle/schema";
+import { assertPaymentAcceptable, dollarsToCents, LedgerIntegrityError, recordPaymentInTransaction, reversePaymentInTransaction } from "./ledger";
+import {
+  commitSettlementTransfer,
+  postPendingSettlementHold,
+  reverseSettledFunds,
+  submitPendingSettlementHold,
+  voidPendingSettlementHold,
+  withTigerBeetleLedger,
+} from "./tigerbeetle-ledger";
 import { dispatchOutboxBatch } from "./outbox";
 
 export const settlementTransferStatusSchema = z.enum([
   "requested", "authorized", "submitted", "accepted", "settled", "failed", "reversed", "reconciled",
+  // M5c: the TigerBeetle hold outcome was unknown after timeout while
+  // TB_LEDGER_REQUIRED=false. Conservative: settlement is blocked until an
+  // operator explicitly reconciles the hold out-of-band.
+  "hold_unknown",
 ]);
 export type SettlementTransferStatus = z.infer<typeof settlementTransferStatusSchema>;
+
+/**
+ * drizzle/schema.ts is owned by another wave, so its pgEnum lacks the
+ * hold_unknown label added by migration 0034_wave_fc.sql. This cast keeps the
+ * drizzle enum typing satisfied while the runtime value is the real DB label.
+ */
+type DbTransferStatus = typeof settlementTransfers.$inferInsert.status;
+const asDbTransferStatus = (s: SettlementTransferStatus): DbTransferStatus =>
+  s as unknown as DbTransferStatus;
 
 export const providerSettlementReportSchema = z.object({
   provider: z.string().trim().min(2).max(64),
@@ -33,17 +55,48 @@ export type ProviderSettlementReportInput = z.infer<typeof providerSettlementRep
 
 const transitionMap: Record<SettlementTransferStatus, SettlementTransferStatus[]> = {
   requested: ["authorized", "failed"],
-  authorized: ["submitted", "failed"],
+  authorized: ["submitted", "failed", "hold_unknown"],
   submitted: ["accepted", "settled", "failed"],
   accepted: ["settled", "failed"],
   settled: ["reversed", "reconciled"],
   failed: [],
   reversed: ["reconciled"],
   reconciled: ["reversed"],
+  // M5c: no automatic transitions — an operator must explicitly reconcile a
+  // hold_unknown transfer (see markSettlementTransferSubmitted).
+  hold_unknown: [],
 };
 
 export function canTransitionSettlementTransfer(from: SettlementTransferStatus, to: SettlementTransferStatus): boolean {
   return transitionMap[from].includes(to);
+}
+
+export type SettlementSagaAction = "post_hold" | "commit_settlement" | "void_hold" | "reverse_settled" | "none";
+
+/**
+ * Pure saga planner for provider settlement reports, driven by the transfer's
+ * recorded TigerBeetle mirror state (settlement_transfers.metadata):
+ *   settled  — post the pending hold when one was mirrored at submission,
+ *              otherwise mirror the settlement as a one-shot committed transfer
+ *   failed   — void the mirrored hold (no hold → nothing to release)
+ *   reversed — compensating committed reversal, but only when a posting exists
+ *   accepted — no funds movement
+ */
+export function planSettlementSagaAction(
+  reportedStatus: "accepted" | "settled" | "failed" | "reversed",
+  metadata: Record<string, unknown> | null,
+): SettlementSagaAction {
+  const meta = metadata ?? {};
+  switch (reportedStatus) {
+    case "settled":
+      return typeof meta.tbPendingHoldId === "string" ? "post_hold" : "commit_settlement";
+    case "failed":
+      return typeof meta.tbPendingHoldId === "string" ? "void_hold" : "none";
+    case "reversed":
+      return typeof meta.tbSettledTransferId === "string" ? "reverse_settled" : "none";
+    default:
+      return "none";
+  }
 }
 
 export function assertMakerChecker(requestedBy: string, decidedBy: string): void {
@@ -94,6 +147,29 @@ export async function createSettlementTransfer(input: {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.disputeId}))`);
     const duplicate = await tx.select().from(settlementTransfers).where(eq(settlementTransfers.idempotencyKey, input.idempotencyKey)).limit(1);
     if (duplicate[0]) return duplicate[0];
+    // M5a: cap cumulative settlement requests at the determination amount.
+    // requested+authorized+submitted+accepted+settled+reconciled transfers all
+    // count against the cap; failed/reversed transfers released their claim.
+    const disputeRows = await tx.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1);
+    const dispute = disputeRows[0];
+    if (!dispute) throw new LedgerIntegrityError("Dispute not found");
+    if (!dispute.determinationAmount) {
+      throw new LedgerIntegrityError("A payment determination is required before settlement transfers can be requested");
+    }
+    const determinationCents = dollarsToCents(dispute.determinationAmount);
+    const committed = await tx.select({ total: sql<number>`COALESCE(SUM(${settlementTransfers.amountCents}), 0)::int` })
+      .from(settlementTransfers)
+      .where(and(
+        eq(settlementTransfers.disputeId, input.disputeId),
+        sql`${settlementTransfers.status} IN ('requested','authorized','submitted','accepted','settled','reconciled','hold_unknown')`,
+      ));
+    const committedCents = Number(committed[0]?.total ?? 0);
+    if (committedCents + input.amountCents > determinationCents) {
+      throw new LedgerIntegrityError(
+        `Settlement transfers for this dispute would exceed the determination amount: ` +
+        `${committedCents + input.amountCents} cents requested+approved vs ${determinationCents} cents determined`,
+      );
+    }
     const now = new Date();
     const transfer: typeof settlementTransfers.$inferInsert = {
       id: crypto.randomUUID(),
@@ -164,6 +240,60 @@ export async function decideSettlementTransfer(input: {
 export async function markSettlementTransferSubmitted(input: { transferId: string; providerTransferId: string; actorId: string }): Promise<SettlementTransfer> {
   const db = await getDb();
   if (!db) throw new LedgerIntegrityError("Database unavailable; transfer submission was not recorded");
+  // Phase 1 of the TigerBeetle two-phase transfer: reserve the funds as a
+  // pending hold BEFORE any Postgres state changes, so a required-ledger
+  // outage aborts the submission before it is recorded (fail closed). The hold
+  // is idempotent: its transfer ID derives from the transfer.submitted outbox
+  // idempotency key. The transaction below re-validates authoritatively; this
+  // probe only avoids redundant sidecar calls on retries of already-decided
+  // transfers.
+  const prior = await getSettlementTransfer(input.transferId);
+  let tbPendingHoldId: string | null = null;
+  let holdUnknownReason: string | null = null;
+  if (prior && prior.status === "authorized") {
+    const hold = await withTigerBeetleLedger(
+      () => submitPendingSettlementHold({
+        disputeId: prior.disputeId,
+        amountCents: prior.amountCents,
+        holdIdempotencyKey: lifecycleOutboxKey(prior.id, "transfer.submitted"),
+      }),
+      { aggregateId: prior.id, aggregateType: "settlement_transfer", action: "transfer.hold" },
+    );
+    if (hold.mode === "applied" && hold.result) tbPendingHoldId = hold.result.pendingTransferId;
+    // M5c: the ledger is enabled but its response is unknown (timeout/outage)
+    // and TB_LEDGER_REQUIRED=false. The hold MAY exist in TigerBeetle, so we
+    // must not record the transfer as submitted (a later settle could
+    // double-move funds, or funds could be held with no PG record). Mark the
+    // transfer hold_unknown and block settlement until an operator explicitly
+    // reconciles the hold out-of-band.
+    if (hold.mode === "degraded") holdUnknownReason = hold.reason;
+  }
+  if (prior && holdUnknownReason) {
+    const now = new Date();
+    const result = await db.transaction(async tx => {
+      const rows = await tx.select().from(settlementTransfers).where(eq(settlementTransfers.id, input.transferId)).limit(1);
+      const transfer = rows[0];
+      if (!transfer) throw new LedgerIntegrityError("Settlement transfer not found");
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${transfer.disputeId}))`);
+      if (transfer.status !== "authorized") throw new LedgerIntegrityError("Only an authorized transfer may be marked submitted");
+      const metadata = {
+        ...((transfer.metadata as Record<string, unknown> | null) ?? {}),
+        holdUnknownReason: holdUnknownReason.slice(0, 1000),
+        providerTransferIdAttempted: input.providerTransferId,
+      };
+      const updatedRows = await tx.update(settlementTransfers).set({
+        status: asDbTransferStatus("hold_unknown"),
+        metadata,
+        updatedAt: now,
+      }).where(eq(settlementTransfers.id, transfer.id)).returning();
+      const updated = updatedRows[0];
+      if (!updated) throw new LedgerIntegrityError("Settlement hold_unknown state was not persisted");
+      await enqueueLifecycleEvent(tx, updated, "transfer.hold_unknown", { reason: holdUnknownReason.slice(0, 500) }, input.actorId);
+      return updated;
+    });
+    await dispatchOutboxBatch(1);
+    return result;
+  }
   const result = await db.transaction(async tx => {
     const rows = await tx.select().from(settlementTransfers).where(eq(settlementTransfers.id, input.transferId)).limit(1);
     const transfer = rows[0];
@@ -175,7 +305,10 @@ export async function markSettlementTransferSubmitted(input: { transferId: strin
       throw new LedgerIntegrityError("A current approved maker-checker decision is required before submission");
     }
     const now = new Date();
-    const updatedRows = await tx.update(settlementTransfers).set({ status: "submitted", providerTransferId: input.providerTransferId, submittedAt: now, updatedAt: now }).where(eq(settlementTransfers.id, transfer.id)).returning();
+    const submittedMetadata = tbPendingHoldId
+      ? { ...((transfer.metadata as Record<string, unknown> | null) ?? {}), tbPendingHoldId }
+      : transfer.metadata;
+    const updatedRows = await tx.update(settlementTransfers).set({ status: "submitted", providerTransferId: input.providerTransferId, submittedAt: now, metadata: submittedMetadata, updatedAt: now }).where(eq(settlementTransfers.id, transfer.id)).returning();
     const updated = updatedRows[0];
     if (!updated) throw new LedgerIntegrityError("Settlement submission state was not persisted");
     await enqueueLifecycleEvent(tx, updated, "transfer.submitted", { providerTransferId: input.providerTransferId }, input.actorId);
@@ -188,6 +321,63 @@ export async function markSettlementTransferSubmitted(input: { transferId: strin
 export async function reconcileProviderSettlementReport(input: ProviderSettlementReportInput, rawPayload: Record<string, unknown>) {
   const db = await getDb();
   if (!db) throw new LedgerIntegrityError("Database unavailable; provider report was not reconciled");
+  // TigerBeetle saga step, executed BEFORE the Postgres transaction so a
+  // required-ledger outage aborts reconciliation before anything is recorded
+  // (fail closed; the provider can redeliver the signed report). All sidecar
+  // operations are idempotent — their transfer IDs derive from the lifecycle
+  // outbox idempotency keys — so redelivery after a Postgres failure never
+  // double-posts. The transaction below re-validates authoritatively under
+  // the dispute advisory lock; this read only plans the saga step.
+  const prior = await getSettlementTransfer(input.transferId);
+  // M5b: run the PG-side business-rule pre-check BEFORE any TigerBeetle
+  // post/commit. TigerBeetle must never move funds for a settlement that
+  // Postgres would reject (no determination, nothing remaining, amount above
+  // the remaining determined amount). The transaction below re-validates
+  // authoritatively under the advisory lock via recordPaymentInTransaction.
+  if (prior && input.status === "settled"
+      && canTransitionSettlementTransfer(prior.status as SettlementTransferStatus, "settled")) {
+    const disputeRows = await db.select().from(disputes).where(eq(disputes.id, prior.disputeId)).limit(1);
+    if (disputeRows[0]) assertPaymentAcceptable(disputeRows[0], prior.amountCents);
+  }
+  let tbSettledTransferId: string | null = null;
+  let tbVoidTransferId: string | null = null;
+  let tbReversalTransferId: string | null = null;
+  if (prior && canTransitionSettlementTransfer(prior.status as SettlementTransferStatus, input.status === "accepted" ? "accepted" : input.status === "settled" ? "settled" : input.status === "failed" ? "failed" : "reversed")) {
+    const sagaAction = planSettlementSagaAction(input.status, (prior.metadata as Record<string, unknown> | null) ?? null);
+    const holdKey = lifecycleOutboxKey(prior.id, "transfer.submitted");
+    if (sagaAction === "post_hold") {
+      // Phase 2 (success): post the pending hold recorded at submission.
+      const posted = await withTigerBeetleLedger(
+        () => postPendingSettlementHold({ holdIdempotencyKey: holdKey, postIdempotencyKey: lifecycleOutboxKey(prior.id, "transfer.settled") }),
+        { aggregateId: prior.id, aggregateType: "settlement_transfer", action: "transfer.post" },
+      );
+      if (posted.mode === "applied" && posted.result) tbSettledTransferId = posted.result.transferId;
+    } else if (sagaAction === "commit_settlement") {
+      // No mirrored hold (ledger was disabled/degraded at submission):
+      // mirror the settlement as a one-shot committed transfer instead.
+      const committed = await withTigerBeetleLedger(
+        () => commitSettlementTransfer({ disputeId: prior.disputeId, amountCents: prior.amountCents, idempotencyKey: lifecycleOutboxKey(prior.id, "transfer.settled") }),
+        { aggregateId: prior.id, aggregateType: "settlement_transfer", action: "transfer.commit" },
+      );
+      if (committed.mode === "applied" && committed.result) tbSettledTransferId = committed.result.transferId;
+    } else if (sagaAction === "void_hold") {
+      // Phase 2 (failure): release the hold. A missing hold is a no-op.
+      const voided = await withTigerBeetleLedger(
+        () => voidPendingSettlementHold({ holdIdempotencyKey: holdKey, voidIdempotencyKey: lifecycleOutboxKey(prior.id, "transfer.failed") }),
+        { aggregateId: prior.id, aggregateType: "settlement_transfer", action: "transfer.void" },
+      );
+      if (voided.mode === "applied" && voided.result) tbVoidTransferId = voided.result.transferId;
+    } else if (sagaAction === "reverse_settled") {
+      // Saga compensation: the settlement was posted to TigerBeetle and the
+      // provider later reported a reversal. Entries are immutable, so a
+      // committed compensating transfer moves the funds back.
+      const reversed = await withTigerBeetleLedger(
+        () => reverseSettledFunds({ disputeId: prior.disputeId, amountCents: prior.amountCents, idempotencyKey: lifecycleOutboxKey(prior.id, "transfer.reversed") }),
+        { aggregateId: prior.id, aggregateType: "settlement_transfer", action: "transfer.reverse" },
+      );
+      if (reversed.mode === "applied" && reversed.result) tbReversalTransferId = reversed.result.transferId;
+    }
+  }
   const result = await db.transaction(async tx => {
     const duplicate = await tx.select().from(settlementProviderReports).where(and(eq(settlementProviderReports.provider, input.provider), eq(settlementProviderReports.providerReportId, input.reportId))).limit(1);
     if (duplicate[0]) return { duplicate: true, reconciliationStatus: "matched" as const, transferStatus: null as SettlementTransferStatus | null };
@@ -248,10 +438,17 @@ export async function reconcileProviderSettlementReport(input: ProviderSettlemen
       timestamps.reconciledAt = now;
       persistedStatus = "reconciled";
     }
+    const reconciledMetadata = {
+      ...((transfer.metadata as Record<string, unknown> | null) ?? {}),
+      ...(tbSettledTransferId ? { tbSettledTransferId } : {}),
+      ...(tbVoidTransferId ? { tbVoidTransferId } : {}),
+      ...(tbReversalTransferId ? { tbReversalTransferId } : {}),
+    };
     const updatedRows = await tx.update(settlementTransfers).set({
       status: persistedStatus, ...timestamps,
       failureCode: target === "failed" ? "provider_reported_failure" : transfer.failureCode,
       failureReason: target === "failed" ? "Authenticated provider report marked transfer failed" : transfer.failureReason,
+      metadata: reconciledMetadata,
       updatedAt: now,
     }).where(eq(settlementTransfers.id, transfer.id)).returning();
     const updated = updatedRows[0];
@@ -262,6 +459,13 @@ export async function reconcileProviderSettlementReport(input: ProviderSettlemen
       expectedStatus, reportedStatus: target, reconciledBy: "settlement-provider", reconciledAt: now, createdAt: now,
     });
     await enqueueLifecycleEvent(tx, updated, target === "settled" ? "transfer.reconciled" : `transfer.${target}`, { providerReportId: input.reportId, ledgerEntryId }, "settlement-provider");
+    // O9: also emit the canonical bus event so wildcard consumers (audit
+    // writer, webhook dispatcher) see the payment outcome.
+    if (target === "settled") {
+      await enqueueLifecycleEvent(tx, updated, "payment.settled", { providerReportId: input.reportId, ledgerEntryId, amountCents: transfer.amountCents }, "settlement-provider");
+    } else if (target === "failed") {
+      await enqueueLifecycleEvent(tx, updated, "payment.settlement_failed", { providerReportId: input.reportId, failureReason: updated.failureReason }, "settlement-provider");
+    }
     return { duplicate: false, reconciliationStatus: "matched" as const, transferStatus: updated.status as SettlementTransferStatus, ledgerEntryId };
   });
   if (!result.duplicate) await dispatchOutboxBatch(1);

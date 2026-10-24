@@ -117,7 +117,9 @@ export default function Onboarding() {
   const [saving, setSaving] = useState(false);
   const [orgNameTouched, setOrgNameTouched] = useState(false);
 
-  // Read role from URL query param (passed from marketing site registration)
+  // Read role from URL query param (cosmetic personalization default only —
+  // Phase13-FC (G13): the registration flow no longer propagates ?role= and
+  // privileged roles are assigned server-side by admin/invite flows).
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const roleParam = params.get("role") as StakeholderRole;
@@ -135,6 +137,14 @@ export default function Onboarding() {
 
   const saveProfileMutation = trpc.profiles.save.useMutation();
   const completeOnboardingMutation = trpc.profiles.completeOnboarding.useMutation();
+  // Phase13-FC (G6): optional NPI capture for providers/facilities, verified
+  // against the public NPPES registry via identity.verifyNpi. The honest
+  // outcome ('verified' | 'unverified' | 'mismatch') is stored on the
+  // profile; 'unverified' includes registry-unreachable (fail-open with
+  // warning — success is never faked) and does not block onboarding.
+  const verifyNpiMutation = trpc.identity.verifyNpi.useMutation();
+  const [npi, setNpi] = useState("");
+  const [npiResult, setNpiResult] = useState<string | null>(null);
   const orgNameError = validateOrganizationDetails(orgName);
   const canSaveOrganization = !orgNameError && !saving;
 
@@ -144,13 +154,35 @@ export default function Onboarding() {
       toast.error(orgNameError);
       return;
     }
+    const npiTrim = npi.trim();
+    if (npiTrim && !/^\d{10}$/.test(npiTrim)) {
+      toast.error("NPI must be exactly 10 digits.");
+      return;
+    }
     setSaving(true);
     try {
       await saveProfileMutation.mutateAsync({
         orgName: orgName.trim(),
         orgType: orgType || undefined,
         stakeholderRole: (role as "provider" | "facility" | "payer" | "idr_entity" | "other") || "provider",
+        npi: npiTrim || undefined,
       });
+      if (npiTrim) {
+        try {
+          const res = await verifyNpiMutation.mutateAsync({ npi: npiTrim, expectedName: orgName.trim() || undefined });
+          if (res.status === "verified") {
+            setNpiResult(`NPI verified against the NPPES registry${res.registryName ? ` (${res.registryName})` : ""}.`);
+          } else if (res.status === "mismatch") {
+            setNpiResult(`NPI could not be matched in the NPPES registry${res.warning ? `: ${res.warning}` : "."}`);
+            toast.warning("NPI not verified — an admin may review it after onboarding.");
+          } else {
+            setNpiResult(`NPI verification pending: ${res.warning ?? "registry unreachable"} — saved as unverified.`);
+            toast.warning("NPI saved but not yet verified (registry unavailable).");
+          }
+        } catch {
+          setNpiResult("NPI saved but verification failed (invalid NPI or service error).");
+        }
+      }
       setStep(2);
     } catch {
       toast.error("Failed to save profile. Please try again.");
@@ -316,6 +348,19 @@ export default function Onboarding() {
                   </>}
                 </select>
               </div>
+              {(role === "provider" || role === "facility") && (
+                <div>
+                  <Label htmlFor="npi">NPI (optional — verified against the NPPES registry)</Label>
+                  <Input
+                    id="npi"
+                    placeholder="10-digit National Provider Identifier"
+                    value={npi}
+                    onChange={e => setNpi(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                    className="mt-1.5"
+                  />
+                  {npiResult && <p className="mt-1.5 text-xs text-muted-foreground">{npiResult}</p>}
+                </div>
+              )}
               <div className="flex gap-3 pt-2">
                 <Button variant="outline" onClick={() => setStep(0)} className="flex-1">Back</Button>
                 <Button onClick={handleSaveOrg} disabled={!canSaveOrganization} className="flex-1">

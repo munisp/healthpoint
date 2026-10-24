@@ -1,0 +1,215 @@
+# HealthPoint — application tier values
+#
+# Supply-chain policy:
+#   * Every first-party image below defaults to this chart's appVersion tag.
+#   * For production, pin `digest:` (sha256:...) for EVERY image — see
+#     docs/UPGRADES.md for the digest-pinning workflow.
+#   * `tag: ""` + empty digest + empty appVersion is a hard template error
+#     (fail-fast, no silent `latest`).
+#
+# Secrets policy:
+#   * This chart NEVER creates Secret objects with values. It references a
+#     pre-created Secret (default name `healthpoint-secrets`) by key.
+#   * Create it from deploy/k8s/secrets.example.yaml via sealed-secrets or
+#     an external-secrets operator — see docs/SECRETS.md.
+
+global:
+  imageRegistry: ""        # e.g. "ghcr.io/munisp" — prepended to all first-party repositories
+  imagePullSecrets: []     # e.g. [{name: ghcr-pull-secret}]
+  storageClass: ""         # only used if optional PVCs are enabled
+
+fullnameOverride: ""
+
+imageDefaults:
+  pullPolicy: IfNotPresent
+
+# ── Secrets wiring ────────────────────────────────────────────────────────────
+secrets:
+  # Pre-created Secret holding all sensitive values (see docs/SECRETS.md and
+  # deploy/k8s/secrets.example.yaml for the full key list).
+  name: healthpoint-secrets
+
+# ── Non-secret configuration shared by the app server ────────────────────────
+# Hostnames assume datastore charts/operators installed in the same namespace
+# with the release names documented in templates/NOTES.txt. Override as needed.
+config:
+  nodeEnv: production
+  keycloakUrl: "http://keycloak:8080"
+  keycloakRealm: healthpoint
+  keycloakClientId: healthpoint-app
+  kafkaBrokers: "kafka:9092"
+  opensearchUrl: "http://opensearch:9200"
+  permifyUrl: "http://permify:3476"
+  permifyGrpcUrl: "permify:3478"
+  temporalAddress: "temporal-frontend:7233"
+  temporalNamespace: default
+  temporalTaskQueue: healthpoint-idr
+  tigerbeetleAddress: "tigerbeetle:3000"
+  s3Endpoint: "http://minio:9000"
+  s3Bucket: idr-documents
+  # Settlement callback provider stays fail-closed unless explicitly enabled
+  settlementCallbackProvider: mojaloop
+  paymentExecutionMode: disabled
+
+# ── App server (Express 5 + tRPC, serves the built React client) ─────────────
+server:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: healthpoint/server
+    tag: ""        # defaults to .Chart.AppVersion
+    digest: ""     # e.g. sha256:... — set in production
+  service:
+    type: ClusterIP
+    port: 3000
+  # Probes use the /healthz + /readyz convention added to server/_core on this
+  # branch. If you deploy an older image that only has /api/health, override
+  # these paths accordingly.
+  probes:
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 15
+      periodSeconds: 10
+    readiness:
+      path: /readyz
+      initialDelaySeconds: 5
+      periodSeconds: 5
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# ── Python Temporal worker (services/temporal-worker) ────────────────────────
+pythonWorker:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: healthpoint/temporal-worker
+    tag: ""
+    digest: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ── Go ledger sidecar (TigerBeetle + Permify + Mojaloop facade) ──────────────
+goLedger:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: healthpoint/go-ledger
+    tag: ""
+    digest: ""
+  service:
+    type: ClusterIP
+    port: 8001
+  probes:
+    liveness:
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+    readiness:
+      path: /health
+      initialDelaySeconds: 5
+      periodSeconds: 5
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ── Rust stream processor (Kafka consumers; /health + /metrics on 8002) ──────
+rustProcessor:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: healthpoint/rust-processor
+    tag: ""
+    digest: ""
+  service:
+    type: ClusterIP
+    port: 8002
+  probes:
+    liveness:
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+    readiness:
+      path: /health
+      initialDelaySeconds: 5
+      periodSeconds: 5
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ── Client (static SPA behind nginx) ─────────────────────────────────────────
+# DISABLED by default: the server image already serves the built SPA (Vite
+# output is bundled into dist/ by the root Dockerfile). Enable this only if
+# you build a separate static image (e.g. nginx:1.27-alpine serving
+# client/dist) — no such Dockerfile exists in this repo yet.
+client:
+  enabled: false
+  replicaCount: 2
+  image:
+    repository: healthpoint/client
+    tag: ""
+    digest: ""
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# ── Ingress ───────────────────────────────────────────────────────────────────
+# Production traffic flow: Internet → Caddy (TLS, HTTP/3, Coraza WAF) →
+# OpenAppsec → APISIX → server. This chart can emit a plain Ingress for the
+# API gateway of your choice; in the reference topology APISIX (class apisix)
+# fronts the server and Caddy terminates TLS at the edge. Keep `enabled: false`
+# if routes are managed through APISIX CRDs / APISIX Dashboard instead.
+ingress:
+  enabled: false
+  className: apisix
+  annotations: {}
+    # kubernetes.io/ingress.class: apisix
+    # k8s.apisix.apache.org/enable-cors: "true"
+  host: app.healthpoint.example.com
+  tls:
+    enabled: true
+    secretName: healthpoint-tls   # cert-manager or pre-created; never inline
+
+# ── Datastores (NOT deployed by this chart) ───────────────────────────────────
+# Reference installs (bitnami/operator patterns — do not vendor):
+#   helm install postgresql oci://registry-1.docker.io/bitnamicharts/postgresql --set auth.database=idr_demo
+#   helm install redis      oci://registry-1.docker.io/bitnamicharts/redis --set auth.enabled=true
+#   helm install kafka      oci://registry-1.docker.io/bitnamicharts/kafka
+#   helm install temporal   temporalio/temporal (PostgreSQL persistence)
+#   helm install keycloak   oci://registry-1.docker.io/bitnamicharts/keycloak
+#   helm install opensearch opensearchproject/helm-charts/opensearch
+#   helm install minio      oci://registry-1.docker.io/bitnamicharts/minio
+#   helm install apisix     apisix/apisix --set etcd.enabled=true
+# Permify and TigerBeetle have no official charts — run as small Deployments/
+# StatefulSets from their pinned upstream images (see docker-compose.yml for
+# the exact images/flags this repo is tested against).
+datastores: {}
