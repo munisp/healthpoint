@@ -41,6 +41,8 @@ import { bulkUploadRouter } from "./routers/bulk-upload";
 // phase21 additions (intelligence & learning loop)
 import { feedbackRouter, prefillRouter, offerStrategyRouter } from "./routers/intelligence";
 import { nextActionsRouter } from "./routers/next-actions";
+// phase22 additions (closed learning loop: bandit transparency + outcome calibration)
+import { banditRouter, outcomeModelRouter } from "./routers/intelligence";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -75,7 +77,10 @@ export const rootRouter = mergeRouters(
   router({ feedback: feedbackRouter }),
   router({ prefill: prefillRouter }),
   router({ offerStrategy: offerStrategyRouter }),
-  router({ nextActions: nextActionsRouter })
+  router({ nextActions: nextActionsRouter }),
+  // phase22 additions
+  router({ outcomeModel: outcomeModelRouter }),
+  router({ bandit: banditRouter })
 );
 
 export type RootRouter = typeof rootRouter;
