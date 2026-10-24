@@ -60,7 +60,13 @@ interface PendingAssignment extends Record<string, unknown> {
   segment_key: string;
   arm_id: string;
   served_usd: string;
-  created_at: Date;
+  /** Raw DB text of created_at — used verbatim in ::timestamp comparisons
+   *  (F4: never round-trip a `timestamp` column through JS Date, which
+   *  re-interprets it under the Node process TZ). */
+  created_text: string;
+  /** SQL-side age in ms at scan time (EXTRACT EPOCH × 1000 vs the same
+   *  ${nowTs}::timestamp expression used everywhere else in this file). */
+  age_ms: string | number;
 }
 
 /** Exported for tests/journeys. Idempotent: guarded by outcome IS NULL. */
@@ -70,7 +76,9 @@ export async function attributeBanditRewards(db: Db, now: Date): Promise<BanditA
   const result: BanditAttributionResult = { attributed: 0, accepted: 0, rejected: 0, countered: 0, expired: 0 };
   // Grace period of 1 hour avoids racing same-minute UI interactions.
   const pending = rowsOf<PendingAssignment>(await db.execute(sql`
-    SELECT id, org_id, dispute_id, segment_tier, segment_key, arm_id, served_usd, created_at
+    SELECT id, org_id, dispute_id, segment_tier, segment_key, arm_id, served_usd,
+      created_at::text AS created_text,
+      EXTRACT(EPOCH FROM (${nowTs}::timestamp - created_at)) * 1000 AS age_ms
     FROM bandit_assignments
     WHERE outcome IS NULL AND created_at < ${nowTs}::timestamp - interval '1 hour'
     ORDER BY created_at ASC
@@ -81,17 +89,20 @@ export async function attributeBanditRewards(db: Db, now: Date): Promise<BanditA
     const batch = pending.slice(i, i + 200);
     const write = async (tx: Db) => {
       for (const a of batch) {
-        const createdTs = new Date(a.created_at).toISOString();
+        // F4: createdText is the DB's own text rendering of the timestamp —
+        // casting it back with ::timestamp is exact under ANY Node/DB TZ
+        // split (no JS Date round-trip).
+        const createdText = a.created_text;
         const facts = rowsOf<Record<string, unknown>>(await tx.execute(sql`
           SELECT
             (SELECT o.amount FROM dispute_offers o
               WHERE o."disputeId" = ${a.dispute_id} AND o."isAccepted" = true
               ORDER BY o."submittedAt" DESC NULLS LAST LIMIT 1) AS accepted_amount,
             (SELECT COUNT(*)::int FROM dispute_offers o
-              WHERE o."disputeId" = ${a.dispute_id} AND o."submittedAt" > ${createdTs}::timestamp) AS newer_offers,
+              WHERE o."disputeId" = ${a.dispute_id} AND o."submittedAt" > ${createdText}::timestamp) AS newer_offers,
             (SELECT COUNT(*)::int FROM dispute_events e
               WHERE e."disputeId" = ${a.dispute_id} AND e."eventType" = 'offer_rejected'
-                AND e."createdAt" > ${createdTs}::timestamp) AS reject_events,
+                AND e."createdAt" > ${createdText}::timestamp) AS reject_events,
             (SELECT d.status FROM disputes d WHERE d.id = ${a.dispute_id}) AS dispute_status
         `))[0] ?? {};
         const acceptedAmount = facts.accepted_amount !== null && facts.accepted_amount !== undefined
@@ -100,7 +111,9 @@ export async function attributeBanditRewards(db: Db, now: Date): Promise<BanditA
         const rejectEvents = Number(facts.reject_events ?? 0);
         const status = String(facts.dispute_status ?? "");
         const servedUsd = Number(a.served_usd);
-        const ageMs = now.getTime() - new Date(a.created_at).getTime();
+        // F4: SQL-side age (computed against the same ${nowTs}::timestamp
+        // convention as every other comparison in this file) — no JS Date.
+        const ageMs = Number(a.age_ms);
         const withinWindow = ageMs <= windowDays * 86400000;
 
         // Classification order per design §3.1 reward table.
@@ -138,7 +151,7 @@ export async function attributeBanditRewards(db: Db, now: Date): Promise<BanditA
           ? rowsOf<Record<string, unknown>>(await tx.execute(sql`
               SELECT 1 FROM bandit_assignments b2
               WHERE b2.dispute_id = ${a.dispute_id} AND b2.id <> ${a.id}
-                AND (b2.outcome IN ('accepted','rejected') OR b2.created_at < ${createdTs}::timestamp)
+                AND (b2.outcome IN ('accepted','rejected') OR b2.created_at < ${createdText}::timestamp)
               LIMIT 1
             `))
           : [];
