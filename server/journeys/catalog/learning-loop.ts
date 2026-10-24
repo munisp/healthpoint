@@ -348,10 +348,13 @@ export const j33: Journey = {
         const advKey = `advance:${st.idleDisputeId}`;
         await ctx.provider.nextActions.dismiss({ actionKey: advKey });
         const rej = await ctx.sql.unsafe(
-          `SELECT count(*)::int AS n FROM suggestion_events WHERE suggestion_id = $1 AND surface = 'next_action' AND action = 'rejected'`,
+          `SELECT count(*)::int AS n, max(metadata->>'kind') AS kind FROM suggestion_events WHERE suggestion_id = $1 AND surface = 'next_action' AND action = 'rejected'`,
           [advKey],
         );
         ctx.assert(Number(rej[0].n) >= 1, "dismiss recorded a rejected event");
+        // F1: the rejected event's kind must be the CARD kind, not the raw
+        // actionKey prefix ("advance" ≠ "advance_step").
+        ctx.assertEqual(rej[0].kind, "advance_step", "rejected event kind is the card kind, not the raw actionKey prefix");
         await ctx.sql.unsafe(
           `UPDATE next_action_dismissals SET expires_at = now() - interval '1 second' WHERE user_id = 'jrn-user-provider' AND action_key = $1`,
           [advKey],
