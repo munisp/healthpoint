@@ -3172,6 +3172,50 @@ export const appRouter = router({
         payerName: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        // ── Phase 22 (S4) FLAGGED minimal edit: prediction SOURCE swap ─────
+        // Procedure signature, input schema, and output shape
+        // (winProbability, confidenceScore, keyFactors, recommendation,
+        // modelVersion) are UNCHANGED — only the source of the numbers:
+        // trained outcome-model-v2 when an active model covers this segment,
+        // otherwise the legacy LLM path below (labeled "llm-fallback").
+        // Step-deadlines minimal-edit precedent.
+        {
+          const db = await getDb();
+          const { disputes } = await import("../drizzle/schema");
+          const disputeRow = db
+            ? (await db.select().from(disputes).where(eq(disputes.id, input.disputeId)).limit(1))[0]
+            : undefined;
+          const trained = db && disputeRow
+            ? await (await import("./idr/outcome-prediction-source")).generateOutcomePredictionFromModel(db, disputeRow)
+            : null;
+          if (trained && db) {
+            // Append-only calibration log; actuals are joined nightly by the
+            // learning-loop refresh (design §6.3).
+            const { outcomeModelPredictions } = await import("../drizzle/schema-intelligence");
+            await db.insert(outcomeModelPredictions).values({
+              id: crypto.randomUUID(),
+              disputeId: input.disputeId,
+              modelVersionId: trained.modelVersionId,
+              predictedWinProb: String(trained.prediction.winProb),
+              predictedAwardP25Usd: trained.prediction.awardP25Usd !== null ? String(trained.prediction.awardP25Usd) : null,
+              predictedAwardP50Usd: trained.prediction.awardP50Usd !== null ? String(trained.prediction.awardP50Usd) : null,
+              predictedAwardP75Usd: trained.prediction.awardP75Usd !== null ? String(trained.prediction.awardP75Usd) : null,
+              segmentTier: trained.prediction.segmentTierUsed,
+              segmentKey: trained.segmentKey,
+              source: "trained",
+            }).onConflictDoNothing();
+            return upsertOutcomePrediction({
+              disputeId: input.disputeId,
+              winProbability: trained.winProbability,
+              confidenceScore: trained.confidenceScore,
+              keyFactors: JSON.stringify(trained.keyFactors),
+              recommendation: trained.recommendation,
+              modelVersion: trained.modelVersion,
+            });
+          }
+        }
+        // ── End Phase 22 edit — legacy LLM path below is unchanged except
+        // for the honesty label "llm-fallback" (was the bare 'v2'). ────────
         const prompt = `You are an NSA/IDR dispute outcome prediction expert. Analyze this IDR dispute and predict the outcome.
 
 Dispute Details:
@@ -3219,7 +3263,7 @@ Based on NSA IDR historical data and legal precedent, provide:
           confidenceScore: Math.max(0, Math.min(100, parsed.confidenceScore)),
           keyFactors: JSON.stringify(parsed.keyFactors),
           recommendation: parsed.recommendation,
-          modelVersion: 'v2',
+          modelVersion: 'llm-fallback',
         });
       }),
   }),
