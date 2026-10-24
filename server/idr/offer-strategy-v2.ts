@@ -51,7 +51,11 @@ export interface ModelVersionBlock {
   version: number | null;
   trainedAt: string | null;
   trainingSampleSize: number;
-  honestyLabel: "statistical_estimate" | "insufficient_data";
+  /**
+   * "bandit_active" is only ever set by the ROUTER (Phase 22 S1) when a
+   * bounded bandit arm was actually served this call — the engine stays pure.
+   */
+  honestyLabel: "bandit_active" | "statistical_estimate" | "insufficient_data";
 }
 
 export interface OfferStrategyV2Input {
@@ -69,7 +73,7 @@ export interface OfferStrategyV2Input {
 
 export interface OfferStrategyV2Result {
   recommendedOfferUsdStatisticalEstimate: number | null;
-  label: "statistical_estimate" | "insufficient_data";
+  label: "bandit_active" | "statistical_estimate" | "insufficient_data";
   features: {
     qpaUsd: number | null;
     initialPaymentUsd: number | null;
