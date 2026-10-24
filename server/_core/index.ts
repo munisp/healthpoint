@@ -32,6 +32,7 @@ import { regulatoryFeedPollHandler } from "../scheduled/regulatoryFeedPoll";
 import { bulkFhirWorkerHandler } from "../scheduled/bulkFhirWorker";
 import { retentionWorkerHandler, startRetentionWorker } from "../scheduled/retentionWorker";
 import { offerModelRefreshHandler } from "../scheduled/offerModelRefresh";
+import { learningLoopRefreshHandler } from "../scheduled/learningLoopRefresh";
 import { ENV } from "./env";
 import {
   SETTLEMENT_EVENT_ID_HEADER,
@@ -645,6 +646,10 @@ async function startServer() {
   // Phase 21: nightly offer-strategy-v2 model refresh (nightly cron; default
   // after deadline-autopilot — see OFFER_MODEL_REFRESH_CRON in .env.example).
   app.post("/api/scheduled/offer-model-refresh", scheduledAuth, offerModelRefreshHandler);
+  // Phase 22: nightly closed-learning-loop refresh (bandit reward
+  // attribution, outcome-model-v2 training, calibration join, ranking stats).
+  // Run AFTER offer-model-refresh (LEARNING_LOOP_REFRESH_CRON in .env.example).
+  app.post("/api/scheduled/learning-loop-refresh", scheduledAuth, learningLoopRefreshHandler);
 
   // PHI retention purge (fhir_resource_cache, smart_form_extractions) on an
   // env-configurable cadence (RETENTION_SWEEP_INTERVAL_MS, default daily; 0
