@@ -319,28 +319,32 @@ export const j33: Journey = {
         const st = (ctx as unknown as { _st: J33State })._st;
         // Seeded dismissals/acts: idle_offer well-acted, advance_step
         // repeatedly dismissed (rejected) — both above the impressions floor.
+        // phase22-fix2: pass the metadata OBJECT, not JSON.stringify(...) —
+        // postgres.js serializes a string param for a ::jsonb slot into a
+        // jsonb STRING (double-encoded), so metadata->>'kind' was NULL and
+        // the ranker keyed these as {suggestion_id}:unknown below the floor.
         for (let i = 0; i < 12; i++) {
           await ctx.sql.unsafe(
             `INSERT INTO suggestion_events (id, org_id, user_id, suggestion_id, surface, action, model_name, metadata)
              VALUES ($1, $2, 'jrn-user-provider', $3, 'next_action', 'presented', 'next-actions-v1', $4::jsonb)`,
-            [crypto.randomUUID(), st.orgId, ctx.ns(`j33-na-idle-${i}`), JSON.stringify({ kind: "idle_offer", persona: "provider" })],
+            [crypto.randomUUID(), st.orgId, ctx.ns(`j33-na-idle-${i}`), { kind: "idle_offer", persona: "provider" }],
           );
           if (i < 9) {
             await ctx.sql.unsafe(
               `INSERT INTO suggestion_events (id, org_id, user_id, suggestion_id, surface, action, model_name, metadata)
                VALUES ($1, $2, 'jrn-user-provider', $3, 'next_action', 'accepted', 'next-actions-v1', $4::jsonb)`,
-              [crypto.randomUUID(), st.orgId, ctx.ns(`j33-na-idle-${i}`), JSON.stringify({ kind: "idle_offer", persona: "provider" })],
+              [crypto.randomUUID(), st.orgId, ctx.ns(`j33-na-idle-${i}`), { kind: "idle_offer", persona: "provider" }],
             );
           }
           await ctx.sql.unsafe(
             `INSERT INTO suggestion_events (id, org_id, user_id, suggestion_id, surface, action, model_name, metadata)
              VALUES ($1, $2, 'jrn-user-provider', $3, 'next_action', 'presented', 'next-actions-v1', $4::jsonb)`,
-            [crypto.randomUUID(), st.orgId, ctx.ns(`j33-na-adv-${i}`), JSON.stringify({ kind: "advance_step", persona: "provider" })],
+            [crypto.randomUUID(), st.orgId, ctx.ns(`j33-na-adv-${i}`), { kind: "advance_step", persona: "provider" }],
           );
           await ctx.sql.unsafe(
             `INSERT INTO suggestion_events (id, org_id, user_id, suggestion_id, surface, action, model_name, metadata)
              VALUES ($1, $2, 'jrn-user-provider', $3, 'next_action', 'rejected', 'next-actions-v1', $4::jsonb)`,
-            [crypto.randomUUID(), st.orgId, ctx.ns(`j33-na-adv-${i}`), JSON.stringify({ kind: "advance_step", persona: "provider" })],
+            [crypto.randomUUID(), st.orgId, ctx.ns(`j33-na-adv-${i}`), { kind: "advance_step", persona: "provider" }],
           );
         }
         // Real dismiss path: dismissing the advance card records a `rejected`
