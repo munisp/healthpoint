@@ -43,7 +43,13 @@ export interface OfferStrategyInput {
   platformStats: WinRateStats;
   /** Per-dispute administrative fee (USD). */
   adminFeeUsd: number;
-  /** Optional OutcomeNet win probability — MOCK-VERIFIED synthetic model. */
+  /**
+   * Optional OutcomeNet win probability — MOCK-VERIFIED synthetic model.
+   * @deprecated Phase 22 retires the synthetic path: outcome predictions now
+   * come from outcome-model-v2 (server/idr/outcome-model-v2.ts), trained on
+   * real closed determinations. The parameter is KEPT (not removed) because
+   * v1 is the documented rollback path for v2 — do not wire new callers.
+   */
   outcomeNetProbability?: number | null;
 }
 
