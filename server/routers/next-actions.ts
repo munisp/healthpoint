@@ -20,7 +20,7 @@
  */
 import crypto from "node:crypto";
 import { z } from "zod";
-import { and, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { router, protectedProcedure } from "../_core/trpc";
 import { disputes } from "../../drizzle/schema";
 import { orgMemberships } from "../../drizzle/schema-personas";
@@ -376,13 +376,25 @@ export const nextActionsRouter = router({
       // `rejected` suggestion event (additive; next_action_dismissals stays
       // the TTL hide-store). orgId is recovered from the card's presented
       // event — dismiss input is deliberately unchanged.
-      const pres = await db.select({ orgId: suggestionEvents.orgId, metadata: suggestionEvents.metadata }).from(suggestionEvents)
-        .where(and(
-          eq(suggestionEvents.suggestionId, input.actionKey),
-          eq(suggestionEvents.surface, "next_action"),
-          eq(suggestionEvents.action, "presented"),
-        ))
-        .limit(1);
+      // phase22-fix2: scope the recovery to the caller's own orgs (same
+      // org_memberships pattern as list) and take the most recent presented
+      // event. Unscoped LIMIT 1 let a multi-org user's dismiss of a
+      // globally-constant actionKey (e.g. remittance:unposted) recover
+      // ANOTHER org's event → FORBIDDEN and the negative signal was lost.
+      const ms = await db.select({ orgId: orgMemberships.orgId }).from(orgMemberships)
+        .where(eq(orgMemberships.userId, ctx.user.id));
+      const userOrgIds = [...new Set(ms.map((m: { orgId: string }) => m.orgId))];
+      const pres = userOrgIds.length
+        ? await db.select({ orgId: suggestionEvents.orgId, metadata: suggestionEvents.metadata }).from(suggestionEvents)
+          .where(and(
+            eq(suggestionEvents.suggestionId, input.actionKey),
+            eq(suggestionEvents.surface, "next_action"),
+            eq(suggestionEvents.action, "presented"),
+            inArray(suggestionEvents.orgId, userOrgIds),
+          ))
+          .orderBy(desc(suggestionEvents.createdAt))
+          .limit(1)
+        : [];
       if (pres[0]?.orgId) {
         // S6: the recovered orgId is membership-free input — assert org
         // membership (same as every other procedure in this router) before
