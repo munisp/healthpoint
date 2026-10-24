@@ -166,10 +166,14 @@ export function selectOfferArm(input: BanditSelectionInput): BanditSelection {
 
   // Gate 1: not enough evidence — collect on the baseline arm.
   if (input.totalPulls < input.minPulls) return serveBaseline("min_pulls");
-  // Gate 2: absolute daily exploration cap.
+  // Gate 2: daily exploration cap (best-effort under concurrency — the
+  // check-then-insert at the serve path is non-atomic; see Gate 3).
   if (input.exploresToday >= input.maxExplorePerDay) return serveBaseline("daily_cap");
-  // Gate 3: prospective exploration-rate cap (never exceeded, even by a
-  // concurrent pair — counters are re-read from the DB at serve time).
+  // Gate 3: prospective exploration-rate cap. Honesty (F3): the caps are
+  // checked-then-inserted NON-atomically at the serve path — under
+  // concurrent serves they are BEST-EFFORT, with overshoot bounded by the
+  // number of concurrent serves (concurrency − 1 past the cap). The blast
+  // radius stays bounded by the ±bps arm band and the disclosed baseline.
   if (input.servesToday > 0 && (input.exploresToday + 1) / (input.servesToday + 1) > input.explorationRate) {
     return serveBaseline("rate_cap");
   }
