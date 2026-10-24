@@ -67,6 +67,20 @@ export interface NextActionCard {
 
 const NEXT_STEP_LABELS: Record<string, string> = STEP_LABELS;
 
+/**
+ * actionKey prefix → card kind. The actionKey prefix is a wire token, NOT
+ * the ranking kind — dismiss-negatives must record the CARD kind so they
+ * land on the same ranking_stats item keys as the serve path (F1).
+ */
+const ACTION_KEY_PREFIX_KIND: Record<string, NextActionCard["kind"]> = {
+  deadline: "deadline",
+  advance: "advance_step",
+  determination: "advance_step",
+  "idle-offer": "idle_offer",
+  quarantine: "quarantine_repair",
+  remittance: "unposted_remittance",
+};
+
 /** Legal next step from the disputes.advance FSM allowedTransitions. */
 function nextStepOf(currentStep: string | null): string | null {
   const steps = Object.keys(IDR_WORKFLOW_STEPS);
@@ -362,7 +376,7 @@ export const nextActionsRouter = router({
       // `rejected` suggestion event (additive; next_action_dismissals stays
       // the TTL hide-store). orgId is recovered from the card's presented
       // event — dismiss input is deliberately unchanged.
-      const pres = await db.select({ orgId: suggestionEvents.orgId }).from(suggestionEvents)
+      const pres = await db.select({ orgId: suggestionEvents.orgId, metadata: suggestionEvents.metadata }).from(suggestionEvents)
         .where(and(
           eq(suggestionEvents.suggestionId, input.actionKey),
           eq(suggestionEvents.surface, "next_action"),
@@ -370,6 +384,18 @@ export const nextActionsRouter = router({
         ))
         .limit(1);
       if (pres[0]?.orgId) {
+        // S6: the recovered orgId is membership-free input — assert org
+        // membership (same as every other procedure in this router) before
+        // writing the rejected event. Non-member → FORBIDDEN.
+        await assertOrgMember(db, ctx.user.id, pres[0].orgId, ["owner", "staff", "viewer"]);
+        // F1: prefer the presented event's metadata.kind (written at serve
+        // time with the correct card kind); fall back to the explicit
+        // actionKey-prefix map. NEVER the raw prefix — ranking_stats item
+        // keys use card kinds.
+        const presentedKind = (pres[0].metadata as { kind?: unknown } | null)?.kind;
+        const kind = typeof presentedKind === "string" && presentedKind
+          ? presentedKind
+          : ACTION_KEY_PREFIX_KIND[input.actionKey.split(":")[0]];
         await recordSuggestionEvents(db, [{
           orgId: pres[0].orgId,
           userId: ctx.user.id,
@@ -378,7 +404,7 @@ export const nextActionsRouter = router({
           action: "rejected",
           modelName: "next-actions-v1",
           modelVersionId: null,
-          metadata: { kind: input.actionKey.split(":")[0] },
+          metadata: kind ? { kind } : {},
         }]);
       }
       return { dismissed: true, actionKey: input.actionKey, expiresAt: expiresAt.toISOString() };
