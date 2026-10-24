@@ -67,7 +67,10 @@ export const j32: Journey = {
         await ctx.sql.unsafe(
           `INSERT INTO claim_quarantine (id, session_id, org_id, row_number, raw_payload, error_reason, missing_fields)
            VALUES ($1, $2, $3, 1, $4, 'validation failed', $5::jsonb)`,
-          [st.quarantineId, sessionId, st.orgId, claimLine(ctx.runId, 1), JSON.stringify(["claimId", "planType"])],
+          // phase22-fix2: missing_fields is jsonb — pass the array, not
+          // JSON.stringify (postgres.js double-encodes string params for
+          // ::jsonb slots). raw_payload stays a string: that column is text.
+          [st.quarantineId, sessionId, st.orgId, claimLine(ctx.runId, 1), ["claimId", "planType"]],
         );
         // 25 closed determinations in a unique leaf segment + 1 open dispute
         // with a near open-negotiation deadline.
