@@ -123,7 +123,10 @@ export class KeystrokeTracker {
  * Map an offer-strategy v2 honesty label to display copy. The label itself
  * is rendered verbatim next to this copy — never reword the label.
  */
-export function honestyLabelCopy(label: "statistical_estimate" | "insufficient_data"): string {
+export function honestyLabelCopy(label: "bandit_active" | "statistical_estimate" | "insufficient_data"): string {
+  if (label === "bandit_active") {
+    return "Learning — this recommendation is part of a bounded exploration loop (no more than 10% of cases) while the platform actively learns which offer strategy works best. Not a prediction or guarantee.";
+  }
   return label === "statistical_estimate"
     ? "Statistical estimate from real platform IDR determinations — not a prediction or guarantee."
     : "Not enough data yet — no estimate is produced until enough closed determinations exist.";
