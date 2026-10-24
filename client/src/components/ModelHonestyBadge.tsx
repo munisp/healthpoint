@@ -1,6 +1,7 @@
 /**
  * ModelHonestyBadge — Phase 21 (S3). Renders the SERVER-PROVIDED honesty
- * label verbatim (statistical_estimate / insufficient_data) plus the
+ * label verbatim (bandit_active / statistical_estimate / insufficient_data)
+ * plus the
  * modelVersion block (version, trainedAt, training sample size). A model
  * older than 7 days is badged stale (design §10.3). No confidence numbers
  * are ever fabricated — only server values are displayed.
@@ -13,7 +14,7 @@ export interface ModelVersionInfo {
   version: number | null;
   trainedAt: string | null;
   trainingSampleSize: number;
-  honestyLabel: "statistical_estimate" | "insufficient_data";
+  honestyLabel: "bandit_active" | "statistical_estimate" | "insufficient_data";
 }
 
 export default function ModelHonestyBadge({ modelVersion }: { modelVersion: ModelVersionInfo }) {
