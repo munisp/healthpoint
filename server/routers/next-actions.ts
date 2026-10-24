@@ -26,9 +26,15 @@ import { disputes } from "../../drizzle/schema";
 import { orgMemberships } from "../../drizzle/schema-personas";
 import { claimQuarantine } from "../../drizzle/schema-bulk-upload";
 import { remittance835Files, remittanceLines } from "../../drizzle/schema-submitter";
-import { nextActionDismissals } from "../../drizzle/schema-intelligence";
+import { nextActionDismissals, suggestionEvents, rankingStats } from "../../drizzle/schema-intelligence";
 import { requireDb } from "../personas/guards";
 import { assertOrgMember, recordSuggestionEvents, contextHash } from "./intelligence";
+import {
+  rankingEnabled,
+  rankingMinImpressions,
+  smoothedActRate,
+  reorderWithinSeverity,
+} from "../idr/ranking";
 import {
   listUpcomingDeadlines,
   STEP_LABELS,
@@ -276,9 +282,48 @@ export const nextActionsRouter = router({
             ))
         : [];
       const dismissedSet = new Set(dismissed.map((d: { actionKey: string }) => d.actionKey));
-      const visible = cards.filter(c => !dismissedSet.has(c.actionKey)).slice(0, input.limit);
+      let visible = cards.filter(c => !dismissedSet.has(c.actionKey)).slice(0, input.limit);
+
+      // ── Phase 22 (S2): learned re-order within severity groups ─────────
+      // Beta(1,1)-smoothed act rate per {kind}:{persona}, org-scoped pooling
+      // (rankingScope "org_persona", design §5.2). Items below
+      // RANKING_MIN_IMPRESSIONS keep the P21 static order at their exact
+      // positions; learning never crosses severity groups. When zero items
+      // are eligible the ordering is byte-identical to Phase 21.
+      const persona = input.persona ?? "unknown";
+      let ranking: {
+        enabled: boolean;
+        scope: "org_persona";
+        learnedItems: number;
+        label: "learning_active" | "static_ordering";
+      } = { enabled: false, scope: "org_persona", learnedItems: 0, label: "static_ordering" };
+      if (rankingEnabled() && orgIds.length) {
+        const stats = await db.select().from(rankingStats).where(and(
+          eq(rankingStats.orgId, orgIds[0]),
+          eq(rankingStats.ranker, "next_action"),
+        ));
+        const byKey = new Map(stats.map(s => [s.itemKey, s]));
+        const minImpressions = rankingMinImpressions();
+        const reordered = reorderWithinSeverity(
+          visible,
+          c => c.severity,
+          c => {
+            const st = byKey.get(`${c.kind}:${persona}`);
+            if (!st || st.presented < minImpressions) return null;
+            return smoothedActRate(st.acts, st.negatives);
+          },
+        );
+        visible = reordered.items;
+        ranking = {
+          enabled: true,
+          scope: "org_persona",
+          learnedItems: reordered.learnedItems,
+          label: reordered.learnedItems > 0 ? "learning_active" : "static_ordering",
+        };
+      }
 
       // S1: card impressions (rule-based producer; modelVersionId null).
+      // Phase 22: metadata gains persona (ranking item key dimension).
       if (visible.length && orgIds.length) {
         await recordSuggestionEvents(db, visible.map(c => ({
           orgId: orgIds[0],
@@ -289,10 +334,10 @@ export const nextActionsRouter = router({
           modelName: "next-actions-v1",
           modelVersionId: null,
           contextHash: contextHash(orgIds[0], "next_action", { kind: c.kind }),
-          metadata: { kind: c.kind },
+          metadata: { kind: c.kind, persona },
         })));
       }
-      return { cards: visible, dismissedCount: dismissedSet.size };
+      return { cards: visible, dismissedCount: dismissedSet.size, ranking };
     }),
 
   dismiss: protectedProcedure
@@ -313,6 +358,29 @@ export const nextActionsRouter = router({
         target: [nextActionDismissals.userId, nextActionDismissals.actionKey],
         set: { expiresAt },
       });
+      // Phase 22 (S2): dismissals are the negative ranking signal. Record a
+      // `rejected` suggestion event (additive; next_action_dismissals stays
+      // the TTL hide-store). orgId is recovered from the card's presented
+      // event — dismiss input is deliberately unchanged.
+      const pres = await db.select({ orgId: suggestionEvents.orgId }).from(suggestionEvents)
+        .where(and(
+          eq(suggestionEvents.suggestionId, input.actionKey),
+          eq(suggestionEvents.surface, "next_action"),
+          eq(suggestionEvents.action, "presented"),
+        ))
+        .limit(1);
+      if (pres[0]?.orgId) {
+        await recordSuggestionEvents(db, [{
+          orgId: pres[0].orgId,
+          userId: ctx.user.id,
+          suggestionId: input.actionKey,
+          surface: "next_action",
+          action: "rejected",
+          modelName: "next-actions-v1",
+          modelVersionId: null,
+          metadata: { kind: input.actionKey.split(":")[0] },
+        }]);
+      }
       return { dismissed: true, actionKey: input.actionKey, expiresAt: expiresAt.toISOString() };
     }),
 });
