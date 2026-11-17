@@ -4,14 +4,15 @@
  * Redis-backed fixed-window rate limiter (INCR + EXPIRE per key/window).
  *
  * Failure modes:
- *   - failClosed: true  → auth/token/payment/PHI endpoints. When Redis is
- *     unavailable IN PRODUCTION the request is rejected (503) — an
- *     unauthenticated-throttling gap on those routes is not acceptable.
+ *   - failClosed: true  → auth/token/payment/PHI endpoints AND the general
+ *     tRPC limiter. When Redis is unavailable IN PRODUCTION the request is
+ *     rejected (503) — an unauthenticated-throttling gap on those routes is
+ *     not acceptable.
  *     Outside production (local dev without Redis) the limiter logs and
  *     allows, matching server/redis.ts's graceful-degradation convention.
- *   - failClosed: false → low-risk read paths (e.g. the general tRPC limiter).
- *     Backend outages are logged (fail-open-with-log) so a Redis blip cannot
- *     take down read traffic.
+ *   - failClosed: false → reserved for low-risk read paths. Backend outages
+ *     are logged (fail-open-with-log) so a Redis blip cannot take down read
+ *     traffic.
  *
  * All limits are configurable via env (see .env.example):
  *   RATE_LIMIT_AUTH_MAX / RATE_LIMIT_AUTH_WINDOW_SECONDS         (default 20/60)
@@ -110,12 +111,16 @@ export function sensitiveRateLimiter() {
   });
 }
 
-/** General tRPC limiter — fail-open-with-log (documented above). */
+/**
+ * General tRPC limiter. Phase 24 (F3): now fail-CLOSED in production like the
+ * auth/sensitive limiters — with fail-open, a Redis outage silently removed
+ * all throttling from every tRPC procedure (including the MFA endpoints).
+ */
 export function apiRateLimiter() {
   return createRateLimiter({
     name: "api",
     max: envInt("RATE_LIMIT_API_MAX", 300),
     windowSeconds: envInt("RATE_LIMIT_API_WINDOW_SECONDS", 60),
-    failClosed: false,
+    failClosed: true,
   });
 }
