@@ -67,6 +67,16 @@ import {
   blendConfidence,
 } from "../idr/ranking";
 import { OFFER_MODEL_NAME } from "../scheduled/offerModelRefresh";
+import {
+  exactDistinctSql,
+  hllBuildSql,
+  hllEstimateSql,
+  probeSketchCapability,
+  sketchEligible,
+  sketchMinRows,
+  sketchesActive,
+  type EstimateProvenance,
+} from "../idr/sketches";
 
 type Db = Awaited<ReturnType<typeof requireDb>>;
 
@@ -897,6 +907,84 @@ export const banditRouter = router({
         honestyNote:
           `Arm posteriors are computed per organization only — no cross-organization pooling. Rewards are attributed nightly from real offer outcomes (accepted = 1, rejected = 0; countered and expired serves are excluded). Exploration is capped (rate + daily + ±${Math.max(...parseArmsBps().map(a => Math.abs(a.deltaBps))) / 100}% amount band) and every served recommendation discloses the unadjusted baseline.`,
       };
+    }),
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 23: ingestion cardinality (HLL vs exact, on-demand — no new tables)
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface CardinalityMetric {
+  value: number;
+  estimateProvenance: EstimateProvenance;
+}
+
+/**
+ * Distinct-count estimates over the org's OWN bulk-ingested claims surface
+ * (practice_claims): patients ("patientRef"), rendering NPIs
+ * ("renderingNpi"), ICNs ("claimId"). HLL when the datasketches extension is
+ * active AND the org's row volume is >= SKETCH_MIN_ROWS; otherwise exact
+ * COUNT(DISTINCT). Provenance is reported PER METRIC.
+ */
+export async function computeIngestCardinality(
+  db: Db,
+  orgId: string,
+): Promise<{
+  patients: CardinalityMetric;
+  renderingNpis: CardinalityMetric;
+  icns: CardinalityMetric;
+  rowCount: number;
+  sketchCapable: boolean;
+}> {
+  const capable = await probeSketchCapability(db);
+  const active = await sketchesActive(db);
+  const minRows = sketchMinRows();
+  const countRows = rowsOfExec(await db.execute(sql`
+    SELECT COUNT(*)::int AS n FROM practice_claims WHERE "orgId" = ${orgId}
+  `));
+  const rowCount = Number(countRows[0]?.n ?? 0);
+  const useHll = active && sketchEligible(rowCount, minRows);
+  const provenance: EstimateProvenance = useHll ? "hll_sketch" : "exact";
+
+  // Column expressions are fixed literals (practice_claims columns); orgId is
+  // a bound parameter. The HLL builds carry a NULL filter so nullable columns
+  // behave exactly like COUNT(DISTINCT) (which ignores NULLs).
+  const metric = (col: string) =>
+    useHll
+      ? `${hllEstimateSql(`${hllBuildSql(col)} FILTER (WHERE ${col} IS NOT NULL)`)}`
+      : exactDistinctSql(col);
+  const rows = rowsOfExec(await db.execute(sql`
+    SELECT
+      ${sql.raw(metric('"patientRef"'))} AS patients,
+      ${sql.raw(metric('"renderingNpi"'))} AS rendering_npis,
+      ${sql.raw(metric('"claimId"'))} AS icns
+    FROM practice_claims
+    WHERE "orgId" = ${orgId}
+  `));
+  const r = rows[0] ?? {};
+  const num = (v: unknown) => (v === null || v === undefined ? 0 : Math.round(Number(v)));
+  return {
+    patients: { value: num(r.patients), estimateProvenance: provenance },
+    renderingNpis: { value: num(r.rendering_npis), estimateProvenance: provenance },
+    icns: { value: num(r.icns), estimateProvenance: provenance },
+    rowCount,
+    sketchCapable: capable,
+  };
+}
+
+export const intelligenceRouter = router({
+  /**
+   * Phase 23: on-demand cardinality of the org's bulk-ingested claims.
+   * Org-scoped (owner/staff/viewer). Sketch-backed counts are approximations
+   * with published HLL error bounds and are labeled estimateProvenance
+   * "hll_sketch"; the exact fallback is labeled "exact".
+   */
+  ingestCardinality: protectedProcedure
+    .input(z.object({ orgId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      await assertOrgMember(db, ctx.user.id, input.orgId, READ_ROLES);
+      return computeIngestCardinality(db, input.orgId);
     }),
 });
 
