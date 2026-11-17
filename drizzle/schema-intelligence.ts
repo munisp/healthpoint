@@ -27,13 +27,22 @@ import {
   pgTable,
   varchar,
   integer,
+  bigint,
   timestamp,
   jsonb,
   numeric,
   boolean,
   index,
   uniqueIndex,
+  customType,
 } from "drizzle-orm/pg-core";
+
+/** bytea column (drizzle pg-core has no first-class bytea builder here; schema-bulk-upload.ts precedent). */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
 
 export const SUGGESTION_EVENT_ACTIONS = ["presented", "accepted", "edited", "rejected", "expired"] as const;
 export type SuggestionEventAction = (typeof SUGGESTION_EVENT_ACTIONS)[number];
@@ -262,6 +271,43 @@ export const outcomeModelPredictions = pgTable(
   ],
 );
 
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 23: Apache DataSketches adoption (migration 0058_wave_p23.sql)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * S5: per-org × segment KLL double-sketch state for outcome-model-v2 award
+ * quantiles. org_id is varchar(64) with no FK — same convention as every
+ * other org_id in this module (organizations.id is varchar(64), so the
+ * design-contract's `uuid references organizations(id)` is not expressible).
+ *
+ * `sketch` is NULL whenever the datasketches extension is absent/gated off or
+ * the segment is below SKETCH_MIN_ROWS; `row_count` is ALWAYS the exact row
+ * count (it gates sketch eligibility at read time). Refreshed nightly by
+ * maintainOutcomeSegmentSketches as a full recompute (state derives from
+ * facts — the same idempotency convention as ranking_stats). Aggregates
+ * only: award USD amounts already live in cleartext on disputes — no new
+ * PHI surface.
+ */
+export const outcomeSegmentSketches = pgTable(
+  "outcome_segment_sketches",
+  {
+    id: varchar("id", { length: 64 }).primaryKey().$defaultFn(() => crypto.randomUUID()),
+    orgId: varchar("org_id", { length: 64 }).notNull(),
+    /** Canonical segment key from server/idr/segment-keys.ts. */
+    segmentKey: varchar("segment_key", { length: 191 }).notNull(),
+    /** KLL double sketch bytes (NULL in exact mode). */
+    sketch: bytea("sketch"),
+    /** Exact count of closed determinations merged into this row. */
+    rowCount: bigint("row_count", { mode: "number" }).notNull().default(0),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("outcome_segment_sketches_uniq").on(t.orgId, t.segmentKey),
+    index("outcome_segment_sketches_segment_idx").on(t.segmentKey),
+  ],
+);
+
 export type SuggestionEvent = typeof suggestionEvents.$inferSelect;
 export type ModelVersion = typeof modelVersions.$inferSelect;
 export type NextActionDismissal = typeof nextActionDismissals.$inferSelect;
@@ -269,3 +315,4 @@ export type BanditAssignment = typeof banditAssignments.$inferSelect;
 export type BanditArmStat = typeof banditArmStats.$inferSelect;
 export type RankingStat = typeof rankingStats.$inferSelect;
 export type OutcomeModelPrediction = typeof outcomeModelPredictions.$inferSelect;
+export type OutcomeSegmentSketch = typeof outcomeSegmentSketches.$inferSelect;
