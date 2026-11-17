@@ -205,7 +205,11 @@ export const j20: Journey = {
           name: `Journey EMR ${ctx.ns("j20")}`.slice(0, 200),
           emrSystem: "generic-fhir",
           authType: "none",
-          baseUrl: "https://127.0.0.1:9/fhir",
+          // Phase 24 (F1): emr URLs are (being) SSRF-guarded — use RFC 5737
+          // TEST-NET-3 (public, guard-allowed, globally unroutable) instead of
+          // loopback so the fixture survives the guard landing; the fetch
+          // still fails honestly with SERVICE_UNAVAILABLE.
+          baseUrl: "https://203.0.113.1:9/fhir",
           credentials: {},
           fieldMappings: {},
           fhirVersion: "R4",
