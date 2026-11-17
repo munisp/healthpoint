@@ -35,7 +35,7 @@ import {
 } from "../idr/outcome-model-v2";
 import { rewardWindowDays } from "../idr/offer-bandit";
 import { canonicalSegmentKey, type SegmentTier } from "../idr/segment-keys";
-import { kllBuildSql, sketchMinRows, sketchesActive } from "../idr/sketches";
+import { kllBuildByteaSql, sketchMinRows, sketchesActive } from "../idr/sketches";
 import { runOfferModelTraining, SEGMENT_SUPPRESSION_FLOOR } from "./offerModelRefresh";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -529,6 +529,7 @@ interface SketchGroupRow extends Record<string, unknown> {
   svc: string | null;
   st: string | null;
   n: number;
+  /** Real sketch bytes (Buffer) after the server-side ::bytea cast; NULL in exact mode. */
   sketch: Buffer | null;
 }
 
@@ -590,9 +591,10 @@ export async function maintainOutcomeSegmentSketches(db: Db, now: Date): Promise
     const head = sql.raw(`SELECT ${t.select}, COUNT(*)::int AS n, `);
     // minRows flows as a bound parameter; the KLL build expression is a
     // repo-constant fragment (server/idr/sketches.ts is the single source of
-    // truth for extension function names).
+    // truth for extension function names). ::bytea server-side so postgres-js
+    // decodes real sketch bytes to a Buffer (never base64 text).
     const sketchSel = active
-      ? sql`CASE WHEN COUNT(*) >= ${minRows} THEN ${sql.raw(kllBuildSql("amt"))} ELSE NULL END`
+      ? sql`CASE WHEN COUNT(*) >= ${minRows} THEN ${sql.raw(kllBuildByteaSql("amt"))} ELSE NULL END`
       : sql`NULL`;
     const tail = sql.raw(` AS sketch ${SKETCH_SOURCE_SQL}${t.where} GROUP BY ${t.groupBy}`);
     const rows = rowsOf<SketchGroupRow>(await db.execute(sql`${head}${sketchSel}${tail}`));
