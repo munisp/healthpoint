@@ -69,6 +69,16 @@ vi.mock("../storage", () => ({
   },
 }));
 
+// Phase 24 (F1): bulkFhirWorker now fetches via emrFetch (server/emr-url-guard.ts),
+// which blocks loopback/private targets — including this file's 127.0.0.1 mock
+// server. This file only tests the state machine, not URL safety (see
+// server/tests/emr-url-guard.test.ts and bulk-fhir-worker-ssrf.test.ts for
+// that), so the guard is mocked at the module boundary, the same pattern as
+// webhook-retry.test.ts uses for webhook-url-guard after DEFECT-008.
+vi.mock("../emr-url-guard", () => ({
+  emrFetch: async (url: string, init?: RequestInit) => fetch(url, init),
+}));
+
 // Track which job an update targets: the worker updates by job id; our fake
 // applies to the job whose id was most recently seen via a module hook.
 (state as any).updatingId = null;
