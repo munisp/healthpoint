@@ -82,6 +82,14 @@ type Db = Awaited<ReturnType<typeof requireDb>>;
 
 const READ_ROLES = ["owner", "staff", "viewer"];
 
+/**
+ * Phase 24 (F6b): per-user cap on `presented` event recording — a viewer/
+ * staff member could otherwise inject unlimited forged impressions and
+ * poison ranking_stats / acceptance metrics (learning-loop spam). DB-based
+ * fixed window over suggestion_events (no Redis dependency).
+ */
+export const PRESENTED_EVENTS_PER_USER_PER_HOUR = 200;
+
 /** Same membership assertion as server/routers/bulk-upload.ts:49. */
 export async function assertOrgMember(db: Db, userId: string, orgId: string, roles: string[] = ["owner", "staff"]) {
   const rows = await db
@@ -223,7 +231,41 @@ export const feedbackRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
-      await assertOrgMember(db, ctx.user.id, input.orgId, READ_ROLES);
+      // Phase 24 (F6a): feedback.record is a MUTATION — restrict to
+      // owner/staff (assertOrgMember default). Viewers are read-only;
+      // previously READ_ROLES let any org viewer write learning-loop events.
+      await assertOrgMember(db, ctx.user.id, input.orgId);
+      if (input.action === "presented") {
+        // Phase 24 (F6b): per-user rate cap on impression recording.
+        const rows = await db.execute(sql`
+          SELECT count(*)::int AS n FROM suggestion_events
+          WHERE user_id = ${ctx.user.id} AND action = 'presented'
+            AND created_at > now() - interval '1 hour'
+        `);
+        const n = Number(rowsOfExec(rows)[0]?.n ?? 0);
+        if (n >= PRESENTED_EVENTS_PER_USER_PER_HOUR) {
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: `Presented-event rate limit exceeded (${PRESENTED_EVENTS_PER_USER_PER_HOUR}/hour)`,
+          });
+        }
+      } else {
+        // Phase 24 (F6c): terminal/derived events must reference a
+        // suggestion actually served in the caller's org — otherwise any
+        // member could inject accepted/rejected events for arbitrary
+        // (or another org's) suggestionIds and poison the learning loop.
+        const prior = await db
+          .select({ id: suggestionEvents.id })
+          .from(suggestionEvents)
+          .where(and(eq(suggestionEvents.suggestionId, input.suggestionId), eq(suggestionEvents.orgId, input.orgId)))
+          .limit(1);
+        if (prior.length === 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Unknown suggestionId for this organization — only suggestions actually served can receive feedback",
+          });
+        }
+      }
       const inserted = await recordSuggestionEvents(db, [{
         orgId: input.orgId,
         userId: ctx.user.id,
