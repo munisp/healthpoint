@@ -18,9 +18,11 @@ import {
   hllBuildSql,
   hllEstimateSql,
   hllUnionSql,
+  kllBuildByteaSql,
   kllBuildSql,
   kllMergeSql,
   kllQuantileSql,
+  resetSketchProbeCacheForTests,
   shouldUseSketches,
   sketchEligible,
   sketchGate,
@@ -39,6 +41,11 @@ describe("sketch SQL builders (exact strings)", () => {
     expect(kllQuantileSql("sketch::kll_double_sketch", 0.25)).toBe(
       "kll_double_sketch_get_quantile(sketch::kll_double_sketch, 0.25)",
     );
+  });
+
+  it("write-path build casts to bytea server-side (F1: postgres-js decodes bytea→Buffer, never base64 text)", () => {
+    expect(kllBuildByteaSql("amt")).toBe("kll_double_sketch_build(amt)::bytea");
+    expect(kllBuildByteaSql("v")).toContain("::bytea");
   });
 
   it("HLL build/union/estimate use the verified datasketches names", () => {
@@ -107,5 +114,51 @@ describe("env gate resolution", () => {
     expect(sketchEligible(10001, 10000)).toBe(true);
     expect(sketchEligible(0, 1)).toBe(false);
     expect(sketchEligible(1, 1)).toBe(true);
+  });
+});
+
+describe("read-path containment (F2): sketch query failure falls back to exact", () => {
+  it("generateOutcomePredictionFromModel returns the exact-mode result when the sketch query throws", async () => {
+    const { generateOutcomePredictionFromModel } = await import("./outcome-prediction-source");
+    // Stub db (test-only; production code stays mock-free): the model_version
+    // select returns an active model; execute call #1 (pg_extension probe)
+    // "finds" the extension so the sketch path is ATTEMPTED; execute call #2
+    // (the sketch read) throws — containment must turn that into the exact
+    // fallback, never a 500.
+    const activeRow = {
+      id: "mv-stub", version: 7, modelName: "outcome-model-v2", status: "active",
+      parameters: {
+        generatedAt: new Date().toISOString(), platformFloor: 30, suppressionFloor: 5,
+        tiers: {
+          idr_entity_x_service_x_patientstate: [], idr_entity_x_service: [],
+          service_x_patientstate: [], service: [],
+          platform: { tier: "platform", key: {}, sampleSize: 40, wins: 20, awardP25Usd: 100, awardP50Usd: 150, awardP75Usd: 200, medianDeterminationUsd: 150 },
+        },
+      },
+    };
+    let executeCalls = 0;
+    const stubDb = {
+      select: () => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve([activeRow]) }) }) }),
+      execute: () => {
+        executeCalls += 1;
+        if (executeCalls === 1) return Promise.resolve([{ found: 1 }]); // probe: extension present
+        return Promise.reject(new Error("sketch read boom"));
+      },
+    };
+    resetSketchProbeCacheForTests();
+    try {
+      const result = await generateOutcomePredictionFromModel(
+        stubDb as never,
+        { idrEntityId: "e1", serviceType: "svc", patientState: "TX" } as never,
+      );
+      expect(executeCalls).toBe(2); // sketch path was actually attempted
+      expect(result).toBeTruthy();
+      expect(result!.estimateProvenance).toBe("exact");
+      expect(result!.prediction.awardP50Usd).toBe(150);
+      expect(result!.prediction.segmentTierUsed).toBe("platform");
+      expect(result!.keyFactors.join("\n")).not.toContain("KLL");
+    } finally {
+      resetSketchProbeCacheForTests();
+    }
   });
 });
