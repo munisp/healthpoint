@@ -14,6 +14,8 @@
  *   3. trainOutcomeModel       — S4 outcome-model-v2 training
  *   4. joinOutcomeActuals      — S4 calibration join
  *   5. refreshRankingStats     — S2+S3 ranker rate tables
+ *   6. maintainOutcomeSegmentSketches — P23 additive KLL sketch state
+ *      (exact aggregates in step 3 are always written regardless)
  *
  * NON-goal enforcement (design §10): rewards attribute HERE, in batch — the
  * disputes.acceptOffer/rejectOffer payment-adjacent paths are read, never
@@ -24,7 +26,7 @@ import { Request, Response } from "express";
 import crypto from "crypto";
 import { desc, eq, and, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { modelVersions } from "../../drizzle/schema-intelligence";
+import { modelVersions, outcomeSegmentSketches } from "../../drizzle/schema-intelligence";
 import {
   OUTCOME_MODEL_NAME,
   outcomeModelMinSamples,
@@ -32,6 +34,8 @@ import {
   type OutcomeSegmentRow,
 } from "../idr/outcome-model-v2";
 import { rewardWindowDays } from "../idr/offer-bandit";
+import { canonicalSegmentKey, type SegmentTier } from "../idr/segment-keys";
+import { kllBuildSql, sketchMinRows, sketchesActive } from "../idr/sketches";
 import { runOfferModelTraining, SEGMENT_SUPPRESSION_FLOOR } from "./offerModelRefresh";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -489,6 +493,153 @@ export async function refreshRankingStats(db: Db, now: Date): Promise<RankingRef
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Step 6: outcome segment sketch maintenance (Phase 23 — ADDITIVE)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// outcome_segment_sketches is refreshed as a FULL RECOMPUTE from dispute
+// facts and replaced atomically (ranking_stats precedent: state derives from
+// facts, idempotent across re-runs). The design contract's "row_count += n"
+// upsert-merge wording assumes incremental batches; the source aggregation
+// here is a full recompute, so blind accumulation would double-count every
+// night and corrupt SKETCH_MIN_ROWS gating — replace semantics instead.
+//
+// Org attribution: disputes carry no org column, so a dispute is attributed
+// to its creator's org via org_memberships (MIN("orgId") — deterministic
+// single attribution, so the read path's cross-org KLL merge never
+// double-counts a dispute; same membership-derived scoping precedent as
+// outcomeModel.calibration). Disputes whose creator has no membership are
+// platform-only (still in the exact aggregates above).
+//
+// row_count is ALWAYS the exact count (it gates sketch eligibility at read
+// time). sketch is built ONLY when the extension is active AND the segment
+// batch is >= SKETCH_MIN_ROWS; otherwise NULL (exact mode).
+
+export interface SketchMaintenanceResult {
+  /** outcome_segment_sketches rows written this refresh. */
+  rows: number;
+  orgs: number;
+  /** Whether the datasketches extension was active (sketch bytes written). */
+  sketchActive: boolean;
+  minRows: number;
+}
+
+interface SketchGroupRow extends Record<string, unknown> {
+  org_id: string;
+  idre: string | null;
+  svc: string | null;
+  st: string | null;
+  n: number;
+  sketch: Buffer | null;
+}
+
+/**
+ * Constant SQL fragments only (aggregateOutcomeSegments sql.raw discipline).
+ * Org attribution subquery uses the org_memberships camelCase convention.
+ */
+const SKETCH_SOURCE_SQL = `
+  FROM (
+    SELECT d."idrEntityId" AS idre, d."serviceType" AS svc, d."patientState" AS st,
+           d."determinationAmount"::double precision AS amt,
+           (SELECT MIN(m."orgId") FROM org_memberships m WHERE m."userId" = d."createdBy") AS org_id
+    FROM disputes d
+    WHERE d."determinationWinner" IS NOT NULL AND d."determinationAmount" IS NOT NULL
+  ) s
+  WHERE s.org_id IS NOT NULL`;
+
+/** One SELECT per outcome-model-v2 tier; non-tier columns aliased to NULL. */
+const SKETCH_TIER_QUERIES: Array<{ tier: SegmentTier; select: string; where: string; groupBy: string }> = [
+  {
+    tier: "idr_entity_x_service_x_patientstate",
+    select: "org_id, idre, svc, st",
+    where: ' AND idre IS NOT NULL',
+    groupBy: "1, 2, 3, 4",
+  },
+  {
+    tier: "idr_entity_x_service",
+    select: "org_id, idre, svc, NULL::text AS st",
+    where: ' AND idre IS NOT NULL',
+    groupBy: "1, 2, 3",
+  },
+  {
+    tier: "service_x_patientstate",
+    select: "org_id, NULL::text AS idre, svc, st",
+    where: "",
+    groupBy: "1, 3, 4",
+  },
+  {
+    tier: "service",
+    select: "org_id, NULL::text AS idre, svc, NULL::text AS st",
+    where: "",
+    groupBy: "1, 3",
+  },
+  {
+    tier: "platform",
+    select: "org_id, NULL::text AS idre, NULL::text AS svc, NULL::text AS st",
+    where: "",
+    groupBy: "1",
+  },
+];
+
+/** Exported for tests/journeys. Idempotent full recompute. */
+export async function maintainOutcomeSegmentSketches(db: Db, now: Date): Promise<SketchMaintenanceResult> {
+  const active = await sketchesActive(db);
+  const minRows = sketchMinRows();
+  const collected: Array<{ orgId: string; segmentKey: string; n: number; sketch: Buffer | null }> = [];
+
+  for (const t of SKETCH_TIER_QUERIES) {
+    const head = sql.raw(`SELECT ${t.select}, COUNT(*)::int AS n, `);
+    // minRows flows as a bound parameter; the KLL build expression is a
+    // repo-constant fragment (server/idr/sketches.ts is the single source of
+    // truth for extension function names).
+    const sketchSel = active
+      ? sql`CASE WHEN COUNT(*) >= ${minRows} THEN ${sql.raw(kllBuildSql("amt"))} ELSE NULL END`
+      : sql`NULL`;
+    const tail = sql.raw(` AS sketch ${SKETCH_SOURCE_SQL}${t.where} GROUP BY ${t.groupBy}`);
+    const rows = rowsOf<SketchGroupRow>(await db.execute(sql`${head}${sketchSel}${tail}`));
+    for (const r of rows) {
+      const n = Number(r.n ?? 0);
+      if (n < SEGMENT_SUPPRESSION_FLOOR) continue; // P21 thin-segment suppression precedent
+      collected.push({
+        orgId: String(r.org_id),
+        segmentKey: canonicalSegmentKey(t.tier, {
+          idrEntityId: r.idre ?? null,
+          serviceType: r.svc ?? null,
+          patientState: r.st ?? null,
+        }),
+        n,
+        sketch: r.sketch ?? null,
+      });
+    }
+  }
+
+  // Atomic replace (refreshRankingStats precedent).
+  const write = async (tx: Db) => {
+    await tx.execute(sql`DELETE FROM outcome_segment_sketches`);
+    for (let i = 0; i < collected.length; i += 200) {
+      await tx.insert(outcomeSegmentSketches).values(
+        collected.slice(i, i + 200).map(c => ({
+          id: crypto.randomUUID(),
+          orgId: c.orgId,
+          segmentKey: c.segmentKey,
+          sketch: c.sketch,
+          rowCount: c.n,
+          updatedAt: now,
+        })),
+      );
+    }
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const anyDb = db as any;
+  if (typeof anyDb.transaction === "function") {
+    await anyDb.transaction(async (tx: Db) => write(tx));
+  } else {
+    await write(db);
+  }
+
+  return { rows: collected.length, orgs: new Set(collected.map(c => c.orgId)).size, sketchActive: active, minRows };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Shared governance-row writer (P21 retire+insert precedent)
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -551,6 +702,7 @@ export interface LearningLoopResult {
   bandit?: { attribution?: BanditAttributionResult; governance?: unknown; error?: string };
   outcomeModel?: { training?: OutcomeTrainingResult; calibration?: { joined: number }; error?: string };
   ranking?: { result?: RankingRefreshResult; error?: string };
+  sketches?: { result?: SketchMaintenanceResult; error?: string };
 }
 
 /** Exported for tests/journeys (clock injection via `now`). */
@@ -587,6 +739,14 @@ export async function runLearningLoopRefresh(db: Db, now: Date): Promise<Learnin
     out.ranking = { result: await refreshRankingStats(db, now) };
   } catch (err) {
     out.ranking = { error: err instanceof Error ? err.message : String(err) };
+  }
+
+  // Step 6: outcome segment sketch maintenance (Phase 23 — additive; the
+  // exact aggregates above are always written regardless).
+  try {
+    out.sketches = { result: await maintainOutcomeSegmentSketches(db, now) };
+  } catch (err) {
+    out.sketches = { error: err instanceof Error ? err.message : String(err) };
   }
 
   return out;
