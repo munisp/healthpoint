@@ -259,7 +259,16 @@ export const j04: Journey = {
         // End-to-end byte path: the runner's storage stub captured the exact
         // payload bytes under the recorded storageKey (retrievable content,
         // not a dangling metadata-only pointer).
-        const stored = journeyStorageObjects.get(storageKey);
+        // Phase 24 (F8): the server namespaces the client-provided key
+        // (org/<orgId>/… or the per-user fallback) — assert against the
+        // RECORDED s3Key, and verify the namespace prefix is applied.
+        const recordedKey = String((listed[0] as { s3Key: string }).s3Key);
+        ctx.assert(
+          recordedKey === storageKey || (recordedKey.startsWith("org/") && recordedKey.endsWith(storageKey)),
+          "storage key recorded verbatim or org-namespaced (phase 24 transition)",
+          { recordedKey },
+        );
+        const stored = journeyStorageObjects.get(recordedKey);
         ctx.assert(
           stored !== undefined && stored.includes(pdfPayload),
           "uploaded bytes persisted to object storage under the recorded key",
