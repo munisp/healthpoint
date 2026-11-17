@@ -82,16 +82,19 @@ function isBlockedAddress(address: string): boolean {
  * (by literal IP or DNS) to any internal/private/link-local/loopback
  * address. Safe to call on both user input and immediately before a
  * real fetch.
+ *
+ * `resourceLabel` only customizes error text (e.g. "EMR URL" from
+ * server/emr-url-guard.ts); the policy is identical for every caller.
  */
-export async function assertWebhookUrlSafe(rawUrl: string): Promise<void> {
+export async function assertWebhookUrlSafe(rawUrl: string, resourceLabel = "Webhook URL"): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
   } catch {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Webhook URL is not a valid URL" });
+    throw new TRPCError({ code: "BAD_REQUEST", message: `${resourceLabel} is not a valid URL` });
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Webhook URL must use http or https" });
+    throw new TRPCError({ code: "BAD_REQUEST", message: `${resourceLabel} must use http or https` });
   }
 
   const hostname = parsed.hostname.replace(/^\[/, "").replace(/\]$/, ""); // strip IPv6 brackets
@@ -104,14 +107,14 @@ export async function assertWebhookUrlSafe(rawUrl: string): Promise<void> {
     try {
       addresses = (await dns.lookup(hostname, { all: true, verbatim: true })).map(r => r.address);
     } catch {
-      throw new TRPCError({ code: "BAD_REQUEST", message: "Webhook URL hostname could not be resolved" });
+      throw new TRPCError({ code: "BAD_REQUEST", message: `${resourceLabel} hostname could not be resolved` });
     }
   }
 
   if (addresses.length === 0 || addresses.some(isBlockedAddress)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Webhook URL must not point to an internal, private, or restricted network address",
+      message: `${resourceLabel} must not point to an internal, private, or restricted network address`,
     });
   }
 }
