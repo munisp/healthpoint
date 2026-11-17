@@ -43,6 +43,8 @@ import { feedbackRouter, prefillRouter, offerStrategyRouter } from "./routers/in
 import { nextActionsRouter } from "./routers/next-actions";
 // phase22 additions (closed learning loop: bandit transparency + outcome calibration)
 import { banditRouter, outcomeModelRouter } from "./routers/intelligence";
+// phase23 additions (DataSketches KLL/HLL: ingestion cardinality)
+import { intelligenceRouter } from "./routers/intelligence";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -80,7 +82,9 @@ export const rootRouter = mergeRouters(
   router({ nextActions: nextActionsRouter }),
   // phase22 additions
   router({ outcomeModel: outcomeModelRouter }),
-  router({ bandit: banditRouter })
+  router({ bandit: banditRouter }),
+  // phase23 additions
+  router({ intelligence: intelligenceRouter })
 );
 
 export type RootRouter = typeof rootRouter;
