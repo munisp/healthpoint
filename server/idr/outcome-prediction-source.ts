@@ -78,14 +78,21 @@ async function sketchQuantilesForSegment(
   // bytea is cast back via the extension's assignment cast. segment_key is a
   // bound parameter — never interpolated.
   const q = (frac: number) => kllQuantileSql(kllMergeSql("sketch::kll_double_sketch"), frac);
-  const rows = rowsOf<Record<string, unknown>>(await db.execute(sql`
-    SELECT COALESCE(SUM(row_count), 0)::float8 AS n,
-      ${sql.raw(q(0.25))} AS q25,
-      ${sql.raw(q(0.50))} AS q50,
-      ${sql.raw(q(0.75))} AS q75
-    FROM outcome_segment_sketches
-    WHERE segment_key = ${segmentKey} AND sketch IS NOT NULL
-  `));
+  let rows: Array<Record<string, unknown>>;
+  try {
+    rows = rowsOf<Record<string, unknown>>(await db.execute(sql`
+      SELECT COALESCE(SUM(row_count), 0)::float8 AS n,
+        ${sql.raw(q(0.25))} AS q25,
+        ${sql.raw(q(0.50))} AS q50,
+        ${sql.raw(q(0.75))} AS q75
+      FROM outcome_segment_sketches
+      WHERE segment_key = ${segmentKey} AND sketch IS NOT NULL
+    `));
+  } catch {
+    // Never block serving on sketch availability: any sketch-read failure
+    // falls back to the exact trained quantiles (estimateProvenance "exact").
+    return null;
+  }
   const r = rows[0];
   const n = Number(r?.n ?? 0);
   if (!r || r.q25 === null || r.q25 === undefined) return null;
