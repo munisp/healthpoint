@@ -22,6 +22,7 @@ import { getDb } from "../db";
 import { bulkFhirExportJobs, emrConnections, smartTokens } from "../../drizzle/schema";
 import { eq, inArray } from "drizzle-orm";
 import { storagePut } from "../storage";
+import { emrFetch } from "../emr-url-guard";
 
 const POLL_TIMEOUT_MS = 15_000;
 
@@ -73,7 +74,10 @@ async function kickJob(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, job: 
   const typeParam = (job.resourceTypes ?? []).join(",");
   const url = `${conn.baseUrl.replace(/\/$/, "")}${exportKickPath(job)}${typeParam ? `?_type=${encodeURIComponent(typeParam)}` : ""}${job.since ? `${typeParam ? "&" : "?"}_since=${encodeURIComponent(job.since.toISOString())}` : ""}`;
 
-  const res = await fetch(url, {
+  // Phase 24 (F1): emrFetch re-validates the EMR URL against the SSRF guard
+  // (private/loopback/link-local blocks, DNS re-resolution) immediately
+  // before fetching and refuses redirects.
+  const res = await emrFetch(url, {
     method: "GET",
     headers: {
       Accept: "application/fhir+json",
@@ -106,7 +110,9 @@ async function pollJob(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, job: 
   }
 
   const token = await emrAccessToken(job.emrConnectionId);
-  const res = await fetch(job.statusUrl, {
+  // Phase 24 (F1): statusUrl comes from the EMR's $export response
+  // (Content-Location) — second-order SSRF surface, guard before fetch.
+  const res = await emrFetch(job.statusUrl, {
     method: "GET",
     headers: {
       Accept: "application/json",
@@ -139,7 +145,9 @@ async function pollJob(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, job: 
   const storedFiles: Array<{ type: string; url: string; count: number }> = [];
   let totalRecords = 0;
   for (const file of output) {
-    const fileRes = await fetch(file.url, {
+    // Phase 24 (F1): file.url comes from the EMR's export manifest —
+    // second-order SSRF surface, guard before fetch.
+    const fileRes = await emrFetch(file.url, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       signal: AbortSignal.timeout(60_000),
     });
