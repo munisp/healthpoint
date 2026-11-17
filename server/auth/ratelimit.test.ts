@@ -92,4 +92,28 @@ describe("Redis-backed rate limiter", () => {
       process.env.NODE_ENV = originalEnv;
     }
   });
+
+  it("apiRateLimiter() is fail-CLOSED in production (phase 24, F3) — 503 when Redis is unavailable", async () => {
+    // No REDIS_URL in this environment → the default redis incrementer
+    // reports unavailable; with failClosed:true the factory must 503 in prod.
+    const originalEnv = process.env.NODE_ENV;
+    const originalRedis = process.env.REDIS_URL;
+    const originalSentinels = process.env.REDIS_SENTINELS;
+    process.env.NODE_ENV = "production";
+    delete process.env.REDIS_URL;
+    delete process.env.REDIS_SENTINELS;
+    try {
+      const { apiRateLimiter } = await import("./ratelimit");
+      const app = express();
+      app.use(apiRateLimiter());
+      app.get("/x", (_req, res) => res.json({ ok: true }));
+      const base = await startServer(app);
+      const res = await fetch(`${base}/x`);
+      expect(res.status).toBe(503);
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+      if (originalRedis !== undefined) process.env.REDIS_URL = originalRedis;
+      if (originalSentinels !== undefined) process.env.REDIS_SENTINELS = originalSentinels;
+    }
+  });
 });
