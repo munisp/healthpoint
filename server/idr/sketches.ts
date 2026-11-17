@@ -127,6 +127,18 @@ export function kllBuildSql(valueExpr: string): string {
   return `kll_double_sketch_build(${valueExpr})`;
 }
 
+/**
+ * Batch KLL build cast to bytea SERVER-SIDE (assignment cast), for
+ * persistence. Without the cast the SELECT yields the kll_double_sketch type,
+ * whose text output function emits base64 and which postgres-js (unknown OID)
+ * returns as a TEXT string — storing that into a bytea column would persist
+ * ASCII-of-base64 (corrupt). With ::bytea postgres-js decodes to a Buffer,
+ * and the read-side ::kll_double_sketch cast round-trips it.
+ */
+export function kllBuildByteaSql(valueExpr: string): string {
+  return `${kllBuildSql(valueExpr)}::bytea`;
+}
+
 /** Merge a column/subquery of KLL sketches (aggregate — the only merge form). */
 export function kllMergeSql(sketchExpr: string): string {
   return `kll_double_sketch_merge(${sketchExpr})`;
