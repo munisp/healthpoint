@@ -10,6 +10,7 @@ import hpp from "hpp";
 import morgan from "morgan";
 import { v4 as uuidv4 } from "uuid";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { trpcBatchSizeGuard, ollamaActiveBackendGuard } from "./trpc-guards";
 import { registerKeycloakRoutes } from "./keycloak";
 import { bootstrapOpenSearchIndices } from "../search";
 import { startKafkaConsumer } from "../events/kafka-consumer";
@@ -235,9 +236,9 @@ async function startServer() {
 
   // ── Redis-backed distributed rate limiting (server/auth/ratelimit.ts) ─────
   // Limits are per-instance-independent (shared via Redis). Auth/token,
-  // settlement/payment, and PHI routes FAIL CLOSED in production when Redis
-  // is unavailable; the general tRPC limiter is fail-open-with-log (documented
-  // in ratelimit.ts). Limits configurable via RATE_LIMIT_* env vars.
+  // settlement/payment, PHI routes, and (phase 24, F3) the general tRPC
+  // limiter FAIL CLOSED in production when Redis is unavailable. Limits
+  // configurable via RATE_LIMIT_* env vars.
   app.use("/api/auth", authRateLimiter());
   app.use("/api/settlement", sensitiveRateLimiter());
   app.use("/api/fhir", sensitiveRateLimiter());
@@ -759,6 +760,13 @@ async function startServer() {
   });
 
   // ── tRPC API ──────────────────────────────────────────────────────────────
+  // Phase 24 guards run BEFORE the tRPC handler (see server/_core/trpc-guards.ts):
+  //   - trpcBatchSizeGuard (F3): reject batches > 10 calls (the rate limiter
+  //     counts a batch as one request; the cap closes the amplification gap).
+  //   - ollamaActiveBackendGuard (F0, INTERIM): require an admin session for
+  //     ollama.activeBackend until the procedure itself is restricted in
+  //     routers.ts (staged separately; it currently leaks the LLM apiKey).
+  app.use("/api/trpc", trpcBatchSizeGuard, ollamaActiveBackendGuard);
   app.use(
     "/api/trpc",
     createExpressMiddleware({
