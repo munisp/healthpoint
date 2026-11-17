@@ -102,6 +102,7 @@ vi.mock("../authz", async importOriginal => {
 });
 
 import { appRouter } from "../routers";
+import { normalizeStorageKey } from "../upload-security";
 
 // ── Test context ──────────────────────────────────────────────────────────────
 function makeCtx(): TrpcContext {
@@ -123,7 +124,13 @@ function makeCtx(): TrpcContext {
 
 const caller = () => appRouter.createCaller(makeCtx());
 
-const CONTENT = "eob pdf bytes %PDF-1.4 — explanation of benefits exhibit";
+// Phase 24 (F8): bytes must carry a real PDF magic header — the upload path
+// now validates declared type against content. (Previous fixture had the
+// %PDF- marker mid-string and would correctly be rejected today.)
+const CONTENT = "%PDF-1.4\neob pdf bytes — explanation of benefits exhibit";
+// The fake db has no org_memberships rows, so the key namespaces under the
+// uploader's per-user fallback (see routers.ts documents.upload).
+const expectKey = (userKey: string) => normalizeStorageKey("user-user-1", userKey);
 
 function baseInput(fileBase64: string, fileSize: number) {
   return {
@@ -158,7 +165,7 @@ describe("documents.upload byte persistence", () => {
     const row = state.documents[0];
     expect(row.id).toBe(docId);
     expect(row.disputeId).toBe("dispute-1");
-    expect(row.s3Key).toBe(input.storageKey);
+    expect(row.s3Key).toBe(expectKey(input.storageKey));
     expect(row.fileSize).toBe(Buffer.byteLength(CONTENT));
     expect(row.mimeType).toBe("application/pdf");
     expect(row.documentType).toBe("eob");
@@ -197,6 +204,32 @@ describe("documents.upload byte persistence", () => {
     await expect(
       caller().documents.upload(legacyCall as any)
     ).rejects.toSatisfy(e => e instanceof TRPCError && e.code === "BAD_REQUEST");
+    expect(state.stored.size).toBe(0);
+    expect(state.documents).toHaveLength(0);
+  });
+
+  // ── Phase 24 (F8) hardening ───────────────────────────────────────────────
+  it("namespaces a traversal-laden storageKey inside the caller's namespace", async () => {
+    const input = { ...baseInput(Buffer.from(CONTENT, "utf-8").toString("base64"), CONTENT.length), storageKey: "../../escape/evil.pdf" };
+    await caller().documents.upload(input);
+    const row = state.documents[0];
+    expect(row.s3Key).toBe("org/user-user-1/escape/evil.pdf");
+    expect(state.stored.has("org/user-user-1/escape/evil.pdf")).toBe(true);
+    expect([...state.stored.keys()].some(k => k.includes(".."))).toBe(false);
+  });
+
+  it("rejects bytes whose magic does not match the declared type (BAD_REQUEST, nothing stored)", async () => {
+    const input = baseInput(Buffer.from("plain text, not a pdf", "utf-8").toString("base64"), 21);
+    await expect(caller().documents.upload(input))
+      .rejects.toSatisfy(e => e instanceof TRPCError && e.code === "BAD_REQUEST" && /magic-byte/.test(e.message));
+    expect(state.stored.size).toBe(0);
+    expect(state.documents).toHaveLength(0);
+  });
+
+  it("rejects a disallowed file type (BAD_REQUEST, nothing stored)", async () => {
+    const input = { ...baseInput(Buffer.from("<html></html>", "utf-8").toString("base64"), 13), fileName: "evil.html", fileType: "text/html" };
+    await expect(caller().documents.upload(input))
+      .rejects.toSatisfy(e => e instanceof TRPCError && e.code === "BAD_REQUEST" && /not allowed/.test(e.message));
     expect(state.stored.size).toBe(0);
     expect(state.documents).toHaveLength(0);
   });
