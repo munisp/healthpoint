@@ -94,6 +94,48 @@ describe("ollamaActiveBackendGuard (F0, interim)", () => {
     expect(state.status).toBe(401);
   });
 
+  // ── Phase-24 fix-wave: interior path segment must NOT shadow the procedure ─
+  // @trpc/server's express adapter resolves the procedure from the LAST URL
+  // segment only, so /api/trpc/x/ollama.activeBackend (req.path here is
+  // "/x/ollama.activeBackend" after the /api/trpc mount strip) still reaches
+  // ollama.activeBackend. The guard must parse identically.
+  it("blocks an interior-segment bypass (/x/ollama.activeBackend)", async () => {
+    const { res, state } = fakeRes();
+    const { next, calls } = nextSpy();
+    await ollamaActiveBackendGuard(fakeReq("/x/ollama.activeBackend"), res, next);
+    expect(calls).toHaveLength(0);
+    expect(state.status).toBe(401);
+  });
+  it("blocks a deep interior-segment bypass (/foo/bar/ollama.activeBackend)", async () => {
+    const { res, state } = fakeRes();
+    const { next, calls } = nextSpy();
+    await ollamaActiveBackendGuard(fakeReq("/foo/bar/ollama.activeBackend"), res, next);
+    expect(calls).toHaveLength(0);
+    expect(state.status).toBe(401);
+  });
+  it("blocks the guarded procedure batched behind an interior segment", async () => {
+    const { res, state } = fakeRes();
+    const { next, calls } = nextSpy();
+    await ollamaActiveBackendGuard(fakeReq("/x/auth.me,ollama.activeBackend"), res, next);
+    expect(calls).toHaveLength(0);
+    expect(state.status).toBe(401);
+  });
+  it("still passes an unrelated procedure behind an interior segment", async () => {
+    const { res } = fakeRes();
+    const { next, calls } = nextSpy();
+    await ollamaActiveBackendGuard(fakeReq("/x/disputes.list"), res, next);
+    expect(calls).toHaveLength(1);
+  });
+  it("batch-size guard counts only the last segment's procedures", () => {
+    // 11 procedures in the last segment behind an interior prefix → reject.
+    const path = "/x/" + Array.from({ length: TRPC_MAX_BATCH_SIZE + 1 }, (_, i) => `q.${i}`).join(",");
+    const { res, state } = fakeRes();
+    const { next, calls } = nextSpy();
+    trpcBatchSizeGuard(fakeReq(path), res, next);
+    expect(calls).toHaveLength(0);
+    expect(state.status).toBe(400);
+  });
+
   // Session-backed branches need the real DB (resolveSession → users table).
   const HAS_DB = !!process.env.DATABASE_URL;
   describe.skipIf(!HAS_DB)("session-backed branches (DB)", () => {
@@ -132,5 +174,58 @@ describe("ollamaActiveBackendGuard (F0, interim)", () => {
       await ollamaActiveBackendGuard(fakeReq("/ollama.activeBackend", { cookie }), res, next);
       expect(calls).toHaveLength(1);
     });
+  });
+});
+
+// ── Real Express mount: exercise the guards with Express's own req.path ──────
+// The Phase-24 review bypass was empirical: GET /api/trpc/x/ollama.activeBackend
+// reached the procedure because Express strips the /api/trpc mount prefix and
+// the tRPC adapter reads only the LAST segment. These tests mount the real
+// guards exactly like server/_core/index.ts and drive real HTTP requests.
+describe("guards mounted on a real Express app (mount-prefix semantics)", () => {
+  let server: import("node:http").Server;
+  let base: string;
+
+  beforeAll(async () => {
+    const { default: express } = await import("express");
+    const app = express();
+    // Same mount as server/_core/index.ts.
+    app.use("/api/trpc", trpcBatchSizeGuard, ollamaActiveBackendGuard);
+    // Stand-in for the tRPC handler: anything a guard lets through lands here.
+    app.use("/api/trpc", (_req, res) => {
+      res.status(200).json({ reached: "trpc-handler" });
+    });
+    await new Promise<void>(resolve => {
+      server = app.listen(0, "127.0.0.1", () => resolve());
+    });
+    const addr = server.address();
+    if (typeof addr === "string" || !addr) throw new Error("no listen address");
+    base = `http://127.0.0.1:${addr.port}`;
+  });
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) =>
+      server.close(err => (err ? reject(err) : resolve()))
+    );
+  });
+
+  it("REVIEW REPRO: /api/trpc/x/ollama.activeBackend is blocked (401)", async () => {
+    const res = await fetch(`${base}/api/trpc/x/ollama.activeBackend`);
+    expect(res.status).toBe(401);
+  });
+  it("REVIEW REPRO: /api/trpc/foo/bar/ollama.activeBackend?batch=1 is blocked (401)", async () => {
+    const res = await fetch(`${base}/api/trpc/foo/bar/ollama.activeBackend?batch=1`);
+    expect(res.status).toBe(401);
+  });
+  it("canonical /api/trpc/ollama.activeBackend is still blocked (401)", async () => {
+    const res = await fetch(`${base}/api/trpc/ollama.activeBackend`);
+    expect(res.status).toBe(401);
+  });
+  it("canonical batch /api/trpc/auth.me,ollama.activeBackend?batch=1 is still blocked (401)", async () => {
+    const res = await fetch(`${base}/api/trpc/auth.me,ollama.activeBackend?batch=1`);
+    expect(res.status).toBe(401);
+  });
+  it("unrelated procedures still reach the handler (200), direct and interior", async () => {
+    expect((await fetch(`${base}/api/trpc/disputes.list`)).status).toBe(200);
+    expect((await fetch(`${base}/api/trpc/x/disputes.list`)).status).toBe(200);
   });
 });
