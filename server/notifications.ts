@@ -18,6 +18,9 @@ export interface NotificationPayload {
 export interface DeliveryResult {
   channel: "email" | "sms";
   success: boolean;
+  /** Honest delivery state: 'unconfigured' when no provider credentials exist
+   *  (previously reported as success:true, silently losing statutory alerts). */
+  deliveryStatus?: "delivered" | "unconfigured" | "failed" | "queued";
   messageId?: string;
   error?: string;
 }
@@ -59,9 +62,9 @@ export async function sendEmail(payload: NotificationPayload): Promise<DeliveryR
   const transport = getEmailTransport();
 
   if (!transport) {
-    // No SMTP configured — log to console for development
-    console.log(`[EMAIL] To: ${payload.to} | Subject: ${payload.subject}\n${payload.body}`);
-    return { channel: "email", success: true, messageId: `dev-${Date.now()}` };
+    // No SMTP configured — report honestly instead of pretending success.
+    console.warn(`[EMAIL] UNCONFIGURED (no SMTP/SendGrid credentials) — not delivered. To: ${payload.to} | Subject: ${payload.subject}`);
+    return { channel: "email", success: false, deliveryStatus: "unconfigured", error: "SMTP/SendGrid not configured" };
   }
 
   try {
@@ -72,10 +75,10 @@ export async function sendEmail(payload: NotificationPayload): Promise<DeliveryR
       text: payload.body,
       html: payload.htmlBody ?? `<pre style="font-family:sans-serif">${payload.body}</pre>`,
     });
-    return { channel: "email", success: true, messageId: info.messageId };
+    return { channel: "email", success: true, deliveryStatus: "delivered", messageId: info.messageId };
   } catch (err: any) {
     console.error("[EMAIL] Delivery failed:", err.message);
-    return { channel: "email", success: false, error: err.message };
+    return { channel: "email", success: false, deliveryStatus: "failed", error: err.message };
   }
 }
 
@@ -87,9 +90,9 @@ export async function sendSMS(payload: NotificationPayload): Promise<DeliveryRes
   const fromNumber = process.env.TWILIO_FROM_NUMBER;
 
   if (!accountSid || !authToken || !fromNumber) {
-    // No Twilio configured — log to console for development
-    console.log(`[SMS] To: ${payload.to} | ${payload.body}`);
-    return { channel: "sms", success: true, messageId: `dev-sms-${Date.now()}` };
+    // No Twilio configured — report honestly instead of pretending success.
+    console.warn(`[SMS] UNCONFIGURED (no Twilio credentials) — not delivered. To: ${payload.to}`);
+    return { channel: "sms", success: false, deliveryStatus: "unconfigured", error: "Twilio not configured" };
   }
 
   try {
@@ -115,10 +118,10 @@ export async function sendSMS(payload: NotificationPayload): Promise<DeliveryRes
     }
 
     const data = (await response.json()) as { sid: string };
-    return { channel: "sms", success: true, messageId: data.sid };
+    return { channel: "sms", success: true, deliveryStatus: "delivered", messageId: data.sid };
   } catch (err: any) {
     console.error("[SMS] Delivery failed:", err.message);
-    return { channel: "sms", success: false, error: err.message };
+    return { channel: "sms", success: false, deliveryStatus: "failed", error: err.message };
   }
 }
 
@@ -156,21 +159,135 @@ export async function dispatchNotification(opts: DispatchOptions): Promise<Deliv
   const smsBody = `[IDR Platform] ${opts.disputeRef}: ${opts.title}. ${opts.message}`.slice(0, 160);
 
   if (opts.recipientEmail) {
-    const result = await sendEmail({
+    const emailPayload = {
       to: opts.recipientEmail,
       subject: `[IDR] ${opts.title} — ${opts.disputeRef}`,
       body: `${opts.title}\n\n${opts.message}${opts.dueDate ? `\n\nDeadline: ${opts.dueDate.toLocaleDateString()}` : ""}`,
       htmlBody,
-    });
+    };
+    const result = await sendEmail(emailPayload);
+    if (!result.success && result.deliveryStatus === "failed") {
+      // Real provider failure — enqueue for retry so statutory deadline
+      // alerts are not silently lost.
+      const queued = await enqueueNotificationRetry("email", emailPayload, opts.type, opts.disputeRef, result.error);
+      if (queued) result.deliveryStatus = "queued";
+    }
     results.push(result);
   }
 
   if (opts.recipientPhone) {
-    const result = await sendSMS({ to: opts.recipientPhone, body: smsBody });
+    const smsPayload = { to: opts.recipientPhone, body: smsBody };
+    const result = await sendSMS(smsPayload);
+    if (!result.success && result.deliveryStatus === "failed") {
+      const queued = await enqueueNotificationRetry("sms", smsPayload, opts.type, opts.disputeRef, result.error);
+      if (queued) result.deliveryStatus = "queued";
+    }
     results.push(result);
   }
 
   return results;
+}
+
+// ─── Notification retry outbox ────────────────────────────────────────────────
+// Failed email/SMS deliveries are persisted to the notification_attempts table
+// (migration 0039_wave_w3.sql — accessed via raw SQL because drizzle/schema.ts
+// is owned by another wave) and drained by the scheduled worker in
+// server/scheduled/notificationRetryWorker.ts. Backoff: 1m/5m/15m/1h/4h, then
+// terminal 'failed'.
+
+import crypto from "node:crypto";
+import { getDb } from "./db";
+import { sql } from "drizzle-orm";
+
+export const NOTIFICATION_RETRY_SCHEDULE_MS = [60_000, 300_000, 900_000, 3_600_000, 14_400_000] as const;
+
+export function computeNotificationNextRetryAt(attempts: number, now = new Date()): Date | null {
+  const delay = NOTIFICATION_RETRY_SCHEDULE_MS[attempts - 1];
+  if (delay === undefined) return null;
+  return new Date(now.getTime() + delay);
+}
+
+async function enqueueNotificationRetry(
+  channel: "email" | "sms",
+  payload: NotificationPayload,
+  type: NotificationType,
+  disputeRef: string,
+  error?: string,
+): Promise<boolean> {
+  try {
+    const db = await getDb();
+    if (!db) return false;
+    const id = crypto.randomUUID();
+    const nextAttempt = computeNotificationNextRetryAt(1);
+    await db.execute(sql`
+      INSERT INTO notification_attempts
+        (id, channel, recipient, subject, body, "htmlBody", "notificationType", "disputeRef",
+         status, attempts, "nextAttemptAt", "errorMessage", "createdAt")
+      VALUES
+        (${id}, ${channel}, ${payload.to}, ${payload.subject ?? null}, ${payload.body}, ${payload.htmlBody ?? null},
+         ${type}, ${disputeRef}, 'pending', 0, ${nextAttempt}, ${error ?? null}, NOW())
+    `);
+    console.warn(`[notifications] queued ${channel} retry ${id} for ${payload.to} (${type}/${disputeRef})`);
+    return true;
+  } catch (err) {
+    console.error("[notifications] failed to enqueue notification retry:", err);
+    return false;
+  }
+}
+
+/** Drain due notification retries. Called by the scheduled worker. */
+export async function processNotificationRetries(limit = 50): Promise<{ attempted: number }> {
+  const db = await getDb();
+  if (!db) return { attempted: 0 };
+
+  const dueRaw = await db.execute(sql`
+    SELECT id, channel, recipient, subject, body, "htmlBody", "notificationType", "disputeRef", attempts
+    FROM notification_attempts
+    WHERE status = 'pending' AND "nextAttemptAt" IS NOT NULL AND "nextAttemptAt" <= NOW()
+    ORDER BY "nextAttemptAt" ASC
+    LIMIT ${limit}
+  `);
+  const due: Array<Record<string, any>> = Array.isArray(dueRaw)
+    ? (dueRaw as any)
+    : (((dueRaw as any)?.rows ?? []) as Array<Record<string, any>>);
+
+  let attempted = 0;
+  for (const r of due) {
+    attempted += 1;
+    const attempts = Number(r.attempts ?? 0) + 1;
+    const result = r.channel === "email"
+      ? await sendEmail({ to: r.recipient, subject: r.subject ?? undefined, body: r.body, htmlBody: r.htmlBody ?? undefined })
+      : await sendSMS({ to: r.recipient, body: r.body });
+
+    if (result.success) {
+      await db.execute(sql`
+        UPDATE notification_attempts
+        SET status = 'delivered', attempts = ${attempts}, "lastAttemptAt" = NOW(), "errorMessage" = NULL
+        WHERE id = ${r.id}
+      `);
+      continue;
+    }
+    if (result.deliveryStatus === "unconfigured") {
+      // Still nothing to send with — keep the row visible but stop burning retries.
+      await db.execute(sql`
+        UPDATE notification_attempts
+        SET status = 'unconfigured', attempts = ${attempts}, "lastAttemptAt" = NOW(), "errorMessage" = ${result.error ?? null}
+        WHERE id = ${r.id}
+      `);
+      continue;
+    }
+    const nextAttempt = computeNotificationNextRetryAt(attempts);
+    await db.execute(sql`
+      UPDATE notification_attempts
+      SET status = ${nextAttempt ? "pending" : "failed"},
+          attempts = ${attempts},
+          "lastAttemptAt" = NOW(),
+          "nextAttemptAt" = ${nextAttempt},
+          "errorMessage" = ${result.error ?? null}
+      WHERE id = ${r.id}
+    `);
+  }
+  return { attempted };
 }
 
 // ─── HTML email template ──────────────────────────────────────────────────────

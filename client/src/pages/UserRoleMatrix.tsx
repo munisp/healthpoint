@@ -85,6 +85,17 @@ export default function UserRoleMatrix() {
         <span>This matrix reflects the current platform permission model. To change a user's role, use the Admin User Management page. Role changes take effect immediately.</span>
       </div>
 
+      {/* Phase15-FA (A9): provenance — no authz-registry read endpoint exists
+          (authz router exposes grant/revoke/listAccess only), so this matrix is
+          a static reference that can drift from server/authz-registry.ts. */}
+      <div className="flex items-center gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600">
+        <Info className="h-4 w-4 shrink-0" />
+        <span>
+          <strong>Static reference</strong> — as of 2026-09-05, source: <code>client/src/pages/UserRoleMatrix.tsx</code> (mirrors the role model in <code>server/authz-registry.ts</code>).
+          No live authorization-registry endpoint exists yet, so this page is not generated from the server; verify against the registry before relying on it for audits.
+        </span>
+      </div>
+
       {/* Role summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {ROLES.map((role, i) => {

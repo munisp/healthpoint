@@ -39,75 +39,108 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  /* Semantic money/status tones (soft bg + readable foreground pairs) */
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
 }
 
+/* ============================================================
+   HealthPoint IDR design tokens
+   Healthcare-fintech trust palette: warm neutrals + one calm
+   deep-teal primary. All text/background pairs below were
+   verified to meet WCAG AA (>=4.5:1 body, >=3:1 large text).
+   ============================================================ */
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --background: #faf9f7; /* warm off-white */
+  --foreground: #1f2a26; /* deep slate-green ink — 14.1:1 on bg */
+  --card: #ffffff;
+  --card-foreground: #1f2a26;
+  --popover: #ffffff;
+  --popover-foreground: #1f2a26;
+  --primary: #0e6e5d; /* deep teal — 6.2:1 with white text */
+  --primary-foreground: #ffffff;
+  --secondary: #eff2f0;
+  --secondary-foreground: #1f2a26;
+  --muted: #f1f0ec;
+  --muted-foreground: #55605b; /* 6.2:1 on bg, 6.5:1 on card */
+  --accent: #e5efeb; /* soft teal tint */
+  --accent-foreground: #14453b; /* 9.2:1 on accent */
+  --destructive: #b64336; /* muted red — 5.5:1 with white text */
+  --border: #e2e0da;
+  --input: #e2e0da;
+  --ring: #0e6e5d;
+  /* Semantic status tones (soft background + AA foreground) */
+  --success: #e7f2ea;
+  --success-foreground: #2f6b44; /* 5.5:1 */
+  --warning: #f7ebd3;
+  --warning-foreground: #7a5410; /* 5.7:1 */
+  --danger: #f8e7e3;
+  --danger-foreground: #93392e; /* 6.1:1 */
+  --info: #e8ecef;
+  --info-foreground: #445056; /* 7.0:1 */
+  /* Muted, low-saturation chart palette */
+  --chart-1: #0e6e5d; /* deep teal */
+  --chart-2: #6f9a8d; /* sage */
+  --chart-3: #c99a3f; /* muted amber */
+  --chart-4: #445056; /* slate */
+  --chart-5: #b64336; /* muted terracotta */
+  --sidebar: #f4f3f0;
+  --sidebar-foreground: #1f2a26;
+  --sidebar-primary: #0e6e5d;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e5efeb;
+  --sidebar-accent-foreground: #14453b;
+  --sidebar-border: #e2e0da;
+  --sidebar-ring: #0e6e5d;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #141816; /* warm near-black */
+  --foreground: #edece8; /* 15.2:1 */
+  --card: #1b211e;
+  --card-foreground: #edece8;
+  --popover: #1b211e;
+  --popover-foreground: #edece8;
+  --primary: #5bc0a8; /* lighter teal — 7.8:1 with dark ink text */
+  --primary-foreground: #0b1f1a;
+  --secondary: #262c29;
+  --secondary-foreground: #edece8;
+  --muted: #262c29;
+  --muted-foreground: #9aa39e; /* 6.9:1 */
+  --accent: #233530;
+  --accent-foreground: #c4e6dc;
+  --destructive: #a84a3e;
+  --border: #ffffff1f;
+  --input: #ffffff2b;
+  --ring: #5bc0a8;
+  --success: #1c2e23;
+  --success-foreground: #7fc79a; /* 7.2:1 */
+  --warning: #33270f;
+  --warning-foreground: #e3b45c; /* 7.6:1 */
+  --danger: #3a1d18;
+  --danger-foreground: #e58f82; /* 6.3:1 */
+  --info: #20262b;
+  --info-foreground: #a9bcc9;
+  --chart-1: #5bc0a8;
+  --chart-2: #7fa397;
+  --chart-3: #d3ac58;
+  --chart-4: #8a9aa5;
+  --chart-5: #d4836f;
+  --sidebar: #1b211e;
+  --sidebar-foreground: #edece8;
+  --sidebar-primary: #5bc0a8;
+  --sidebar-primary-foreground: #0b1f1a;
+  --sidebar-accent: #233530;
+  --sidebar-accent-foreground: #c4e6dc;
+  --sidebar-border: #ffffff1a;
+  --sidebar-ring: #5bc0a8;
 }
 
 @layer base {
@@ -116,6 +149,11 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* Fonts loaded via <link> in index.html (CSP-allowed origins). */
+    font-family: "Inter", ui-sans-serif, system-ui, -apple-system,
+      "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
@@ -128,6 +166,68 @@
   input[type="radio"]:not(:disabled) {
     @apply cursor-pointer;
   }
+
+  /* Accessible, consistent keyboard focus indicator */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* Calm micro-interactions: 150–250ms ease-out on interactive chrome */
+  a,
+  button,
+  [role="button"],
+  input,
+  select,
+  textarea {
+    transition-property: color, background-color, border-color, box-shadow,
+      opacity, transform;
+    transition-duration: 200ms;
+    transition-timing-function: ease-out;
+  }
+
+  /* Respect users who prefer reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Subtle card hover lift used by dashboard-style cards (opt-in) */
+.card-interactive {
+  transition: box-shadow 200ms ease-out, transform 200ms ease-out,
+    border-color 200ms ease-out;
+}
+.card-interactive:hover {
+  box-shadow: 0 4px 16px -6px rgb(15 40 34 / 0.12);
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .card-interactive:hover {
+    transform: none;
+  }
+}
+
+/* Skeleton shimmer for loading placeholders */
+@keyframes hp-shimmer {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+.skeleton-shimmer {
+  animation: hp-shimmer 1.6s ease-in-out infinite;
 }
 
 /* ============================================================

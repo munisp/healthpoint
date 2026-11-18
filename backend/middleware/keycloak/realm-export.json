@@ -4,14 +4,14 @@
   "clients": [
     {
       "clientId": "frontend",
-      "secret": "Z3VpxN2YyA4V3wH0aA4V3wH0aA4V3wH0",
+      "secret": "${KEYCLOAK_FRONTEND_CLIENT_SECRET}",
       "publicClient": true,
       "redirectUris": ["http://localhost:5173/*"],
       "webOrigins": ["+"]
     },
     {
       "clientId": "backend",
-      "secret": "V3wH0aA4V3wH0aA4V3wH0aA4V3wH0aA4",
+      "secret": "${KEYCLOAK_BACKEND_CLIENT_SECRET}",
       "serviceAccountsEnabled": true
     }
   ],
@@ -34,7 +34,7 @@
       "credentials": [
         {
           "type": "password",
-          "value": "admin"
+          "value": "${ADMIN_INITIAL_PASSWORD}"
         }
       ],
       "realmRoles": ["admin"]
@@ -45,7 +45,7 @@
       "credentials": [
         {
           "type": "password",
-          "value": "user"
+          "value": "${USER_INITIAL_PASSWORD}"
         }
       ],
       "realmRoles": ["user"]

@@ -56,6 +56,33 @@ case "${PAYMENT_EXECUTION_MODE:-}" in
   *) invalid+=("PAYMENT_EXECUTION_MODE must be disabled or sandbox; live initiation is not implemented") ;;
 esac
 
+# ── Phase 15 FB (B7): optional-middleware consistency assertions ────────────
+# VAPID web-push keys are both-or-neither (a lone key is a misconfiguration
+# that would silently dead-letter push delivery).
+if [[ -n "${VAPID_PUBLIC_KEY:-}" && -z "${VAPID_PRIVATE_KEY:-}" ]] || [[ -z "${VAPID_PUBLIC_KEY:-}" && -n "${VAPID_PRIVATE_KEY:-}" ]]; then
+  invalid+=("VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be configured together (both-or-neither)")
+fi
+# PERMIFY_ENFORCE=true hard-gates dispute authz on Permify — it must be reachable.
+if [[ "${PERMIFY_ENFORCE:-false}" == "true" ]]; then
+  [[ -n "${PERMIFY_URL:-}" ]] || missing+=("PERMIFY_URL (required when PERMIFY_ENFORCE=true)")
+fi
+# Permify write mirror needs an endpoint too.
+if [[ "${PERMIFY_WRITE_ENABLED:-false}" == "true" ]]; then
+  [[ -n "${PERMIFY_URL:-}" ]] || missing+=("PERMIFY_URL (required when PERMIFY_WRITE_ENABLED=true)")
+fi
+# TB_LEDGER_ENABLED routes settlement holds/posts through the Go sidecar — it
+# needs the sidecar address and the internal service token.
+if [[ "${TB_LEDGER_ENABLED:-false}" == "true" ]]; then
+  [[ -n "${GO_SERVICES_URL:-}" ]] || missing+=("GO_SERVICES_URL (required when TB_LEDGER_ENABLED=true)")
+  [[ -n "${INTERNAL_SERVICE_TOKEN:-}" ]] || missing+=("INTERNAL_SERVICE_TOKEN (required when TB_LEDGER_ENABLED=true)")
+fi
+# Temporal durable-execution dispatch needs an address, namespace and CA.
+if [[ "${TEMPORAL_EXECUTION_ENABLED:-false}" == "true" ]]; then
+  [[ -n "${TEMPORAL_ADDRESS:-}" ]] || missing+=("TEMPORAL_ADDRESS (required when TEMPORAL_EXECUTION_ENABLED=true)")
+  [[ -n "${TEMPORAL_NAMESPACE:-}" ]] || missing+=("TEMPORAL_NAMESPACE (required when TEMPORAL_EXECUTION_ENABLED=true)")
+  [[ -n "${TEMPORAL_CA_PATH:-}" ]] || missing+=("TEMPORAL_CA_PATH (required when TEMPORAL_EXECUTION_ENABLED=true)")
+fi
+
 if ((${#missing[@]} || ${#invalid[@]})); then
   printf 'Production configuration validation failed.\n' >&2
   ((${#missing[@]})) && printf 'Missing: %s\n' "${missing[*]}" >&2

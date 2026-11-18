@@ -1,0 +1,81 @@
+{{- if .Values.rustProcessor.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "healthpoint.fullname" . }}-rust-processor
+  labels:
+    {{- include "healthpoint.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rust-processor
+spec:
+  replicas: {{ .Values.rustProcessor.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "healthpoint.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rust-processor
+  template:
+    metadata:
+      labels:
+        {{- include "healthpoint.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rust-processor
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: rust-processor
+          image: {{ include "healthpoint.image" (dict "image" .Values.rustProcessor.image "root" .) | quote }}
+          imagePullPolicy: {{ .Values.imageDefaults.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.rustProcessor.service.port }}
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ .Values.config.kafkaBrokers | quote }}
+            - name: RUST_SERVICES_PORT
+              value: {{ .Values.rustProcessor.service.port | quote }}
+            - name: RUST_LOG
+              value: "info"
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.rustProcessor.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.rustProcessor.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.rustProcessor.probes.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.rustProcessor.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.rustProcessor.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.rustProcessor.probes.readiness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.rustProcessor.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "healthpoint.fullname" . }}-rust-processor
+  labels:
+    {{- include "healthpoint.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rust-processor
+spec:
+  type: {{ .Values.rustProcessor.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.rustProcessor.service.port }}
+      targetPort: http
+  selector:
+    {{- include "healthpoint.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rust-processor
+{{- end }}

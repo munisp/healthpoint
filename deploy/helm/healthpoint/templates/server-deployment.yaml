@@ -1,0 +1,146 @@
+{{- if .Values.server.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "healthpoint.fullname" . }}-server
+  labels:
+    {{- include "healthpoint.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  {{- if not .Values.server.autoscaling.enabled }}
+  replicas: {{ .Values.server.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "healthpoint.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        {{- include "healthpoint.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: server
+          image: {{ include "healthpoint.image" (dict "image" .Values.server.image "root" .) | quote }}
+          imagePullPolicy: {{ .Values.imageDefaults.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.service.port }}
+          env:
+            - name: NODE_ENV
+              value: {{ .Values.config.nodeEnv | quote }}
+            - name: PORT
+              value: {{ .Values.server.service.port | quote }}
+            - name: KEYCLOAK_URL
+              value: {{ .Values.config.keycloakUrl | quote }}
+            - name: KEYCLOAK_REALM
+              value: {{ .Values.config.keycloakRealm | quote }}
+            - name: KEYCLOAK_CLIENT_ID
+              value: {{ .Values.config.keycloakClientId | quote }}
+            - name: KAFKA_BROKERS
+              value: {{ .Values.config.kafkaBrokers | quote }}
+            - name: OPENSEARCH_URL
+              value: {{ .Values.config.opensearchUrl | quote }}
+            - name: PERMIFY_URL
+              value: {{ .Values.config.permifyUrl | quote }}
+            - name: PERMIFY_GRPC_URL
+              value: {{ .Values.config.permifyGrpcUrl | quote }}
+            - name: TEMPORAL_ADDRESS
+              value: {{ .Values.config.temporalAddress | quote }}
+            - name: TIGERBEETLE_ADDRESS
+              value: {{ .Values.config.tigerbeetleAddress | quote }}
+            - name: S3_ENDPOINT
+              value: {{ .Values.config.s3Endpoint | quote }}
+            - name: S3_BUCKET
+              value: {{ .Values.config.s3Bucket | quote }}
+            - name: SETTLEMENT_CALLBACK_PROVIDER
+              value: {{ .Values.config.settlementCallbackProvider | quote }}
+            # ── Sensitive values: Secret keys only, never inline ────────────
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: database-url }
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: jwt-secret }
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: redis-url }
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: keycloak-client-secret, optional: true }
+            - name: SCHEDULED_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: scheduled-secret }
+            - name: SETTLEMENT_CALLBACK_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: settlement-callback-secret }
+            - name: SETTLEMENT_CALLBACK_KEYRING
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: settlement-callback-keyring }
+            - name: SETTLEMENT_MTLS_CLIENT_CA_PEM
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: settlement-mtls-client-ca-pem }
+            - name: SETTLEMENT_MTLS_CLIENT_FINGERPRINTS
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: settlement-mtls-client-fingerprints }
+            - name: SETTLEMENT_MTLS_INGRESS_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: settlement-mtls-ingress-token }
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: s3-access-key }
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ include "healthpoint.secretName" . }}, key: s3-secret-key }
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.server.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.server.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.server.probes.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.server.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.server.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.server.probes.readiness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "healthpoint.fullname" . }}-server
+  labels:
+    {{- include "healthpoint.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: {{ .Values.server.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.server.service.port }}
+      targetPort: http
+  selector:
+    {{- include "healthpoint.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+{{- end }}
