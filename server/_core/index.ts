@@ -10,7 +10,7 @@ import hpp from "hpp";
 import morgan from "morgan";
 import { v4 as uuidv4 } from "uuid";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { trpcBatchSizeGuard, ollamaActiveBackendGuard } from "./trpc-guards";
+import { trpcBatchSizeGuard, ollamaActiveBackendGuard, TRPC_MAX_BATCH_SIZE } from "./trpc-guards";
 import { registerKeycloakRoutes } from "./keycloak";
 import { bootstrapOpenSearchIndices } from "../search";
 import { startKafkaConsumer } from "../events/kafka-consumer";
@@ -772,6 +772,12 @@ async function startServer() {
     createExpressMiddleware({
       router: rootRouter,
       createContext,
+      // Phase 24 (F3, defense in depth): enforce the same batch cap at the
+      // framework layer — trpcBatchSizeGuard above parses req.path itself,
+      // and any guard/adapter parsing divergence would otherwise reopen the
+      // amplification gap. tRPC rejects oversized batches with 400, the same
+      // status the guard returns, so client-visible semantics are unchanged.
+      maxBatchSize: TRPC_MAX_BATCH_SIZE,
       // phase14-perfa: short private caching for slow-changing reference-data
       // reads (fee schedules, IDRE directory, QPA benchmark tables, org
       // branding). All other tRPC responses keep their previous headers
