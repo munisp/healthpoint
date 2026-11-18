@@ -30,10 +30,20 @@ import { resolveSession } from "./keycloak";
 export const TRPC_MAX_BATCH_SIZE = 10;
 export const GUARDED_PROCEDURE = "ollama.activeBackend";
 
-/** Procedure names targeted by this request (comma-joined when batched). */
+/**
+ * Procedure names targeted by this request (comma-joined when batched).
+ *
+ * Mirrors @trpc/server's express adapter exactly: the procedure path is the
+ * LAST URL segment only (`req.path.slice(req.path.lastIndexOf("/") + 1)`),
+ * comma-split for batched calls. Anything before the final "/" is the mount
+ * prefix the adapter discards — parsing the entire req.path let an interior
+ * segment shadow the real target (e.g. /api/trpc/x/ollama.activeBackend
+ * resolved to the guarded procedure while the guard only saw "x"), so the
+ * last segment must be extracted FIRST and only then comma-split.
+ */
 export function trpcProcedurePaths(req: Request): string[] {
-  return req.path
-    .replace(/^\/+/, "")
+  const lastSegment = req.path.slice(req.path.lastIndexOf("/") + 1);
+  return lastSegment
     .split(",")
     .map(p => p.trim())
     .filter(Boolean);
