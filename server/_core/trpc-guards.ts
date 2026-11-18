@@ -33,25 +33,43 @@ export const GUARDED_PROCEDURE = "ollama.activeBackend";
 /**
  * Procedure names targeted by this request (comma-joined when batched).
  *
- * Mirrors @trpc/server's express adapter exactly: the procedure path is the
- * LAST URL segment only (`req.path.slice(req.path.lastIndexOf("/") + 1)`),
- * comma-split for batched calls. Anything before the final "/" is the mount
- * prefix the adapter discards — parsing the entire req.path let an interior
- * segment shadow the real target (e.g. /api/trpc/x/ollama.activeBackend
- * resolved to the guarded procedure while the guard only saw "x"), so the
- * last segment must be extracted FIRST and only then comma-split.
+ * Mirrors @trpc/server exactly, in the framework's exact order:
+ *   1. The procedure path is the LAST URL segment only — the express adapter
+ *      does `req.path.slice(req.path.lastIndexOf("/") + 1)`. Anything before
+ *      the final "/" is the mount prefix the adapter discards.
+ *   2. resolveResponse then DECODES the path BEFORE comma-splitting
+ *      (resolveResponse-*.mjs: `decodePath(opts.path)` → getRequestInfo →
+ *      `path.split(",")`), so percent-encoding can hide both the procedure
+ *      name (ollama%2EactiveBackend) and the batch separator (%2C). Decode
+ *      first, split second — never the other way around.
+ *
+ * decodeURIComponent throws URIError on malformed escape sequences; both
+ * guards catch that and block with 400 (fail-closed — tRPC's own decodePath
+ * rejects malformed encodings with BAD_REQUEST anyway, so blocking here is
+ * the same outcome one layer earlier).
  */
 export function trpcProcedurePaths(req: Request): string[] {
   const lastSegment = req.path.slice(req.path.lastIndexOf("/") + 1);
-  return lastSegment
+  return decodeURIComponent(lastSegment)
     .split(",")
     .map(p => p.trim())
     .filter(Boolean);
 }
 
+/** Parse targeted procedures; on malformed %-encoding block with 400. */
+function targetedProcedures(req: Request, res: Response): string[] | null {
+  try {
+    return trpcProcedurePaths(req);
+  } catch {
+    res.status(400).json({ error: "Malformed URL-encoding in tRPC procedure path" });
+    return null;
+  }
+}
+
 /** F3: reject tRPC batches larger than TRPC_MAX_BATCH_SIZE. */
 export function trpcBatchSizeGuard(req: Request, res: Response, next: NextFunction): void {
-  const procedures = trpcProcedurePaths(req);
+  const procedures = targetedProcedures(req, res);
+  if (procedures === null) return;
   if (procedures.length > TRPC_MAX_BATCH_SIZE) {
     res.status(400).json({
       error: `tRPC batch size ${procedures.length} exceeds the limit of ${TRPC_MAX_BATCH_SIZE} calls per request`,
@@ -68,7 +86,9 @@ export function trpcBatchSizeGuard(req: Request, res: Response, next: NextFuncti
  *   - non-admin role                → 403
  */
 export async function ollamaActiveBackendGuard(req: Request, res: Response, next: NextFunction): Promise<void> {
-  if (!trpcProcedurePaths(req).includes(GUARDED_PROCEDURE)) {
+  const procedures = targetedProcedures(req, res);
+  if (procedures === null) return;
+  if (!procedures.includes(GUARDED_PROCEDURE)) {
     next();
     return;
   }
