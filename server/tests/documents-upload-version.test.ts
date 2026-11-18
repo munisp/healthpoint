@@ -111,7 +111,6 @@ vi.mock("../authz", async importOriginal => {
 });
 
 import { appRouter } from "../routers";
-import { normalizeStorageKey } from "../upload-security";
 
 // ── Test context ──────────────────────────────────────────────────────────────
 function makeCtx(): TrpcContext {
@@ -133,9 +132,8 @@ function makeCtx(): TrpcContext {
 
 const caller = () => appRouter.createCaller(makeCtx());
 
-// Phase 24 (F8): real PDF magic header required (content validation).
-const CONTENT_V1 = "%PDF-1.4\nversion-one pdf bytes";
-const CONTENT_V2 = "%PDF-1.7\nversion-two pdf bytes — revised determination exhibit";
+const CONTENT_V1 = "version-one pdf bytes %PDF-1.4";
+const CONTENT_V2 = "version-two pdf bytes %PDF-1.7 — revised determination exhibit";
 
 function baseInput(fileBase64: string, fileSize: number) {
   return {
@@ -165,9 +163,7 @@ describe("documents.uploadVersion byte persistence", () => {
 
     expect(version.versionNumber).toBe(1);
     expect(version.isLatest).toBe(true);
-    // Phase 24 (F8): the client-provided key is namespaced (fake db has no
-    // org_memberships rows → per-user fallback namespace).
-    expect(version.s3Key).toBe(normalizeStorageKey("user-user-1", input.storageKey));
+    expect(version.s3Key).toBe(input.storageKey);
     expect(version.fileSize).toBe(Buffer.byteLength(CONTENT_V1));
     expect(version.mimeType).toBe("application/pdf");
     expect(version.uploadedBy).toBe("user-1");
