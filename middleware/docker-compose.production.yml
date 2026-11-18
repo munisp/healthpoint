@@ -171,7 +171,7 @@ services:
       KC_PROXY: edge
       KC_LOG_LEVEL: warn
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
     depends_on:
@@ -195,7 +195,7 @@ services:
         --addresses=0.0.0.0:3000
         /data/0_0.tigerbeetle
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - tigerbeetle_data:/data
     entrypoint: ["/bin/sh", "-c", "
@@ -308,7 +308,7 @@ services:
     image: opensearchproject/opensearch-dashboards:2.11.0
     container_name: opensearch-dashboards
     ports:
-      - "5601:5601"
+      - "127.0.0.1:5601:5601"
     environment:
       OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
       DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
@@ -354,7 +354,7 @@ services:
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_CORS_ORIGINS=http://localhost:3000
     ports:
-      - "8088:8080"
+      - "127.0.0.1:8088:8080"
     networks:
       - middleware_net
 
@@ -364,8 +364,8 @@ services:
     container_name: permify
     command: serve
     ports:
-      - "3476:3476"
-      - "3478:3478"
+      - "127.0.0.1:3476:3476"
+      - "127.0.0.1:3478:3478"
     environment:
       - PERMIFY_DATABASE_ENGINE=postgres
       - PERMIFY_DATABASE_URI=postgresql://healthpoint:${POSTGRES_PASSWORD:?required}@postgres:5432/healthpoint
@@ -429,7 +429,7 @@ services:
     image: openappsec/agent:latest
     container_name: openappsec
     ports:
-      - "8443:8443"
+      - "127.0.0.1:8443:8443"
     environment:
       - OPENAPPSEC_MODE=prevent
     networks:
@@ -460,7 +460,7 @@ services:
       --binlog-format=ROW
       --transaction-isolation=READ-COMMITTED
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mojaloop_mysql_data:/var/lib/mysql
     healthcheck:
@@ -485,7 +485,7 @@ services:
       - '--web.console.templates=/usr/share/prometheus/consoles'
       - '--storage.tsdb.retention.time=30d'
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     networks:
       - middleware_net
 
@@ -501,7 +501,7 @@ services:
       GF_AUTH_GENERIC_OAUTH_AUTH_URL: http://keycloak:8080/realms/healthpoint/protocol/openid-connect/auth
       GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://keycloak:8080/realms/healthpoint/protocol/openid-connect/token
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
