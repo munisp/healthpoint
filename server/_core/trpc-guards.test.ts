@@ -228,4 +228,93 @@ describe("guards mounted on a real Express app (mount-prefix semantics)", () => 
     expect((await fetch(`${base}/api/trpc/disputes.list`)).status).toBe(200);
     expect((await fetch(`${base}/api/trpc/x/disputes.list`)).status).toBe(200);
   });
+
+  // ── Phase-24 fix-wave 3: percent-encoding bypass class ─────────────────────
+  // tRPC v11 resolveResponse decodes the procedure path BEFORE batch-splitting
+  // (decodePath(opts.path) → path.split(",")), so percent-encoding can smuggle
+  // both the procedure name and the batch separator past a guard that never
+  // decodes. The guard now decodes first, splits second, and fails closed
+  // (400) on malformed encoding — the same outcome tRPC's decodePath gives.
+  it("REPRO: /api/trpc/ollama%2EactiveBackend is blocked (401, not a key leak)", async () => {
+    const res = await fetch(`${base}/api/trpc/ollama%2EactiveBackend`);
+    expect(res.status).toBe(401);
+  });
+  it("REPRO: /api/trpc/ollama.active%42ackend is blocked (401)", async () => {
+    const res = await fetch(`${base}/api/trpc/ollama.active%42ackend`);
+    expect(res.status).toBe(401);
+  });
+  it("REPRO: /api/trpc/ollama.activeBackend%2Cauth.me?batch=1 is blocked (401)", async () => {
+    const res = await fetch(`${base}/api/trpc/ollama.activeBackend%2Cauth.me?batch=1`);
+    expect(res.status).toBe(401);
+  });
+  it("REPRO: %2C-encoded batch of 12 is rejected by the size guard (400)", async () => {
+    const encoded = Array.from({ length: TRPC_MAX_BATCH_SIZE + 2 }, (_, i) => `q${i}`).join("%2C");
+    const res = await fetch(`${base}/api/trpc/${encoded}?batch=1`);
+    expect(res.status).toBe(400);
+  });
+  it("malformed encoding (%ZZ) is blocked (400), never passed through", async () => {
+    const res = await fetch(`${base}/api/trpc/ollama%ZZactiveBackend`);
+    expect(res.status).toBe(400);
+  });
+  it("malformed encoding (trailing %) is blocked (400), never passed through", async () => {
+    const res = await fetch(`${base}/api/trpc/ollama.activeBackend%`);
+    expect(res.status).toBe(400);
+  });
+  it("a normal encoded batch within the cap still reaches the handler (200)", async () => {
+    const res = await fetch(`${base}/api/trpc/auth.me%2Cdisputes.list?batch=1`);
+    expect(res.status).toBe(200);
+  });
+});
+
+// ── Framework-layer batch cap (F3 defense in depth) ─────────────────────────
+// server/_core/index.ts passes maxBatchSize: TRPC_MAX_BATCH_SIZE to
+// createExpressMiddleware, so the cap holds even if guard/adapter parsing
+// ever diverges again. Prove the framework option works as configured: real
+// createExpressMiddleware, real router, real HTTP.
+describe("createExpressMiddleware maxBatchSize (framework layer)", () => {
+  let server: import("node:http").Server;
+  let base: string;
+
+  beforeAll(async () => {
+    const { default: express } = await import("express");
+    const { initTRPC } = await import("@trpc/server");
+    const { createExpressMiddleware } = await import("@trpc/server/adapters/express");
+    const t = initTRPC.create();
+    const router = t.router({
+      ping: t.procedure.query(() => "pong"),
+    });
+    const app = express();
+    app.use("/api/trpc", createExpressMiddleware({ router, maxBatchSize: TRPC_MAX_BATCH_SIZE }));
+    await new Promise<void>(resolve => {
+      server = app.listen(0, "127.0.0.1", () => resolve());
+    });
+    const addr = server.address();
+    if (typeof addr === "string" || !addr) throw new Error("no listen address");
+    base = `http://127.0.0.1:${addr.port}`;
+  });
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) =>
+      server.close(err => (err ? reject(err) : resolve()))
+    );
+  });
+
+  it("serves a normal batched request within the cap (2 calls → 200, 2 results)", async () => {
+    const res = await fetch(`${base}/api/trpc/ping,ping?batch=1`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as unknown[];
+    expect(body).toHaveLength(2);
+    for (const item of body) {
+      expect((item as { result: { data: string } }).result.data).toBe("pong");
+    }
+  });
+  it("rejects a batch larger than the cap (11 calls → 400)", async () => {
+    const path = Array.from({ length: TRPC_MAX_BATCH_SIZE + 1 }, () => "ping").join(",");
+    const res = await fetch(`${base}/api/trpc/${path}?batch=1`);
+    expect(res.status).toBe(400);
+  });
+  it("rejects a %2C-encoded batch larger than the cap (400, decode-before-split)", async () => {
+    const encoded = Array.from({ length: TRPC_MAX_BATCH_SIZE + 1 }, () => "ping").join("%2C");
+    const res = await fetch(`${base}/api/trpc/${encoded}?batch=1`);
+    expect(res.status).toBe(400);
+  });
 });
