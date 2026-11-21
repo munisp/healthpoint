@@ -6,8 +6,7 @@
 # a success marker consumed by backup-age-check.sh, mirrors to
 # BACKUP_OFFSITE_DIR when set, and prunes backups older than
 # BACKUP_RETENTION_DAYS (only backups that have passed verification are ever
-# pruned; failed/partial backups are kept for forensics unless
-# BACKUP_PRUNE_FAILED=true).
+# pruned; failed/partial backups are kept for forensics).
 #
 # Usage:
 #   PGHOST=postgres PGUSER=replicator PGPASSWORD=... ./base-backup.sh
