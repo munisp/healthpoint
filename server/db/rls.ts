@@ -23,7 +23,11 @@
  *
  * Honest limitation (design §3.4/§9): app.service_mode is session state, not
  * a credential. It defends against bugs (forgotten scoping), not against an
- * attacker with arbitrary query execution.
+ * attacker with arbitrary query execution. (Fix-wave note, finding F-2:
+ * service_mode is self-settable by any role with EXECUTE on
+ * app_service_mode() — design-accepted for wave 1; hardening follow-up is a
+ * separate hp_worker role owning the service paths so the app role never
+ * carries the bypass.)
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { TRPCError } from "@trpc/server";
@@ -81,6 +85,63 @@ function normalizeOrgIds(orgIds: string[]): string[] {
   return out;
 }
 
+// ── Scheduled orphan scan (fix F-3c) ────────────────────────────────────────
+
+export interface OrphanScanReport {
+  orphans: OrphanScanResult;
+  total: number;
+}
+
+/**
+ * Daily orphan scan + audit evidence row. The §6.3 audit-soak exit criteria
+ * (0 rls_shadow_diff events AND 0 orphan rows over 7 days) require a daily
+ * trail, so a row is written on EVERY run — action 'rls_orphan_scan' with the
+ * per-table counts in newValue; total>0 additionally logs a warning.
+ */
+export async function runRlsOrphanScan(): Promise<OrphanScanReport> {
+  const orphans = await scanOrgOrphans();
+  const total = Object.values(orphans).reduce((a, b) => a + b, 0);
+  try {
+    const { createAuditEntry } = await import("../db");
+    await createAuditEntry({
+      userId: "system",
+      action: "rls_orphan_scan",
+      entityType: "rls",
+      entityId: "orphan-scan",
+      oldValue: null,
+      newValue: JSON.stringify({ at: new Date().toISOString(), total, orphans }).slice(0, 8000),
+      ipAddress: null,
+      userAgent: null,
+    });
+  } catch (err) {
+    console.warn("[rls] orphan-scan audit write failed:", err instanceof Error ? err.message : err);
+  }
+  if (total > 0) {
+    console.warn(`[rls] orphan scan found ${total} rows:`, JSON.stringify(orphans));
+  } else {
+    console.info("[rls] orphan scan clean (0 orphan rows)");
+  }
+  return { orphans, total };
+}
+
+/** Start the daily orphan-scan interval (retentionWorker precedent). */
+export function startRlsOrphanScanWorker(intervalMs = 24 * 60 * 60 * 1000): () => void {
+  const timer = setInterval(() => { void runRlsOrphanScan(); }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+/** POST /api/scheduled/rls-orphan-scan handler (mounted behind scheduledAuth). */
+export async function rlsOrphanScanHandler(_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void }; json: (b: unknown) => void }) {
+  try {
+    const report = await runRlsOrphanScan();
+    res.json({ ok: true, ...report });
+  } catch (err) {
+    console.error("[rls] scheduled orphan scan failed:", err);
+    res.status(500).json({ ok: false, error: "rls orphan scan failed" });
+  }
+}
+
 async function baseDb(): Promise<RlsDb> {
   const db = rlsMode() === "enforce" ? await getRlsDb() : await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "database_unavailable" });
@@ -128,7 +189,13 @@ export async function withOrgContext<T>(ctx: RlsRequestContext, fn: (db: RlsDb) 
     await tx.execute(sql`SELECT set_config('app.current_user', ${ctx.userId}, true), set_config('app.current_orgs', ${""}, true)`);
     await verifyMemberships(tx, ctx.userId, orgIds);
     await tx.execute(sql`SELECT set_config('app.current_orgs', ${orgsKey}, true)`);
-    return run(tx);
+    const out = await run(tx);
+    // Fix F-3b: sampled shadow probe on the request's org visibility
+    // (audit mode only; rate from RLS_SHADOW_SAMPLE_RATE).
+    if (rlsMode() === "audit" && Math.random() < shadowSampleRate()) {
+      await probeOrgVisibility(tx, ctx, orgIds);
+    }
+    return out;
   });
 }
 
@@ -181,6 +248,15 @@ function samplePct(): number {
   return Math.min(100, Math.max(0, n));
 }
 
+/** Sampling fraction (0..1) for the withOrgContext read-path probe wiring
+ *  (fix F-3b). Fractional rate unlike the integer RLS_AUDIT_SAMPLE_PCT used
+ *  by rlsShadow call sites. Off when RLS_ENABLED=off (mode check gates it). */
+function shadowSampleRate(): number {
+  const n = Number.parseFloat((process.env.RLS_SHADOW_SAMPLE_RATE ?? "0.01").trim());
+  if (!Number.isFinite(n)) return 0.01;
+  return Math.min(1, Math.max(0, n));
+}
+
 export interface ShadowDiff {
   label: string;
   visibleCount: number;
@@ -202,18 +278,48 @@ export async function rlsShadow<T extends Record<string, unknown>>(
 ): Promise<T[]> {
   const primary = (await tx.execute(statement)) as unknown as T[];
   if (rlsMode() !== "audit" || Math.random() * 100 >= samplePct()) return primary;
+  await shadowProbe(tx, label, statement, primary);
+  return primary;
+}
+
+/**
+ * Core shadow probe (fix F-3a): re-execute `statement` as hp_app and diff row
+ * ids against the already-executed `primary` rows. Callers apply their own
+ * sampling before invoking this — it ALWAYS probes.
+ *
+ * Failure-safety (adversarial-review repro): a failing shadow statement
+ * previously aborted the caller's transaction (25P02) and left the session
+ * role stuck at hp_app. The probe now runs inside a NESTED TRANSACTION
+ * (driver-native savepoint): raw SAVEPOINT SQL does NOT recover a postgres-js
+ * transaction — the driver records the first statement error and rethrows it
+ * at commit (postgres.js scope() uncaughtError semantics), so the request
+ * would still fail. A nested tx gives real rollback-to-savepoint semantics:
+ * on failure the tx-local role switch is reverted by the rollback itself and
+ * the outer transaction stays usable; on success the role is restored
+ * explicitly before the savepoint release. Probe failures are logged and
+ * never fail the request (audit is observability).
+ */
+export async function shadowProbe<T extends Record<string, unknown>>(
+  tx: RlsDb, label: string, statement: SQL, primary: T[],
+): Promise<{ diff: boolean }> {
   try {
     const prevRoleRows = (await tx.execute(sql`SELECT current_setting('role', true) AS r`)) as unknown as Array<{ r: string }>;
     const prevRole = prevRoleRows[0]?.r ?? "none";
-    await tx.execute(sql`SELECT set_config('role', 'hp_app', true)`);
-    const shadow = (await tx.execute(statement)) as unknown as T[];
-    await tx.execute(sql`SELECT set_config('role', ${prevRole}, true)`);
+    const shadow = await tx.transaction(async (stx) => {
+      await stx.execute(sql`SELECT set_config('role', 'hp_app', true)`);
+      const rows = (await stx.execute(statement)) as unknown as T[];
+      // Success path: restore the role before the savepoint release (on
+      // failure the rollback reverts the tx-local switch automatically).
+      await stx.execute(sql`SELECT set_config('role', ${prevRole}, true)`);
+      return rows;
+    });
     const ids = (rows: T[]) => new Set(rows.map(r => String((r as { id?: unknown }).id ?? JSON.stringify(r))));
-    const p = ids(primary), s = new Set(ids(shadow));
+    const p = ids(primary), s = new Set(ids(shadow ?? []));
     const onlyVisible = [...p].filter(id => !s.has(id));
     const onlyShadow = [...s].filter(id => !p.has(id));
-    if (onlyVisible.length > 0 || onlyShadow.length > 0) {
-      const diff: ShadowDiff = { label, visibleCount: primary.length, shadowCount: shadow.length, onlyVisible, onlyShadow };
+    const hasDiff = onlyVisible.length > 0 || onlyShadow.length > 0;
+    if (hasDiff) {
+      const diff: ShadowDiff = { label, visibleCount: primary.length, shadowCount: (shadow ?? []).length, onlyVisible, onlyShadow };
       console.warn(`[rls] shadow diff (${label}):`, JSON.stringify(diff));
       const { createAuditEntry } = await import("../db");
       await createAuditEntry({
@@ -227,11 +333,54 @@ export async function rlsShadow<T extends Record<string, unknown>>(
         userAgent: null,
       }).catch(err => console.warn("[rls] audit write failed:", err instanceof Error ? err.message : err));
     }
+    return { diff: hasDiff };
   } catch (err) {
     // Probe failures never fail the request (audit is observability).
     console.warn(`[rls] shadow probe failed (${label}):`, err instanceof Error ? err.message : err);
+    return { diff: false };
   }
-  return primary;
+}
+
+/**
+ * Sampled read-path probe wiring (fix F-3b): in audit mode, a fraction
+ * (RLS_SHADOW_SAMPLE_RATE, default 0.01) of withOrgContext requests
+ * re-verify org visibility as hp_app on the SAME transaction/GUCs.
+ *
+ * Probe semantics: the statement is ORG-BOUNDED on purpose — "the enforced
+ * read returns exactly what the org-scoped app query returns". That catches
+ * the rollout-killer class (deny-direction regressions: GUC parsing bugs,
+ * wrong org extraction, privilege/42501 errors on hp_app) without the
+ * false-positive noise an unbounded probe would generate (the audit-mode
+ * primary connection is the table OWNER, which legitimately bypasses RLS —
+ * an unbounded diff would fire on every sample). practice_claims is the
+ * canonical target: pure org_isolation policy (no self-read clause, unlike
+ * org_memberships) and granted to hp_app.
+ */
+async function probeOrgVisibility(tx: RlsDb, ctx: RlsRequestContext, orgIds: string[]): Promise<void> {
+  if (orgIds.length === 0) return;
+  const statement = sql`SELECT id FROM practice_claims WHERE "orgId" IN (${sql.join(orgIds.map(o => sql`${o}`), sql`, `)}) ORDER BY id LIMIT 50`;
+  const primary = (await tx.execute(statement)) as unknown as Array<Record<string, unknown>>;
+  rlsProbeStats.contextProbes += 1;
+  await shadowProbe(tx, `withOrgContext:${ctx.userId}:${[...orgIds].sort().join(",")}`.slice(0, 64), statement, primary);
+}
+
+/** Observability/test hook: number of executed withOrgContext shadow probes. */
+export const rlsProbeStats = { contextProbes: 0 };
+
+/**
+ * Failure-isolation guard for batch work (fixes F-4/F-5): runs fn inside a
+ * NESTED transaction (driver-native savepoint) so one item's DB error cannot
+ * abort the whole batch transaction (25P02 cascade). Raw SAVEPOINT SQL is
+ * insufficient — the postgres.js driver records the first statement error and
+ * rethrows it at commit; a nested transaction gets true rollback-to-savepoint
+ * semantics. fn receives the guard transaction and MUST run its statements
+ * on it. In off mode there is no wrapping batch transaction (statements are
+ * independent), so fn runs directly — byte-identical off-mode behavior.
+ * Errors are rethrown for the caller to count/handle.
+ */
+export async function rlsGuard<T>(db: RlsDb, fn: (tx: RlsDb) => Promise<T>): Promise<T> {
+  if (rlsMode() === "off") return fn(db);
+  return db.transaction(async (tx) => fn(tx as unknown as RlsDb));
 }
 
 // ── Audit mode: orphan-row scan (design §6.2) ───────────────────────────────
