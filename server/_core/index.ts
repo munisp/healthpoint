@@ -397,7 +397,7 @@ async function startServer() {
       res.setHeader("Cache-Control", "no-store");
       res.status(reconciliation.duplicate ? 200 : reconciliation.reconciliationStatus === "exception" ? 409 : 202).json(reconciliation);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Settlement report reconciliation failed";
+      const message = error instanceof Error ? error.message : "Provider report reconciliation failed";
       const status = error instanceof LedgerIntegrityError ? 409 : 503;
       console.error("[settlement] provider report reconciliation failed", { requestId: (req as any).requestId, message });
       res.status(status).json({ error: "Settlement report was not reconciled", message });
@@ -643,6 +643,11 @@ async function startServer() {
   app.post("/api/scheduled/regulatory-feed-poll", scheduledAuth, regulatoryFeedPollHandler);
   app.post("/api/scheduled/bulk-fhir-worker", scheduledAuth, bulkFhirWorkerHandler);
   app.post("/api/scheduled/retention-purge", scheduledAuth, retentionWorkerHandler);
+  // Wave p27 fix (F-3c): manual trigger for the daily RLS orphan scan.
+  app.post("/api/scheduled/rls-orphan-scan", scheduledAuth, async (req, res) => {
+    const { rlsOrphanScanHandler } = await import("../db/rls");
+    return rlsOrphanScanHandler(req, res);
+  });
   app.post("/api/scheduled/deadline-autopilot", scheduledAuth, deadlineAutopilotHandler);
   // Phase 21: nightly offer-strategy-v2 model refresh (nightly cron; default
   // after deadline-autopilot — see OFFER_MODEL_REFRESH_CRON in .env.example).
@@ -659,6 +664,18 @@ async function startServer() {
   {
     const intervalMs = Number(process.env.RETENTION_SWEEP_INTERVAL_MS ?? 24 * 60 * 60 * 1000);
     if (Number.isFinite(intervalMs) && intervalMs > 0) startRetentionWorker(intervalMs);
+  }
+
+  // Wave p27 fix (F-3c): daily org-orphan scan feeding the §6.3 audit-soak
+  // exit criteria (evidence rows in audit_log, action 'rls_orphan_scan').
+  // Runs whenever RLS is engaged (audit or enforce); off mode stays
+  // byte-identical (no scan, no writes).
+  if ((process.env.RLS_ENABLED ?? "off") !== "off") {
+    const intervalMs = Number(process.env.RLS_ORPHAN_SCAN_INTERVAL_MS ?? 24 * 60 * 60 * 1000);
+    if (Number.isFinite(intervalMs) && intervalMs > 0) {
+      const { startRlsOrphanScanWorker } = await import("../db/rls");
+      startRlsOrphanScanWorker(intervalMs);
+    }
   }
 
   // Durable settlement and payment-evidence events are reconciled after their
