@@ -180,8 +180,12 @@ async function pollJob(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, job: 
 export async function processBulkFhirJobs(limit = 25): Promise<{ processed: number }> {
   const db = await getDb();
   if (!db) return { processed: 0 };
+  // Wave p27 (RLS design §3.4/R10): scheduled workers run in service mode
+  // under RLS audit/enforce; pure passthrough in the default off mode.
+  const { withServiceContext } = await import("../db/rls");
+  return withServiceContext({ service: true, label: "bulk-fhir" }, async (tx) => {
 
-  const jobs = await db.select().from(bulkFhirExportJobs)
+  const jobs = await tx.select().from(bulkFhirExportJobs)
     .where(inArray(bulkFhirExportJobs.status, ["pending", "in_progress"]))
     .limit(limit);
 
@@ -190,18 +194,19 @@ export async function processBulkFhirJobs(limit = 25): Promise<{ processed: numb
     processed += 1;
     try {
       if (job.status === "pending") {
-        await kickJob(db, job);
+        await kickJob(tx, job);
       } else {
-        await pollJob(db, job);
+        await pollJob(tx, job);
       }
     } catch (err: any) {
-      await db.update(bulkFhirExportJobs)
+      await tx.update(bulkFhirExportJobs)
         .set({ status: "failed", errorMessage: String(err?.message ?? err).slice(0, 2000), completedAt: new Date() })
         .where(eq(bulkFhirExportJobs.id, job.id))
         .catch(() => undefined);
     }
   }
   return { processed };
+  }, db);
 }
 
 export async function bulkFhirWorkerHandler(req: Request, res: Response) {
