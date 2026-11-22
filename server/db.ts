@@ -93,6 +93,41 @@ export function resolvePostgresDriverUrl(connectionString: string): string {
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pgClient: ReturnType<typeof postgres> | null = null;
 
+// ── Wave p27 (RLS): hp_app connection for enforce mode ──────────────────────
+// Separate lazy pool connecting as the non-superuser hp_app role
+// (RLS_DATABASE_URL). Used ONLY by server/db/rls.ts helpers when
+// RLS_ENABLED=enforce; off/audit modes and every existing caller keep getDb().
+let _rlsDb: ReturnType<typeof drizzle> | null = null;
+let _rlsPgClient: ReturnType<typeof postgres> | null = null;
+
+export async function getRlsDb(): Promise<ReturnType<typeof drizzle> | null> {
+  if (_rlsDb) return _rlsDb;
+  const url = process.env.RLS_DATABASE_URL?.trim();
+  if (!url || !isPostgresConnectionString(url)) {
+    console.error("[Database] RLS_DATABASE_URL is not configured; hp_app connection unavailable");
+    return null;
+  }
+  try {
+    const poolMax = envInt("PG_POOL_MAX", 20, 1, 200);
+    _rlsPgClient = postgres(url, {
+      max: poolMax,
+      idle_timeout: envInt("PG_POOL_IDLE_TIMEOUT_SEC", 30, 1, 3600),
+      connect_timeout: envInt("PG_POOL_CONNECT_TIMEOUT_SEC", 10, 1, 120),
+      max_lifetime: envInt("PG_POOL_MAX_LIFETIME_SEC", 1800, 0, 86400),
+      onnotice: () => {},
+    });
+    _rlsDb = drizzle(_rlsPgClient);
+    await _rlsPgClient`SELECT 1`;
+    console.info(`[Database] Connected to PostgreSQL as hp_app (RLS enforce pool, max=${poolMax})`);
+    return _rlsDb;
+  } catch (error) {
+    _rlsDb = null;
+    _rlsPgClient = null;
+    console.error("[Database] hp_app connection failed:", error);
+    return null;
+  }
+}
+
 /** Parse a positive-int env knob with clamping; falls back to `fallback`. */
 function envInt(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
@@ -203,7 +238,7 @@ export async function countUsers(): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
   const result = await db.select({ value: count() }).from(users);
-  return result[0]?.value ?? 0;
+  return result[0]?.count ?? 0;
 }
 
 // ─── Business day calculation ─────────────────────────────────────────────────
@@ -279,9 +314,9 @@ export async function getDisputeById(id: string) {
   const dispute = result[0];
   // Fetch related data
   const [events, offers, documents] = await Promise.all([
-    db.select().from(disputeEvents).where(eq(disputeEvents.disputeId, id)).orderBy(disputeEvents.createdAt),
-    db.select().from(disputeOffers).where(eq(disputeOffers.disputeId, id)).orderBy(disputeOffers.submittedAt),
-    db.select().from(disputeDocuments).where(eq(disputeDocuments.disputeId, id)).orderBy(disputeDocuments.uploadedAt),
+    db.select().from(disputeEvents).where(eq(disputeEvents.disputeId, dispute.id)).orderBy(disputeEvents.createdAt),
+    db.select().from(disputeOffers).where(eq(disputeOffers.disputeId, dispute.id)).orderBy(disputeOffers.submittedAt),
+    db.select().from(disputeDocuments).where(eq(disputeDocuments.disputeId, dispute.id)).orderBy(disputeDocuments.uploadedAt),
   ]);
   return { ...dispute, events, offers, documents };
 }
@@ -853,7 +888,7 @@ export function calculateQPA(
   } else {
     severity = "extreme";
     recommendation = `Billed amount is ${percentageOfQpa - 100}% above the QPA benchmark — this is an extreme outlier. Review whether the correct CPT codes were entered and whether this amount is defensible in arbitration.`;
-    regulatoryNote = "Amounts more than 2.5× the QPA face a very high bar in IDR. The No Surprises Act presumes the QPA is correct; extraordinary documentation is required to overcome this presumption.";
+    regulatoryNote = "The IDR entity must consider the QPA as the presumptive correct amount. Amounts more than 2.5× the QPA face a very high bar in IDR. The No Surprises Act presumes the QPA is correct; extraordinary documentation is required to overcome this presumption.";
   }
 
   return {
@@ -1480,9 +1515,9 @@ export async function listDocumentAnalyses(opts: { userId?: string; disputeId?: 
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
-  if (opts.userId) conditions.push(eq(documentAnalyses.userId, opts.userId));
+  if (opts.userId) conditions.push(eq(auditLog.userId, opts.userId));
   if (opts.disputeId) conditions.push(eq(documentAnalyses.disputeId, opts.disputeId));
   let q = db.select().from(documentAnalyses).$dynamic();
   if (conditions.length > 0) q = q.where(and(...conditions));
-  return q.orderBy(desc(documentAnalyses.createdAt)).limit(opts.limit ?? 50);
+  return q.orderBy(desc(documentAnalyses.createdAt)).limit(opts?.limit ?? 50);
 }
