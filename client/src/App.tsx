@@ -66,6 +66,7 @@ const DisputeMerge = lazy(() => import("./pages/DisputeMerge"));
 const ArbitratorScorecard = lazy(() => import("./pages/ArbitratorScorecard"));
 const SplitBillAnalysis = lazy(() => import("./pages/SplitBillAnalysis"));
 const TwoFactorAuth = lazy(() => import("./pages/TwoFactorAuth"));
+const MfaPage = lazy(() => import("./pages/MfaPage"));
 const MobileDisputeWizard = lazy(() => import("./pages/MobileDisputeWizard"));
 const DisputeClone = lazy(() => import("./pages/DisputeClone"));
 const PayerResponseTimeAnalytics = lazy(() => import("./pages/PayerResponseTimeAnalytics"));
@@ -174,6 +175,9 @@ function Router() {
       {/* Public routes */}
       <Route path={"/"} component={Home} />
       <Route path={"/login"} component={LoginPage} />
+      {/* Two-stage login second factor (mfa-pending session cookie carries
+          the state; public route like /login). Phase 25. */}
+      <Route path={"/mfa"} component={MfaPage} />
       <Route path={"/404"} component={NotFound} />
       <Route path={"/changelog"} component={Changelog} />
       <Route path={"/help"} component={HelpCenter} />
