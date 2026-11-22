@@ -30,6 +30,11 @@ export const webauthnCredentials = pgTable(
     createdAt: timestamp("created_at").defaultNow(),
     lastUsedAt: timestamp("last_used_at"),
     lastCounterAnomalyAt: timestamp("last_counter_anomaly_at"),
+    // Wave P26 (O6): NULL = enrollment completed but pending out-of-band
+    // email confirmation — the credential is INERT (rejected at
+    // authentication, invisible to hasActivePasskey) until confirmed.
+    // Migration 0060 backfills pre-existing rows to created_at.
+    confirmedAt: timestamp("confirmed_at"),
   },
   (t) => [
     uniqueIndex("webauthn_credentials_cred_uniq").on(t.credentialId),
