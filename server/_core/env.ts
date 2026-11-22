@@ -67,6 +67,20 @@ const envSchema = z.object({
   // 1h max per the O6 remediation design; shorter is safer.
   FACTOR_CONFIRM_TTL_SECONDS: z.coerce.number().int().positive().max(3600).optional().default(3600),
 
+  // Wave P27 (Phase 26 Stream B): Postgres Row-Level Security, wave 1.
+  // Tri-state gate mirroring the SKETCHES_ENABLED auto|on|off precedent.
+  // Env gate NOT a feature_flags row (unknown flags are DEFAULT-ON — the
+  // wrong failure direction for an auth feature, see :52-55 above).
+  //   off     (default): migrations may be applied; zero behavioral change.
+  //   audit:  policies enabled (not forced); owner bypasses; withOrgContext
+  //           shadow-probes a sampled fraction of reads as hp_app and logs
+  //           rls_shadow_diff rows to audit_log.
+  //   enforce: 0066 (FORCE) applied; helpers use the hp_app connection
+  //           (RLS_DATABASE_URL) and context becomes mandatory.
+  RLS_ENABLED: z.enum(["off", "audit", "enforce"]).optional().default("off"),
+  RLS_DATABASE_URL: z.string().optional().default(""),       // hp_app connection; enforce mode
+  RLS_AUDIT_SAMPLE_PCT: z.string().optional().default("5"),  // shadow-probe sampling
+
   // App URL & email
   VITE_APP_URL: z.string().optional().default("http://localhost:3000"),
   RESEND_API_KEY: z.string().optional().default(""),
