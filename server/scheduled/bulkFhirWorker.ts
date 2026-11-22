@@ -177,12 +177,12 @@ async function pollJob(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, job: 
  * One worker pass over non-terminal jobs. Exported for direct testing
  * against a mock FHIR server.
  */
-export async function processBulkFhirJobs(limit = 25): Promise<{ processed: number }> {
+export async function processBulkFhirJobs(limit = 25): Promise<{ processed: number; failed: number }> {
   const db = await getDb();
-  if (!db) return { processed: 0 };
+  if (!db) return { processed: 0, failed: 0 };
   // Wave p27 (RLS design §3.4/R10): scheduled workers run in service mode
   // under RLS audit/enforce; pure passthrough in the default off mode.
-  const { withServiceContext } = await import("../db/rls");
+  const { withServiceContext, rlsGuard } = await import("../db/rls");
   return withServiceContext({ service: true, label: "bulk-fhir" }, async (tx) => {
 
   const jobs = await tx.select().from(bulkFhirExportJobs)
@@ -190,29 +190,39 @@ export async function processBulkFhirJobs(limit = 25): Promise<{ processed: numb
     .limit(limit);
 
   let processed = 0;
+  let failed = 0;
   for (const job of jobs) {
     processed += 1;
+    // Fix F-4: per-job failure isolation. The batch runs in ONE service-mode
+    // transaction — a single job's DB error would otherwise abort it (25P02)
+    // and turn every following job into a silent no-op while `processed`
+    // kept counting. rlsGuard wraps each job in a nested-transaction
+    // savepoint (direct statements in off mode) so a failure rolls back only
+    // that job's writes and the failure is counted honestly.
     try {
-      if (job.status === "pending") {
-        await kickJob(tx, job);
-      } else {
-        await pollJob(tx, job);
-      }
+      await rlsGuard(tx, async (gtx) => {
+        if (job.status === "pending") {
+          await kickJob(gtx, job);
+        } else {
+          await pollJob(gtx, job);
+        }
+      });
     } catch (err: any) {
+      failed += 1;
       await tx.update(bulkFhirExportJobs)
         .set({ status: "failed", errorMessage: String(err?.message ?? err).slice(0, 2000), completedAt: new Date() })
         .where(eq(bulkFhirExportJobs.id, job.id))
         .catch(() => undefined);
     }
   }
-  return { processed };
+  return { processed, failed };
   }, db);
 }
 
 export async function bulkFhirWorkerHandler(req: Request, res: Response) {
   try {
-    const { processed } = await processBulkFhirJobs();
-    res.json({ ok: true, processed });
+    const { processed, failed } = await processBulkFhirJobs();
+    res.json({ ok: true, processed, failed });
   } catch (err: any) {
     console.error("[bulk-fhir] worker failed:", err);
     res.status(500).json({ ok: false, error: err?.message ?? String(err) });
