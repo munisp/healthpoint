@@ -24,7 +24,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createHash, randomUUID } from "node:crypto";
-import { eq, and, ne } from "drizzle-orm";
+import { eq, and, ne, isNotNull } from "drizzle-orm";
 import { router, publicProcedure, protectedProcedure } from "../_core/trpc";
 import { getDb, createAuditEntry } from "../db";
 import { users } from "../../drizzle/schema";
@@ -134,6 +134,8 @@ export const webauthnRouter = router({
         lastUsedAt: r.lastUsedAt,
         backedUp: r.backedUp,
         deviceType: r.deviceType,
+        // Wave P26 (O6): false = pending email confirmation (inert).
+        confirmed: r.confirmedAt != null,
       })),
       hasTotp: totp,
       canDeleteLast,
@@ -218,6 +220,13 @@ export const webauthnRouter = router({
       const info = verification.registrationInfo;
       const credIdBuf = Buffer.from(info.credential.id, "base64url");
       const id = randomUUID();
+
+      // Wave P26 (O6): FIRST-factor enrollment (account has zero confirmed
+      // factors — covers both forced-enrollment tiers) must be confirmed
+      // out-of-band via email BEFORE the credential activates; subsequent
+      // enrollments activate immediately and trigger an alert email.
+      const { countConfirmedFactors } = await import("../auth/enroll-confirm");
+      const isFirstFactor = (await countConfirmedFactors(ctx.user.id)) === 0;
       try {
         await db.insert(webauthnCredentials).values({
           id,
@@ -230,11 +239,64 @@ export const webauthnRouter = router({
           name: input.name ?? "Passkey",
           backedUp: info.credentialBackedUp,
           deviceType: info.credentialDeviceType,
+          confirmedAt: isFirstFactor ? null : new Date(),
         });
       } catch (err) {
         // Unique-index race: same authenticator registered twice concurrently.
         throw new TRPCError({ code: "CONFLICT", message: "credential_already_registered" });
       }
+      const src = auditSource(ctx);
+
+      if (isFirstFactor) {
+        // Pending confirmation: issue the single-use token and email it to
+        // the ACCOUNT address (the attacker's session cannot redirect it).
+        // Email failure never activates the factor — it stays pending and
+        // the user can resend (mfaConfirm.resend).
+        const { issueConfirmation } = await import("../auth/enroll-confirm");
+        const issued = await issueConfirmation({
+          userId: ctx.user.id,
+          factorType: "passkey",
+          factorId: id,
+          label: input.name ?? "Passkey",
+          requestIp: src.ipAddress,
+          requestUserAgent: src.userAgent,
+        });
+        let emailSent = false;
+        if (ctx.user.email) {
+          try {
+            const { sendFactorEnrollmentConfirmEmail } = await import("../email");
+            await sendFactorEnrollmentConfirmEmail(ctx.user.email, {
+              factorLabel: `Passkey · ${input.name ?? "Passkey"}`,
+              confirmUrl: `${ENV.appUrl}/confirm-enrollment?token=${issued.token}`,
+              expiresMinutes: Math.round(ENV.factorConfirmTtlSeconds / 60),
+              requestedAt: new Date(),
+              ip: src.ipAddress,
+              userAgent: src.userAgent,
+            });
+            emailSent = true;
+          } catch (err) {
+            console.error("[webauthn] confirmation email failed (factor stays pending):", err instanceof Error ? err.message : err);
+          }
+        }
+        audit({
+          userId: ctx.user.id,
+          action: "webauthn.register",
+          entityType: "webauthn_credential",
+          entityId: id,
+          oldValue: null,
+          newValue: JSON.stringify({
+            credentialId: credHash(credIdBuf),
+            name: input.name ?? "Passkey",
+            deviceType: info.credentialDeviceType,
+            backedUp: info.credentialBackedUp,
+            requiresConfirmation: true,
+            confirmationEmailSent: emailSent,
+          }),
+          ...src,
+        });
+        return { success: true as const, credentialId: id, requiresConfirmation: true as const, emailSent };
+      }
+
       audit({
         userId: ctx.user.id,
         action: "webauthn.register",
@@ -246,10 +308,37 @@ export const webauthnRouter = router({
           name: input.name ?? "Passkey",
           deviceType: info.credentialDeviceType,
           backedUp: info.credentialBackedUp,
+          requiresConfirmation: false,
         }),
-        ...auditSource(ctx),
+        ...src,
       });
-      return { success: true as const, credentialId: id };
+      // Subsequent-factor alert (O6): fire-and-forget — delivery failure
+      // must NOT fail the enrollment; log + audit instead.
+      if (ctx.user.email) {
+        const email = ctx.user.email;
+        void (async () => {
+          const { sendFactorAddedAlertEmail } = await import("../email");
+          const sent = await sendFactorAddedAlertEmail(email, {
+            factorLabel: `Passkey · ${input.name ?? "Passkey"}`,
+            addedAt: new Date(),
+            ip: src.ipAddress,
+            userAgent: src.userAgent,
+            manageUrl: `${ENV.appUrl}/two-factor-auth`,
+          });
+          if (!sent) {
+            audit({
+              userId: ctx.user.id,
+              action: "webauthn.alertEmailFailed",
+              entityType: "webauthn_credential",
+              entityId: id,
+              oldValue: null,
+              newValue: JSON.stringify({ credentialId: credHash(credIdBuf) }),
+              ...src,
+            });
+          }
+        })().catch(err => console.warn("[webauthn] factor-added alert failed:", err instanceof Error ? err.message : err));
+      }
+      return { success: true as const, credentialId: id, requiresConfirmation: false as const };
     }),
 
   /**
@@ -342,14 +431,18 @@ export const webauthnRouter = router({
       }
       const rows = await db.select().from(webauthnCredentials).where(eq(webauthnCredentials.credentialId, credBuf)).limit(1);
       const cred = rows[0];
-      if (!cred) {
+      // Wave P26 (O6): an UNCONFIRMED credential (confirmed_at NULL — first
+      // factor pending email confirmation) is inert and rejected exactly
+      // like an unknown one. The audit reason distinguishes the cases for
+      // incident review; the client-visible error is identical.
+      if (!cred || !cred.confirmedAt) {
         audit({
           userId: stored.userId ?? "anonymous",
           action: "webauthn.authenticateFailed",
           entityType: "webauthn_credential",
           entityId: input.ceremonyId,
           oldValue: null,
-          newValue: JSON.stringify({ reason: "unknown_credential" }),
+          newValue: JSON.stringify({ reason: !cred ? "unknown_credential" : "unconfirmed_credential" }),
           ...auditSource(ctx),
         });
         throw new TRPCError({ code: "UNAUTHORIZED", message: "authentication_failed" });
@@ -528,6 +621,8 @@ export const webauthnRouter = router({
       lastUsedAt: r.lastUsedAt,
       backedUp: r.backedUp,
       deviceType: r.deviceType,
+      // Wave P26 (O6): false = pending email confirmation (inert).
+      confirmed: r.confirmedAt != null,
     }));
   }),
 
@@ -582,6 +677,25 @@ export const webauthnRouter = router({
       // Ownership: NOT_FOUND either way — no cross-user existence leak.
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Credential not found" });
 
+      // Wave P26 (O6): an UNCONFIRMED credential is inert — deleting it is
+      // cancel/cleanup, not a security-sensitive removal. Skip the step-up
+      // proof and the last-factor guard (a pending credential is not a
+      // factor; a user in the forced-enrollment flow could not produce a
+      // step-up proof anyway).
+      if (!row.confirmedAt) {
+        await db.delete(webauthnCredentials).where(eq(webauthnCredentials.id, row.id));
+        audit({
+          userId: ctx.user.id,
+          action: "webauthn.deletePending",
+          entityType: "webauthn_credential",
+          entityId: row.id,
+          oldValue: JSON.stringify({ name: row.name, deviceType: row.deviceType }),
+          newValue: null,
+          ...auditSource(ctx),
+        });
+        return { success: true as const };
+      }
+
       // Re-auth proof (exactly one path, §3.6 step 3).
       const totp = await hasActiveTotp(ctx.user.id);
       if (totp) {
@@ -611,9 +725,14 @@ export const webauthnRouter = router({
         }
       }
 
-      // Last-factor guard (§3.6 step 4).
+      // Last-factor guard (§3.6 step 4). Wave P26 (O6): only CONFIRMED
+      // credentials count as remaining factors — pending ones are inert.
       const others = await db.select({ id: webauthnCredentials.id }).from(webauthnCredentials)
-        .where(and(eq(webauthnCredentials.userId, ctx.user.id), ne(webauthnCredentials.id, row.id)));
+        .where(and(
+          eq(webauthnCredentials.userId, ctx.user.id),
+          ne(webauthnCredentials.id, row.id),
+          isNotNull(webauthnCredentials.confirmedAt),
+        ));
       const blocked = await lastFactorGuardBlocks(ctx.user.id, others.length, totp);
       if (blocked) {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "cannot_remove_last_mfa_method" });
