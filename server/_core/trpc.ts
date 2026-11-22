@@ -229,3 +229,45 @@ export const protectedProcedure = t.procedure
   .use(enforceObjectLevelAuthz)
   .use(invalidateSearchOnMutation)
   .use(auditAllActionsOnMutation);
+
+/**
+ * Wave p27 (RLS, design phase-26-rls-design.md §2.2 rule 5): org-scoped
+ * procedure. Runs the handler inside `withOrgContext` — the transaction
+ * carries transaction-local `app.current_user` / `app.current_orgs`, and
+ * membership of EVERY requested org is verified (FORBIDDEN otherwise).
+ *
+ * The org id comes from the zod-VALIDATED input (`.input(z.object({ orgId:
+ * ... }))` must run before this middleware — in tRPC v11 input validators
+ * compose ahead of `.use`, and middlewares receive the parsed input). Inputs
+ * with `orgIds: string[]` (the multi-org next-actions shape, design R3) set
+ * the full verified list.
+ *
+ * Adoption contract: handlers MUST issue org-table queries through
+ * `ctx.rlsDb` (the context transaction) for RLS to see them; queries issued
+ * via `getDb()` bypass the context transaction. Migrating the six
+ * assertOrgMember call sites onto this is mechanical and NOT required for
+ * wave-1 enforcement (design §10) — the app-layer checks stay as they are.
+ */
+const orgContextMiddleware = t.middleware(async opts => {
+  const { ctx, next } = opts;
+  const input = ((opts as { input?: unknown }).input ?? {}) as { orgId?: unknown; orgIds?: unknown };
+  let orgIds = Array.isArray(input.orgIds)
+    ? input.orgIds.filter((v): v is string => typeof v === "string")
+    : typeof input.orgId === "string" ? [input.orgId] : [];
+  // R6: key-authenticated requests default to the key's bound org when the
+  // input does not name one. Legacy NULL-org keys get no default — under
+  // enforce they are rejected from org-table procedures (documented behavior
+  // change, design R6).
+  if (orgIds.length === 0 && typeof ctx.apiKeyOrgId === "string" && ctx.apiKeyOrgId) {
+    orgIds = [ctx.apiKeyOrgId];
+  }
+  if (orgIds.length === 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "orgId_required" });
+  }
+  const { withOrgContext } = await import("../db/rls");
+  return withOrgContext({ userId: ctx.user!.id, orgIds }, async (tx) =>
+    next({ ctx: { ...ctx, rlsDb: tx } })
+  );
+});
+
+export const orgProcedure = protectedProcedure.use(orgContextMiddleware);
