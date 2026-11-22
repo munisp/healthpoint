@@ -19,7 +19,7 @@
  *    VITE_APP_URL (+ ALLOWED_ORIGINS for origins).
  */
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { getDb } from "../db";
 import { users } from "../../drizzle/schema";
 import { webauthnCredentials } from "../../drizzle/schema-webauthn";
@@ -32,7 +32,11 @@ export function assertWebauthnEnabled(): void {
   }
 }
 
-/** True when the user has at least one registered passkey. */
+/**
+ * True when the user has at least one CONFIRMED passkey (Wave P26/O6:
+ * confirmed_at NOT NULL). Unconfirmed (pending email confirmation)
+ * credentials are inert and must not satisfy the MFA "verify" stage.
+ */
 export async function hasActivePasskey(userId: string): Promise<boolean> {
   try {
     const db = await getDb();
@@ -40,7 +44,7 @@ export async function hasActivePasskey(userId: string): Promise<boolean> {
     const rows = await db
       .select({ id: webauthnCredentials.id })
       .from(webauthnCredentials)
-      .where(eq(webauthnCredentials.userId, userId))
+      .where(and(eq(webauthnCredentials.userId, userId), isNotNull(webauthnCredentials.confirmedAt)))
       .limit(1);
     return rows.length > 0;
   } catch (err) {
