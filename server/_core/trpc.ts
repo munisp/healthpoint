@@ -67,6 +67,12 @@ export const MFA_PENDING_ALLOWED_PATHS = new Set([
   "webauthn.verifyRegistration",
   "webauthn.authenticationOptions",
   "webauthn.verifyAuthentication",
+  // Phase 26 (O6): first-factor enrollment confirmation flow — the
+  // forced-enrollment UX (mfa-pending session) must be able to finalize a
+  // TOTP enrollment (issue the email confirmation) and resend it.
+  // mfaConfirm.confirm is PUBLIC (token-only) and needs no allow-list entry.
+  "mfaConfirm.finalizeTotp",
+  "mfaConfirm.resend",
 ]);
 
 const requireUser = t.middleware(async opts => {
