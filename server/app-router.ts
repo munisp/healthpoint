@@ -47,6 +47,8 @@ import { banditRouter, outcomeModelRouter } from "./routers/intelligence";
 import { intelligenceRouter } from "./routers/intelligence";
 // phase25 additions (WebAuthn / passkeys for staff auth)
 import { webauthnRouter } from "./routers/webauthn";
+// phase26 additions (O6: first-factor enrollment email confirmation)
+import { enrollConfirmRouter } from "./routers/enroll-confirm";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -88,7 +90,9 @@ export const rootRouter = mergeRouters(
   // phase23 additions
   router({ intelligence: intelligenceRouter }),
   // phase25 additions
-  router({ webauthn: webauthnRouter })
+  router({ webauthn: webauthnRouter }),
+  // phase26 additions
+  router({ mfaConfirm: enrollConfirmRouter })
 );
 
 export type RootRouter = typeof rootRouter;
