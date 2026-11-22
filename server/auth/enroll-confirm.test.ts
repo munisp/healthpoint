@@ -295,7 +295,7 @@ describe("mfaConfirm.finalizeTotp", () => {
     const sent = mailer.confirm[0];
     expect(sent.to).toBe("u1@test.local");
     const url = String(sent.payload.confirmUrl);
-    expect(url).toContain("/confirm-enrollment?token=");
+    expect(url).toContain("/confirm-enrollment#token=");
     expect(String(sent.payload.ip)).toBe("203.0.113.9");
     expect(String(sent.payload.userAgent)).toBe("vitest");
     // The emailed token is the raw one; it confirms the TOTP.
