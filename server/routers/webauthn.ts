@@ -221,12 +221,18 @@ export const webauthnRouter = router({
       const credIdBuf = Buffer.from(info.credential.id, "base64url");
       const id = randomUUID();
 
-      // Wave P26 (O6): FIRST-factor enrollment (account has zero confirmed
-      // factors — covers both forced-enrollment tiers) must be confirmed
-      // out-of-band via email BEFORE the credential activates; subsequent
-      // enrollments activate immediately and trigger an alert email.
+      // Wave P26 (O6): FIRST-factor enrollment must be confirmed out-of-band
+      // via email BEFORE the credential activates; subsequent enrollments
+      // activate immediately and trigger an alert email. "Subsequent" is
+      // ONLY safe to infer from a FULL session: an mfa-pending session has
+      // proven NO factor yet, so the "a step-up already happened at login"
+      // assumption is false — an attacker holding a phished password
+      // (mfa-pending) must NOT be able to auto-activate their own passkey
+      // just because the victim already has a confirmed factor. Treat
+      // mfa-pending as first-factor (email-confirm mandatory) regardless.
       const { countConfirmedFactors } = await import("../auth/enroll-confirm");
-      const isFirstFactor = (await countConfirmedFactors(ctx.user.id)) === 0;
+      const isFirstFactor = ctx.mfaPending === true
+        || (await countConfirmedFactors(ctx.user.id)) === 0;
       try {
         await db.insert(webauthnCredentials).values({
           id,
@@ -267,7 +273,7 @@ export const webauthnRouter = router({
             const { sendFactorEnrollmentConfirmEmail } = await import("../email");
             await sendFactorEnrollmentConfirmEmail(ctx.user.email, {
               factorLabel: `Passkey · ${input.name ?? "Passkey"}`,
-              confirmUrl: `${ENV.appUrl}/confirm-enrollment?token=${issued.token}`,
+              confirmUrl: `${ENV.appUrl}/confirm-enrollment#token=${issued.token}`,
               expiresMinutes: Math.round(ENV.factorConfirmTtlSeconds / 60),
               requestedAt: new Date(),
               ip: src.ipAddress,
