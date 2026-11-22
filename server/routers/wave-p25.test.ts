@@ -144,6 +144,17 @@ describe.skipIf(!HAS_DB)("Phase25 WebAuthn/passkeys (live PG)", () => {
       response: fixtures.registration.response,
     });
     expect(reg.success).toBe(true);
+    // Wave P26 (O6): first-factor registration is PENDING until the emailed
+    // token is confirmed (RESEND_API_KEY unset here → email send fails soft,
+    // the token is still issued; the test seam returns the raw token).
+    expect(reg.requiresConfirmation).toBe(true);
+    {
+      const { getLastIssuedTokenForTests } = await import("../auth/enroll-confirm");
+      const token = getLastIssuedTokenForTests("passkey", reg.credentialId);
+      expect(token).toBeTruthy();
+      const confirmed = await caller.mfaConfirm.confirm({ token: token! });
+      expect(confirmed.success).toBe(true);
+    }
 
     // list
     const list = await caller.webauthn.listCredentials();
@@ -217,6 +228,7 @@ describe.skipIf(!HAS_DB)("Phase25 WebAuthn/passkeys (live PG)", () => {
       publicKey: crypto.randomBytes(77),
       counter: 0,
       name: "Sole key",
+      confirmedAt: new Date(), // Wave P26 (O6): confirmed factor
     });
     const stepupId = crypto.randomUUID();
     redisState.store.set(`session:webauthn-stepup:${U2}`, stepupId);
