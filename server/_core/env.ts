@@ -48,6 +48,21 @@ const envSchema = z.object({
   // CORS — comma-separated list of allowed origins
   ALLOWED_ORIGINS: z.string().optional().default(""),
 
+  // WebAuthn / passkeys (Phase 25) — master gate DEFAULTS OFF; see design doc
+  // phase-25-webauthn-design.md §4.2. Env gate (not a feature_flags row):
+  // unknown flags are DEFAULT-ON in server/feature-flags.ts, the wrong
+  // failure direction for an auth feature.
+  WEBAUTHN_ENABLED: z.enum(["true", "false"]).optional().default("false"),
+  WEBAUTHN_RP_ID: z.string().optional().default(""),
+  WEBAUTHN_RP_NAME: z.string().optional().default("HealthPoint"),
+  WEBAUTHN_ORIGINS: z.string().optional().default(""),
+  WEBAUTHN_ENFORCEMENT: z.enum(["optional", "preferred", "required"]).optional().default("optional"),
+  WEBAUTHN_REQUIRED_ROLES: z.string().optional().default("admin"),
+  WEBAUTHN_PASSWORDLESS_ENABLED: z.enum(["true", "false"]).optional().default("false"),
+  WEBAUTHN_CHALLENGE_TTL_SECONDS: z.coerce.number().int().positive().optional().default(300),
+  WEBAUTHN_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional().default(10),
+  WEBAUTHN_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().optional().default(60),
+
   // App URL & email
   VITE_APP_URL: z.string().optional().default("http://localhost:3000"),
   RESEND_API_KEY: z.string().optional().default(""),
@@ -144,6 +159,26 @@ export const ENV = {
     .split(",")
     .map((s: string) => s.trim())
     .filter(Boolean),
+
+  // WebAuthn / passkeys (Phase 25). RP ID / origins derive from VITE_APP_URL
+  // (+ ALLOWED_ORIGINS) when not explicitly set — see
+  // server/auth/webauthn-policy.ts resolveWebauthnRpConfig.
+  webauthnEnabled: _env.WEBAUTHN_ENABLED === "true",
+  webauthnRpId: _env.WEBAUTHN_RP_ID || "",
+  webauthnRpName: _env.WEBAUTHN_RP_NAME || "HealthPoint",
+  webauthnOrigins: (_env.WEBAUTHN_ORIGINS || "")
+    .split(",")
+    .map((s: string) => s.trim())
+    .filter(Boolean),
+  webauthnEnforcement: _env.WEBAUTHN_ENFORCEMENT || "optional",
+  webauthnRequiredRoles: (_env.WEBAUTHN_REQUIRED_ROLES || "admin")
+    .split(",")
+    .map((s: string) => s.trim())
+    .filter(Boolean),
+  webauthnPasswordlessEnabled: _env.WEBAUTHN_PASSWORDLESS_ENABLED === "true",
+  webauthnChallengeTtlSeconds: _env.WEBAUTHN_CHALLENGE_TTL_SECONDS ?? 300,
+  webauthnRateLimitMax: _env.WEBAUTHN_RATE_LIMIT_MAX ?? 10,
+  webauthnRateLimitWindowSeconds: _env.WEBAUTHN_RATE_LIMIT_WINDOW_SECONDS ?? 60,
 
   // App URL & email
   appUrl: _env.VITE_APP_URL || "http://localhost:3000",
