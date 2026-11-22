@@ -137,6 +137,13 @@ export interface TrainingResult {
 
 /** Exported for tests and for the journey (clock injection via `now`). */
 export async function runOfferModelTraining(db: Db, now: Date): Promise<TrainingResult> {
+  // Wave p27 (RLS design R2): global-aggregate worker — runs in service mode
+  // under RLS audit/enforce; pure passthrough in the default off mode.
+  const { withServiceContext } = await import("../db/rls");
+  return withServiceContext({ service: true, label: "offer-model" }, (tx) => runOfferModelTrainingInner(tx, now), db);
+}
+
+async function runOfferModelTrainingInner(db: Db, now: Date): Promise<TrainingResult> {
   const tiers = await aggregateSegments(db);
   const total = tiers.platform.sampleSize;
   const parameters: OfferModelParameters = {
