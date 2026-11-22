@@ -2,7 +2,7 @@
  * MfaConfirmPage.tsx — Wave P26 (O6)
  *
  * Public landing page for the first-factor enrollment confirmation email
- * (/confirm-enrollment?token=…). Token-only by design: the visitor does NOT
+ * (/confirm-enrollment#token=…). Token-only by design: the visitor does NOT
  * need a session — the token itself is the proof of mailbox ownership, so an
  * attacker's mfa-pending session cannot self-confirm. On success the new
  * factor is active; the user is sent back to /mfa to finish signing in.
@@ -23,7 +23,14 @@ export default function MfaConfirmPage() {
   useEffect(() => {
     if (started.current) return; // React 18 StrictMode double-effect guard
     started.current = true;
-    const token = new URLSearchParams(window.location.search).get("token") ?? "";
+    // The token travels in the URL FRAGMENT (#token=…), never the query
+    // string, so it stays out of server access logs and browser history.
+    // Legacy fallback: links emailed before this change carried the token in
+    // the query (?token=); those expire within the token TTL (≤1h), so we
+    // still honor them during the deploy rollover window.
+    const fragmentToken = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("token");
+    const queryToken = new URLSearchParams(window.location.search).get("token");
+    const token = fragmentToken ?? queryToken ?? "";
     if (token.length < 32) {
       setState("error");
       setMessage("This confirmation link is invalid or has expired.");
