@@ -148,6 +148,9 @@ export const nextActionDismissals = pgTable(
   },
   (t) => [
     uniqueIndex("next_action_dismissals_user_key_idx").on(t.userId, t.actionKey),
+    // Wave p27 (RLS batch C, migration 0064): org-leading index so enforced
+    // org_isolation reads don't seq-scan (design §5.1).
+    index("next_action_dismissals_org_idx").on(t.orgId),
   ],
 );
 
