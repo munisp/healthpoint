@@ -393,6 +393,48 @@
       "when": 1790100000000,
       "tag": "0060_wave_p26",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1790200000000,
+      "tag": "0061_wave_p27_rls_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1790300000000,
+      "tag": "0062_wave_p27_rls_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1790400000000,
+      "tag": "0063_wave_p27_rls_ingest",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1790500000000,
+      "tag": "0064_wave_p27_rls_intelligence",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1790600000000,
+      "tag": "0065_wave_p27_rls_personas",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1790700000000,
+      "tag": "0066_wave_p27_rls_force",
+      "breakpoints": true
     }
   ]
 }
