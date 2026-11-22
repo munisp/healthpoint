@@ -259,13 +259,21 @@ export async function authenticateApiKey(token: string, req?: Request): Promise<
   const { apiKeys } = await import("../../drizzle/schema");
   const { eq } = await import("drizzle-orm");
 
-  const rows = await drizzle.select().from(apiKeys).where(eq(apiKeys.keyHash, keyHash)).limit(1);
-  const key = rows[0];
-  if (!key) throw new BearerAuthError("unknown_api_key");
-  if (key.revokedAt) throw new BearerAuthError("api_key_revoked");
-  if (key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now()) {
-    throw new BearerAuthError("api_key_expired");
-  }
+  // Wave p27 (RLS design R6): the key lookup runs BEFORE any org context
+  // exists, so under RLS audit/enforce it must run in service mode; the org
+  // context for the request is derived from the key's orgId afterwards (see
+  // context.ts apiKeyOrgId → orgProcedure). Pure passthrough in off mode.
+  const { withServiceContext } = await import("../db/rls");
+  const key = await withServiceContext({ service: true, label: "api-key-auth" }, async (svcDb) => {
+    const rows = await svcDb.select().from(apiKeys).where(eq(apiKeys.keyHash, keyHash)).limit(1);
+    const k = rows[0];
+    if (!k) throw new BearerAuthError("unknown_api_key");
+    if (k.revokedAt) throw new BearerAuthError("api_key_revoked");
+    if (k.expiresAt && new Date(k.expiresAt).getTime() <= Date.now()) {
+      throw new BearerAuthError("api_key_expired");
+    }
+    return k;
+  }, drizzle);
 
   const user = await db.getUser(key.userId);
   if (!user) throw new BearerAuthError("api_key_owner_missing");
@@ -294,8 +302,11 @@ export async function authenticateApiKey(token: string, req?: Request): Promise<
     }
   }
 
-  // Touch lastUsedAt without blocking the request.
-  drizzle.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, key.id))
+  // Touch lastUsedAt without blocking the request. Also service-context:
+  // under RLS enforce an unscoped write to api_keys would fail with 42501.
+  void withServiceContext({ service: true, label: "api-key-auth" },
+    (svcDb) => svcDb.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, key.id)),
+    drizzle)
     .then(() => {}, err => console.warn("[Auth] apiKeys lastUsedAt update failed:", err instanceof Error ? err.message : err));
 
   return { user, scopes, orgId: keyOrgId };
