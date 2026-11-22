@@ -69,10 +69,26 @@ services:
       - middleware_net
     restart: "no"
 
+  # ── PostgreSQL WAL archive dir init (one-shot) ──────────────────────────────
+  # Docker creates named-volume mount points root:root 0755; the postgres
+  # process (uid 70) could not write WAL archives. Chown once before start.
+  postgres-archive-init:
+    image: postgres:16-alpine
+    container_name: postgres-archive-init
+    volumes:
+      - postgres_wal_archive:/var/lib/postgresql/wal-archive
+    command: chown -R 70:70 /var/lib/postgresql/wal-archive
+    networks:
+      - middleware_net
+    restart: "no"
+
   # ── PostgreSQL (Production-tuned) ───────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: postgres
+    depends_on:
+      postgres-archive-init:
+        condition: service_completed_successfully
     environment:
       POSTGRES_USER: healthpoint
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
@@ -94,13 +110,19 @@ services:
       - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
       - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    # NOTE on archive_command quoting (verified against PG 16.2):
+    # unquoted `-c archive_command=... %p %f` word-splits and postgres exits
+    # `invalid argument: "%p"`; double+single quotes leave LITERAL single
+    # quotes in the GUC value and the archiver fails 127. The form below
+    # survives compose's shellwords split as ONE token whose value has no
+    # literal quotes. Scripts ship mode 0644 in the repo, hence `bash`.
     command: >
       postgres
         -c config_file=/etc/postgresql/postgresql.conf
         -c wal_level=replica
         -c archive_mode=on
         -c archive_timeout=300
-        -c archive_command=/opt/healthpoint/backups/archive-command.sh %p %f
+        -c "archive_command=bash /opt/healthpoint/backups/archive-command.sh %p %f"
         -c max_connections=500
         -c shared_buffers=256MB
         -c effective_cache_size=768MB
