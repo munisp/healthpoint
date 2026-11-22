@@ -61,10 +61,27 @@ export async function orgRequiresMfa(userId: string): Promise<boolean> {
  *   "verify" — TOTP enabled: must present a code before full access
  *   "enroll" — orgSettings.requireMFA=true and no TOTP: must set up TOTP first
  *   "none"   — full session may be issued immediately
+ *
+ * Phase 25 composition (design §5.3): a registered passkey ALSO satisfies
+ * the "verify" stage (the /mfa page offers passkey-first, TOTP fallback),
+ * and the WEBAUTHN_ENFORCEMENT=required tier forces enrollment for
+ * configured roles. TOTP semantics are unchanged — TOTP stays first.
  */
 export async function getMfaRequirement(userId: string): Promise<MfaRequirement> {
-  if (await hasActiveTotp(userId)) return "verify";
-  if (await orgRequiresMfa(userId)) return "enroll";
+  if (await hasActiveTotp(userId)) return "verify";                 // unchanged; TOTP-first
+  // Passkey awareness only applies while the feature is enabled — when
+  // WEBAUTHN_ENABLED=false the verify procedures are gated off, so
+  // returning "verify" for a passkey-only user would lock them out
+  // (fail-safe direction: feature off = passkeys invisible).
+  const { ENV } = await import("../_core/env");
+  if (ENV.webauthnEnabled) {
+    const { hasActivePasskey, passkeyRequiredForRole } = await import("./webauthn-policy");
+    if (await hasActivePasskey(userId)) return "verify";            // passkey-only users
+    if (await orgRequiresMfa(userId)) return "enroll";              // unchanged
+    if (await passkeyRequiredForRole(userId)) return "enroll";      // §5.2 required tier
+    return "none";
+  }
+  if (await orgRequiresMfa(userId)) return "enroll";                // unchanged
   return "none";
 }
 
