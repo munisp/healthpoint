@@ -206,6 +206,9 @@ export const inviteTokens = pgTable(
   (t) => [
     uniqueIndex("invite_tokens_hash_idx").on(t.tokenHash),
     index("invite_tokens_email_idx").on(t.email),
+    // Wave p27 (RLS batch D, migration 0065): org index so enforced
+    // org_isolation reads don't seq-scan (design §5.1).
+    index("invite_tokens_org_idx").on(t.orgId),
   ]
 );
 export type InviteToken = typeof inviteTokens.$inferSelect;
