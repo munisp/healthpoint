@@ -234,3 +234,208 @@ export async function sendNewLeadNotification(
     console.error("[email] Failed to send lead notification:", err);
   }
 }
+
+// ─── Wave P26 (O6): factor-enrollment security emails ───────────────────────
+
+export interface FactorConfirmEmailPayload {
+  factorLabel: string;   // e.g. "Passkey · J35 clinic key" / "Authenticator app (TOTP)"
+  confirmUrl: string;    // single-use token URL
+  expiresMinutes: number;
+  requestedAt: Date;
+  ip: string | null;
+  userAgent: string | null;
+}
+
+function metaRowsHtml(p: { requestedAt: Date; ip: string | null; userAgent: string | null }): string {
+  return [
+    ["Time (UTC)", p.requestedAt.toISOString()],
+    ["IP address", p.ip ?? "unknown"],
+    ["Device / browser", p.userAgent ?? "unknown"],
+  ]
+    .map(([label, value], i) => `
+    <tr style="background:${i % 2 === 0 ? "#f8fafc" : "#ffffff"};">
+      <td style="padding:8px 14px;font-size:12px;color:#64748b;font-weight:600;width:36%;border-bottom:1px solid #e2e8f0;">${label}</td>
+      <td style="padding:8px 14px;font-size:12px;color:#0f172a;border-bottom:1px solid #e2e8f0;">${htmlEscape(value)}</td>
+    </tr>`)
+    .join("");
+}
+
+/**
+ * FIRST-factor enrollment confirmation (O6): the factor stays inert until
+ * the account owner clicks this link — an attacker holding only the
+ * password cannot self-confirm from their session. Like sendLoginOtpEmail,
+ * failures THROW: without this email the enrollment can never activate, so
+ * the caller must know (and may surface a resend path).
+ */
+export async function sendFactorEnrollmentConfirmEmail(
+  to: string,
+  p: FactorConfirmEmailPayload,
+): Promise<void> {
+  const resend = getResend();
+  if (!resend) {
+    console.info("[email] RESEND_API_KEY not set — cannot send factor-confirmation email");
+    throw new Error("Email delivery is not configured");
+  }
+  const subject = "Confirm your new HealthPoint sign-in method";
+  const html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><title>${subject}</title></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;padding:40px 0;"><tr><td align="center">
+    <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1);">
+      <tr><td style="background:#0f172a;padding:24px 32px;color:#38bdf8;font-size:20px;font-weight:700;">HealthPoint Security</td></tr>
+      <tr><td style="padding:24px 32px 0;">
+        <h1 style="margin:0;font-size:20px;font-weight:700;color:#0f172a;">Confirm your new sign-in method</h1>
+        <p style="font-size:14px;color:#475569;line-height:1.6;">
+          A request was made to add <strong>${htmlEscape(p.factorLabel)}</strong> as a sign-in method on your
+          HealthPoint account. It will not work until you confirm it.
+        </p>
+        <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin:12px 0;">
+          ${metaRowsHtml(p)}
+        </table>
+        <p style="margin:20px 0;">
+          <a href="${htmlEscape(p.confirmUrl)}" style="display:inline-block;background:#0ea5e9;color:#ffffff;font-size:14px;font-weight:600;padding:12px 24px;border-radius:8px;text-decoration:none;">Confirm this sign-in method →</a>
+        </p>
+        <p style="font-size:13px;color:#64748b;line-height:1.6;">
+          This link expires in ${p.expiresMinutes} minutes and works once.<br/>
+          <strong>If you didn't make this request</strong>, do not click the link — your password may be
+          compromised. Sign in and change it, then contact your administrator.
+        </p>
+      </td></tr>
+      <tr><td style="padding:16px 32px;border-top:1px solid #e2e8f0;font-size:12px;color:#94a3b8;">
+        Sent by HealthPoint automated security notifications
+      </td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+  const text = [
+    "CONFIRM YOUR NEW HEALTHPOINT SIGN-IN METHOD",
+    "===========================================",
+    `A request was made to add: ${p.factorLabel}`,
+    "",
+    `Time (UTC):       ${p.requestedAt.toISOString()}`,
+    `IP address:       ${p.ip ?? "unknown"}`,
+    `Device / browser: ${p.userAgent ?? "unknown"}`,
+    "",
+    `Confirm (expires in ${p.expiresMinutes} minutes, single-use):`,
+    p.confirmUrl,
+    "",
+    "If you didn't make this request, do NOT open the link — your password may",
+    "be compromised. Sign in, change it, and contact your administrator.",
+  ].join("\n");
+
+  const { error } = await resend.emails.send({ from: FROM_EMAIL, to: [to], subject, html, text });
+  if (error) {
+    console.error("[email] Resend error sending factor-confirmation email:", error);
+    throw new Error("Failed to send factor confirmation email");
+  }
+  console.info(`[email] Factor-confirmation email sent to ${to}`);
+}
+
+export interface FactorAddedAlertPayload {
+  factorLabel: string;
+  addedAt: Date;
+  ip: string | null;
+  userAgent: string | null;
+  manageUrl: string; // credential-management UI (revoke path)
+}
+
+/**
+ * SUBSEQUENT-factor enrollment alert (O6): fire-and-forget "a new sign-in
+ * method was added — not you? revoke it here". Returns false on failure;
+ * NEVER throws — alert delivery must not fail the enrollment.
+ */
+export async function sendFactorAddedAlertEmail(
+  to: string,
+  p: FactorAddedAlertPayload,
+): Promise<boolean> {
+  const resend = getResend();
+  if (!resend) {
+    console.info("[email] RESEND_API_KEY not set — skipping factor-added alert");
+    return false;
+  }
+  try {
+    const subject = "A new sign-in method was added to your HealthPoint account";
+    const html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><title>${subject}</title></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;padding:40px 0;"><tr><td align="center">
+    <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1);">
+      <tr><td style="background:#0f172a;padding:24px 32px;color:#38bdf8;font-size:20px;font-weight:700;">HealthPoint Security</td></tr>
+      <tr><td style="padding:24px 32px 0;">
+        <span style="display:inline-block;background:#fef3c7;color:#92400e;font-size:12px;font-weight:600;padding:4px 12px;border-radius:999px;letter-spacing:.5px;">SECURITY ALERT</span>
+        <h1 style="margin:12px 0 0;font-size:20px;font-weight:700;color:#0f172a;">New sign-in method added</h1>
+        <p style="font-size:14px;color:#475569;line-height:1.6;">
+          <strong>${htmlEscape(p.factorLabel)}</strong> was added to your HealthPoint account.
+        </p>
+        <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin:12px 0;">
+          ${metaRowsHtml({ requestedAt: p.addedAt, ip: p.ip, userAgent: p.userAgent })}
+        </table>
+        <p style="font-size:13px;color:#64748b;line-height:1.6;">
+          If this was you, no action is needed. <strong>If you don't recognize this</strong>,
+          revoke it immediately and change your password:
+        </p>
+        <p style="margin:20px 0;">
+          <a href="${htmlEscape(p.manageUrl)}" style="display:inline-block;background:#dc2626;color:#ffffff;font-size:14px;font-weight:600;padding:12px 24px;border-radius:8px;text-decoration:none;">Review my sign-in methods →</a>
+        </p>
+      </td></tr>
+      <tr><td style="padding:16px 32px;border-top:1px solid #e2e8f0;font-size:12px;color:#94a3b8;">
+        Sent by HealthPoint automated security notifications
+      </td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+    const text = [
+      "SECURITY ALERT — NEW HEALTHPOINT SIGN-IN METHOD",
+      "===============================================",
+      `Added: ${p.factorLabel}`,
+      "",
+      `Time (UTC):       ${p.addedAt.toISOString()}`,
+      `IP address:       ${p.ip ?? "unknown"}`,
+      `Device / browser: ${p.userAgent ?? "unknown"}`,
+      "",
+      "If this was you, no action is needed. If you don't recognize this,",
+      "revoke it immediately and change your password:",
+      p.manageUrl,
+    ].join("\n");
+
+    const { error } = await resend.emails.send({ from: FROM_EMAIL, to: [to], subject, html, text });
+    if (error) {
+      console.error("[email] Resend error sending factor-added alert:", error);
+      return false;
+    }
+    console.info(`[email] Factor-added alert sent to ${to}`);
+    return true;
+  } catch (err) {
+    console.error("[email] Failed to send factor-added alert:", err);
+    return false;
+  }
+}
+
+/**
+ * Send a login one-time-passcode email (server/auth/emailOtp.ts).
+ * Unlike sendNewLeadNotification, failures here DO throw — if the email
+ * never arrives the user has no other way to get this code, so the caller
+ * needs to know and surface a real error rather than silently leaving them
+ * waiting on a login screen for a message that was never sent.
+ */
+export async function sendLoginOtpEmail(to: string, code: string): Promise<void> {
+  const resend = getResend();
+  if (!resend) {
+    console.info("[email] RESEND_API_KEY not set — skipping login OTP email");
+    throw new Error("Email delivery is not configured");
+  }
+
+  const { error } = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: [to],
+    subject: `Your HealthPoint sign-in code: ${code}`,
+    html: `<p>Your HealthPoint sign-in code is:</p><p style="font-size:28px;font-weight:700;letter-spacing:4px;">${code}</p><p>This code expires in 10 minutes. If you didn't request this, you can ignore this email.</p>`,
+    text: `Your HealthPoint sign-in code is: ${code}\n\nThis code expires in 10 minutes. If you didn't request this, you can ignore this email.`,
+  });
+
+  if (error) {
+    console.error("[email] Resend error sending login OTP:", error);
+    throw new Error("Failed to send login code email");
+  }
+  console.info(`[email] Login OTP sent to ${to}`);
+}

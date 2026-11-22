@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Root npm workspace (pnpm-lock.yaml)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Phase 24 (F7): group minor/patch bumps into one PR to keep review load
+    # low; major bumps arrive individually for deliberate review.
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+  # GitHub Actions — keeps the SHA-pinned actions in workflows/security.yml
+  # current (dependabot bumps the SHA and the # vX.Y.Z comment together).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"

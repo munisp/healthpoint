@@ -1,0 +1,42 @@
+HealthPoint application tier installed.
+
+WHAT THIS CHART DEPLOYED
+  - server          (Express 5 + tRPC API and the built React SPA)  :{{ .Values.server.service.port }}
+{{- if .Values.pythonWorker.enabled }}
+  - python-worker   (Temporal workflow worker)
+{{- end }}
+{{- if .Values.goLedger.enabled }}
+  - go-ledger       (TigerBeetle/Permify/Mojaloop sidecar)          :{{ .Values.goLedger.service.port }}
+{{- end }}
+{{- if .Values.rustProcessor.enabled }}
+  - rust-processor  (Kafka stream processing, /health /metrics)     :{{ .Values.rustProcessor.service.port }}
+{{- end }}
+{{- if .Values.client.enabled }}
+  - client          (static SPA via nginx)                          :{{ .Values.client.service.port }}
+{{- end }}
+
+WHAT THIS CHART DID NOT DEPLOY (install separately — operators/StatefulSets)
+  PostgreSQL 16, Redis 7, Kafka 3.7, Temporal server, Keycloak 26, Permify,
+  OpenSearch 2.x, MinIO, TigerBeetle, APISIX + etcd, OpenAppsec, Caddy.
+  Recommended: bitnami charts for postgresql/redis/kafka/keycloak/minio,
+  opensearchproject chart for OpenSearch, temporalio chart for Temporal,
+  apisix chart (with etcd) for the gateway. See values.yaml "datastores"
+  comments for the exact reference commands. Permify and TigerBeetle have no
+  official charts — run them from the pinned upstream images used in
+  docker-compose.yml.
+
+BEFORE THE APP WILL START
+  1. Create the application secrets (chart references Secret
+     "{{ include "healthpoint.secretName" . }}" — never committed):
+       see docs/SECRETS.md and deploy/k8s/secrets.example.yaml
+  2. Run database migrations (drizzle):
+       kubectl run {{ include "healthpoint.fullname" . }}-migrate --rm -i \
+         --image={{ include "healthpoint.image" (dict "image" .Values.server.image "root" .) }} \
+         --restart=Never --env="DATABASE_URL=<from secret>" -- \
+         sh -c "pnpm drizzle-kit migrate"
+
+VERIFY
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl port-forward svc/{{ include "healthpoint.fullname" . }}-server 3000:{{ .Values.server.service.port }}
+  curl -sf http://localhost:3000/healthz   # liveness
+  curl -sf http://localhost:3000/readyz    # readiness (checks DB)

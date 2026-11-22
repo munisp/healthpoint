@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { Shield, ShieldCheck, ShieldOff, Key, Copy, Check, AlertTriangle, Smartphone, RefreshCw, Loader2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import PasskeySettings from "@/components/PasskeySettings";
 
 type Step = "status" | "setup-scan" | "setup-verify" | "setup-backup" | "setup-done" | "disable-confirm";
 
@@ -48,13 +49,39 @@ export default function TwoFactorAuth() {
   });
 
   const verifyMutation = trpc.totp.verify.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
+      // Wave P26 (O6): decide first-factor (email confirmation required)
+      // vs subsequent (active immediately + alert email) enrollment.
+      try {
+        const fin = await finalizeTotpMutation.mutateAsync();
+        if (fin.status === "confirmation_required") {
+          setAwaitingEmailConfirm(true);
+          toast.success("Check your email to confirm this sign-in method");
+        } else {
+          toast.success("Two-factor authentication enabled");
+        }
+      } catch {
+        // finalize failing never undoes the enrollment; the factor simply
+        // stays inert until confirmed/finalized.
+        toast.success("Two-factor authentication enabled");
+      }
       utils.totp.status.invalidate();
       setStep("status");
-      toast.success("Two-factor authentication enabled");
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Wave P26 (O6): post-enrollment finalize + pending-confirmation state.
+  const finalizeTotpMutation = trpc.mfaConfirm.finalizeTotp.useMutation();
+  const resendConfirmMutation = trpc.mfaConfirm.resend.useMutation({
+    onSuccess: (r) => {
+      if (r.status === "sent") toast.success(r.emailSent ? "Confirmation email resent" : "Could not send the email — try again later");
+      else { setAwaitingEmailConfirm(false); toast.success("Already confirmed"); }
+      utils.totp.status.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const [awaitingEmailConfirm, setAwaitingEmailConfirm] = useState(false);
 
   const disableMutation = trpc.totp.disable.useMutation({
     onSuccess: () => {
@@ -134,6 +161,31 @@ export default function TwoFactorAuth() {
         </div>
         {is2FAEnabled && <Badge className="ml-auto bg-green-100 text-green-700">Enabled</Badge>}
       </div>
+
+      {/* Phase 25: Passkeys (self-hides when the feature gate is off or the
+          browser lacks WebAuthn) */}
+      <PasskeySettings />
+
+      {/* Wave P26 (O6): pending out-of-band email confirmation */}
+      {awaitingEmailConfirm && step === "status" && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="pt-6 flex items-start gap-3">
+            <Shield size={20} className="text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-2">
+              <div className="font-semibold text-sm text-amber-800">Email confirmation required</div>
+              <p className="text-xs text-amber-700">
+                Your authenticator app won't work for sign-in until you open the confirmation
+                link we emailed you (expires in 60 minutes).
+              </p>
+              <Button variant="outline" size="sm"
+                disabled={resendConfirmMutation.isPending}
+                onClick={() => resendConfirmMutation.mutate({ factorType: "totp" })}>
+                Resend confirmation email
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Status Screen */}
       {step === "status" && (

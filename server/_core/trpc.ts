@@ -1,13 +1,33 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
+import { enforcePathAuthz } from "../authz-registry";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  // tRPC's default error shape includes the raw error.stack (absolute
+  // server file paths, library internals) in every error response body,
+  // regardless of NODE_ENV - confirmed live: a plain 404 on a bad
+  // procedure path leaked the full node_modules stack trace to the HTTP
+  // client. Strip it outside development (CWE-209 information exposure).
+  errorFormatter(opts) {
+    const { shape } = opts;
+    if (process.env.NODE_ENV === "development") return shape;
+    return {
+      ...shape,
+      data: {
+        ...shape.data,
+        stack: undefined,
+      },
+    };
+  },
 });
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
+// Re-exported so server/app-router.ts can merge the idr-compliance router
+// into the app router without editing the (workstream-owned) routers.ts.
+export const mergeRouters = t.mergeRouters;
 
 /**
  * Middleware that automatically invalidates the Fuse.js / OpenSearch search
@@ -23,11 +43,47 @@ const invalidateSearchOnMutation = t.middleware(async opts => {
   return result;
 });
 
+/**
+ * Procedures a pre-MFA ("mfa-pending") session may call: the login-upgrade
+ * endpoint plus the TOTP enrollment procs (forced-enrollment flow when
+ * orgSettings.requireMFA=true). Everything else gets 403 mfa_required.
+ */
+export const MFA_PENDING_ALLOWED_PATHS = new Set([
+  "auth.verifyLoginTotp",
+  "auth.requestLoginEmailOtp",
+  "auth.verifyLoginEmailOtp",
+  "auth.me",
+  "totp.status",
+  "totp.generateSecret",
+  "totp.setup",
+  "totp.verify",
+  "totp.getBackupCodes",
+  // Phase 25: passkey ceremonies + forced passkey enrollment from an
+  // mfa-pending session (design §3.2). Management procedures
+  // (listCredentials/renameCredential/deleteCredential) are deliberately
+  // excluded — credential management requires a completed login.
+  "webauthn.status",
+  "webauthn.registrationOptions",
+  "webauthn.verifyRegistration",
+  "webauthn.authenticationOptions",
+  "webauthn.verifyAuthentication",
+  // Phase 26 (O6): first-factor enrollment confirmation flow — the
+  // forced-enrollment UX (mfa-pending session) must be able to finalize a
+  // TOTP enrollment (issue the email confirmation) and resend it.
+  // mfaConfirm.confirm is PUBLIC (token-only) and needs no allow-list entry.
+  "mfaConfirm.finalizeTotp",
+  "mfaConfirm.resend",
+]);
+
 const requireUser = t.middleware(async opts => {
   const { ctx, next } = opts;
 
   if (!ctx.user) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+
+  if (ctx.mfaPending && !MFA_PENDING_ALLOWED_PATHS.has(opts.path)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "mfa_required" });
   }
 
   return next({
@@ -39,8 +95,179 @@ const requireUser = t.middleware(async opts => {
 });
 
 /**
- * Protected procedure — requires auth + auto-invalidates search index on mutations.
+ * orgSettings.auditAllActions — when enabled for the calling user, every
+ * successful mutation is recorded in audit_log. Fire-and-forget: audit
+ * failures never fail the request (warn-logged).
+ */
+const auditAllActionsOnMutation = t.middleware(async opts => {
+  const result = await opts.next();
+  if (opts.type === "mutation" && result.ok && opts.ctx.user) {
+    const user = opts.ctx.user;
+    const path = opts.path;
+    void (async () => {
+      const { getDb, createAuditEntry } = await import("../db");
+      const { orgSettings } = await import("../../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) return;
+      const rows = await db.select({ a: orgSettings.auditAllActions }).from(orgSettings).where(eq(orgSettings.userId, user.id)).limit(1);
+      if (rows[0]?.a !== true) return;
+      const headers = (opts.ctx.req?.headers ?? {}) as Record<string, unknown>;
+      const ip = (headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? opts.ctx.req?.ip ?? null;
+      await createAuditEntry({
+        userId: user.id,
+        action: "mutation",
+        entityType: "trpc",
+        entityId: path,
+        oldValue: null,
+        newValue: null,
+        ipAddress: ip,
+        userAgent: (headers["user-agent"] as string | undefined) ?? null,
+      });
+    })().catch(err => console.warn("[audit] auditAllActions write failed:", err instanceof Error ? err.message : err));
+  }
+  return result;
+});
+
+/**
+ * Central object-level authorization (IDOR protection). Runs AFTER `requireUser`
+ * and consults the path→checker registry in server/authz-registry.ts. Mapped
+ * paths must pass their checker (fail closed: checker errors deny the request);
+ * unmapped paths default-allow with a once-per-path audit log line.
+ *
+ * In @trpc/server v11 the input is zod-validated BEFORE middlewares run, so
+ * checkers receive the parsed, schema-validated input object.
+ */
+const enforceObjectLevelAuthz = t.middleware(async opts => {
+  const { ctx, next, path } = opts;
+  // ctx.user is guaranteed non-null because requireUser runs first.
+  const user = ctx.user!;
+  // @trpc/server v11 middlewares receive the PARSED input as `input` (zod has
+  // already validated it) plus `getRawInput()` for the unparsed value; there
+  // is no `rawInput` property on middleware opts in v11.
+  const parsed = (opts as { input?: unknown }).input;
+  const input = parsed !== undefined ? parsed : await opts.getRawInput();
+  await enforcePathAuthz(path, {
+    user: { id: user.id, role: user.role === "admin" ? "admin" : "user" },
+  }, input);
+  return next();
+});
+
+/**
+ * Impersonation audit (wave W5-6). Every authenticated request carrying a
+ * valid `x-impersonation-token` writes audit_log action='impersonate.access'
+ * and gets the claims on ctx.impersonation. Admin MUTATIONS are blocked
+ * while impersonating another admin. Dynamic imports avoid a module cycle
+ * (server/impersonation.ts builds procedures from this file).
+ */
+const auditImpersonatedRequest = t.middleware(async opts => {
+  const { ctx, next, path, type } = opts;
+  const headers = (ctx.req?.headers ?? {}) as Record<string, unknown>;
+  const raw = headers["x-impersonation-token"];
+  const token = Array.isArray(raw) ? raw[0] : (raw as string | undefined);
+  if (!token) return next();
+  const { verifyImpersonationToken } = await import("../impersonation");
+  const claims = await verifyImpersonationToken(token);
+  if (!claims) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "Impersonation token expired or invalid" });
+  }
+  const { getDb, createAuditEntry } = await import("../db");
+  await createAuditEntry({
+    userId: claims.impersonatorId,
+    action: "impersonate.access",
+    entityType: "trpc",
+    entityId: path,
+    oldValue: null,
+    newValue: JSON.stringify({ targetId: claims.targetId, type }),
+    ipAddress: null,
+    userAgent: null,
+  }).catch(err => console.warn("[impersonation] audit write failed:", err instanceof Error ? err.message : err));
+  // Phase13-FC (G12): impersonation sessions must not perform
+  // onboarding-state transitions for the target — MFA enrollment completion,
+  // invite acceptance, bootstrap-admin claim, and onboarding completion are
+  // identity-binding actions that must come from the real user's session.
+  const IMPERSONATION_BLOCKED_ONBOARDING_PATHS = new Set([
+    "totp.setup", "totp.verify", "totp.disable",
+    "orgs.acceptInvite", "orgs.claimBootstrapAdmin",
+    "profiles.completeOnboarding", "profiles.save",
+    // Phase 25 (design §5.5): registering, renaming or deleting a passkey
+    // changes the target's long-term authentication surface — an
+    // impersonating admin must not plant or remove a durable credential on
+    // another user's account.
+    "webauthn.registrationOptions", "webauthn.verifyRegistration",
+    "webauthn.renameCredential", "webauthn.deleteCredential",
+  ]);
+  if (type === "mutation" && IMPERSONATION_BLOCKED_ONBOARDING_PATHS.has(path)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "onboarding_state_blocked_during_impersonation: onboarding-state transitions (MFA enrollment, invite acceptance, bootstrap claim, onboarding completion) cannot be performed from an impersonation session",
+    });
+  }
+  if (type === "mutation" && path.startsWith("admin.") && claims.targetId !== claims.impersonatorId) {
+    const db = await getDb();
+    if (db) {
+      const { users } = await import("../../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const [target] = await db.select({ role: users.role }).from(users).where(eq(users.id, claims.targetId)).limit(1);
+      if (target?.role === "admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Admin mutations are blocked while impersonating another admin" });
+      }
+    }
+  }
+  // Attach claims without altering the inferred context type.
+  (ctx as { impersonation?: unknown }).impersonation = claims;
+  return next();
+});
+
+/**
+ * Protected procedure — requires auth + object-level authz +
+ * auto-invalidates search index on mutations.
  */
 export const protectedProcedure = t.procedure
   .use(requireUser)
-  .use(invalidateSearchOnMutation);
+  .use(auditImpersonatedRequest)
+  .use(enforceObjectLevelAuthz)
+  .use(invalidateSearchOnMutation)
+  .use(auditAllActionsOnMutation);
+
+/**
+ * Wave p27 (RLS, design phase-26-rls-design.md §2.2 rule 5): org-scoped
+ * procedure. Runs the handler inside `withOrgContext` — the transaction
+ * carries transaction-local `app.current_user` / `app.current_orgs`, and
+ * membership of EVERY requested org is verified (FORBIDDEN otherwise).
+ *
+ * The org id comes from the zod-VALIDATED input (`.input(z.object({ orgId:
+ * ... }))` must run before this middleware — in tRPC v11 input validators
+ * compose ahead of `.use`, and middlewares receive the parsed input). Inputs
+ * with `orgIds: string[]` (the multi-org next-actions shape, design R3) set
+ * the full verified list.
+ *
+ * Adoption contract: handlers MUST issue org-table queries through
+ * `ctx.rlsDb` (the context transaction) for RLS to see them; queries issued
+ * via `getDb()` bypass the context transaction. Migrating the six
+ * assertOrgMember call sites onto this is mechanical and NOT required for
+ * wave-1 enforcement (design §10) — the app-layer checks stay as they are.
+ */
+const orgContextMiddleware = t.middleware(async opts => {
+  const { ctx, next } = opts;
+  const input = ((opts as { input?: unknown }).input ?? {}) as { orgId?: unknown; orgIds?: unknown };
+  let orgIds = Array.isArray(input.orgIds)
+    ? input.orgIds.filter((v): v is string => typeof v === "string")
+    : typeof input.orgId === "string" ? [input.orgId] : [];
+  // R6: key-authenticated requests default to the key's bound org when the
+  // input does not name one. Legacy NULL-org keys get no default — under
+  // enforce they are rejected from org-table procedures (documented behavior
+  // change, design R6).
+  if (orgIds.length === 0 && typeof ctx.apiKeyOrgId === "string" && ctx.apiKeyOrgId) {
+    orgIds = [ctx.apiKeyOrgId];
+  }
+  if (orgIds.length === 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "orgId_required" });
+  }
+  const { withOrgContext } = await import("../db/rls");
+  return withOrgContext({ userId: ctx.user!.id, orgIds }, async (tx) =>
+    next({ ctx: { ...ctx, rlsDb: tx } })
+  );
+});
+
+export const orgProcedure = protectedProcedure.use(orgContextMiddleware);

@@ -48,6 +48,40 @@ const envSchema = z.object({
   // CORS — comma-separated list of allowed origins
   ALLOWED_ORIGINS: z.string().optional().default(""),
 
+  // WebAuthn / passkeys (Phase 25) — master gate DEFAULTS OFF; see design doc
+  // phase-25-webauthn-design.md §4.2. Env gate (not a feature_flags row):
+  // unknown flags are DEFAULT-ON in server/feature-flags.ts, the wrong
+  // failure direction for an auth feature.
+  WEBAUTHN_ENABLED: z.enum(["true", "false"]).optional().default("false"),
+  WEBAUTHN_RP_ID: z.string().optional().default(""),
+  WEBAUTHN_RP_NAME: z.string().optional().default("HealthPoint"),
+  WEBAUTHN_ORIGINS: z.string().optional().default(""),
+  WEBAUTHN_ENFORCEMENT: z.enum(["optional", "preferred", "required"]).optional().default("optional"),
+  WEBAUTHN_REQUIRED_ROLES: z.string().optional().default("admin"),
+  WEBAUTHN_PASSWORDLESS_ENABLED: z.enum(["true", "false"]).optional().default("false"),
+  WEBAUTHN_CHALLENGE_TTL_SECONDS: z.coerce.number().int().positive().optional().default(300),
+  WEBAUTHN_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional().default(10),
+  WEBAUTHN_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().optional().default(60),
+
+  // Wave P26 (O6): first-factor enrollment email-confirmation token TTL.
+  // 1h max per the O6 remediation design; shorter is safer.
+  FACTOR_CONFIRM_TTL_SECONDS: z.coerce.number().int().positive().max(3600).optional().default(3600),
+
+  // Wave P27 (Phase 26 Stream B): Postgres Row-Level Security, wave 1.
+  // Tri-state gate mirroring the SKETCHES_ENABLED auto|on|off precedent.
+  // Env gate NOT a feature_flags row (unknown flags are DEFAULT-ON — the
+  // wrong failure direction for an auth feature, see :52-55 above).
+  //   off     (default): migrations may be applied; zero behavioral change.
+  //   audit:  policies enabled (not forced); owner bypasses; withOrgContext
+  //           shadow-probes a sampled fraction of reads as hp_app and logs
+  //           rls_shadow_diff rows to audit_log.
+  //   enforce: 0066 (FORCE) applied; helpers use the hp_app connection
+  //           (RLS_DATABASE_URL) and context becomes mandatory.
+  RLS_ENABLED: z.enum(["off", "audit", "enforce"]).optional().default("off"),
+  RLS_DATABASE_URL: z.string().optional().default(""),       // hp_app connection; enforce mode
+  RLS_AUDIT_SAMPLE_PCT: z.string().optional().default("5"),  // shadow-probe sampling
+  RLS_SHADOW_SAMPLE_RATE: z.string().optional().default("0.01"), // withOrgContext probe fraction (0-1)
+
   // App URL & email
   VITE_APP_URL: z.string().optional().default("http://localhost:3000"),
   RESEND_API_KEY: z.string().optional().default(""),
@@ -144,6 +178,29 @@ export const ENV = {
     .split(",")
     .map((s: string) => s.trim())
     .filter(Boolean),
+
+  // WebAuthn / passkeys (Phase 25). RP ID / origins derive from VITE_APP_URL
+  // (+ ALLOWED_ORIGINS) when not explicitly set — see
+  // server/auth/webauthn-policy.ts resolveWebauthnRpConfig.
+  webauthnEnabled: _env.WEBAUTHN_ENABLED === "true",
+  webauthnRpId: _env.WEBAUTHN_RP_ID || "",
+  webauthnRpName: _env.WEBAUTHN_RP_NAME || "HealthPoint",
+  webauthnOrigins: (_env.WEBAUTHN_ORIGINS || "")
+    .split(",")
+    .map((s: string) => s.trim())
+    .filter(Boolean),
+  webauthnEnforcement: _env.WEBAUTHN_ENFORCEMENT || "optional",
+  webauthnRequiredRoles: (_env.WEBAUTHN_REQUIRED_ROLES || "admin")
+    .split(",")
+    .map((s: string) => s.trim())
+    .filter(Boolean),
+  webauthnPasswordlessEnabled: _env.WEBAUTHN_PASSWORDLESS_ENABLED === "true",
+  webauthnChallengeTtlSeconds: _env.WEBAUTHN_CHALLENGE_TTL_SECONDS ?? 300,
+  webauthnRateLimitMax: _env.WEBAUTHN_RATE_LIMIT_MAX ?? 10,
+  webauthnRateLimitWindowSeconds: _env.WEBAUTHN_RATE_LIMIT_WINDOW_SECONDS ?? 60,
+
+  // Wave P26 (O6): first-factor enrollment email confirmation
+  factorConfirmTtlSeconds: _env.FACTOR_CONFIRM_TTL_SECONDS ?? 3600,
 
   // App URL & email
   appUrl: _env.VITE_APP_URL || "http://localhost:3000",

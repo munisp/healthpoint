@@ -32,6 +32,35 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Split stable, always-loaded vendor code out of the app entry chunk
+        // so app-code changes don't bust the browser cache for the framework
+        // bundle (and vice versa). Route pages are already lazy-loaded in
+        // client/src/App.tsx. Charts/motion libs are deliberately NOT forced
+        // here: they are only imported by lazy routes, and forcing a shared
+        // manual chunk would preload them eagerly on first paint.
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return undefined;
+          if (
+            id.includes("/react/") ||
+            id.includes("/react-dom/") ||
+            id.includes("/scheduler/") ||
+            id.includes("/wouter/")
+          ) {
+            return "vendor-react";
+          }
+          if (
+            id.includes("/@tanstack/") ||
+            id.includes("/@trpc/") ||
+            id.includes("/superjson/")
+          ) {
+            return "vendor-data";
+          }
+          return undefined;
+        },
+      },
+    },
   },
   server: {
     host: true,

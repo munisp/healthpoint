@@ -9,6 +9,7 @@ import {
   Gavel, LogOut, Plus, Scale, TrendingUp, Activity
 } from "lucide-react";
 import SlaProgressBar, { SlaLegend, getSlaStatus } from "@/components/SlaProgressBar";
+import NextActionsPanel from "@/components/NextActionsPanel";
 import { useLocation } from "wouter";
 import { useState } from "react";
 import { useChartColors } from "@/hooks/useChartColors";
@@ -212,6 +213,11 @@ export default function Dashboard() {
             ))}
           </div>
         )}
+
+        {/* Phase 21 (S4): next-action queue — rule-based read model over
+            deadlines / idle offers / quarantine / remittances. Empty state
+            is rendered honestly inside the panel. */}
+        <NextActionsPanel limit={10} />
 
         {/* Dispute Volume Analytics Chart */}
         <Card className="border-slate-200">

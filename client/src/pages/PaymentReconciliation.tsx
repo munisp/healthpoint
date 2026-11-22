@@ -1,11 +1,13 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
+import StatusBadge from "@/components/StatusBadge";
+import EmptyState from "@/components/EmptyState";
+import { formatUSD } from "@/lib/format";
 import { DollarSign, CheckCircle2, AlertTriangle, RefreshCw, Search, Download, TrendingUp, Clock } from "lucide-react";
 
 type ReconciliationStatus = "matched" | "unmatched" | "partial" | "overpaid";
@@ -22,17 +24,12 @@ interface ReconciliationRow {
   closedAt: string | null;
 }
 
-const STATUS_CONFIG: Record<ReconciliationStatus, { label: string; color: string; icon: any }> = {
-  matched: { label: "Matched", color: "bg-green-100 text-green-700 dark:bg-green-950/30 dark:text-green-400", icon: CheckCircle2 },
-  unmatched: { label: "Unmatched", color: "bg-red-100 text-red-700 dark:bg-red-950/30 dark:text-red-400", icon: AlertTriangle },
-  partial: { label: "Partial", color: "bg-amber-100 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400", icon: Clock },
-  overpaid: { label: "Overpaid", color: "bg-blue-100 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400", icon: TrendingUp },
+const STATUS_CONFIG: Record<ReconciliationStatus, { label: string; icon: any }> = {
+  matched: { label: "Matched", icon: CheckCircle2 },
+  unmatched: { label: "Unmatched", icon: AlertTriangle },
+  partial: { label: "Partial", icon: Clock },
+  overpaid: { label: "Overpaid", icon: TrendingUp },
 };
-
-function fmt(n: number | null | undefined) {
-  if (n == null) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
-}
 
 export default function PaymentReconciliation() {
   const [search, setSearch] = useState("");
@@ -111,7 +108,7 @@ export default function PaymentReconciliation() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <DollarSign className="h-6 w-6 text-green-600" />
+            <DollarSign className="h-6 w-6 text-success-foreground" />
             Payment Reconciliation
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Match payments to dispute determinations and identify variances</p>
@@ -127,8 +124,23 @@ export default function PaymentReconciliation() {
         {(["matched", "partial", "unmatched", "overpaid"] as ReconciliationStatus[]).map(s => {
           const cfg = STATUS_CONFIG[s];
           const Icon = cfg.icon;
+          const active = statusFilter === s;
           return (
-            <Card key={s} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => setStatusFilter(statusFilter === s ? "all" : s)}>
+            <Card
+              key={s}
+              className={`cursor-pointer card-interactive ${active ? "ring-2 ring-ring border-primary" : ""}`}
+              onClick={() => setStatusFilter(active ? "all" : s)}
+              role="button"
+              tabIndex={0}
+              aria-pressed={active}
+              aria-label={`Filter by ${cfg.label}`}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setStatusFilter(active ? "all" : s);
+                }
+              }}
+            >
               <CardContent className="pt-4">
                 <div className="flex items-center gap-2">
                   <Icon className="h-4 w-4 text-muted-foreground" />
@@ -143,19 +155,19 @@ export default function PaymentReconciliation() {
 
       {/* Financial summary */}
       <div className="grid grid-cols-3 gap-4">
-        <Card><CardContent className="pt-4"><p className="text-sm text-muted-foreground">Total Billed</p><p className="text-2xl font-bold">{fmt(summary.totalBilled)}</p></CardContent></Card>
-        <Card><CardContent className="pt-4"><p className="text-sm text-muted-foreground">Total Paid</p><p className="text-2xl font-bold text-green-600">{fmt(summary.totalPaid)}</p></CardContent></Card>
-        <Card><CardContent className="pt-4"><p className="text-sm text-muted-foreground">Net Variance</p><p className={`text-2xl font-bold ${summary.totalVariance >= 0 ? "text-blue-600" : "text-red-600"}`}>{fmt(summary.totalVariance)}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-sm text-muted-foreground">Total Billed</p><p className="text-2xl font-bold">{formatUSD(summary.totalBilled)}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-sm text-muted-foreground">Total Paid</p><p className="text-2xl font-bold text-success-foreground">{formatUSD(summary.totalPaid)}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-sm text-muted-foreground">Net Variance</p><p className={`text-2xl font-bold ${summary.totalVariance >= 0 ? "text-info-foreground" : "text-danger-foreground"}`}>{formatUSD(summary.totalVariance)}</p></CardContent></Card>
       </div>
 
       {/* Filters */}
       <div className="flex gap-3">
         <div className="relative flex-1 max-w-xs">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search dispute, claim, payer..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+          <Input placeholder="Search dispute, claim, payer..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" aria-label="Search reconciliation records" />
         </div>
         <Select value={statusFilter} onValueChange={(v: any) => setStatusFilter(v)}>
-          <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-40" aria-label="Filter by reconciliation status"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Statuses</SelectItem>
             {(Object.keys(STATUS_CONFIG) as ReconciliationStatus[]).map(s => (
@@ -179,24 +191,32 @@ export default function PaymentReconciliation() {
               </thead>
               <tbody className="divide-y">
                 {isLoading ? (
-                  <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">Loading...</td></tr>
+                  <tr><td colSpan={8} className="text-center py-8 text-muted-foreground" role="status">Loading…</td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">No records match the current filters</td></tr>
+                  <tr>
+                    <td colSpan={8} className="p-0">
+                      <EmptyState
+                        variant="payments"
+                        title="No records match the current filters"
+                        description="Try broadening your search or selecting a different reconciliation status."
+                      />
+                    </td>
+                  </tr>
                 ) : (
                   filtered.map(r => {
                     const cfg = STATUS_CONFIG[r.status];
                     return (
-                      <tr key={r.disputeId} className="hover:bg-muted/30">
+                      <tr key={r.disputeId} className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-3 font-mono text-xs">{r.disputeId.slice(0, 8)}...</td>
                         <td className="px-4 py-3 text-xs max-w-32 truncate">{r.payerName}</td>
-                        <td className="px-4 py-3 font-mono text-xs">{fmt(r.billedAmount)}</td>
-                        <td className="px-4 py-3 font-mono text-xs">{fmt(r.determinedAmount)}</td>
-                        <td className="px-4 py-3 font-mono text-xs">{fmt(r.paidAmount)}</td>
-                        <td className={`px-4 py-3 font-mono text-xs font-semibold ${r.variance > 0 ? "text-blue-600" : r.variance < 0 ? "text-red-600" : "text-green-600"}`}>
-                          {r.variance !== 0 ? (r.variance > 0 ? "+" : "") + fmt(r.variance) : "—"}
+                        <td className="px-4 py-3 font-mono text-xs">{formatUSD(r.billedAmount)}</td>
+                        <td className="px-4 py-3 font-mono text-xs">{formatUSD(r.determinedAmount)}</td>
+                        <td className="px-4 py-3 font-mono text-xs">{formatUSD(r.paidAmount)}</td>
+                        <td className={`px-4 py-3 font-mono text-xs font-semibold ${r.variance > 0 ? "text-info-foreground" : r.variance < 0 ? "text-danger-foreground" : "text-success-foreground"}`}>
+                          {r.variance !== 0 ? (r.variance > 0 ? "+" : "") + formatUSD(r.variance) : "—"}
                         </td>
                         <td className="px-4 py-3">
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cfg.color}`}>{cfg.label}</span>
+                          <StatusBadge status={r.status} label={cfg.label} />
                         </td>
                         <td className="px-4 py-3 text-xs text-muted-foreground">
                           {r.closedAt ? new Date(r.closedAt).toLocaleDateString() : "—"}
@@ -210,11 +230,11 @@ export default function PaymentReconciliation() {
                 <tfoot className="bg-muted/30 border-t-2 font-semibold">
                   <tr>
                     <td colSpan={2} className="px-4 py-3 text-xs">{filtered.length} records</td>
-                    <td className="px-4 py-3 font-mono text-xs">{fmt(filtered.reduce((s, r) => s + r.billedAmount, 0))}</td>
+                    <td className="px-4 py-3 font-mono text-xs">{formatUSD(filtered.reduce((s, r) => s + r.billedAmount, 0))}</td>
                     <td className="px-4 py-3 text-xs">—</td>
-                    <td className="px-4 py-3 font-mono text-xs text-green-600">{fmt(filtered.reduce((s, r) => s + (r.paidAmount ?? 0), 0))}</td>
-                    <td className={`px-4 py-3 font-mono text-xs font-bold ${filtered.reduce((s, r) => s + r.variance, 0) >= 0 ? "text-blue-600" : "text-red-600"}`}>
-                      {fmt(filtered.reduce((s, r) => s + r.variance, 0))}
+                    <td className="px-4 py-3 font-mono text-xs text-success-foreground">{formatUSD(filtered.reduce((s, r) => s + (r.paidAmount ?? 0), 0))}</td>
+                    <td className={`px-4 py-3 font-mono text-xs font-bold ${filtered.reduce((s, r) => s + r.variance, 0) >= 0 ? "text-info-foreground" : "text-danger-foreground"}`}>
+                      {formatUSD(filtered.reduce((s, r) => s + r.variance, 0))}
                     </td>
                     <td colSpan={2} />
                   </tr>

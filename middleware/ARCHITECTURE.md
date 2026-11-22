@@ -1,5 +1,14 @@
 # NSA/IDR Healthcare Platform - Middleware Architecture
 
+> **Historical design document (2025), partially superseded.**
+> - **Dapr was never adopted by application code and was removed from all
+>   infrastructure on 2026-09-05.** Sections 2, 4 and the "Dapr Sidecars"
+>   diagram below describe the original plan, not current reality. The
+>   platform talks to Kafka/Redis/Temporal/Permify directly.
+> - The stub microservices referenced below (GFE Management, CMS Portal
+>   Automation, etc.) are not part of the deployable stack.
+> - For current deployment architecture see `DEPLOYMENT_GUIDE.md`.
+
 ## 1. Introduction
 
 This document outlines the design and implementation of a comprehensive middleware stack for the NSA/IDR Healthcare Platform. The goal is to create a production-grade, cloud-native architecture with enterprise-level capabilities for microservices communication, identity and access management, authorization, workflow orchestration, event streaming, and API management.
@@ -8,7 +17,7 @@ This document outlines the design and implementation of a comprehensive middlewa
 
 | Component | Category | Description |
 |---|---|---|
-| **Dapr** | Microservices Runtime | Provides APIs for service-to-service invocation, state management, pub/sub, and more. |
+| **Dapr** | Microservices Runtime | ~~Provides APIs for service-to-service invocation, state management, pub/sub~~ **REMOVED 2026-09-05 — zero adoption** |
 | **Keycloak** | Identity & Access Management | Manages user authentication and identity brokering. |
 | **Permify** | Authorization | Fine-grained authorization as a service. |
 | **Temporal** | Workflow Orchestration | Replaces the existing BPMN workflow engine with a code-first, durable workflow system. |
@@ -52,7 +61,11 @@ graph TD
     B --> L
 ```
 
-## 4. Dapr Configuration
+## 4. Dapr Configuration — REMOVED
+
+> Dapr was removed on 2026-09-05. The `dapr/` config directories referenced
+> below (`middleware/dapr/`, `backend/middleware/dapr/`, `infra/dapr/`) were
+> deleted. Services use direct Kafka/Redis clients instead.
 
 Dapr will be used to provide a consistent set of APIs for all microservices. This will simplify development and improve portability.
 
@@ -70,11 +83,9 @@ Dapr will be used to provide a consistent set of APIs for all microservices. Thi
 
 ## 5. Implementation Plan
 
-1.  **Phase 1: Dapr Integration:** Integrate Dapr with all existing microservices.
+1.  **Phase 1: Dapr Integration:** ~~Integrate Dapr with all existing microservices.~~ (Cancelled — Dapr removed.)
 2.  **Phase 2: Identity & Authorization:** Implement Keycloak and Permify.
 3.  **Phase 3: Workflow Orchestration:** Replace the BPMN workflow engine with Temporal.
 4.  **Phase 4: Event Streaming:** Implement Kafka for event-driven communication.
 5.  **Phase 5: API Gateway:** Replace the existing API gateway with APISIX.
 6.  **Phase 6: Integration & Testing:** Integrate all middleware components and perform end-to-end testing.
-
-

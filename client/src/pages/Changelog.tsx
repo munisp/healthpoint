@@ -93,7 +93,7 @@ export default function Changelog() {
         ) : filtered.length === 0 ? (
           <p className="text-center text-muted-foreground py-12 text-sm">
             {entries?.length === 0
-              ? "No changelog entries yet — seed via the Admin panel."
+              ? "No changelog entries yet. Entries are written by the release pipeline into the changelog feed — until that writer is enabled (backend work pending), this page will remain empty. The route is kept intentionally."
               : "No changes match your current filters."}
           </p>
         ) : (
