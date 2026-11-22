@@ -32,7 +32,7 @@ import { Separator } from "@/components/ui/separator";
 import { Loader2, KeyRound, ShieldCheck, Smartphone, Mail, AlertCircle } from "lucide-react";
 
 type Factor = "choose" | "totp" | "email";
-type EnrollStep = "choose" | "totp-scan" | "totp-verify" | "totp-done";
+type EnrollStep = "choose" | "totp-scan" | "totp-verify" | "totp-done" | "email-confirm";
 
 /** §6.5 — map WebAuthn DOMExceptions to low-literacy, retry-safe copy. */
 function webauthnErrorMessage(err: unknown): string {
@@ -93,6 +93,11 @@ export default function MfaPage() {
   const genSecret = trpc.totp.generateSecret.useMutation();
   const totpSetup = trpc.totp.setup.useMutation();
   const totpVerifyEnroll = trpc.totp.verify.useMutation();
+  // Wave P26 (O6): first-factor enrollments require an out-of-band email
+  // confirmation before the factor activates.
+  const finalizeTotp = trpc.mfaConfirm.finalizeTotp.useMutation();
+  const resendConfirm = trpc.mfaConfirm.resend.useMutation();
+  const [pendingFactor, setPendingFactor] = useState<"totp" | "passkey" | null>(null);
 
   useEffect(() => { setError(null); setInfo(null); }, [factor, enrollStep]);
 
@@ -125,11 +130,22 @@ export default function MfaPage() {
     try {
       const opts = await regOptions.mutateAsync({});
       const attestation = await startRegistration({ optionsJSON: opts.options as never });
-      await verifyReg.mutateAsync({
+      const reg = await verifyReg.mutateAsync({
         ceremonyId: opts.ceremonyId,
         name: "This device",
         response: attestation as unknown as Record<string, unknown>,
       });
+      // Wave P26 (O6): a first-factor passkey stays inert until the emailed
+      // confirmation link is clicked.
+      if (reg.requiresConfirmation) {
+        setPendingFactor("passkey");
+        setEnrollStep("email-confirm");
+        setInfo(reg.emailSent
+          ? "Passkey saved. We emailed you a confirmation link — open it to activate your passkey."
+          : "Passkey saved, but we couldn't send the confirmation email. Use the resend button below.");
+        setBusy(false);
+        return;
+      }
       setInfo("Passkey saved. Now unlock it once to finish signing in.");
       const ok = await runPasskeyCeremony(); // upgrade the mfa-pending session
       if (ok) window.location.assign(redirectTo);
@@ -180,6 +196,19 @@ export default function MfaPage() {
     setBusy(true);
     try {
       await totpVerifyEnroll.mutateAsync({ code: totpCode });
+      // Wave P26 (O6): a first-factor TOTP stays inert until the emailed
+      // confirmation link is clicked; a subsequent one activates immediately.
+      const fin = await finalizeTotp.mutateAsync();
+      if (fin.status === "confirmation_required") {
+        setPendingFactor("totp");
+        setEnrollStep("email-confirm");
+        setInfo(fin.emailSent
+          ? "Authenticator app connected. We emailed you a confirmation link — open it to activate sign-in with your app."
+          : "Authenticator app connected, but we couldn't send the confirmation email. Use the resend button below.");
+        setTotpCode("");
+        setBusy(false);
+        return;
+      }
       setEnrollStep("totp-done");
       setInfo("Authenticator app connected. Enter a fresh code to finish signing in.");
       setFactor("totp");
@@ -315,6 +344,54 @@ export default function MfaPage() {
                   </AlertDescription>
                 </Alert>
               )}
+            </div>
+          )}
+
+          {mode === "enroll" && enrollStep === "email-confirm" && (
+            <div className="space-y-3">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+                <Mail className="h-6 w-6 text-primary" />
+              </div>
+              <p className="text-center text-sm text-muted-foreground">
+                Check your email for a confirmation link. Once you open it, come back here and
+                {pendingFactor === "passkey" ? " sign in with your passkey." : " enter a code from your app."}
+              </p>
+              <Button variant="outline" className="w-full" disabled={busy || !pendingFactor}
+                onClick={async () => {
+                  if (!pendingFactor) return;
+                  setBusy(true); setError(null);
+                  try {
+                    const r = await resendConfirm.mutateAsync({ factorType: pendingFactor });
+                    if (r.status === "no_pending") {
+                      setInfo("This sign-in method is already confirmed — continue below.");
+                      if (pendingFactor === "totp") { setEnrollStep("totp-done"); setFactor("totp"); }
+                      else setEnrollStep("choose");
+                    } else {
+                      setInfo(r.emailSent ? "Confirmation email resent." : "We still couldn't send the email — try again later.");
+                    }
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Could not resend the email.");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}>
+                {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
+                Resend confirmation email
+              </Button>
+              <Button variant="ghost" className="w-full" disabled={busy}
+                onClick={async () => {
+                  // After confirming via email the user continues here.
+                  if (pendingFactor === "totp") {
+                    setEnrollStep("totp-done"); setFactor("totp");
+                    setInfo("Enter a code from your app to finish signing in.");
+                  } else {
+                    // Passkey: go straight to the unlock ceremony.
+                    setInfo(null);
+                    await onUsePasskey();
+                  }
+                }}>
+                I confirmed it — continue
+              </Button>
             </div>
           )}
 
