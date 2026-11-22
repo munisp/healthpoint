@@ -58,6 +58,15 @@ export const MFA_PENDING_ALLOWED_PATHS = new Set([
   "totp.setup",
   "totp.verify",
   "totp.getBackupCodes",
+  // Phase 25: passkey ceremonies + forced passkey enrollment from an
+  // mfa-pending session (design §3.2). Management procedures
+  // (listCredentials/renameCredential/deleteCredential) are deliberately
+  // excluded — credential management requires a completed login.
+  "webauthn.status",
+  "webauthn.registrationOptions",
+  "webauthn.verifyRegistration",
+  "webauthn.authenticationOptions",
+  "webauthn.verifyAuthentication",
 ]);
 
 const requireUser = t.middleware(async opts => {
@@ -175,6 +184,12 @@ const auditImpersonatedRequest = t.middleware(async opts => {
     "totp.setup", "totp.verify", "totp.disable",
     "orgs.acceptInvite", "orgs.claimBootstrapAdmin",
     "profiles.completeOnboarding", "profiles.save",
+    // Phase 25 (design §5.5): registering, renaming or deleting a passkey
+    // changes the target's long-term authentication surface — an
+    // impersonating admin must not plant or remove a durable credential on
+    // another user's account.
+    "webauthn.registrationOptions", "webauthn.verifyRegistration",
+    "webauthn.renameCredential", "webauthn.deleteCredential",
   ]);
   if (type === "mutation" && IMPERSONATION_BLOCKED_ONBOARDING_PATHS.has(path)) {
     throw new TRPCError({
