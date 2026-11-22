@@ -113,7 +113,7 @@ DROP POLICY IF EXISTS org_isolation ON submitter_clients;
 CREATE POLICY org_isolation ON submitter_clients
   FOR ALL TO PUBLIC
   USING ( "submitterOrgId" = ANY (app_current_orgs())
-          OR "clientOrgId"   = ANY (app_current_orgs())
+          OR "clientOrgId" = ANY (app_current_orgs())
           OR app_service_mode() )
   WITH CHECK ( "submitterOrgId" = ANY (app_current_orgs()) OR app_service_mode() );
 --> statement-breakpoint
