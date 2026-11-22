@@ -12,6 +12,17 @@
  * (auth.verifyLoginTotp + totp setup procs for forced enrollment).
  * auth.verifyLoginTotp upgrades the session to a full token after a valid
  * TOTP proof (or a single-use backup code).
+ *
+ * Wave P26 (O6): "active" is no longer sufficient — an ACTIVE totp_secrets
+ * row must also have a confirmed companion row
+ * (factor_enrollment_confirmations, server/auth/enroll-confirm.ts) whose
+ * fingerprint matches the CURRENT secret envelope. This closes the
+ * forced-enrollment backdoor (attacker with a phished password enrolling
+ * their own TOTP from an mfa-pending session) WITHOUT editing the frozen
+ * routers.ts enrollment paths: the enrollment ceremony still runs, but the
+ * factor stays inert until the out-of-band email confirmation completes.
+ * Re-setup (totp.setup replaces the envelope) invalidates prior
+ * confirmations via the fingerprint.
  */
 
 import { and, eq } from "drizzle-orm";
@@ -20,17 +31,23 @@ import { orgSettings, totpSecrets } from "../../drizzle/schema";
 
 export type MfaRequirement = "none" | "verify" | "enroll";
 
-/** True when the user has an ACTIVE TOTP secret (2FA enabled). */
+/** True when the user has an ACTIVE *and email-confirmed* TOTP secret (2FA enabled). */
 export async function hasActiveTotp(userId: string): Promise<boolean> {
   try {
     const db = await getDb();
     if (!db) return false;
     const rows = await db
-      .select({ id: totpSecrets.id })
+      .select({ id: totpSecrets.id, secret: totpSecrets.secret })
       .from(totpSecrets)
       .where(and(eq(totpSecrets.userId, userId), eq(totpSecrets.status, "active")))
       .limit(1);
-    return rows.length > 0;
+    const row = rows[0];
+    if (!row) return false;
+    // Wave P26 (O6): an active row without a confirmed companion (or whose
+    // companion's fingerprint no longer matches after a re-setup) is an
+    // UNCONFIRMED enrollment — inert until the emailed token is consumed.
+    const { isTotpConfirmed } = await import("./enroll-confirm");
+    return await isTotpConfirmed(row.id, row.secret);
   } catch (err) {
     // Fail open on DB errors so a transient outage cannot lock every user
     // out; the TOTP row check re-runs at verifyLoginTotp time anyway.
@@ -100,6 +117,13 @@ export async function verifyLoginCode(userId: string, code: string): Promise<boo
     .limit(1);
   const row = rows[0];
   if (!row) return false;
+
+  // Wave P26 (O6): refuse codes from an UNCONFIRMED enrollment — including
+  // the fresh backup codes an attacker receives from totp.setup. Fingerprint
+  // comparison also catches a stolen-session re-setup that replaced the
+  // victim's envelope after the original confirmation.
+  const { isTotpConfirmed } = await import("./enroll-confirm");
+  if (!(await isTotpConfirmed(row.id, row.secret))) return false;
 
   if (/^\d{6}$/.test(code)) {
     const { verify: totpVerify } = await import("otplib");
