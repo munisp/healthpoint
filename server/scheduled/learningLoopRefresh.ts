@@ -709,6 +709,16 @@ export interface LearningLoopResult {
 
 /** Exported for tests/journeys (clock injection via `now`). */
 export async function runLearningLoopRefresh(db: Db, now: Date): Promise<LearningLoopResult> {
+  // Wave p27 (RLS design R2): the loop legitimately reads/aggregates ACROSS
+  // orgs (suggestion_events COUNT(DISTINCT org_id), per-org bandit/ranking
+  // rewrites) — under RLS audit/enforce it must run in service mode. In the
+  // default off mode withServiceContext is a pure passthrough on the caller's
+  // db handle, so behavior is unchanged.
+  const { withServiceContext } = await import("../db/rls");
+  return withServiceContext({ service: true, label: "learning-loop" }, (tx) => runLearningLoopRefreshInner(tx, now), db);
+}
+
+async function runLearningLoopRefreshInner(db: Db, now: Date): Promise<LearningLoopResult> {
   const out: LearningLoopResult = {};
 
   // Step 0: wrap the P21 offer-model training (NEVER edited).
