@@ -42,7 +42,15 @@ function getSql(): postgres.Sql {
       "ConfigurationError",
     );
   }
-  sharedSql = postgres(url);
+  // Wave p27 (RLS design R4): this client is a DEDICATED per-worker-process
+  // connection (not the shared request pool), so the designed bootstrap is a
+  // session-level app.service_mode GUC — set as a startup-packet parameter so
+  // every lazily-opened pool connection carries it. Gated on RLS_ENABLED so
+  // the default off mode stays byte-identical; startup-packet custom GUCs are
+  // accepted by PG14+ (verified against PG16 in the wave-p27 sandbox).
+  sharedSql = (process.env.RLS_ENABLED ?? "off") === "off"
+    ? postgres(url)
+    : postgres(url, { connection: { "app.service_mode": "on" } });
   return sharedSql;
 }
 
