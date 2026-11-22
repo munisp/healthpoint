@@ -238,7 +238,7 @@ export async function countUsers(): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
   const result = await db.select({ value: count() }).from(users);
-  return result[0]?.count ?? 0;
+  return result[0]?.value ?? 0;
 }
 
 // ─── Business day calculation ─────────────────────────────────────────────────
@@ -314,9 +314,9 @@ export async function getDisputeById(id: string) {
   const dispute = result[0];
   // Fetch related data
   const [events, offers, documents] = await Promise.all([
-    db.select().from(disputeEvents).where(eq(disputeEvents.disputeId, dispute.id)).orderBy(disputeEvents.createdAt),
-    db.select().from(disputeOffers).where(eq(disputeOffers.disputeId, dispute.id)).orderBy(disputeOffers.submittedAt),
-    db.select().from(disputeDocuments).where(eq(disputeDocuments.disputeId, dispute.id)).orderBy(disputeDocuments.uploadedAt),
+    db.select().from(disputeEvents).where(eq(disputeEvents.disputeId, id)).orderBy(disputeEvents.createdAt),
+    db.select().from(disputeOffers).where(eq(disputeOffers.disputeId, id)).orderBy(disputeOffers.submittedAt),
+    db.select().from(disputeDocuments).where(eq(disputeDocuments.disputeId, id)).orderBy(disputeDocuments.uploadedAt),
   ]);
   return { ...dispute, events, offers, documents };
 }
@@ -888,7 +888,7 @@ export function calculateQPA(
   } else {
     severity = "extreme";
     recommendation = `Billed amount is ${percentageOfQpa - 100}% above the QPA benchmark — this is an extreme outlier. Review whether the correct CPT codes were entered and whether this amount is defensible in arbitration.`;
-    regulatoryNote = "The IDR entity must consider the QPA as the presumptive correct amount. Amounts more than 2.5× the QPA face a very high bar in IDR. The No Surprises Act presumes the QPA is correct; extraordinary documentation is required to overcome this presumption.";
+    regulatoryNote = "Amounts more than 2.5× the QPA face a very high bar in IDR. The No Surprises Act presumes the QPA is correct; extraordinary documentation is required to overcome this presumption.";
   }
 
   return {
@@ -1519,5 +1519,5 @@ export async function listDocumentAnalyses(opts: { userId?: string; disputeId?: 
   if (opts.disputeId) conditions.push(eq(documentAnalyses.disputeId, opts.disputeId));
   let q = db.select().from(documentAnalyses).$dynamic();
   if (conditions.length > 0) q = q.where(and(...conditions));
-  return q.orderBy(desc(documentAnalyses.createdAt)).limit(opts?.limit ?? 50);
+  return q.orderBy(desc(documentAnalyses.createdAt)).limit(opts.limit ?? 50);
 }
