@@ -226,7 +226,7 @@ describe("registration ceremony (router level)", () => {
     expect(dbState.rows[0].confirmedAt).toBeNull();
     expect(mailer.confirm.length).toBe(1);
     expect(mailer.confirm[0].to).toBe("wa@test.local");
-    expect(String(mailer.confirm[0].payload.confirmUrl)).toContain("/confirm-enrollment?token=");
+    expect(String(mailer.confirm[0].payload.confirmUrl)).toContain("/confirm-enrollment#token=");
     expect(String(mailer.confirm[0].payload.ip)).toBe("203.0.113.7");
 
     // Pending credential is INERT at authentication.
