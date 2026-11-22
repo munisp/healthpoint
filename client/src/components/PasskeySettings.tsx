@@ -33,6 +33,14 @@ export default function PasskeySettings() {
   const verifyReg = trpc.webauthn.verifyRegistration.useMutation();
   const authOptions = trpc.webauthn.authenticationOptions.useMutation();
   const verifyAuthn = trpc.webauthn.verifyAuthentication.useMutation();
+  // Wave P26 (O6): resend the first-factor confirmation email.
+  const resendConfirm = trpc.mfaConfirm.resend.useMutation({
+    onSuccess: r => {
+      if (r.status === "sent") toast.success(r.emailSent ? "Confirmation email resent" : "Could not send the email — try again later");
+      else { toast.success("Passkey already confirmed"); utils.webauthn.status.invalidate(); utils.webauthn.listCredentials.invalidate(); }
+    },
+    onError: e => toast.error(e.message),
+  });
   const rename = trpc.webauthn.renameCredential.useMutation({
     onSuccess: () => {
       utils.webauthn.status.invalidate();
@@ -67,13 +75,21 @@ export default function PasskeySettings() {
     try {
       const opts = await regOptions.mutateAsync({});
       const attestation = await startRegistration({ optionsJSON: opts.options as never });
-      await verifyReg.mutateAsync({
+      const reg = await verifyReg.mutateAsync({
         ceremonyId: opts.ceremonyId,
         response: attestation as unknown as Record<string, unknown>,
       });
       utils.webauthn.status.invalidate();
       utils.webauthn.listCredentials.invalidate();
-      toast.success("Passkey added to this device");
+      // Wave P26 (O6): first-factor passkeys activate only after the emailed
+      // confirmation link is clicked.
+      if (reg.requiresConfirmation) {
+        toast.success(reg.emailSent
+          ? "Passkey saved — check your email to confirm it before it works"
+          : "Passkey saved, but the confirmation email failed — use Resend below");
+      } else {
+        toast.success("Passkey added to this device");
+      }
     } catch (err) {
       const name = (err as { name?: string })?.name ?? "";
       if (name === "InvalidStateError") toast.info("This device is already registered");
@@ -155,6 +171,17 @@ export default function PasskeySettings() {
                 </div>
                 <div className="flex items-center gap-1">
                   {c.backedUp && <Badge variant="secondary">backed up</Badge>}
+                  {/* Wave P26 (O6): pending first-factor confirmation */}
+                  {!c.confirmed && (
+                    <>
+                      <Badge variant="outline" className="border-amber-300 text-amber-700">pending email confirmation</Badge>
+                      <Button size="sm" variant="ghost" className="text-xs"
+                        disabled={resendConfirm.isPending}
+                        onClick={() => resendConfirm.mutate({ factorType: "passkey" })}>
+                        Resend
+                      </Button>
+                    </>
+                  )}
                   <Button size="icon" variant="ghost"
                     onClick={() => { setEditingId(c.id); setEditingName(c.name); }}>
                     <Pencil className="h-4 w-4" />
