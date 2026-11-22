@@ -5,8 +5,10 @@
  * pgserver connects as SUPERUSER — and superusers bypass RLS unconditionally
  * (FORCE included) — so this suite creates and connects as a dedicated
  * NON-superuser role `rls_test_app` to exercise the policies (design §2.3
- * sandbox hazard). The migration DDL (0061-0066) is replayed idempotently in
- * beforeAll, so the suite works against any 0000-0060 baseline.
+ * sandbox hazard). The migration DDL (0061-0065 + fix 0067 + ops-gated 0066)
+ * is replayed idempotently in beforeAll, so the suite works against any
+ * 0000-0060 baseline. (Fix F-1: 0066 now lives in drizzle/ops/ — it is
+ * deliberately NOT in the auto-applied journal chain.)
  *
  * Teardown reverses 0066+policies (per §6.4) and drops rls_test_app, leaving
  * hp_app/grants/functions (migration 0061 state) in place.
@@ -17,7 +19,7 @@ import path from "node:path";
 import postgres from "postgres";
 import { sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { withOrgContext, withServiceContext, rlsShadow, scanOrgOrphans } from "./rls";
+import { withOrgContext, withServiceContext, rlsShadow, shadowProbe, scanOrgOrphans, rlsProbeStats } from "./rls";
 
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 const RUN = Date.now().toString(36);
@@ -34,8 +36,13 @@ const MIGRATIONS = [
   "0063_wave_p27_rls_ingest.sql",
   "0064_wave_p27_rls_intelligence.sql",
   "0065_wave_p27_rls_personas.sql",
-  "0066_wave_p27_rls_force.sql",
+  // Fix wave: 0066 moved to drizzle/ops (F-1, manual apply only); 0067 is the
+  // append-only F-6/F-7 policy fix in the auto chain.
+  "0067_wave_p27_rls_fix.sql",
 ];
+/** Ops-gated FORCE file (fix F-1) — applied here to exercise enforce parity,
+ *  NOT via the journal chain. */
+const OPS_FORCE_SQL = path.resolve(__dirname, "../../drizzle/ops/0066_wave_p27_rls_force.sql");
 
 const WAVE1_TABLES = [
   "practice_claims", "practice_claim_scores", "remittance_835_files", "remittance_lines",
@@ -101,11 +108,12 @@ describe.skipIf(!HAS_DB)("Wave p27 RLS (live PG, non-superuser rls_test_app)", (
     await adminSql`GRANT USAGE ON SCHEMA public TO rls_test_app`;
     await adminSql.unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${WAVE1_TABLES.join(", ")} TO rls_test_app`);
 
-    // 2. Replay batch DDL idempotently (0061-0066) — mirrors CI applying the
-    //    migration chain; re-running must be a no-op.
+    // 2. Replay batch DDL idempotently (0061-0065 + 0067 from the journal
+    //    chain, then the ops-gated 0066 FORCE) — mirrors CI applying the
+    //    migration chain plus a rehearsed ops apply; re-running is a no-op.
     const dir = path.resolve(__dirname, "../../drizzle/migrations");
-    for (const file of MIGRATIONS) {
-      const content = readFileSync(path.join(dir, file), "utf8");
+    for (const file of [...MIGRATIONS, OPS_FORCE_SQL]) {
+      const content = readFileSync(file.startsWith("/") ? file : path.join(dir, file), "utf8");
       for (const stmt of content.split("--> statement-breakpoint")) {
         const body = stmt.trim();
         if (body && !/^(--[^\n]*\n?)*$/.test(body)) await adminSql.unsafe(body);
@@ -170,6 +178,7 @@ describe.skipIf(!HAS_DB)("Wave p27 RLS (live PG, non-superuser rls_test_app)", (
         // functions (0061 state) intentionally remain.
         for (const t of WAVE1_TABLES) await adminSql.unsafe(`ALTER TABLE ${t} NO FORCE ROW LEVEL SECURITY`).catch(() => undefined);
         for (const t of WAVE1_TABLES) await adminSql.unsafe(`DROP POLICY IF EXISTS org_isolation ON ${t}`);
+        await adminSql.unsafe(`DROP POLICY IF EXISTS organizations_service_delete ON organizations`).catch(() => undefined);
         for (const t of WAVE1_TABLES) await adminSql.unsafe(`ALTER TABLE ${t} DISABLE ROW LEVEL SECURITY`);
         await adminSql`DELETE FROM submitter_clients WHERE id = ${scId}`.catch(() => undefined);
         await adminSql`DELETE FROM next_action_dismissals WHERE user_id IN (${UA}, ${UAB}, ${UB})`.catch(() => undefined);
@@ -352,5 +361,94 @@ describe.skipIf(!HAS_DB)("Wave p27 RLS (live PG, non-superuser rls_test_app)", (
     ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
     // Invalid org id format rejected:
     await expect(withOrgContext({ userId: UA, orgIds: ["a,b']--"] }, async () => 1)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("10. F-6: next_action_dismissals WITH CHECK — org-bound rows require the org clause (reviewer repro fails)", async () => {
+    // Reviewer repro: user-a plants a dismissal row carrying org_id='org-b'.
+    // The 0064 check allowed it via the unconditional user clause; 0067
+    // restricts the user clause to NULL-org rows.
+    await asAppSession({ user: UA, orgs: [ORG_A] }, (q) =>
+      expect42501(q`INSERT INTO next_action_dismissals (id, org_id, user_id, action_key, expires_at)
+        VALUES (${"nad-evil-" + RUN}, ${ORG_B}, ${UA}, 'k-evil', now() + interval '1 day')`));
+    // Legit paths still work: NULL-org self-dismissal and own-org row.
+    await asApp({ user: UA, orgs: [ORG_A] }, async (q) => {
+      await q`INSERT INTO next_action_dismissals (id, org_id, user_id, action_key, expires_at)
+        VALUES (${"nad-legit1-" + RUN}, NULL, ${UA}, 'k-legit1', now() + interval '1 day')`;
+      await q`INSERT INTO next_action_dismissals (id, org_id, user_id, action_key, expires_at)
+        VALUES (${"nad-legit2-" + RUN}, ${ORG_A}, ${UA}, 'k-legit2', now() + interval '1 day')`;
+      const rows = await q`SELECT id FROM next_action_dismissals WHERE id IN (${"nad-legit1-" + RUN}, ${"nad-legit2-" + RUN})`;
+      expect(rows.length).toBe(2);
+    });
+    // Nothing was planted in org B (verified as superuser):
+    const planted = await adminSql`SELECT id FROM next_action_dismissals WHERE id = ${"nad-evil-" + RUN}`;
+    expect(planted.length).toBe(0);
+  });
+
+  it("11. F-7: organizations DELETE requires service mode (reviewer repro fails)", async () => {
+    // Reviewer repro: a member (viewer role even) deleted their own org row.
+    const ORG_D = `rls-org-d-${RUN}`;
+    await adminSql`INSERT INTO organizations (id, name, type) VALUES (${ORG_D}, 'RLS Org D', 'provider')`;
+    await adminSql`INSERT INTO org_memberships (id, "orgId", "userId", role) VALUES (${"m-d-" + RUN}, ${ORG_D}, ${UA}, 'owner')`;
+    try {
+      // Permissive org_isolation passes, but the 0067 RESTRICTIVE
+      // service-only policy blocks the delete (0 rows, fail-closed):
+      await asApp({ user: UA, orgs: [ORG_D] }, async (q) => {
+        const r = await q`DELETE FROM organizations WHERE id = ${ORG_D}`;
+        expect(r.count).toBe(0);
+      });
+      const still = await adminSql`SELECT id FROM organizations WHERE id = ${ORG_D}`;
+      expect(still.length).toBe(1);
+      // Service mode (worker/runbook path) can delete:
+      await asApp({ service: true }, async (q) => {
+        const r = await q`DELETE FROM organizations WHERE id = ${ORG_D}`;
+        expect(r.count).toBe(1);
+      });
+    } finally {
+      await adminSql`DELETE FROM org_memberships WHERE id = ${"m-d-" + RUN}`.catch(() => undefined);
+      await adminSql`DELETE FROM organizations WHERE id = ${ORG_D}`.catch(() => undefined);
+    }
+  });
+
+  it("12. F-3a (live): a failing shadow probe leaves the request transaction usable with the role restored", async () => {
+    // Shadow a statement hp_app cannot execute (users is not granted to
+    // hp_app → 42501). Before the fix this aborted the tx (25P02) and left
+    // role=hp_app; now the nested-transaction savepoint recovers both.
+    const db = (await getDb())!;
+    await db.transaction(async (tx) => {
+      const stmt = sql`SELECT id FROM users LIMIT 1`;
+      const primary = (await tx.execute(stmt)) as unknown as Array<Record<string, unknown>>;
+      const res = await shadowProbe(tx, "test.failing-probe", stmt, primary);
+      expect(res.diff).toBe(false); // probe failure is observability, not a diff
+      // Role restored (""/none = no SET ROLE in effect; PG normalizes the
+      // empty restore to 'none' on read-back):
+      const role = (await tx.execute(sql`SELECT current_setting('role', true) AS r`)) as unknown as Array<{ r: string }>;
+      expect(["", "none"]).toContain(role[0].r);
+      // Transaction still usable:
+      const ok = (await tx.execute(sql`SELECT 1 AS one`)) as unknown as Array<{ one: number }>;
+      expect(ok[0].one).toBe(1);
+    });
+  });
+
+  it("13. F-3b (live): withOrgContext executes the sampled shadow probe in audit mode with zero diffs", async () => {
+    const prevMode = process.env.RLS_ENABLED;
+    const prevRate = process.env.RLS_SHADOW_SAMPLE_RATE;
+    process.env.RLS_ENABLED = "audit";
+    process.env.RLS_SHADOW_SAMPLE_RATE = "1"; // probe every request
+    try {
+      const before = await adminSql`SELECT count(*)::int AS n FROM audit_log WHERE action = 'rls_shadow_diff'`;
+      const probesBefore = rlsProbeStats.contextProbes;
+      await withOrgContext({ userId: UA, orgIds: [ORG_A] }, async (tx) => {
+        const rows = await tx.execute(sql`SELECT id FROM practice_claims WHERE id = ${claimA}`);
+        expect((rows as unknown as unknown[]).length).toBe(1);
+      });
+      // The probe executed (org-bounded practice_claims probe)…
+      expect(rlsProbeStats.contextProbes).toBe(probesBefore + 1);
+      // …and found no diff between the owner read and the hp_app shadow.
+      const after = await adminSql`SELECT count(*)::int AS n FROM audit_log WHERE action = 'rls_shadow_diff'`;
+      expect(after[0].n - before[0].n).toBe(0);
+    } finally {
+      if (prevMode === undefined) delete process.env.RLS_ENABLED; else process.env.RLS_ENABLED = prevMode;
+      if (prevRate === undefined) delete process.env.RLS_SHADOW_SAMPLE_RATE; else process.env.RLS_SHADOW_SAMPLE_RATE = prevRate;
+    }
   });
 });
