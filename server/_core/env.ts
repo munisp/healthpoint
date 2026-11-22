@@ -80,6 +80,7 @@ const envSchema = z.object({
   RLS_ENABLED: z.enum(["off", "audit", "enforce"]).optional().default("off"),
   RLS_DATABASE_URL: z.string().optional().default(""),       // hp_app connection; enforce mode
   RLS_AUDIT_SAMPLE_PCT: z.string().optional().default("5"),  // shadow-probe sampling
+  RLS_SHADOW_SAMPLE_RATE: z.string().optional().default("0.01"), // withOrgContext probe fraction (0-1)
 
   // App URL & email
   VITE_APP_URL: z.string().optional().default("http://localhost:3000"),
