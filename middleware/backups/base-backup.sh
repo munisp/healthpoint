@@ -9,7 +9,7 @@
 # pruned; failed/partial backups are kept for forensics).
 #
 # Usage:
-#   PGHOST=postgres PGUSER=replicator PGPASSWORD=... ./base-backup.sh
+#   PGHOST=postgres PGUSER=replicator PGPASSWORD=... bash ./base-backup.sh
 #
 # Env:
 #   PGHOST PGPORT PGUSER PGPASSWORD   standard libpq vars (PGHOST may be a
@@ -27,7 +27,7 @@
 set -euo pipefail
 
 log() { printf '[base-backup %s] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
-die() { log "ERROR: $*"; exit "${2:-1}"; }
+die() { log "ERROR: $1"; exit "${2:-1}"; }
 
 : "${BACKUP_DIR:?BACKUP_DIR must be set to the base backup root}"
 PGPORT="${PGPORT:-5432}"
