@@ -79,55 +79,43 @@ vi.mock("../redis", () => {
   };
 });
 
-// ── In-memory DB double (single webauthn_credentials table) ─────────────────
-const dbState = vi.hoisted(() => ({
-  rows: [] as Array<Record<string, unknown>>,
-  audits: [] as Array<Record<string, unknown>>,
-}));
-
-vi.mock("../db", () => {
-  function chain(rows: Array<Record<string, unknown>>) {
-    const p = Promise.resolve(rows) as Promise<Array<Record<string, unknown>>> & {
-      limit: (n: number) => Promise<Array<Record<string, unknown>>>;
-    };
-    p.limit = (n: number) => Promise.resolve(rows.slice(0, n));
-    return p;
-  }
-  const db = {
-    select: () => ({
-      from: () => ({
-        where: () => chain([...dbState.rows]),
-      }),
-    }),
-    insert: () => ({
-      values: (v: Record<string, unknown>) => {
-        dbState.rows.push(v);
-        return Promise.resolve();
-      },
-    }),
-    update: () => ({
-      set: (o: Record<string, unknown>) => ({
-        where: () => {
-          if (dbState.rows[0]) Object.assign(dbState.rows[0], o);
-          return Promise.resolve();
-        },
-      }),
-    }),
-    delete: () => ({
-      where: () => {
-        dbState.rows.length = 0;
-        return Promise.resolve();
-      },
-    }),
-  };
+// ── In-memory DB double (condition-evaluating — server/tests/in-memory-db.ts;
+// Wave P26 needs confirmed_at / fingerprint filtering to work) ───────────────
+const dbState = vi.hoisted(() => {
+  const webauthnRows: Array<Record<string, unknown>> = [];
   return {
-    getDb: async () => db,
-    createAuditEntry: async (entry: Record<string, unknown>) => {
-      dbState.audits.push(entry);
-      return entry;
-    },
+    tables: {
+      webauthn_credentials: webauthnRows,
+      totp_secrets: [] as Array<Record<string, unknown>>,
+      factor_enrollment_confirmations: [] as Array<Record<string, unknown>>,
+      // verifyAuthentication's session-issuance path selects the user row.
+      users: [{ id: "wa-user-1", name: "WA User", email: "wa@test.local", role: "user" }] as Array<Record<string, unknown>>,
+    } as Record<string, Array<Record<string, unknown>>>,
+    audits: [] as Array<Record<string, unknown>>,
+    // Back-compat alias used throughout this file.
+    rows: webauthnRows,
   };
 });
+
+vi.mock("../db", async () => {
+  const m = await import("../tests/in-memory-db");
+  return m.makeInMemoryDbModule(dbState);
+});
+
+// ── Mailer spy (Wave P26/O6) ────────────────────────────────────────────────
+const mailer = vi.hoisted(() => ({
+  confirm: [] as Array<{ to: string; payload: Record<string, unknown> }>,
+  alert: [] as Array<{ to: string; payload: Record<string, unknown> }>,
+}));
+vi.mock("../email", () => ({
+  sendFactorEnrollmentConfirmEmail: async (to: string, payload: Record<string, unknown>) => {
+    mailer.confirm.push({ to, payload });
+  },
+  sendFactorAddedAlertEmail: async (to: string, payload: Record<string, unknown>) => {
+    mailer.alert.push({ to, payload });
+    return true;
+  },
+}));
 
 // No TOTP for the fixture user (passkey-only paths); verifyLoginCode unused.
 vi.mock("../auth/mfa", () => ({
@@ -184,13 +172,18 @@ function seedCredentialRow(counter = 0) {
     createdAt: new Date(),
     lastUsedAt: null,
     lastCounterAnomalyAt: null,
+    confirmedAt: new Date(), // Wave P26 (O6): seeded credentials are confirmed
   });
 }
 
 beforeEach(() => {
   redisState.store.clear();
   dbState.rows.length = 0;
+  dbState.tables.totp_secrets.length = 0;
+  dbState.tables.factor_enrollment_confirmations.length = 0;
   dbState.audits.length = 0;
+  mailer.confirm.length = 0;
+  mailer.alert.length = 0;
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -216,6 +209,78 @@ describe("registration ceremony (router level)", () => {
     expect(dbState.rows[0].userId).toBe("wa-user-1");
     expect((dbState.rows[0].credentialId as Buffer).toString("base64url")).toBe(fixtures.credential.credentialId);
     expect(dbState.audits.some(a => a.action === "webauthn.register")).toBe(true);
+  });
+
+  it("Wave P26 (O6): FIRST-factor registration is pending email confirmation; activates only after confirm", async () => {
+    const { ctx } = makeCtx(false);
+    const caller = webauthnRouter.createCaller(ctx);
+    const opts = await caller.registrationOptions({ name: "Clinic key" });
+    plantChallenge(opts.ceremonyId, fixtures.registration.challenge, "wa-user-1", "registration");
+    const res = await caller.verifyRegistration({
+      ceremonyId: opts.ceremonyId,
+      name: "Clinic key",
+      response: fixtures.registration.response,
+    });
+    // First factor → pending; confirmation email issued to the ACCOUNT address.
+    expect(res.requiresConfirmation).toBe(true);
+    expect(dbState.rows[0].confirmedAt).toBeNull();
+    expect(mailer.confirm.length).toBe(1);
+    expect(mailer.confirm[0].to).toBe("wa@test.local");
+    expect(String(mailer.confirm[0].payload.confirmUrl)).toContain("/confirm-enrollment?token=");
+    expect(String(mailer.confirm[0].payload.ip)).toBe("203.0.113.7");
+
+    // Pending credential is INERT at authentication.
+    const mfa = makeCtx(true);
+    const mfaCaller = webauthnRouter.createCaller(mfa.ctx);
+    const authOpts = await mfaCaller.authenticationOptions({ ceremony: "mfa" });
+    plantChallenge(authOpts.ceremonyId, fixtures.assertion.challenge, "wa-user-1", "mfa");
+    await expect(mfaCaller.verifyAuthentication({
+      ceremonyId: authOpts.ceremonyId,
+      response: fixtures.assertion.response,
+    })).rejects.toMatchObject({ code: "UNAUTHORIZED", message: "authentication_failed" });
+    expect(dbState.audits.some(a => a.action === "webauthn.authenticateFailed"
+      && String(a.newValue).includes("unconfirmed_credential"))).toBe(true);
+
+    // Simulate the email confirmation (covered end-to-end in
+    // enroll-confirm.test.ts / wave-p26.test.ts) → assertion now succeeds.
+    dbState.rows[0].confirmedAt = new Date();
+    const authOpts2 = await mfaCaller.authenticationOptions({ ceremony: "mfa" });
+    plantChallenge(authOpts2.ceremonyId, fixtures.assertion.challenge, "wa-user-1", "mfa");
+    const ok = await mfaCaller.verifyAuthentication({
+      ceremonyId: authOpts2.ceremonyId,
+      response: fixtures.assertion.response,
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it("Wave P26 (O6): SUBSEQUENT registration activates immediately + fire-and-forget alert email", async () => {
+    // A confirmed TOTP enrollment exists → the new passkey is a second factor.
+    dbState.tables.totp_secrets.push({
+      id: "totp-1", userId: "wa-user-1", secret: "v1.envelope", status: "active",
+      backupCodes: "[]", usedBackupCodes: "[]",
+    });
+    const { createHash } = await import("node:crypto");
+    dbState.tables.factor_enrollment_confirmations.push({
+      id: "comp-1", userId: "wa-user-1", factorType: "totp", factorId: "totp-1",
+      factorFingerprint: createHash("md5").update("v1.envelope").digest("hex"),
+      tokenHash: "x", expiresAt: new Date(), consumedAt: new Date(), confirmedAt: new Date(),
+    });
+    const { ctx } = makeCtx(false);
+    const caller = webauthnRouter.createCaller(ctx);
+    const opts = await caller.registrationOptions({ name: "Second key" });
+    plantChallenge(opts.ceremonyId, fixtures.registration.challenge, "wa-user-1", "registration");
+    const res = await caller.verifyRegistration({
+      ceremonyId: opts.ceremonyId,
+      name: "Second key",
+      response: fixtures.registration.response,
+    });
+    expect(res.requiresConfirmation).toBe(false);
+    expect(dbState.rows[0].confirmedAt).toBeTruthy();
+    expect(mailer.confirm.length).toBe(0);
+    await new Promise(r => setImmediate(r)); // alert is fire-and-forget
+    expect(mailer.alert.length).toBe(1);
+    expect(mailer.alert[0].to).toBe("wa@test.local");
+    expect(String(mailer.alert[0].payload.manageUrl)).toContain("/two-factor-auth");
   });
 
   it("rejects a registration response whose challenge does not match", async () => {
