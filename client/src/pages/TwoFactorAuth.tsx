@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { Shield, ShieldCheck, ShieldOff, Key, Copy, Check, AlertTriangle, Smartphone, RefreshCw, Loader2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import PasskeySettings from "@/components/PasskeySettings";
 
 type Step = "status" | "setup-scan" | "setup-verify" | "setup-backup" | "setup-done" | "disable-confirm";
 
@@ -134,6 +135,10 @@ export default function TwoFactorAuth() {
         </div>
         {is2FAEnabled && <Badge className="ml-auto bg-green-100 text-green-700">Enabled</Badge>}
       </div>
+
+      {/* Phase 25: Passkeys (self-hides when the feature gate is off or the
+          browser lacks WebAuthn) */}
+      <PasskeySettings />
 
       {/* Status Screen */}
       {step === "status" && (
