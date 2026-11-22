@@ -45,7 +45,7 @@ interface J35State {
 
 export const j35: Journey = {
   id: "J35",
-  title: "WebAuthn passkeys: enroll, mfa-pending upgrade, TOTP fallback, required tier, last-factor guard",
+  title: "WebAuthn passkeys: enroll (O6 email-confirmed), mfa-pending upgrade, TOTP fallback, required tier, last-factor guard",
   actor: "provider",
   description:
     "Seeds dedicated staff/admin/TOTP users, enrolls a passkey through the real registration ceremony, completes an mfa-pending to full-session upgrade with a real assertion signature, proves the TOTP login fallback still passes end-to-end, proves the required enforcement tier forces enroll for passkey-less admins, and proves the last-factor guard rejects deletion under an org MFA mandate.",
@@ -89,6 +89,21 @@ export const j35: Journey = {
            VALUES ($1, $2, $3, 'active') ON CONFLICT DO NOTHING`,
           [ctx.ns("j35-totpsecret"), totpUserId, st.totpSecret],
         );
+        // Wave P26 (O6): an ACTIVE row also needs a confirmed companion whose
+        // fingerprint matches the CURRENT envelope (pre-confirmed here the
+        // way migration 0060 grandfathers existing enrollments).
+        const { createHash: ch } = await import("node:crypto");
+        await ctx.sql.unsafe(
+          `INSERT INTO factor_enrollment_confirmations
+             (id, user_id, factor_type, factor_id, factor_fingerprint, token_hash, expires_at, consumed_at, confirmed_at)
+           VALUES ($1, $2, 'totp', $3, $4, $5, now(), now(), now())
+           ON CONFLICT DO NOTHING`,
+          [
+            ctx.ns("j35-totpcomp"), totpUserId, ctx.ns("j35-totpsecret"),
+            ch("md5").update(st.totpSecret).digest("hex"),
+            ch("md5").update(`${totpUserId}-j35`).digest("hex"),
+          ],
+        );
         // Idempotent re-runs: the committed fixture credential ID is globally
         // unique — clear leftovers from prior runs.
         await ctx.sql.unsafe(
@@ -125,6 +140,19 @@ export const j35: Journey = {
           `SELECT user_id, counter, device_type FROM webauthn_credentials WHERE id = $1`, [reg.credentialId]);
         ctx.assertEqual(rows.length, 1, "credential row persisted");
         ctx.assertEqual((rows[0] as unknown as { user_id: string }).user_id, st.staffId, "row owned by staff user");
+
+        // Wave P26 (O6): FIRST-factor enrollment is PENDING until the emailed
+        // confirmation token is consumed. The passkey must NOT satisfy the
+        // MFA requirement before that (forced-enrollment backdoor).
+        const { getMfaRequirement: gmr } = await import("../../auth/mfa");
+        ctx.assert(reg.requiresConfirmation === true, "first-factor registration requires email confirmation");
+        ctx.assertEqual(await gmr(st.staffId), "none", "pending passkey must not satisfy MFA (no org mandate here)");
+        const { getLastIssuedTokenForTests } = await import("../../auth/enroll-confirm");
+        const token = getLastIssuedTokenForTests("passkey", reg.credentialId);
+        ctx.assert(!!token, "confirmation token issued (test seam)");
+        const confirmRes = await caller.mfaConfirm.confirm({ token: token! });
+        ctx.assert(confirmRes.success, "email confirmation activates the passkey");
+        ctx.assertEqual(await gmr(st.staffId), "verify", "confirmed passkey now satisfies MFA");
       },
     },
     {
