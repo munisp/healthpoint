@@ -112,7 +112,8 @@ function plantChallenge(ceremonyId: string, challenge: string, userId: string | 
 
 function tokenFromLastConfirmEmail(): string {
   const url = String(mailer.confirm[mailer.confirm.length - 1].payload.confirmUrl);
-  const token = new URL(url).searchParams.get("token");
+  // Token is carried in the URL FRAGMENT (#token=…), not the query string.
+  const token = new URLSearchParams(new URL(url).hash.replace(/^#/, "")).get("token");
   expect(token).toBeTruthy();
   return token!;
 }
@@ -179,7 +180,7 @@ describe.skipIf(!HAS_DB)("Phase26 first-factor enrollment confirmation (live PG)
     const sent = mailer.confirm[0];
     expect(sent.to).toBe(`${U1}@test.local`);
     expect(String(sent.payload.factorLabel)).toContain("Clinic key");
-    expect(String(sent.payload.confirmUrl)).toContain("/confirm-enrollment?token=");
+    expect(String(sent.payload.confirmUrl)).toContain("/confirm-enrollment#token=");
     expect(sent.payload.expiresMinutes).toBe(60);
     expect(sent.payload.requestedAt).toBeInstanceOf(Date);
 
@@ -329,5 +330,93 @@ describe.skipIf(!HAS_DB)("Phase26 first-factor enrollment confirmation (live PG)
       .rejects.toMatchObject({
         code: "BAD_REQUEST", message: "This confirmation link is invalid or has expired.",
       });
+  });
+
+  // ── Adversarial-review regression: mfa-pending discriminator bypass ──────
+  // Adapted from the reviewer's live-PG POC
+  // (VERIFIER-POC-mfa-pending-bypass.test.ts, credited). Root cause: the
+  // first-vs-subsequent discriminator keyed ONLY on countConfirmedFactors()
+  // and ignored ctx.mfaPending. An mfa-pending session has proven NO factor,
+  // so "subsequent ⇒ a step-up already happened at login" is false — a
+  // phished-password attacker (mfa-pending) must NOT get an auto-active
+  // factor merely because the victim already has one confirmed.
+
+  it("REGRESSION PATH A: mfa-pending passkey registration stays PENDING despite a confirmed factor", async () => {
+    const db = await getDb();
+    const VA = `p26-va-${RUN}`;
+    await db!.insert(usersTable)
+      .values({ id: VA, name: "P26 Victim A", email: `${VA}@test.local`, loginMethod: "test", role: "user" })
+      .onConflictDoNothing();
+    // Victim already has a CONFIRMED TOTP factor.
+    const totpRowId = `p26-totp-va-${RUN}`;
+    await db!.insert(totpSecrets).values({
+      id: totpRowId, userId: VA, secret: TOTP_SECRET, status: "active", backupCodes: "[]", usedBackupCodes: "[]",
+    }).onConflictDoNothing();
+    await db!.insert(factorEnrollmentConfirmations).values({
+      id: `p26-comp-va-${RUN}`, userId: VA, factorType: "totp", factorId: totpRowId,
+      factorFingerprint: crypto.createHash("md5").update(TOTP_SECRET).digest("hex"),
+      tokenHash: crypto.randomBytes(32).toString("hex"),
+      expiresAt: new Date(Date.now() + 3_600_000), consumedAt: new Date(), confirmedAt: new Date(),
+    });
+    // Setup sanity: count > 0, so the PRE-FIX code would have auto-activated.
+    const { countConfirmedFactors } = await import("../auth/enroll-confirm");
+    expect(await countConfirmedFactors(VA)).toBe(1);
+
+    // Free the committed fixture credential for the attacker's registration.
+    await db!.delete(webauthnCredentials).where(
+      eq(webauthnCredentials.credentialId, Buffer.from(fixtures.credential.credentialId, "base64url")),
+    );
+    const [vaRow] = await db!.select().from(usersTable).where(eq(usersTable.id, VA)).limit(1);
+    // Attacker holds ONLY the phished password → mfa-pending session.
+    const attacker = rootRouter.createCaller(makeCtxForUser(vaRow, { mfaPending: true }));
+    const opts = await attacker.webauthn.registrationOptions({ name: "attacker key" });
+    plantChallenge(opts.ceremonyId, fixtures.registration.challenge, VA, "registration");
+    const reg = await attacker.webauthn.verifyRegistration({
+      ceremonyId: opts.ceremonyId, name: "attacker key", response: fixtures.registration.response,
+    });
+
+    // FIX: pending email-confirm, NOT auto-active, and inert at authentication.
+    expect(reg.requiresConfirmation).toBe(true);
+    const rows = await db!.select().from(webauthnCredentials).where(eq(webauthnCredentials.id, reg.credentialId));
+    expect(rows[0].confirmedAt).toBeNull();
+    const authOpts = await attacker.webauthn.authenticationOptions({ ceremony: "mfa" });
+    plantChallenge(authOpts.ceremonyId, fixtures.assertion.challenge, VA, "mfa");
+    await expect(attacker.webauthn.verifyAuthentication({
+      ceremonyId: authOpts.ceremonyId, response: fixtures.assertion.response,
+    })).rejects.toMatchObject({ code: "UNAUTHORIZED", message: "authentication_failed" });
+  });
+
+  it("REGRESSION PATH B: mfa-pending finalizeTotp requires email-confirm despite a confirmed factor", async () => {
+    const db = await getDb();
+    const VB = `p26-vb-${RUN}`;
+    await db!.insert(usersTable)
+      .values({ id: VB, name: "P26 Victim B", email: `${VB}@test.local`, loginMethod: "test", role: "user" })
+      .onConflictDoNothing();
+    // Victim already has a CONFIRMED passkey (count > 0 independent of TOTP).
+    await db!.insert(webauthnCredentials).values({
+      id: `p26-cred-vb-${RUN}`, userId: VB, credentialId: crypto.randomBytes(32),
+      publicKey: crypto.randomBytes(77), counter: 0, name: "victim key", confirmedAt: new Date(),
+    });
+    const { countConfirmedFactors, isTotpConfirmed } = await import("../auth/enroll-confirm");
+    expect(await countConfirmedFactors(VB)).toBe(1);
+
+    // Attacker (mfa-pending) re-runs the frozen totp.setup → new ACTIVE envelope.
+    const attackerSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXQ";
+    await db!.insert(totpSecrets).values({
+      id: `p26-totp-vb-${RUN}`, userId: VB, secret: attackerSecret, status: "active", backupCodes: "[]", usedBackupCodes: "[]",
+    }).onConflictDoNothing();
+
+    const [vbRow] = await db!.select().from(usersTable).where(eq(usersTable.id, VB)).limit(1);
+    // Attacker holds ONLY the phished password → mfa-pending session.
+    const attacker = rootRouter.createCaller(makeCtxForUser(vbRow, { mfaPending: true }));
+    const fin = await attacker.mfaConfirm.finalizeTotp();
+
+    // FIX: confirmation_required (email to the victim), NOT auto-confirmed;
+    // the attacker's TOTP stays inert.
+    expect(fin.status).toBe("confirmation_required");
+    const { verifyLoginCode } = await import("../auth/mfa");
+    const { generate: totpGenerate } = await import("otplib");
+    expect(await verifyLoginCode(VB, await totpGenerate({ secret: attackerSecret }))).toBe(false);
+    expect(await isTotpConfirmed(`p26-totp-vb-${RUN}`, attackerSecret)).toBe(false);
   });
 });
