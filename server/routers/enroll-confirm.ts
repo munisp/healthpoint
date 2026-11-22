@@ -85,7 +85,7 @@ async function sendConfirmEmail(input: {
     const { sendFactorEnrollmentConfirmEmail } = await import("../email");
     await sendFactorEnrollmentConfirmEmail(input.to, {
       factorLabel: input.factorLabel,
-      confirmUrl: `${ENV.appUrl}/confirm-enrollment?token=${input.token}`,
+      confirmUrl: `${ENV.appUrl}/confirm-enrollment#token=${input.token}`,
       expiresMinutes: Math.round(ENV.factorConfirmTtlSeconds / 60),
       requestedAt: new Date(),
       ip: input.ip,
@@ -189,7 +189,15 @@ export const enrollConfirmRouter = router({
       return { status: "confirmed" as const };
     }
 
-    const otherConfirmed = await countConfirmedFactors(ctx.user.id);
+    // "Subsequent" is ONLY safe to infer from a FULL session: an mfa-pending
+    // session has proven NO factor yet, so the "step-up already happened at
+    // login" assumption is false — an attacker holding a phished password
+    // (mfa-pending) who re-runs the frozen totp.setup path must NOT get an
+    // auto-confirmed TOTP just because the victim already has a confirmed
+    // factor. Treat mfa-pending as first-factor (email-confirm mandatory).
+    const otherConfirmed = ctx.mfaPending === true
+      ? 0
+      : await countConfirmedFactors(ctx.user.id);
     if (otherConfirmed > 0) {
       // Subsequent-factor enrollment: step-up already happened at login;
       // activate immediately + alert the account owner out-of-band.
