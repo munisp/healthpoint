@@ -18,6 +18,13 @@ export type TrpcContext = {
   viaApiKey: boolean;
   /** Effective scopes of the API key (admin stripped for non-admin owners). */
   apiKeyScopes: string[];
+  /**
+   * Wave p27 (RLS design R6): org the authenticating hp_ API key is bound
+   * to (null for session auth and for legacy pre-org-binding keys). Lets
+   * orgProcedure default the org context for key-authenticated requests.
+   * Optional so existing test-built contexts keep compiling unchanged.
+   */
+  apiKeyOrgId?: string | null;
 };
 
 export async function createContext(
@@ -27,6 +34,7 @@ export async function createContext(
   let mfaPending = false;
   let viaApiKey = false;
   let apiKeyScopes: string[] = [];
+  let apiKeyOrgId: string | null = null;
 
   // Mobile app + headless API clients authenticate with a Keycloak Bearer
   // access token, verified server-side against the realm JWKS
@@ -42,6 +50,7 @@ export async function createContext(
       user = result.user;
       viaApiKey = true;
       apiKeyScopes = result.scopes;
+      apiKeyOrgId = result.orgId;
     } catch (err) {
       console.warn("[Auth] API key authentication failed:", err instanceof Error ? err.message : err);
       throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid, expired, or revoked API key" });
@@ -71,5 +80,6 @@ export async function createContext(
     mfaPending,
     viaApiKey,
     apiKeyScopes,
+    apiKeyOrgId,
   };
 }
