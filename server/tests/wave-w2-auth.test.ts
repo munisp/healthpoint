@@ -20,16 +20,21 @@ const state = vi.hoisted(() => ({
   apiKeys: [] as any[],
   audit: [] as any[],
   redis: new Map<string, string>(),
+  // Wave P26 (O6): factor_enrollment_confirmations rows — an ACTIVE TOTP
+  // row only counts when a confirmed companion matches its envelope.
+  confirmations: [] as any[],
 }));
 
 vi.mock("../db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../db")>();
   const schema = await vi.importActual<typeof import("../../drizzle/schema")>("../../drizzle/schema");
+  const enrollSchema = await vi.importActual<typeof import("../../drizzle/schema-enroll-confirm")>("../../drizzle/schema-enroll-confirm");
 
   const rowsFor = (table: unknown): any[] => {
     if (table === schema.totpSecrets) return [...state.totp.values()];
     if (table === schema.orgSettings) return [...state.orgSettings.values()];
     if (table === schema.apiKeys) return state.apiKeys;
+    if (table === enrollSchema.factorEnrollmentConfirmations) return state.confirmations;
     return [];
   };
   // Extract equality filters (eq(col, val), incl. inside and(...)) from a
@@ -163,8 +168,22 @@ function mintApiKey(owner: string, scopes: string, opts?: { expiresAt?: Date | n
 beforeEach(() => {
   state.users.clear(); state.totp.clear(); state.orgSettings.clear();
   state.apiKeys = []; state.audit = []; state.redis.clear();
+  state.confirmations = [];
   process.env.EMR_CREDENTIALS_ENCRYPTION_KEY = ""; // plaintext TOTP rows in tests
 });
+
+/** Wave P26 (O6): mark a seeded TOTP row as email-confirmed (companion row). */
+function confirmTotp(userId: string, rowId: string, secret: string) {
+  const fp = createHash("md5").update(secret).digest("hex");
+  state.confirmations.push({
+    id: `comp-${rowId}`, userId, factorType: "totp", factorId: rowId,
+    factorFingerprint: fp,
+    // snake_case aliases: this file's drizzle-SQL filter extractor matches
+    // on DB column names (factor_type / factor_id / factor_fingerprint).
+    factor_type: "totp", factor_id: rowId, factor_fingerprint: fp,
+    tokenHash: "x", expiresAt: new Date(), consumedAt: new Date(), confirmedAt: new Date(),
+  });
+}
 
 // ── F1: two-stage login ──────────────────────────────────────────────────────
 describe("F1 two-stage TOTP login", () => {
@@ -192,6 +211,7 @@ describe("F1 two-stage TOTP login", () => {
   it("verifyLoginTotp rejects a wrong code with 401", async () => {
     seedUser("u1");
     state.totp.set("u1", { id: "t1", userId: "u1", secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP", status: "active", backupCodes: "[]", usedBackupCodes: "[]" });
+    confirmTotp("u1", "t1", "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP");
     const caller = appRouter.createCaller(ctxFor("u1", { mfaPending: true }));
     await expect(caller.auth.verifyLoginTotp({ code: "000000" })).rejects.toSatisfy(
       e => e instanceof TRPCError && e.code === "UNAUTHORIZED");
@@ -202,6 +222,7 @@ describe("F1 two-stage TOTP login", () => {
     const { generate: totpGenerate } = await import("otplib");
     const secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
     state.totp.set("u1", { id: "t1", userId: "u1", secret, status: "active", backupCodes: "[]", usedBackupCodes: "[]" });
+    confirmTotp("u1", "t1", secret);
     const caller = appRouter.createCaller(ctxFor("u1", { mfaPending: true }));
     const code = await totpGenerate({ secret });
     const res = await caller.auth.verifyLoginTotp({ code });
@@ -211,13 +232,41 @@ describe("F1 two-stage TOTP login", () => {
   it("backup codes are single-use", async () => {
     seedUser("u1");
     state.totp.set("u1", { id: "t1", userId: "u1", secret: "x", status: "active", backupCodes: JSON.stringify(["abcd-1234"]), usedBackupCodes: "[]" });
+    confirmTotp("u1", "t1", "x");
     expect(await verifyLoginCode("u1", "abcd-1234")).toBe(true);
     expect(await verifyLoginCode("u1", "abcd-1234")).toBe(false); // replay denied
+  });
+
+  it("Wave P26 (O6): UNCONFIRMED TOTP enrollment cannot verify (forced-enrollment backdoor closed)", async () => {
+    // Attacker with a phished password completes totp.setup + totp.verify from
+    // an mfa-pending session — the row is ACTIVE but never email-confirmed.
+    seedUser("u1");
+    const { generate: totpGenerate } = await import("otplib");
+    const secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+    state.totp.set("u1", { id: "t1", userId: "u1", secret, status: "active", backupCodes: "[]", usedBackupCodes: "[]" });
+    // NO companion row → the factor is inert even with a CORRECT code.
+    const code = await totpGenerate({ secret });
+    expect(await verifyLoginCode("u1", code)).toBe(false);
+    expect(await getMfaRequirement("u1")).not.toBe("verify");
+  });
+
+  it("Wave P26 (O6): re-setup after confirmation invalidates the prior confirmation (fingerprint)", async () => {
+    seedUser("u1");
+    const { generate: totpGenerate } = await import("otplib");
+    const victimSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+    state.totp.set("u1", { id: "t1", userId: "u1", secret: victimSecret, status: "active", backupCodes: "[]", usedBackupCodes: "[]" });
+    confirmTotp("u1", "t1", victimSecret);
+    // Attacker re-runs totp.setup from a stolen session → envelope replaced.
+    const attackerSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXQ";
+    state.totp.set("u1", { id: "t1", userId: "u1", secret: attackerSecret, status: "active", backupCodes: "[]", usedBackupCodes: "[]" });
+    const code = await totpGenerate({ secret: attackerSecret });
+    expect(await verifyLoginCode("u1", code)).toBe(false);
   });
 
   it("getMfaRequirement: verify when TOTP active, enroll when org requires, none otherwise", async () => {
     seedUser("u1"); seedUser("u2"); seedUser("u3");
     state.totp.set("u1", { id: "t", userId: "u1", secret: "x", status: "active", backupCodes: "[]", usedBackupCodes: "[]" });
+    confirmTotp("u1", "t", "x");
     state.orgSettings.set("u2", { userId: "u2", requireMFA: true });
     expect(await getMfaRequirement("u1")).toBe("verify");
     expect(await getMfaRequirement("u2")).toBe("enroll");
