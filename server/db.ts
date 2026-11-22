@@ -1515,7 +1515,7 @@ export async function listDocumentAnalyses(opts: { userId?: string; disputeId?: 
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
-  if (opts.userId) conditions.push(eq(auditLog.userId, opts.userId));
+  if (opts.userId) conditions.push(eq(documentAnalyses.userId, opts.userId));
   if (opts.disputeId) conditions.push(eq(documentAnalyses.disputeId, opts.disputeId));
   let q = db.select().from(documentAnalyses).$dynamic();
   if (conditions.length > 0) q = q.where(and(...conditions));
