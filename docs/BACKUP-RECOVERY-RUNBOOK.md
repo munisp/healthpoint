@@ -54,13 +54,16 @@ When you need to roll the database back to a known-good time `T`
    `ls -d /backups/base/base_* | sort` and confirm `.verified` exists.
 3. **Restore on new infrastructure** (never in place):
    ```bash
-   ./middleware/backups/restore-pitr.sh \
+   bash ./middleware/backups/restore-pitr.sh \
      --backup /backups/base/base_20260905T021500Z \
      --archive-dir /backups/wal-archive \
      --restore-dir /var/lib/postgresql/pitr-restore \
      --target-time "2026-09-05 14:22:31" \
      --port 5433 --start
    ```
+   (Scripts ship mode 0644 in git — invoke via `bash`, or `chmod +x` once.
+   The script rejects target times at/before the backup's START TIME and
+   targets in the future.)
    The script writes `recovery.signal`, sets
    `restore_command`/`recovery_target_time`/`recovery_target_action=promote`,
    replays WAL, and waits for promotion.
@@ -73,6 +76,17 @@ When you need to roll the database back to a known-good time `T`
    untouched for forensics.
 
 ## 4. Ransomware playbook
+
+> **Deployment prerequisite (pre-existing repo gap):**
+> `middleware/docker-compose.production.yml` bind-mounts host paths that
+> are **absent from this repository** and must be provided at deploy time:
+> `middleware/postgres/` (`postgresql.conf`, `pg_hba.conf`, `init/`),
+> `middleware/vault/` (`config.hcl`, `policies/`), `middleware/monitoring/`
+> (prometheus/grafana config), `middleware/keycloak/realm-export.json`, and
+> now `middleware/backups/` (present in-repo, mode 0644). A compose stack
+> started without provisioning those host paths will not come up. This
+> predates the backup work and is documented here so the recovery plan
+> isn't blocked by it during an incident.
 
 ### 4.1 Design guarantees (defense in depth)
 
@@ -143,8 +157,8 @@ SEV-2.
 `middleware/backups/restore-drill.sh` automates the technical core;
 the checklist covers the human loop:
 
-- [ ] Run `restore-drill.sh` (or the staged equivalent against production
-      backups) — record PASS/FAIL + report path.
+- [ ] Run `bash middleware/backups/restore-drill.sh` (or the staged
+      equivalent against production backups) — record PASS/FAIL + report path.
 - [ ] Confirm the report shows: `pg_verifybackup` pass; canary-before rows
       present; canary-after rows absent; exit 0.
 - [ ] Time the restore end-to-end against the RTO ≤ 1h budget; file the
