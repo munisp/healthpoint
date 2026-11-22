@@ -115,7 +115,7 @@ log_timezone = 'UTC'
 wal_level = replica
 archive_mode = on
 archive_timeout = 60
-archive_command = '$SCRIPT_DIR/archive-command.sh %p %f'
+archive_command = 'bash $SCRIPT_DIR/archive-command.sh %p %f'
 max_wal_senders = 4
 EOF
 pg_ctl -D "$SRC_DIR" -l "$SRC_DIR/server.log" -w -t 60 start >>"$REPORT" 2>&1 \
@@ -136,7 +136,7 @@ wait_archive() {  # wait_archive <min-count>
 # ── 2. Verified base backup ──────────────────────────────────────────────────
 log "step 2: base backup via base-backup.sh (pg_verifybackup gate)"
 BB_OUT="$(PGHOST=127.0.0.1 PGPORT="$SRC_PORT" PGUSER=postgres BACKUP_RETENTION_DAYS=7 \
-          "$SCRIPT_DIR/base-backup.sh" 2>>"$REPORT")" || fail "base-backup.sh failed"
+          bash "$SCRIPT_DIR/base-backup.sh" 2>>"$REPORT")" || fail "base-backup.sh failed"
 BASE_BACKUP="$(printf '%s\n' "$BB_OUT" | awk -F= '/^BACKUP_PATH=/{print $2}')"
 [ -n "$BASE_BACKUP" ] && [ -f "$BASE_BACKUP/.verified" ] || fail "base backup missing or unverified"
 log "base backup verified: $BASE_BACKUP"
@@ -188,7 +188,7 @@ log "source data dir destroyed; only base backup + WAL archive remain"
 
 # ── 6. PITR restore to TARGET_TIME ───────────────────────────────────────────
 log "step 6: restore-pitr.sh to '$TARGET_TIME' on port $DST_PORT"
-"$SCRIPT_DIR/restore-pitr.sh" \
+bash "$SCRIPT_DIR/restore-pitr.sh" \
   --backup "$BASE_BACKUP" \
   --archive-dir "$ARCHIVE_DIR" \
   --restore-dir "$DST_DIR" \
