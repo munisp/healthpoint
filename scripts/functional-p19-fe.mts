@@ -32,7 +32,12 @@ import {
 const BASE_URL = process.env.BASE_URL ?? "http://127.0.0.1:3000";
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL required");
-const sql = postgres(DATABASE_URL);
+// Wave p27 (RLS design R4): dedicated script client — session-level
+// app.service_mode via startup-packet parameter under RLS audit/enforce;
+// byte-identical in the default off mode.
+const sql = (process.env.RLS_ENABLED ?? "off") === "off"
+  ? postgres(DATABASE_URL)
+  : postgres(DATABASE_URL, { connection: { "app.service_mode": "on" } });
 
 const RUN = Date.now().toString(36);
 const USER_ID = `p19fe-proof-${RUN}`;
