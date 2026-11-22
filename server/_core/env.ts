@@ -63,6 +63,10 @@ const envSchema = z.object({
   WEBAUTHN_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional().default(10),
   WEBAUTHN_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().optional().default(60),
 
+  // Wave P26 (O6): first-factor enrollment email-confirmation token TTL.
+  // 1h max per the O6 remediation design; shorter is safer.
+  FACTOR_CONFIRM_TTL_SECONDS: z.coerce.number().int().positive().max(3600).optional().default(3600),
+
   // App URL & email
   VITE_APP_URL: z.string().optional().default("http://localhost:3000"),
   RESEND_API_KEY: z.string().optional().default(""),
@@ -179,6 +183,9 @@ export const ENV = {
   webauthnChallengeTtlSeconds: _env.WEBAUTHN_CHALLENGE_TTL_SECONDS ?? 300,
   webauthnRateLimitMax: _env.WEBAUTHN_RATE_LIMIT_MAX ?? 10,
   webauthnRateLimitWindowSeconds: _env.WEBAUTHN_RATE_LIMIT_WINDOW_SECONDS ?? 60,
+
+  // Wave P26 (O6): first-factor enrollment email confirmation
+  factorConfirmTtlSeconds: _env.FACTOR_CONFIRM_TTL_SECONDS ?? 3600,
 
   // App URL & email
   appUrl: _env.VITE_APP_URL || "http://localhost:3000",
