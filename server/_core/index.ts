@@ -397,7 +397,7 @@ async function startServer() {
       res.setHeader("Cache-Control", "no-store");
       res.status(reconciliation.duplicate ? 200 : reconciliation.reconciliationStatus === "exception" ? 409 : 202).json(reconciliation);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Provider report reconciliation failed";
+      const message = error instanceof Error ? error.message : "Settlement report reconciliation failed";
       const status = error instanceof LedgerIntegrityError ? 409 : 503;
       console.error("[settlement] provider report reconciliation failed", { requestId: (req as any).requestId, message });
       res.status(status).json({ error: "Settlement report was not reconciled", message });
