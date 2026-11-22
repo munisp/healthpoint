@@ -93,7 +93,14 @@ export async function handleChunkUpload(req: Request, res: Response): Promise<vo
 
     // Idempotent upsert: re-PUT of the same chunk replaces bytes but only
     // increments chunks_received on first insert.
-    const result = await db.transaction(async (tx) => {
+    // Wave p27 (RLS design R5): chunk/session mutations run inside
+    // withOrgContext so the batch-B policies see app.current_orgs under
+    // audit/enforce. In the default off mode this adds the same membership
+    // verification the handler already performed above (no behavior change);
+    // a mismatch throws FORBIDDEN and lands in the 500 handler below, which
+    // is unreachable in practice because of the assertOrgMemberForChunk gate.
+    const { withOrgContext } = await import("../db/rls");
+    const result = await withOrgContext({ userId: ctx.user.id, orgIds: [session.orgId] }, (rlsDb) => rlsDb.transaction(async (tx) => {
       const existing = (await tx.select({ sha256: bulkUploadChunks.sha256 }).from(bulkUploadChunks)
         .where(and(eq(bulkUploadChunks.sessionId, sessionId), eq(bulkUploadChunks.chunkIndex, chunkIndex)))
         .limit(1))[0];
@@ -117,7 +124,7 @@ export async function handleChunkUpload(req: Request, res: Response): Promise<vo
         .where(eq(bulkUploadSessions.id, sessionId));
       void upd;
       return { inserted: true as const };
-    });
+    }));
 
     res.status(result.inserted ? 201 : 200).json({
       sessionId,
