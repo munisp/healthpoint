@@ -42,11 +42,23 @@ export function suggestionEventsRetentionDays(env: Record<string, string | undef
 
 /** Delete rows older than the retention cutoff. Returns per-table counts. */
 export async function runRetentionPurge(days?: number): Promise<RetentionResult> {
+  // Wave p27 (RLS design R1): the Phase-21 deletes below are GLOBAL (no org
+  // filter). Under enforced RLS without service mode they would silently
+  // match 0 rows and report success — a PHI-retention failure mode. Service
+  // context is mandatory before batch C is enforced; in the default off mode
+  // withServiceContext is a pure passthrough.
+  const { withServiceContext } = await import("../db/rls");
+  const db = await getDb();
+  if (!db) {
+    return { retentionDays: days ?? retentionDays(), cutoff: new Date(), fhirCachePurged: 0, smartFormExtractionsPurged: 0, settlementNoncesPurged: 0, suggestionEventsPurged: 0, nextActionDismissalsPurged: 0 };
+  }
+  return withServiceContext({ service: true, label: "retention" }, (tx) => runRetentionPurgeInner(days, tx), db);
+}
+
+async function runRetentionPurgeInner(days: number | undefined, db: NonNullable<Awaited<ReturnType<typeof getDb>>>): Promise<RetentionResult> {
   const n = days ?? retentionDays();
   const cutoff = new Date(Date.now() - n * 24 * 60 * 60 * 1000);
   const result: RetentionResult = { retentionDays: n, cutoff, fhirCachePurged: 0, smartFormExtractionsPurged: 0, settlementNoncesPurged: 0, suggestionEventsPurged: 0, nextActionDismissalsPurged: 0 };
-  const db = await getDb();
-  if (!db) return result;
   const { lt } = await import("drizzle-orm");
   const { fhirResourceCache, smartFormExtractions } = await import("../../drizzle/schema");
   try {
