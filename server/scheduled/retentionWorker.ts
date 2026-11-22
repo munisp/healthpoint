@@ -55,25 +55,32 @@ export async function runRetentionPurge(days?: number): Promise<RetentionResult>
   return withServiceContext({ service: true, label: "retention" }, (tx) => runRetentionPurgeInner(days, tx), db);
 }
 
-async function runRetentionPurgeInner(days: number | undefined, db: NonNullable<Awaited<ReturnType<typeof getDb>>>): Promise<RetentionResult> {
+/** Exported for the F-5 worker-poisoning unit test (scripted fake db). */
+export async function runRetentionPurgeInner(days: number | undefined, db: NonNullable<Awaited<ReturnType<typeof getDb>>>): Promise<RetentionResult> {
   const n = days ?? retentionDays();
   const cutoff = new Date(Date.now() - n * 24 * 60 * 60 * 1000);
   const result: RetentionResult = { retentionDays: n, cutoff, fhirCachePurged: 0, smartFormExtractionsPurged: 0, settlementNoncesPurged: 0, suggestionEventsPurged: 0, nextActionDismissalsPurged: 0 };
   const { lt } = await import("drizzle-orm");
+  const { rlsGuard } = await import("../db/rls");
   const { fhirResourceCache, smartFormExtractions } = await import("../../drizzle/schema");
+  // Fix F-5: each purge runs inside rlsGuard (nested-transaction savepoint
+  // per table when the service-mode wrap has a transaction open; direct in
+  // off-mode). A failing delete previously aborted the shared tx (25P02),
+  // silently zeroing every LATER purge while the completion log claimed
+  // success. Counts now reflect actual commits per table.
   try {
-    const r = await db.delete(fhirResourceCache).where(lt(fhirResourceCache.fetchedAt, cutoff)).returning({ id: fhirResourceCache.id });
-    result.fhirCachePurged = r.length;
+    result.fhirCachePurged = await rlsGuard(db, async (gtx) =>
+      (await gtx.delete(fhirResourceCache).where(lt(fhirResourceCache.fetchedAt, cutoff)).returning({ id: fhirResourceCache.id })).length);
   } catch (err) { console.warn("[retention] fhir_resource_cache purge failed:", err); }
   try {
-    const r = await db.delete(smartFormExtractions).where(lt(smartFormExtractions.createdAt, cutoff)).returning({ id: smartFormExtractions.id });
-    result.smartFormExtractionsPurged = r.length;
+    result.smartFormExtractionsPurged = await rlsGuard(db, async (gtx) =>
+      (await gtx.delete(smartFormExtractions).where(lt(smartFormExtractions.createdAt, cutoff)).returning({ id: smartFormExtractions.id })).length);
   } catch (err) { console.warn("[retention] smart_form_extractions purge failed:", err); }
   // G1: replay-protection nonces expire on their own clock (24h TTL), not the
   // retention window — purge rows whose expiresAt has passed.
   try {
     const { purgeExpiredSettlementCallbackNonces } = await import("../settlement-auth");
-    result.settlementNoncesPurged = await purgeExpiredSettlementCallbackNonces();
+    result.settlementNoncesPurged = await rlsGuard(db, () => purgeExpiredSettlementCallbackNonces());
   } catch (err) { console.warn("[retention] settlement_callback_nonces purge failed:", err); }
   // Phase 21: suggestion_events on its own (longer) window — rows are the
   // metrics substrate and PHI-free by construction.
@@ -81,14 +88,14 @@ async function runRetentionPurgeInner(days: number | undefined, db: NonNullable<
     const { suggestionEvents } = await import("../../drizzle/schema-intelligence");
     const seDays = suggestionEventsRetentionDays();
     const seCutoff = new Date(Date.now() - seDays * 24 * 60 * 60 * 1000);
-    const r = await db.delete(suggestionEvents).where(lt(suggestionEvents.createdAt, seCutoff)).returning({ id: suggestionEvents.id });
-    result.suggestionEventsPurged = r.length;
+    result.suggestionEventsPurged = await rlsGuard(db, async (gtx) =>
+      (await gtx.delete(suggestionEvents).where(lt(suggestionEvents.createdAt, seCutoff)).returning({ id: suggestionEvents.id })).length);
   } catch (err) { console.warn("[retention] suggestion_events purge failed:", err); }
   // Phase 21: expired next-action dismissals (purged on expiresAt).
   try {
     const { nextActionDismissals } = await import("../../drizzle/schema-intelligence");
-    const r = await db.delete(nextActionDismissals).where(lt(nextActionDismissals.expiresAt, new Date())).returning({ id: nextActionDismissals.id });
-    result.nextActionDismissalsPurged = r.length;
+    result.nextActionDismissalsPurged = await rlsGuard(db, async (gtx) =>
+      (await gtx.delete(nextActionDismissals).where(lt(nextActionDismissals.expiresAt, new Date())).returning({ id: nextActionDismissals.id })).length);
   } catch (err) { console.warn("[retention] next_action_dismissals purge failed:", err); }
   console.info(`[retention] purge complete (>${n}d): fhirCache=${result.fhirCachePurged} smartFormExtractions=${result.smartFormExtractionsPurged} settlementNonces=${result.settlementNoncesPurged} suggestionEvents=${result.suggestionEventsPurged} nextActionDismissals=${result.nextActionDismissalsPurged}`);
   return result;
