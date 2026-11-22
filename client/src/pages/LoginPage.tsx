@@ -23,7 +23,8 @@ import {
 } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
-import { AlertCircle, Loader2, LogIn, UserPlus, ShieldCheck } from "lucide-react";
+import { AlertCircle, Loader2, LogIn, UserPlus, ShieldCheck, KeyRound } from "lucide-react";
+import { browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { useOrgBranding } from "@/hooks/useBranding";
 
 /** Maps ?auth_error= values to human-readable messages */
@@ -45,6 +46,7 @@ function getAuthErrorMessage(code: string | null): string | null {
 export default function LoginPage() {
   const { isAuthenticated, loading } = useAuth();
   const [, navigate] = useLocation();
+  const supportsWebAuthn = browserSupportsWebAuthn();
 
   // Parse query params from the current URL
   const params = new URLSearchParams(window.location.search);
@@ -145,6 +147,24 @@ export default function LoginPage() {
                 <UserPlus className="h-4 w-4" />
                 Create Account
               </Button>
+
+              {/* Phase 25 (§6.4): the passkey is the SECOND factor — this
+                  deep-links into the normal Keycloak sign-in, after which a
+                  registered passkey satisfies the /mfa step. Rendered only
+                  when the browser supports WebAuthn (never a dead button);
+                  conditional-UI autofill is deferred until
+                  WEBAUTHN_PASSWORDLESS_ENABLED=true. */}
+              {supportsWebAuthn && (
+                <Button
+                  variant="outline"
+                  className="w-full gap-2"
+                  size="lg"
+                  onClick={() => { window.location.href = loginUrl; }}
+                >
+                  <KeyRound className="h-4 w-4" />
+                  Sign in with a passkey
+                </Button>
+              )}
 
               {/* Phase13-FC (G14a): password recovery is handled entirely by
                   Keycloak's reset-credentials flow — the platform never
