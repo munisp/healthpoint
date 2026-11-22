@@ -19,39 +19,38 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import DashboardLayout from "./components/DashboardLayout";
 import { lazy, Suspense, type ComponentType } from "react";
 
-const Onboarding = lazy(() => import("./pages/Onboarding"));
-const IDREntityDashboard = lazy(() => import("./pages/IDREntityDashboard"));
-const Notifications = lazy(() => import("./pages/Notifications"));
-const Admin = lazy(() => import("./pages/Admin"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const DisputesList = lazy(() => import("./pages/DisputesList"));
-const DisputeDetail = lazy(() => import("./pages/DisputeDetail"));
 const NewDispute = lazy(() => import("./pages/NewDispute"));
+const DisputeDetail = lazy(() => import("./pages/DisputeDetail"));
+const OfferThreadLive = lazy(() => import("./pages/OfferThreadLive"));
+const ProviderDisputeManagement = lazy(() => import("./pages/ProviderDisputeManagement"));
+const IDREntityDashboard = lazy(() => import("./pages/IDREntityDashboard"));
+const Notifications = lazy(() => import("./pages/Notifications"));
 const AIAssistant = lazy(() => import("./pages/AIAssistant"));
 const StakeholderUpload = lazy(() => import("./pages/StakeholderUpload"));
 const CMSSubmissionTracker = lazy(() => import("./pages/CMSSubmissionTracker"));
 const EMRConnections = lazy(() => import("./pages/EMRConnections"));
 const EMROnboarding = lazy(() => import("./pages/EMROnboarding"));
-const StateBalanceBilling = lazy(() => import("./pages/StateBalanceBilling"));
+const Onboarding = lazy(() => import("./pages/Onboarding"));
 const ExpertReview = lazy(() => import("./pages/ExpertReview"));
 const Reports = lazy(() => import("./pages/Reports"));
-const DisputeTemplates = lazy(() => import("./pages/DisputeTemplates"));
-const LeadsManager = lazy(() => import("./pages/LeadsManager"));
 const DocumentAnalyzer = lazy(() => import("./pages/DocumentAnalyzer"));
 const AuditTrail = lazy(() => import("./pages/AuditTrail"));
 const PayerIntelligence = lazy(() => import("./pages/PayerIntelligence"));
+const Admin = lazy(() => import("./pages/Admin"));
+const AdminUserManagement = lazy(() => import("./pages/AdminUserManagement"));
 const WebhookManager = lazy(() => import("./pages/WebhookManager"));
 const FinancialLedger = lazy(() => import("./pages/FinancialLedger"));
 const GlobalSearch = lazy(() => import("./pages/GlobalSearch"));
 const LakehouseExport = lazy(() => import("./pages/LakehouseExport"));
-const AdminUserManagement = lazy(() => import("./pages/AdminUserManagement"));
 const SystemHealthMonitor = lazy(() => import("./pages/SystemHealthMonitor"));
 const GlobalSettings = lazy(() => import("./pages/GlobalSettings"));
-const Changelog = lazy(() => import("./pages/Changelog"));
 const HelpCenter = lazy(() => import("./pages/HelpCenter"));
-// NOTE: the /disputes/:id/negotiate route below now renders OfferThreadLive
-// (server-persisted thread) instead of the legacy localStorage demo
-// OfferNegotiationThread, so that page is no longer lazy-loaded here.
+const Changelog = lazy(() => import("./pages/Changelog"));
+const Unsubscribe = lazy(() => import("./pages/Unsubscribe"));
+const AuditShareLanding = lazy(() => import("./pages/AuditShareLanding"));
+const DisputeTemplates = lazy(() => import("./pages/DisputeTemplates"));
 const PayerContactBook = lazy(() => import("./pages/PayerContactBook"));
 const APIKeyManagement = lazy(() => import("./pages/APIKeyManagement"));
 const SLABreachMonitor = lazy(() => import("./pages/SLABreachMonitor"));
@@ -62,13 +61,11 @@ const BulkStatusChange = lazy(() => import("./pages/BulkStatusChange"));
 const CSVImport = lazy(() => import("./pages/CSVImport"));
 const WebhookEventReplay = lazy(() => import("./pages/WebhookEventReplay"));
 const EmailDigestPreferences = lazy(() => import("./pages/EmailDigestPreferences"));
-const DisputeMerge = lazy(() => import("./pages/DisputeMerge"));
 const ArbitratorScorecard = lazy(() => import("./pages/ArbitratorScorecard"));
 const SplitBillAnalysis = lazy(() => import("./pages/SplitBillAnalysis"));
 const TwoFactorAuth = lazy(() => import("./pages/TwoFactorAuth"));
 const MfaPage = lazy(() => import("./pages/MfaPage"));
-const MobileDisputeWizard = lazy(() => import("./pages/MobileDisputeWizard"));
-const DisputeClone = lazy(() => import("./pages/DisputeClone"));
+const MfaConfirmPage = lazy(() => import("./pages/MfaConfirmPage"));
 const PayerResponseTimeAnalytics = lazy(() => import("./pages/PayerResponseTimeAnalytics"));
 const DisputeAnnotations = lazy(() => import("./pages/DisputeAnnotations"));
 const BatchEvidenceUpload = lazy(() => import("./pages/BatchEvidenceUpload"));
@@ -118,11 +115,6 @@ const DisputeAccessControl = lazy(() => import("./pages/DisputeAccessControl"));
 const HermesAssistant = lazy(() => import("./pages/HermesAssistant"));
 const SmartFormVisualization = lazy(() => import("./pages/SmartFormVisualization"));
 const CohortAnalysis = lazy(() => import("./pages/CohortAnalysis"));
-const HeartbeatOperations = lazy(() => import("./pages/HeartbeatOperations"));
-const ProviderDisputeManagement = lazy(() => import("./pages/ProviderDisputeManagement"));
-const ProviderSandboxAcceptance = lazy(() => import("./pages/ProviderSandboxAcceptance"));
-const TemporalOperations = lazy(() => import("./pages/TemporalOperations"));
-const WorkflowMonitor = lazy(() => import("./pages/WorkflowMonitor"));
 const SubmissionTimeline = lazy(() => import("./pages/SubmissionTimeline"));
 const PortalOps = lazy(() => import("./pages/PortalOps"));
 const PriorAuthClocks = lazy(() => import("./pages/PriorAuthClocks"));
@@ -131,21 +123,25 @@ const ConsentCenter = lazy(() => import("./pages/ConsentCenter"));
 const QpaExplorer = lazy(() => import("./pages/QpaExplorer"));
 const ComplianceCenter = lazy(() => import("./pages/ComplianceCenter"));
 const StatePathResolver = lazy(() => import("./pages/StatePathResolver"));
+const StateBalanceBilling = lazy(() => import("./pages/StateBalanceBilling"));
+const PatientPortal = lazy(() => import("./pages/PatientPortal"));
+const PayerCases = lazy(() => import("./pages/PayerCases"));
+const IdreQueue = lazy(() => import("./pages/IdreQueue"));
+const IdreDirectoryAdmin = lazy(() => import("./pages/IdreDirectoryAdmin"));
+const FeeSchedulesAdmin = lazy(() => import("./pages/FeeSchedulesAdmin"));
 const SettlementInbox = lazy(() => import("./pages/SettlementInbox"));
-// OfferThreadLive replaces the localStorage-based OfferNegotiationThread demo
-// on the same /disputes/:id/negotiate path (server-persisted offer thread).
-const OfferThreadLive = lazy(() => import("./pages/OfferThreadLive"));
+const SubmitterConsole = lazy(() => import("./pages/SubmitterConsole"));
+const PracticeAuditConsole = lazy(() => import("./pages/PracticeAuditConsole"));
+const OrgsPage = lazy(() => import("./pages/OrgsPage"));
+const LeadsManager = lazy(() => import("./pages/LeadsManager"));
+const HeartbeatOperations = lazy(() => import("./pages/HeartbeatOperations"));
+const ProviderSandboxAcceptance = lazy(() => import("./pages/ProviderSandboxAcceptance"));
+const TemporalOperations = lazy(() => import("./pages/TemporalOperations"));
+const WorkflowMonitor = lazy(() => import("./pages/WorkflowMonitor"));
 const OutcomeSimulatorShell = lazy(() => import("./pages/OutcomeSimulatorShell"));
-const PayerCases = lazy(() => import("./pages/personas/PayerCases"));
-const PatientPortal = lazy(() => import("./pages/personas/PatientPortal"));
-const IdreQueue = lazy(() => import("./pages/personas/IdreQueue"));
-const SubmitterConsole = lazy(() => import("./pages/submitter/SubmitterConsole"));
-const PracticeAuditConsole = lazy(() => import("./pages/practice-audit/PracticeAuditConsole"));
-const OrgsPage = lazy(() => import("./pages/personas/Orgs"));
-const IdreDirectoryAdmin = lazy(() => import("./pages/admin/IdreDirectory"));
-const FeeSchedulesAdmin = lazy(() => import("./pages/admin/FeeSchedules"));
-const Unsubscribe = lazy(() => import("./pages/Unsubscribe"));
-const AuditShareLanding = lazy(() => import("./pages/AuditShareLanding"));
+const DisputeMerge = lazy(() => import("./pages/DisputeMerge"));
+const MobileDisputeWizard = lazy(() => import("./pages/MobileDisputeWizard"));
+const DisputeClone = lazy(() => import("./pages/DisputeClone"));
 const ConsentSignLanding = lazy(() => import("./pages/ConsentSignLanding"));
 const AcceptInvite = lazy(() => import("./pages/AcceptInvite"));
 
@@ -178,6 +174,9 @@ function Router() {
       {/* Two-stage login second factor (mfa-pending session cookie carries
           the state; public route like /login). Phase 25. */}
       <Route path={"/mfa"} component={MfaPage} />
+      {/* Wave P26 (O6): public token-only landing for first-factor
+          enrollment confirmation emails. */}
+      <Route path={"/confirm-enrollment"} component={MfaConfirmPage} />
       <Route path={"/404"} component={NotFound} />
       <Route path={"/changelog"} component={Changelog} />
       <Route path={"/help"} component={HelpCenter} />
