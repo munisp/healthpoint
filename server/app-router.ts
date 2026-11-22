@@ -45,6 +45,8 @@ import { nextActionsRouter } from "./routers/next-actions";
 import { banditRouter, outcomeModelRouter } from "./routers/intelligence";
 // phase23 additions (DataSketches KLL/HLL: ingestion cardinality)
 import { intelligenceRouter } from "./routers/intelligence";
+// phase25 additions (WebAuthn / passkeys for staff auth)
+import { webauthnRouter } from "./routers/webauthn";
 import { mergeRouters, router } from "./_core/trpc";
 
 export const rootRouter = mergeRouters(
@@ -84,7 +86,9 @@ export const rootRouter = mergeRouters(
   router({ outcomeModel: outcomeModelRouter }),
   router({ bandit: banditRouter }),
   // phase23 additions
-  router({ intelligence: intelligenceRouter })
+  router({ intelligence: intelligenceRouter }),
+  // phase25 additions
+  router({ webauthn: webauthnRouter })
 );
 
 export type RootRouter = typeof rootRouter;
