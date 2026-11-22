@@ -76,7 +76,12 @@ function printReport(reports: JourneyReport[]): void {
 
 // ── Main ────────────────────────────────────────────────────────────────────
 async function main(): Promise<number> {
-  const sql = postgres(DATABASE_URL!);
+  // Wave p27 (RLS design R4): dedicated script client — session-level
+  // app.service_mode via startup-packet parameter under RLS audit/enforce;
+  // byte-identical in the default off mode.
+  const sql = (process.env.RLS_ENABLED ?? "off") === "off"
+    ? postgres(DATABASE_URL!)
+    : postgres(DATABASE_URL!, { connection: { "app.service_mode": "on" } });
   const llmStub = await startLlmStub();
   const storageStub = await startStorageStub();
   try {
